@@ -331,3 +331,9 @@ public class AtomicDoubleArray implements java.io.Serializable {
         }
     }
 }
+NA
+NA
+NA
+NA
+NA
+NA

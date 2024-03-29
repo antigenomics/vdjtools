@@ -252,3 +252,9 @@ public class AtomicDouble extends Number implements java.io.Serializable {
         set(s.readDouble());
     }
 }
+NA
+NA
+NA
+NA
+NA
+NA

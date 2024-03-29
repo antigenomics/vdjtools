@@ -1,16 +1,18 @@
-package com.antigenomics.vdjtools.misc;
-
-import org.apache.commons.math3.special.Beta;
-import org.apache.commons.math3.special.Erf;
-import org.apache.commons.math3.special.Gamma;
-import org.apache.commons.math3.util.FastMath;
-import org.apache.commons.math3.util.MathUtils;
-
-import static org.apache.commons.math3.special.Beta.regularizedBeta;
-import static org.apache.commons.math3.util.CombinatoricsUtils.binomialCoefficientLog;
-
-/**
- * Basic distributions (PDF/CDF), copied from MAGERI + Apache Math 3
+/*
+ * Copyright (c) 2014-2024, OOO «MiLaboratory»
+ *
+ * IN NO EVENT SHALL THE INVENTORS BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+ * SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING LOST PROFITS,
+ * ARISING OUT OF THE USE OF THIS SOFTWARE, EVEN IF THE INVENTORS HAS BEEN
+ * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * THE SOFTWARE PROVIDED HEREIN IS ON AN "AS IS" BASIS, AND THE LICENSOR HAS NO
+ * OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR
+ * MODIFICATIONS. THE LICENSOR MAKES NO REPRESENTATIONS AND EXTENDS NO
+ * WARRANTIES OF ANY KIND, EITHER IMPLIED OR EXPRESS, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR
+ * PURPOSE, OR THAT THE USE OF THE SOFTWARE WILL NOT INFRINGE ANY PATENT,
+ * TRADEMARK OR OTHER RIGHTS.
  */
 public final class StatUtil {
     private StatUtil() {
@@ -362,3 +364,17 @@ public final class StatUtil {
         return ret;
     }
 }
+NA
+NA
+NA
+NA
+NA
+NA
+NA
+NA
+NA
+NA
+NA
+NA
+NA
+NA
