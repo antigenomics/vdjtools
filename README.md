@@ -1,4 +1,4 @@
-> VDJtools is free for academic use. his is a legacy version, the software is no longer supported, if you need similar software solutions please visit [MiLaboratory](https://milaboratory.ru/).
+> VDJtools is free for academic use. This is a legacy version, the software is no longer supported, if you need similar software solutions please visit [MiLaboratory](https://milaboratory.ru/).
 
 [![JitPack](https://jitpack.io/v/mikessh/vdjtools.svg)](https://jitpack.io/#mikessh/vdjtools)
 
