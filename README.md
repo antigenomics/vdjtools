@@ -1,6 +1,13 @@
-> VDJtools is free for academic use. This is a legacy version, the software is no longer supported, if you need similar software solutions please visit [MiLaboratory](https://milaboratory.ru/).
+## This software is deprecated
 
-[![JitPack](https://jitpack.io/v/mikessh/vdjtools.svg)](https://jitpack.io/#mikessh/vdjtools)
+This software is no longer actively developed and maintained. For immune repertoire sequencing (AIRR-seq) data analysis software alternatives see other tools by Immunosequencing Algorithms laboratory:
+
+- [mirpy](https://github.com/antigenomics/mirpy) a library with useful python modules and functions for analysis of AIRR-seq data
+- [vdjmatch2](https://github.com/antigenomics/vdjmatch2) for fast querying and matching clonotypes across large AIRR-seq datasets and annotating repertoires using VDJdb database
+- [vdjtools2](https://github.com/antigenomics/vdjtools2) re-implementing all VDJtools analysis methods and more! - coming soon
+- [redcea](https://github.com/antigenomics/redcea) and [irrm-codec](https://github.com/antigenomics/redcea) implementing smart adaptive immune receptor sequence embeddings and extended TCRNET algorithm coming soon
+
+---
 
 ## VDJtools
 
