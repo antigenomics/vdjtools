@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# venv / conda
+.venv/
+venv/
+env/
+
+# build artifacts (scikit-build-core / CMake / wheels)
+build/
+dist/
+wheelhouse/
+_skbuild/
+*.so
+*.dylib
+*.pyd
+
+# C++
+*.o
+*.a
+
+# docs
+docs/_build/
+
+# editor / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# scratch
+tmp/

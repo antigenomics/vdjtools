@@ -1,0 +1,65 @@
+[build-system]
+requires = ["scikit-build-core>=0.12", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
+version = "2.0.0"
+description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Mikhail Shugay", email = "mikhail.shugay@gmail.com" }]
+keywords = ["immunology", "tcr", "bcr", "airr", "repertoire", "pgen", "olga", "igor", "bioinformatics"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+# Base deps are kept to what the currently-implemented code imports; the parent libraries
+# (arda-mapper, vdjmatch->seqtree) are promoted from the extras below to base deps as the
+# phases that import them land (model -> arda, overlap -> vdjmatch). Every dep traces to a use.
+dependencies = [
+    "polars>=1.0",
+    "numpy",
+    "scipy",
+]
+
+[project.optional-dependencies]
+model = ["arda-mapper>=2.5"]           # Phase 1: scenario enumeration + markup repair (brings mmseqs2)
+overlap = ["vdjmatch>=0.0.1"]          # Phase 4: overlap + TCRnet (brings the seqtree engine)
+cli = ["typer>=0.12"]                  # Phase 8
+oracle = ["olga"]                      # Pgen cross-check oracle (tests only)
+test = ["pytest>=7.4", "pytest-cov"]
+docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx"]
+dev = ["ruff", "pytest>=7.4", "pybind11>=2.12"]
+all = ["arda-mapper>=2.5", "vdjmatch>=0.0.1", "typer>=0.12"]
+
+[project.urls]
+Homepage = "https://github.com/antigenomics/vdjtools"
+Repository = "https://github.com/antigenomics/vdjtools"
+Documentation = "https://antigenomics.github.io/vdjtools/"
+
+[tool.scikit-build]
+wheel.packages = ["python/vdjtools"]
+cmake.build-type = "Release"
+build-dir = "build/{wheel_tag}"
+# Ext is compiled at install time. Flip to true during the C++-heavy Phase 1 for
+# auto-recompile-on-import (that needs build-dir set, above).
+editable.rebuild = false
+# Keep the sdist lean; anchor paths with a leading "/".
+sdist.exclude = ["/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples"]
+
+[tool.scikit-build.cmake.define]
+VDJTOOLS_PYTHON = "ON"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+addopts = "-ra"

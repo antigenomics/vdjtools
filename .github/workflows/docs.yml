@@ -1,0 +1,47 @@
+name: docs
+
+on:
+  push:
+    branches: [master, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Per-ref so a dev push never cancels an in-flight master Pages deploy.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Building the package compiles the _core ext so autodoc can import vdjtools;
+      # the heavy parent deps (arda, vdjmatch, seqtree) are mocked in docs/conf.py.
+      - name: Install package + docs toolchain
+        run: pip install -e ".[docs]"
+      - name: Build HTML (fail on warnings)
+        run: sphinx-build -W --keep-going -b html docs docs/_build/html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy:
+    needs: build
+    # The github-pages environment only allows deploys from the default branch; on dev we
+    # validate the build (above) but skip deployment so the workflow stays green.
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

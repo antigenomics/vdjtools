@@ -1,0 +1,88 @@
+name: Publish To PyPI
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+      - name: Build source distribution
+        run: python -m build --sdist
+      - name: Check source distribution
+        run: python -m twine check dist/*
+      - name: Upload source distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: dist/
+
+  build-wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]  # macos-latest = Apple Silicon arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          # vdjtools ships a pybind11/scikit-build-core C++ ext (vdjtools._core); scikit-build-core
+          # pulls cmake + ninja into the build env automatically — no extra container setup.
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32"
+          # import test: __init__ only needs the compiled ext (no runtime deps at import time).
+          CIBW_TEST_COMMAND: 'python -c "import vdjtools, vdjtools._core; print(vdjtools.__file__)"'
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  publish:
+    name: Publish To PyPI
+    needs: [build-sdist, build-wheels]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write  # required for OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          pattern: python-*
+          merge-multiple: true
+          path: dist/
+      - name: Validate package version matches release tag
+        if: github.event_name == 'release'
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tomllib
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          tag = "${{ github.event.release.tag_name }}"
+          norm = tag[1:] if tag.startswith("v") else tag
+          if version != norm:
+              raise SystemExit(f"Version mismatch: pyproject.toml={version}, tag={tag}")
+          print(f"Version check passed: {version} == {tag}")
+          PY
+      - name: List distributions
+        run: ls -R dist/
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

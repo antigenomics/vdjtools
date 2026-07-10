@@ -1,0 +1,23 @@
+# Dedicated conda environment for vdjtools.
+# Provides Python, a C++ toolchain (to build the _core pybind11 extension), and the
+# MMseqs2 binary that arda (the VDJ-model / markup-repair backend) needs at runtime.
+#
+#   conda env create -f environment.yml
+#   conda activate vdjtools
+#   pip install -e ".[dev,test]"
+#
+# Pure-analytics use (diversity / spectratype / usage) does not need MMseqs2, but the
+# model-learning and annotation paths do, so it is provided here for a reproducible install.
+name: vdjtools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - mmseqs2
+  - cxx-compiler
+  - cmake
+  - pip
+  - pip:
+      - scikit-build-core>=0.12
+      - pybind11>=2.12
