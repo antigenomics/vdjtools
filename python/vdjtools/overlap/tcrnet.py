@@ -16,12 +16,22 @@ to :func:`vdjmatch.evalue.query_evalues` (the ``seqtree`` E-value engine):
   neighbour count expected from the background, and ``p_enrichment`` is the Poisson
   tail probability of seeing at least the observed within-sample degree by chance.
 
+**Locus handling.** A TCRnet neighbourhood is only meaningful within one locus (a TRA
+sequence has no true neighbours in a TRB background). When neither ``control`` nor
+``locus`` is given, the sample is split by the locus of its ``v_call`` and each locus
+is scored against its own matched background — mirroring the legacy V-grouping that
+kept loci disjoint. Clonotypes whose locus cannot be resolved (null ``v_call``) are
+dropped with a warning. Passing ``control`` or ``locus`` explicitly overrides this and
+scores every clonotype against that single background.
+
 Scope note: the legacy default was ``s,id,t = 1,0,1`` (one substitution, no indels,
 one total edit), i.e. vdjmatch ``"1,0,0,1"`` — the default here. ``exclude_exact`` is
 ``True`` by default so a clonotype's own identical copy in the target/control is not
 counted as a neighbour.
 """
 from __future__ import annotations
+
+import warnings
 
 import polars as pl
 
@@ -31,6 +41,8 @@ _VDJMATCH_HINT = (
     "vdjmatch is required for vdjtools.overlap.tcrnet; install the extra with "
     "`pip install 'vdjtools[overlap]'` (or `pip install vdjmatch>=0.0.1`)."
 )
+
+_COLS = [CDR3_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_control", "E", "p_enrichment", "p_any", LOCUS]
 
 
 def _require_vdjmatch():
@@ -43,12 +55,23 @@ def _require_vdjmatch():
     return evalue, search_params
 
 
-def _infer_locus(sample: pl.DataFrame) -> str | None:
-    """Most common three-letter locus over the sample's ``v_call`` (e.g. ``"TRB"``)."""
-    loci = add_locus(sample)[LOCUS].drop_nulls()
-    if loci.is_empty():
-        return None
-    return loci.mode().sort()[0]
+def _collapse(sample: pl.DataFrame) -> pl.DataFrame:
+    """Collapse to unique CDR3s, carrying the most-abundant V/J and the summed count."""
+    return (sample.sort(COUNT, descending=True)
+                  .group_by(CDR3_AA, maintain_order=True)
+                  .agg(pl.col(V_CALL).first(), pl.col(J_CALL).first(),
+                       pl.col(COUNT).sum().alias(COUNT)))
+
+
+def _score(agg, control, params, exclude_exact, threads, evalue, seqtree, locus):
+    """Score one already-collapsed (single-locus) frame against ``control``."""
+    cdr3s = agg[CDR3_AA].to_list()
+    target = seqtree.Index.build(cdr3s, alphabet="aa")
+    ev = evalue.query_evalues(target, control, cdr3s, params,
+                              threads=threads, exclude_exact=exclude_exact)
+    ev = ev.rename({"query_cdr3": CDR3_AA, "n_target": "n_neighbors"})
+    return (agg.join(ev, on=CDR3_AA, how="left")
+               .with_columns(pl.lit(locus, dtype=pl.Utf8).alias(LOCUS)))
 
 
 def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
@@ -58,55 +81,62 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
 
     Collapses the sample to unique CDR3s, builds a fuzzy ``seqtree.Index`` over them
     (the within-sample neighbourhood target), and queries each CDR3 against that
-    target and a background control via :func:`vdjmatch.evalue.query_evalues`.
+    target and a background control via :func:`vdjmatch.evalue.query_evalues`. When
+    neither ``control`` nor ``locus`` is given the sample is scored **per locus**, each
+    against its own matched background (see the module docstring).
 
     Args:
         sample: Clonotype frame (canonical schema).
-        control: A prebuilt ``seqtree.Index`` background, or ``None`` to load a
-            matched background via :func:`vdjmatch.evalue.background`.
+        control: A prebuilt ``seqtree.Index`` background, or ``None`` to load matched
+            background(s) via :func:`vdjmatch.evalue.background`. Passing one overrides
+            the per-locus split (every clonotype is scored against it).
         scope: vdjmatch edit-distance scope ``"subs,ins,dels,total"`` defining the
             neighbourhood ball (default one substitution).
-        locus: Locus for the background (e.g. ``"TRB"``); inferred from the sample's
-            ``v_call`` when ``None``.
+        locus: Force a single background locus (e.g. ``"TRB"``); overrides the
+            per-locus split. When ``None`` (and ``control`` is ``None``) the sample is
+            split by the locus of its ``v_call``.
         species: Species for the background control (default ``"human"``).
         exclude_exact: Drop distance-0 (identical / self) hits from both target and
             control counts, so a clonotype is not its own neighbour (default ``True``).
         threads: Worker threads for the native search (``0`` = all cores).
 
     Returns:
-        One row per unique clonotype with columns ``cdr3_aa, v_call, j_call,
-        duplicate_count, n_neighbors`` (within-sample degree), ``n_control``
+        One row per unique clonotype (per locus) with columns ``cdr3_aa, v_call,
+        j_call, duplicate_count, n_neighbors`` (within-sample degree), ``n_control``
         (background degree), ``E`` (expected neighbours), ``p_enrichment`` (Poisson
-        tail), and ``p_any`` — sorted by ascending ``p_enrichment``.
+        tail), ``p_any``, and ``locus`` — sorted by ascending ``p_enrichment``.
 
     Raises:
         ImportError: If vdjmatch is not installed (see the ``overlap`` extra).
-        ValueError: If ``control`` is ``None`` and the locus cannot be determined.
+        ValueError: If ``control`` and ``locus`` are ``None`` and no clonotype has a
+            resolvable locus.
     """
     evalue, search_params = _require_vdjmatch()
     import seqtree
-
-    # Collapse to unique CDR3s, carrying the most-abundant clonotype's V/J and the
-    # summed count (the degree is computed over the unique CDR3 footprint).
-    agg = (sample.sort(COUNT, descending=True)
-                 .group_by(CDR3_AA, maintain_order=True)
-                 .agg(pl.col(V_CALL).first(), pl.col(J_CALL).first(),
-                      pl.col(COUNT).sum().alias(COUNT)))
-    cdr3s = agg[CDR3_AA].to_list()
-
-    if control is None:
-        locus = locus or _infer_locus(sample)
-        if locus is None:
-            raise ValueError("cannot infer locus from sample v_call; pass locus= or control=")
-        control = evalue.background(locus=locus, species=species)
-
-    target = seqtree.Index.build(cdr3s, alphabet="aa")
     params = search_params(scope)
-    ev = evalue.query_evalues(target, control, cdr3s, params,
-                              threads=threads, exclude_exact=exclude_exact)
 
-    ev = ev.rename({"query_cdr3": CDR3_AA, "n_target": "n_neighbors"})
-    return (agg.join(ev, on=CDR3_AA, how="left")
-               .select(CDR3_AA, V_CALL, J_CALL, COUNT,
-                       "n_neighbors", "n_control", "E", "p_enrichment", "p_any")
-               .sort("p_enrichment"))
+    # Explicit override: a single caller-provided (or forced-locus) background scores
+    # every clonotype, regardless of its own locus.
+    if control is not None or locus is not None:
+        if control is None:
+            control = evalue.background(locus=locus, species=species)
+        out = _score(_collapse(sample), control, params, exclude_exact, threads,
+                     evalue, seqtree, locus)
+        return out.select(_COLS).sort("p_enrichment")
+
+    # Auto: split by v_call locus and score each locus against its matched background.
+    withloc = add_locus(sample)
+    n_null = withloc.filter(pl.col(LOCUS).is_null()).height
+    withloc = withloc.filter(pl.col(LOCUS).is_not_null())
+    if withloc.is_empty():
+        raise ValueError("cannot infer locus from sample v_call; pass locus= or control=")
+    if n_null:
+        warnings.warn(f"tcrnet: dropped {n_null} clonotype(s) with unresolvable locus "
+                      "(null v_call); pass locus= or control= to score them.")
+    parts = [
+        _score(_collapse(withloc.filter(pl.col(LOCUS) == loc)),
+               evalue.background(locus=loc, species=species),
+               params, exclude_exact, threads, evalue, seqtree, loc)
+        for loc in sorted(withloc[LOCUS].unique().to_list())
+    ]
+    return pl.concat(parts).select(_COLS).sort("p_enrichment")

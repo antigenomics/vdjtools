@@ -9,8 +9,10 @@ These functions are thin polars wrappers that (a) collapse each sample to unique
 CDR3s, (b) hand the CDR3 lists to vdjmatch, and (c) join the matched pairs back to
 per-clonotype counts/frequencies.
 
-Scope syntax is vdjmatch's ``"subs,ins,dels,total"`` (max substitutions, insertions,
-deletions, and total edits); the default ``"1,0,0,1"`` is a single substitution.
+Matching is on the amino-acid CDR3 (``cdr3_aa``): vdjmatch runs on the ``"aa"``
+alphabet, so this module is aa-only. Scope syntax is vdjmatch's
+``"subs,ins,dels,total"`` (max substitutions, insertions, deletions, total edits);
+the default ``"1,0,0,1"`` is a single substitution.
 """
 from __future__ import annotations
 
@@ -34,10 +36,10 @@ def _require_vdjmatch():
     return cluster
 
 
-def _aggregate(df: pl.DataFrame, by: str) -> pl.DataFrame:
-    """Collapse to unique ``by`` values with summed count, within-sample frequency,
+def _aggregate(df: pl.DataFrame) -> pl.DataFrame:
+    """Collapse to unique ``cdr3_aa`` with summed count, within-sample frequency,
     and a 0-based row index (the positional key vdjmatch returns)."""
-    agg = df.group_by(by, maintain_order=True).agg(pl.col(COUNT).sum().alias("_count"))
+    agg = df.group_by(CDR3_AA, maintain_order=True).agg(pl.col(COUNT).sum().alias("_count"))
     total = agg["_count"].sum() or 1
     return agg.with_columns(
         (pl.col("_count") / total).alias("_freq"),
@@ -46,11 +48,11 @@ def _aggregate(df: pl.DataFrame, by: str) -> pl.DataFrame:
 
 
 def fuzzy_overlap(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
-                  by: str = CDR3_AA, threads: int = 0) -> pl.DataFrame:
+                  threads: int = 0) -> pl.DataFrame:
     """Fuzzy-matched clonotype pairs between two samples (within an edit scope).
 
-    Both samples are collapsed to unique ``by`` values (counts summed, frequencies
-    recomputed within each sample); the two CDR3 lists are handed to
+    Both samples are collapsed to unique ``cdr3_aa`` values (counts summed,
+    frequencies recomputed within each sample); the two CDR3 lists are handed to
     :func:`vdjmatch.cluster.overlap`, and the returned within-scope pairs are joined
     back to per-clonotype counts and frequencies.
 
@@ -59,7 +61,6 @@ def fuzzy_overlap(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
         b: Second clonotype frame.
         scope: vdjmatch edit-distance scope ``"subs,ins,dels,total"`` (default one
             substitution).
-        by: The CDR3 column to match on (default ``"cdr3_aa"``).
         threads: Worker threads for the native search (``0`` = all cores).
 
     Returns:
@@ -71,9 +72,9 @@ def fuzzy_overlap(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
         ImportError: If vdjmatch is not installed (see the ``overlap`` extra).
     """
     cluster = _require_vdjmatch()
-    a_agg = _aggregate(a, by)
-    b_agg = _aggregate(b, by)
-    pairs = cluster.overlap(a_agg[by].to_list(), b_agg[by].to_list(),
+    a_agg = _aggregate(a)
+    b_agg = _aggregate(b)
+    pairs = cluster.overlap(a_agg[CDR3_AA].to_list(), b_agg[CDR3_AA].to_list(),
                             scope=scope, threads=threads)
 
     out_schema = ["a_cdr3", "b_cdr3", "n_subs", "score",
@@ -85,15 +86,15 @@ def fuzzy_overlap(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
             "count_b": pl.Int64, "freq_b": pl.Float64,
         })
 
-    a_join = a_agg.rename({"_idx": "a_idx", "_count": "count_a", "_freq": "freq_a"}).drop(by)
-    b_join = b_agg.rename({"_idx": "b_idx", "_count": "count_b", "_freq": "freq_b"}).drop(by)
+    a_join = a_agg.rename({"_idx": "a_idx", "_count": "count_a", "_freq": "freq_a"}).drop(CDR3_AA)
+    b_join = b_agg.rename({"_idx": "b_idx", "_count": "count_b", "_freq": "freq_b"}).drop(CDR3_AA)
     return (pairs.join(a_join, on="a_idx", how="left")
                  .join(b_join, on="b_idx", how="left")
                  .select(out_schema))
 
 
 def fuzzy_overlap_metrics(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
-                          by: str = CDR3_AA, threads: int = 0) -> dict:
+                          threads: int = 0) -> dict:
     """Summary fuzzy-overlap metrics for two samples.
 
     Computes :func:`fuzzy_overlap` once and derives:
@@ -110,7 +111,6 @@ def fuzzy_overlap_metrics(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,
         a: First clonotype frame.
         b: Second clonotype frame.
         scope: vdjmatch edit-distance scope (see :func:`fuzzy_overlap`).
-        by: The CDR3 column to match on.
         threads: Worker threads for the native search.
 
     Returns:
@@ -119,10 +119,9 @@ def fuzzy_overlap_metrics(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,
     Raises:
         ImportError: If vdjmatch is not installed (see the ``overlap`` extra).
     """
-    a_agg = _aggregate(a, by)
-    b_agg = _aggregate(b, by)
-    n_a, n_b = a_agg.height, b_agg.height
-    pairs = fuzzy_overlap(a, b, scope=scope, by=by, threads=threads)
+    n_a = a.select(pl.col(CDR3_AA).n_unique()).item()
+    n_b = b.select(pl.col(CDR3_AA).n_unique()).item()
+    pairs = fuzzy_overlap(a, b, scope=scope, threads=threads)
 
     if pairs.height == 0:
         return {"pairs": 0, "frac_a_matched": 0.0, "frac_b_matched": 0.0, "fuzzy_F": 0.0}
