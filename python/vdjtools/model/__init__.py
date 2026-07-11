@@ -8,8 +8,9 @@ OLGA's format with :func:`from_olga`; native models round-trip through :func:`sa
 from .events import Event, EventKind
 from .io import from_olga, load_model, save_model
 from .model import Model
-from .reference import cut_segment, load_germline, reconcile_olga, reverse_complement
+from .reference import cut_segment, load_germline, reconcile_olga, reverse_complement, translate
 from .schema import Manifest
+from .stitch import stitch_contig, stitch_frame
 
 __all__ = [
     "Event",
@@ -23,4 +24,7 @@ __all__ = [
     "cut_segment",
     "reconcile_olga",
     "reverse_complement",
+    "translate",
+    "stitch_contig",
+    "stitch_frame",
 ]
