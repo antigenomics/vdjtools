@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from vdjtools.sc.cluster_eval import (
+pytest.importorskip("sklearn")  # cluster_eval builds its contingency via sklearn ([sc] extra)
+
+from vdjtools.sc.cluster_eval import (  # noqa: E402
     assign_singleton_ids,
     cluster_eval,
     homogeneity,

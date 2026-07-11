@@ -97,9 +97,9 @@ def test_write_airr_cell_receptor_hash(tmp_path):
             "clone_id": ["c1", "c1"],
         }
     )
+    yaml = pytest.importorskip("yaml")   # write_airr_cell needs PyYAML ([sc] extra)
     out = tmp_path / "cells.yaml"
     sc.write_airr_cell(df, out)
-    yaml = pytest.importorskip("yaml")
     doc = yaml.safe_load(out.read_text())
     assert len(doc["Cell"]) == 1
     assert doc["Cell"][0]["cell_id"] == "bc1"

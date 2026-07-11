@@ -17,7 +17,9 @@ import random
 import polars as pl
 import pytest
 
-from vdjtools import sc
+pytest.importorskip("sklearn")  # the benchmark scores with cluster_eval ([sc] extra)
+
+from vdjtools import sc  # noqa: E402
 from vdjtools.sc.cluster_eval import cluster_eval
 
 REPO = "isalgo/airr_benchmark"
