@@ -10,6 +10,12 @@ Provenance of every dataset used or produced by vdjtools. Never guess a source �
 | Synthetic out-of-frame training seqs (~100k/chain) | OLGA generation via mirpy tooling; sample at `mirpy/tests/assets/olga_humanTRB_1000.txt.gz` | TSV (V call, J call, CDR3 nt) | generate with OLGA from the models above | **computed** (Monte-Carlo draws); **no tandem D by design** — see plan Phase 1 note |
 | Real non-functional seqs (all 7 loci) | **owner-provided, ships later** | TBD | TBD | **experimental**; the data that will actually exercise D-D — update this row on arrival |
 
+## Phase 7 — single-cell (dCODE)
+
+| Dataset | Origin | Format | How to obtain | Provenance |
+|---|---|---|---|---|
+| 10x dCODE dextramer donors (1–4) | HF dataset `isalgo/airr_benchmark`, path `dcode/vdj_v1_hs_aggregated_donor{1..4}_{all_contig_annotations,consensus_annotations,binarized_matrix}.csv.gz` | gzipped CSV (10x CellRanger VDJ all-contig / consensus annotations; CITE-seq binarized dextramer matrix: `barcode` + 50 `*_binder` boolean cols) | `huggingface_hub.hf_hub_download(repo_id="isalgo/airr_benchmark", repo_type="dataset", filename=...)` (fetched at test time into the HF cache; skips cleanly offline) | **experimental** — 10x Genomics "A New Way of Exploring Immunity" dCODE dextramer single-cell TCR + surface-marker dataset; antigen labels are the single-True `*_binder` column per cell |
+
 ## Golden fixtures (tests)
 
 | Dataset | Origin | Use |
