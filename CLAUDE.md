@@ -46,19 +46,32 @@ Phase 0 (scaffold, git surgery, CI) is **done and pushed**. See `ROADMAP.md` for
 `SOURCES.md` for data provenance. The full approved design lives in the session plan file
 (`~/.claude/plans/i-want-to-complenely-gleaming-snail.md`).
 
-**Next: Phase 1 — `feature/model-engine`** (native V(D)J recombination model, supersedes OLGA+IGoR):
-- `python/vdjtools/model/`: `events schema reference io model scenario stitch pgen generate infer validate`.
-- Model = directory of **long-format polars parquet** marginal tables + `manifest.json` (Bayes net
-  declared as data via `events{}.given`). **D-D capable**: `p_nd(n_d∈{0,1,2})`, `p_d1`, `p_d2`, `DD`
-  insertion junction. VJ loci degrade cleanly (no D tables).
-- Scenario enumeration from **arda** best alignment → plausible set (slide V3'/J5' over a window;
-  seed D via `arda.map_d_junction`; emit n_D∈{0,1,2}). `stitch_contig` rebuilds full nt reads from
-  OLGA's (V,J,CDR3) output so synthetic + real reads share the arda→scenarios→EM path.
-- **C++ (`_core`)**: Pgen DP (OLGA transfer-matrix factorization + D-D term; one DP for nt & aa),
-  generation sampler, EM E-step. Python/polars: I/O, marginals, EM driver, validation.
-- Bootstrap data: mirpy's OLGA models (7 loci) + ~100k OLGA-synthetic out-of-frame seqs/chain
-  (`mirpy/mir/resources/olga/default_models/`, reference only). **No tandem D in bootstrap** — build
-  D-D but unit-test it structurally; closed-loop oracle: EM must recover OLGA marginals, Pgen must
-  match OLGA. Real out-of-frame data (all 7 loci) ships later from the owner.
-- Watch: arda↔OLGA coordinate convention (1-based junction vs 0-based CDR3 grid) — one authoritative
-  converter in `reference.py` with fixtures both ways; Pgen float64 underflow on long aa-CDR3.
+**Phase 1 — `feature/model-engine`** (native V(D)J model, supersedes OLGA+IGoR). Model = directory
+of **long-format polars parquet** marginal tables + `manifest.json` (Bayes net declared as data via
+each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mirpy's OLGA models
+(7 loci) + OLGA-synthetic out-of-frame seqs (`mirpy/mir/resources/olga/default_models/`, ref only;
+**no tandem D in bootstrap**). Progress on branch:
+
+- **DONE 1a** `model/{events,schema,model,io}.py` — OLGA→polars loader, `manifest.json`, parquet
+  round-trip. Lossless vs OLGA's arrays across all 7 loci (`tests/python/test_model_loader.py`).
+- **DONE 1b (nt)** `model/pgen.py` — reference **nucleotide** Pgen (direct scenario sum over the
+  tables, no OLGA at runtime). Matches OLGA `compute_nt_CDR3_pgen` exactly, all 7 loci
+  (`tests/python/test_pgen_nt.py`; exhaustive check is `-m slow`). This is the quantity EM needs.
+- **TODO aa Pgen** — needs the transfer-matrix codon-marginalizing DP; do it in the native `_core`
+  port (P1f) which serves nt+aa in one DP. Reference: OLGA `generation_probability.py` (spec was
+  extracted; grid is (4,3L), split-point dot product, `Tvd/Svd/Dvd/lTvd/lDvd` insertion matrices).
+- **TODO 1c** `scenario.py` + `stitch.py` — `stitch_contig(V,J,CDR3)` rebuilds full nt reads (OLGA
+  emits only V+J+CDR3); **arda** best alignment → plausible scenario set (slide V3'/J5' window; seed
+  D via `arda.map_d_junction`; emit n_D∈{0,1,2}). Needs the **D-D schema extension**: add `n_d`,
+  `d2_gene`, `d2_del`, `dd_ins`/`dd_dinucl` events (the loader already emits `n_d`=δ(1) for OLGA VDJ).
+  Watch: arda↔OLGA coordinate convention (1-based junction vs 0-based CDR3 grid) — one authoritative
+  converter, fixtures both ways.
+- **TODO 1d** `infer.py`/`validate.py` — EM (E-step soft counts over scenarios; M-step polars
+  group-normalize). Closed-loop oracle: EM must recover OLGA marginals on the synthetic bootstrap.
+- **TODO 1e** `generate.py` — ancestral sampler → polars DataFrame.
+- **TODO 1f** native `_core`: fast transfer-matrix Pgen (nt+aa, +D-D term), sampler, EM E-step;
+  assert C++ == reference-Python == OLGA, benchmark faster than OLGA. `arda` is a hard dep here.
+
+Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
+`(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group
+to sum to 1 **or 0** (undefined conditional for an unused gene, kept for gene-index alignment).
