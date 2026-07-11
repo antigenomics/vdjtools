@@ -132,12 +132,19 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   Real signal: **TRD 4.15% nonfunc / 3.42% func tandem-D** (28-bucket survey, new HF revision).
 - **DONE appendix** `appendix/murugan_model.tex` — §M.4 tandem-D (Prop: disjoint n_D partition) + §M.9
   diagnostics (entropy/MI, Bayes-net figure `bn_trb.pdf`/`bn_trd_dd.pdf`, cross-locus H table). 9 pages.
-- **TODO native D-D port** (task): add `p_nd`, `d2`/`dd_ins`/`dd_dinucl` to `PackedModel`; extend
-  `pgen_nt`/`pgen_aa`/`estep_batch` over n_D∈{1,2} (one extra D block in Πᵣ, weighted by P(n_D=2)).
-  Match `_dd_middle`. Then EM on real TRD learns P(n_D=2)>0. arda full-length V/J germline helper still
-  needed for arda-native stitching.
-- **TODO real-data EM comparison** (task): `infer_native` on real nonfunc reads (TRB, TRD) → compare
-  inferred vs legacy-OLGA marginals via `analyze` (the "ours vs OLGA on the same data" deliverable).
+- **DONE native D-D nt Pgen** `src/pgen.cpp::dd_middle` + `PackedModel` (`p_nd1/p_nd2`, `pd2_given_d1`,
+  `del_d2`, `ins_dd`/`R_dd`/`bias_dd`, `dd` flag). Factorized per-D1 left/right partial sums + O(N²)
+  DD-insertion sweep (O(nD²L²N + nD·N²), not naive O(nD²L⁴N²)). Exact vs Python reference on the tiny
+  model; ~255 ms/seq on real TRD (naive was seconds/seq → timed out). `native.pgen_nt` supports tandems
+  (`pack` no longer guards); OLGA cannot compute D-D Pgen at all. `test_native_dd_matches_python_reference`.
+- **DONE real-data EM comparison** `appendix/bench_em.py` — `infer_native` on real nonfunc TRB+TRD reads
+  (single-D, arda-masked) vs legacy OLGA via `analyze`. Finding: **real repertoires have broader
+  trim/insertion entropy than OLGA's synthetic model** (TRB d_del 6.4→7.6 bit, vd_ins 3.8→4.5); within-D
+  coupling I(delD5;delD3|D)≈1.1 bit robust across both. Held-out loglik improves.
+- **TODO native D-D aa + E-step**: `pgen_aa` (aa transfer matrix — one extra D block in Πᵣ) and
+  `estep_batch` (n_D=2 soft counts: n_d, d2_gene, d2_del, dd_ins/dd_dinucl) still single-D (guarded).
+  The E-step D-D is the prerequisite for **TRD D-D EM** (learning P(n_D=2)>0). arda full-length V/J
+  germline helper still needed for arda-native stitching.
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
 `(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group

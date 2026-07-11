@@ -411,7 +411,12 @@ the $VJ$ loci carry $I(V;J)>0$ through $P(J\mid V)$ (e.g.\ $0.27$ bits for TRA).
 edge $I(\{\del_D\};D)$ is large
 ($1.02$ bits for TRB), i.e.\ trimming depends strongly on which $D$ was chosen. The identical routine
 applies to an EM-inferred model, so the same table compares a model learned from real reads against the
-\texttt{OLGA} bootstrap parameter-by-parameter.
+\texttt{OLGA} bootstrap parameter-by-parameter. On $6000$ real out-of-frame human TRB clonotypes
+(single-$D$ EM, aligned-gene mask; \texttt{bench\_em.py}) the fitted model places broader mass on
+exonuclease deletion and non-templated insertion than the synthetic bootstrap --- the $D$-deletion
+entropy rises from $6.44$ to $7.65$ bits and the $VD$-insertion entropy from $3.84$ to $4.50$ bits, while
+the held-out log-likelihood improves --- i.e.\ real repertoires are less tightly trimmed and inserted than
+the \texttt{OLGA} generative model, and the within-$D$ coupling stays near $1$ bit under both.
 
 \begin{table}[t]
   \centering
