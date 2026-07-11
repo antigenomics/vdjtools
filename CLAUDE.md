@@ -152,10 +152,21 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   python_reference`, `test_native_dd_em_recovers_p_nd2`. **Bug found+fixed** (pre-existing): `native.pack`
   cached by `id(model)` returned a stale `PackedModel` after CPython id-reuse (TRB→TRD in one process
   crashed the M-step, 89 vs 18 V) — now stores+verifies the model ref.
+- **DONE real TRD D-D EM** (`appendix/real_trd_dd` pattern) — native D-D EM on real out-of-frame TRD
+  reads (arda-mapped 11.7k unique clonotypes; arda's own d2_call rate **4.15%**) learns generative
+  **P(n_D=2)=0.028** (1k reads, arda V+D-masked, 26 ms/read, held-out LL −40289→−35431). Below arda's
+  hard-call rate as expected — EM marginalizes the tandem-vs-long-insertion ambiguity, so the generative
+  tandem prob is more conservative than the alignment flag. (Convergence gated on V-usage TV → stops at
+  2 iters under masking; an n_d-focused stop would refine the number.)
+- **D-D skip shortcut — benchmarked, no exact skip exists.** D-D Pgen is 2.5× single-D (`dd_middle` ≈60%
+  of the compute) but **0%** of reads have a zero D-D contribution (two 1-nt Ds + insertions tile almost
+  any mid), so there is no exact per-read skip. Dropping `dd_middle` is <1% median Pgen error but up to
+  100% on genuinely-tandem reads. n_D=2 mass is concentrated (top 20% of reads = 85%); a length-gate that
+  skips the shortest 25% biases learned P(n_D=2) by −2.5% (skipping 50% → −11%). Conclusion: keep D-D
+  exact by default (correctness ethos); the clean **exact** speedup is read-parallelization, not gating.
 - **TODO native D-D aa Pgen** (`pgen_aa` — one extra D block in Πᵣ; still guarded, not needed for EM).
-  **TODO** parallelize `estep_batch` over reads (GIL released) — 68 ms/read × 2000 × 15 iters ≈ 34 min
-  single-threaded; ~4 min on 8 threads would make the full **TRD D-D EM** run comfortable. arda
-  full-length V/J germline helper still needed for arda-native stitching.
+  **TODO** parallelize `estep_batch` over reads (GIL released, exact ~8×) — the recommended speedup over
+  a biased gate. arda full-length V/J germline helper still needed for arda-native stitching. (Task #24.)
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
 `(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group
