@@ -2,6 +2,8 @@
 
 Free functions over the canonical clonotype frame (see :mod:`vdjtools.io.schema`).
 """
+from .correct import correct
+from .decontaminate import decontaminate
 from .downsample import downsample, select_top
 from .filter import (
     filter_by_sample,
@@ -19,6 +21,8 @@ __all__ = [
     "filter_frequency",
     "filter_segment",
     "filter_by_sample",
+    "correct",
+    "decontaminate",
     "pool_samples",
     "join_samples",
     "resolve_key",

@@ -31,6 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 model = ["arda-mapper>=2.5"]           # Phase 1: scenario enumeration + markup repair (brings mmseqs2)
 overlap = ["vdjmatch>=0.0.1"]          # Phase 4: overlap + TCRnet (brings the seqtree engine)
+preprocess = ["seqtree>=0.3"]          # Phase 5: freq-based error correction (near-neighbour search)
 cli = ["typer>=0.12"]                  # Phase 8
 examples = ["marimo", "huggingface_hub", "matplotlib", "scikit-learn"]  # example notebooks (scipy is a base dep)
 oracle = ["olga"]                      # Pgen cross-check oracle (tests only)
