@@ -41,6 +41,11 @@ class _GenPrep:
     ins: dict[str, tuple]                             # junction -> (lengths, cum)
     R: dict[str, np.ndarray]
     bias: dict[str, np.ndarray]
+    # D-D (tandem) generation — populated only for a model with P(n_D=2)>0, else p_nd is None.
+    p_nd: tuple | None                                # (n_d values, cum) P(n_D)
+    d2_given_d1: dict                                 # d1 -> (d2 alleles, cum) P(D2|D1)
+    deld2: dict                                       # d2 -> (idx into pairs, cum)
+    deld2_pairs: dict                                 # d2 -> pairs[i]=(n5,n3)
 
 
 def prepare_generation(model: Model) -> _GenPrep:
@@ -101,17 +106,38 @@ def prepare_generation(model: Model) -> _GenPrep:
             deld_pairs[key] = pairs
 
     ins, R, bias = {}, {}, {}
-    for junc in (("vd", "dj") if vdj else ("vj",)):
+    juncs = ["vd", "dj"] if vdj else ["vj"]
+    if vdj and "dd_ins" in t:
+        juncs.append("dd")
+    for junc in juncs:
         it = t[f"{junc}_ins"].sort("length")
         ins[junc] = _cum(it["length"].to_numpy(), it["p"].to_numpy())
         R[junc] = _dinucl_matrix(t[f"{junc}_dinucl"])
         bias[junc] = _steady_state(R[junc])
+
+    # D-D (tandem) generation structures — only when the model declares them.
+    p_nd, d2_given_d1, deld2, deld2_pairs = None, {}, {}, {}
+    if vdj and "d2_gene" in t:
+        ndf = t["n_d"].sort("n_d")
+        p_nd = _cum(ndf["n_d"].to_numpy(), ndf["p"].to_numpy())
+        d2t = t["d2_gene"].filter(t["d2_gene"]["d2_allele"].is_in(list(ud)))
+        for d1, sub in d2t.group_by("d_allele"):
+            key = d1[0] if isinstance(d1, tuple) else d1
+            if key in ud:
+                d2_given_d1[key] = _cum(sub["d2_allele"].to_numpy(), sub["p"].to_numpy())
+        for d, sub in t["d2_del"].group_by("d2_allele"):
+            key = d[0] if isinstance(d, tuple) else d
+            pairs = np.stack([sub["ndel5"].to_numpy(), sub["ndel3"].to_numpy()], axis=1)
+            idx, cum = _cum(np.arange(len(pairs)), sub["p"].to_numpy())
+            deld2[key] = (idx, cum)
+            deld2_pairs[key] = pairs
 
     return _GenPrep(
         chain_type=model.chain_type, v=v, j_marg=j_marg, j_given_v=j_given_v, d_given_j=d_given_j,
         cut={"v": cut_map("v"), "j": cut_map("j"), **({"d": cut_map("d")} if vdj else {})},
         delv=delv, delj=delj, deld=deld, deld_pairs=deld_pairs,
         maxpal=model.manifest.palindrome_max, ins=ins, R=R, bias=bias,
+        p_nd=p_nd, d2_given_d1=d2_given_d1, deld2=deld2, deld2_pairs=deld2_pairs,
     )
 
 
@@ -135,16 +161,33 @@ def _insert(rng, length: int, R: np.ndarray, bias: np.ndarray, *, from_right: bo
     return "".join(_NT[i] for i in out)
 
 
-def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str]:
-    """One recombination draw -> (cdr3_nt, v, d, j)."""
+def _d_seg(prep: _GenPrep, d: str, rng, deld: dict, deld_pairs: dict, *, min1: bool) -> str:
+    """Sample D's 5'/3' deletions and return its CDR3 contribution.
+
+    If ``min1``, resample until the D contributes ≥1 nt (a tandem D must be non-empty to match the
+    Pgen partition); gives up after a few tries if the deletion distribution rarely leaves any.
+    """
+    cutd = prep.cut["d"][d]
+    for _ in range(64):
+        n5, n3 = deld_pairs[d][_pick(rng, deld[d])]
+        start = n5 + prep.maxpal["d_5"]
+        end = len(cutd) - (n3 + prep.maxpal["d_3"])
+        contrib = cutd[start:end] if start < end else ""
+        if contrib or not min1:
+            return contrib
+    return ""
+
+
+def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
+    """One recombination draw -> (cdr3_nt, v, d, j, d2). ``d2`` is the second D for a tandem, else ""."""
     vdj = prep.chain_type == "VDJ"
     v = _pick(rng, prep.v)
+    d, d2 = "", ""
     if vdj:
         j = _pick(rng, prep.j_marg)
         d = _pick(rng, prep.d_given_j[j])
     else:
         j = _pick(rng, prep.j_given_v[v])
-        d = ""
 
     # V and J each contribute >= 1 nt to the CDR3 (matches the Pgen model — never fully deleted).
     cutv = prep.cut["v"][v]
@@ -154,19 +197,25 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str]:
     dj = min(_pick(rng, prep.delj[j]) + prep.maxpal["j_5"], len(cutj) - 1)
     j_contrib = cutj[dj:]
 
-    if vdj:
-        n5, n3 = prep.deld_pairs[d][_pick(rng, prep.deld[d])]
-        cutd = prep.cut["d"][d]
-        start = n5 + prep.maxpal["d_5"]
-        end = len(cutd) - (n3 + prep.maxpal["d_3"])
-        d_contrib = cutd[start:end] if start < end else ""
+    if not vdj:
+        ins_vj = _insert(rng, int(_pick(rng, prep.ins["vj"])), prep.R["vj"], prep.bias["vj"], from_right=False)
+        return v_contrib + ins_vj + j_contrib, v, d, j, d2
+
+    n_d = int(_pick(rng, prep.p_nd)) if prep.p_nd is not None else 1
+    if n_d == 2 and prep.d2_given_d1:
+        d2 = _pick(rng, prep.d2_given_d1[d])  # P(D2 | D1)
+        d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs, min1=True)
+        d2c = _d_seg(prep, d2, rng, prep.deld2, prep.deld2_pairs, min1=True)
+        ins_vd = _insert(rng, int(_pick(rng, prep.ins["vd"])), prep.R["vd"], prep.bias["vd"], from_right=False)
+        ins_dd = _insert(rng, int(_pick(rng, prep.ins["dd"])), prep.R["dd"], prep.bias["dd"], from_right=False)
+        ins_dj = _insert(rng, int(_pick(rng, prep.ins["dj"])), prep.R["dj"], prep.bias["dj"], from_right=True)
+        cdr3 = v_contrib + ins_vd + d1c + ins_dd + d2c + ins_dj + j_contrib
+    else:  # single D (n_D=1; n_D=0 folds in as a fully-trimmed D)
+        d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs, min1=False)
         ins_vd = _insert(rng, int(_pick(rng, prep.ins["vd"])), prep.R["vd"], prep.bias["vd"], from_right=False)
         ins_dj = _insert(rng, int(_pick(rng, prep.ins["dj"])), prep.R["dj"], prep.bias["dj"], from_right=True)
-        cdr3 = v_contrib + ins_vd + d_contrib + ins_dj + j_contrib
-    else:
-        ins_vj = _insert(rng, int(_pick(rng, prep.ins["vj"])), prep.R["vj"], prep.bias["vj"], from_right=False)
-        cdr3 = v_contrib + ins_vj + j_contrib
-    return cdr3, v, d, j
+        cdr3 = v_contrib + ins_vd + d1c + ins_dj + j_contrib
+    return cdr3, v, d, j, d2
 
 
 def generate(model: Model, n: int, *, seed: int | None = None, productive_only: bool = False) -> pl.DataFrame:
@@ -179,19 +228,13 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
         productive_only: If True, reject out-of-frame / stop-codon draws and keep sampling.
 
     Returns:
-        DataFrame with ``cdr3_nt, cdr3_aa, v_call, d_call, j_call, productive``.
-
-    Raises:
-        NotImplementedError: For a tandem-D model — the sampler does not yet draw ``n_D=2``, so it
-            would emit single-D reads only (never a tandem), misrepresenting a D-D model.
+        DataFrame with ``cdr3_nt, cdr3_aa, v_call, d_call, d2_call, j_call, productive``. ``d2_call``
+        is the second D of a tandem (``n_D=2``) draw, else null; for a single-D model it is all-null.
     """
-    from .dd import has_tandem
-
-    if has_tandem(model):
-        raise NotImplementedError("generation does not yet sample tandem-D (n_D=2) rearrangements")
     prep = prepare_generation(model)
     rng = np.random.default_rng(seed)
-    rows = {k: [] for k in ("cdr3_nt", "cdr3_aa", "v_call", "d_call", "j_call", "productive")}
+    cols = ("cdr3_nt", "cdr3_aa", "v_call", "d_call", "d2_call", "j_call", "productive")
+    rows = {k: [] for k in cols}
     got = 0
     guard = 0
     max_guard = n * 10000 + 1000
@@ -199,7 +242,7 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
         guard += 1
         if guard > max_guard:
             raise RuntimeError("generation exceeded attempt budget (productive draws too rare?)")
-        cdr3, v, d, j = _draw(prep, rng)
+        cdr3, v, d, j, d2 = _draw(prep, rng)
         aa = translate(cdr3)
         productive = len(cdr3) % 3 == 0 and "*" not in aa and len(cdr3) > 0
         if productive_only and not productive:
@@ -208,6 +251,7 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
         rows["cdr3_aa"].append(aa)
         rows["v_call"].append(v)
         rows["d_call"].append(d if d else None)
+        rows["d2_call"].append(d2 if d2 else None)
         rows["j_call"].append(j)
         rows["productive"].append(productive)
         got += 1

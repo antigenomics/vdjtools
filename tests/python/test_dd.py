@@ -204,21 +204,33 @@ def test_dd_guards_raise_and_single_d_untouched():
     m = from_olga(OLGA / "human_T_delta", locus="TRD")
     m_dd = to_dd(m, p_nd2=0.1)
     s = generate.generate(m, 1, seed=1)["cdr3_nt"][0].upper()
-    # aa Pgen, native aa Pgen, generation and EM do not yet support tandems → must raise.
+    # aa Pgen (transfer matrix) and EM do not yet support tandems → must raise.
     for fn in (
         lambda: pgen.pgen_aa(pgen.prepare(m_dd), "CAAAF"),
         lambda: native.pgen_aa(m_dd, "CAAAF"),
-        lambda: generate.generate(m_dd, 1, seed=1),
         lambda: infer.infer(m_dd, [s], max_iter=1),
         lambda: infer.infer_native(m_dd, [s], max_iter=1),
     ):
         with pytest.raises(NotImplementedError):
             fn()
-    # native *nt* Pgen DOES support tandems: must not raise, must be nonnegative.
+    # native *nt* Pgen and generation DO support tandems now: must not raise.
     assert native.pgen_nt(m_dd, s) >= 0.0
+    assert generate.generate(m_dd, 3, seed=1).height == 3
     # to_dd(p_nd2=0) is generatively single-D → native stays byte-identical to the single-D model.
     m_dd0 = to_dd(m, p_nd2=0.0)
     assert native.pgen_nt(m_dd0, s) == pytest.approx(native.pgen_nt(m, s), rel=1e-12)
+
+
+def test_generate_dd_fraction_and_scoreable():
+    """Tandem generation: the n_D=2 draw fraction matches P(n_D=2), and every tandem draw is
+    scoreable by the native D-D Pgen (closed-loop consistency needed for D-D EM)."""
+    from vdjtools.model import generate, native
+    m = _tiny_dd_model(p_nd2=0.4, pdel_full_only=False)
+    df = generate.generate(m, 4000, seed=1)
+    assert df["d2_call"].is_not_null().mean() == pytest.approx(0.4, abs=0.03)  # ~ P(n_D=2)
+    tand = df.filter(df["d2_call"].is_not_null()).head(20)
+    assert all(native.pgen_nt(m, r["cdr3_nt"].upper(), r["v_call"], r["j_call"]) > 0
+               for r in tand.to_dicts())
 
 
 def test_native_dd_matches_python_reference():
