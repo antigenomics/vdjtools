@@ -32,6 +32,7 @@ dependencies = [
 model = ["arda-mapper>=2.5"]           # Phase 1: scenario enumeration + markup repair (brings mmseqs2)
 overlap = ["vdjmatch>=0.0.1", "seqtree>=0.3", "scikit-learn"]  # Phase 4: overlap + TCRnet (brings the seqtree engine); sklearn for MDS clustering; seqtree for similarity-weighted (TINA) overlap
 preprocess = ["seqtree>=0.3"]          # Phase 5: freq-based error correction (near-neighbour search)
+sc = ["scikit-learn", "pyyaml", "anndata", "huggingface_hub"]  # Phase 7: single-cell — sklearn for cluster_eval contingency, pyyaml for AIRR Cell export, anndata for the scverse bridge (to_anndata), HF for the dCODE benchmark fetch (tests only)
 cli = ["typer>=0.12"]                  # Phase 8
 examples = ["marimo", "huggingface_hub", "matplotlib", "scikit-learn"]  # example notebooks (scipy is a base dep)
 oracle = ["olga"]                      # Pgen cross-check oracle (tests only)
