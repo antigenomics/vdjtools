@@ -83,7 +83,9 @@ def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None) -> pl.Data
         ValueError: If the required ``count`` and ``cdr3aa`` columns are absent.
     """
     raw = _read_tsv(path, n_rows=n_rows)
-    lower = {c.lower(): c for c in raw.columns}
+    # Some legacy exports comment out the header line (``#count freq ...``); strip a
+    # leading ``#`` so the first column still maps to ``count``.
+    lower = {c.lower().lstrip("#"): c for c in raw.columns}
     found = {canon: lower[src] for src, canon in _NATIVE_MAP.items() if src in lower}
     if COUNT not in found or CDR3_AA not in found:
         raise ValueError(

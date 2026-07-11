@@ -53,6 +53,20 @@ def test_read_vdjtools_native(tmp_path):
     assert df[S.COUNT].dtype == pl.Int64
 
 
+def test_read_vdjtools_commented_header(tmp_path):
+    # Some legacy exports comment out the header line (``#count freq ...``); the
+    # reader must still map the first column to ``count``.
+    p = tmp_path / "h.txt.gz"
+    with gzip.open(p, "wt") as f:
+        f.write("#" + NATIVE_HEADER)
+        f.write("5\t0\tTGTGCC\tCASTV\tTRBV7-2\tTRBD1\tTRBJ1-1\t3\t-1\t-1\t5\n")
+    df = vio.read_vdjtools(p)
+    assert df.height == 1
+    assert df[S.COUNT].to_list() == [5]
+    assert df[S.CDR3_AA].to_list() == ["CASTV"]
+    assert df[S.LOCUS].to_list() == ["TRB"]
+
+
 def test_read_airr_collapses_per_read(tmp_path):
     p = tmp_path / "a.tsv"
     p.write_text(

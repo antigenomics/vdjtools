@@ -36,3 +36,9 @@ docs/_build/
 
 # scratch
 tmp/
+
+# example-notebook data (fetched from HuggingFace, md5-cached; never committed)
+examples/.data/
+
+# marimo session/run cache
+__marimo__/
