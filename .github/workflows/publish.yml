@@ -56,6 +56,9 @@ jobs:
   publish:
     name: Publish To PyPI
     needs: [build-sdist, build-wheels]
+    # Only a published GitHub Release publishes to PyPI; workflow_dispatch runs build + wheels as a
+    # dry run (no PyPI upload, never enters the pypi environment) so the release build can be tested.
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -63,6 +66,9 @@ jobs:
       id-token: write  # required for OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Download distributions
         uses: actions/download-artifact@v4
         with:
@@ -70,17 +76,19 @@ jobs:
           merge-multiple: true
           path: dist/
       - name: Validate package version matches release tag
-        if: github.event_name == 'release'
         run: |
+          # PEP 440 comparison, so a tag like v2.0.0-alpha.0 matches pyproject version 2.0.0a0.
+          python -m pip install --quiet packaging
           python - <<'PY'
-          from pathlib import Path
           import tomllib
+          from pathlib import Path
+          from packaging.version import Version
           version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
           tag = "${{ github.event.release.tag_name }}"
           norm = tag[1:] if tag.startswith("v") else tag
-          if version != norm:
-              raise SystemExit(f"Version mismatch: pyproject.toml={version}, tag={tag}")
-          print(f"Version check passed: {version} == {tag}")
+          if Version(version) != Version(norm):
+              raise SystemExit(f"Version mismatch: pyproject.toml={version!r} != tag {tag!r} (normalized {norm!r})")
+          print(f"Version OK: pyproject {version} == tag {tag}")
           PY
       - name: List distributions
         run: ls -R dist/
