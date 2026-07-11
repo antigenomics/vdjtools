@@ -91,6 +91,7 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
 
     Raises:
         ImportError: If arda (the ``[model]`` extra) is not installed.
+        ValueError: If no germline is found for ``locus`` / ``organism``.
     """
     from arda.cdr3fix import load_anchors  # optional dep (the [model] extra)
     from arda.paths import vdj_dir
@@ -135,7 +136,7 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def reconcile_olga(model, *, tol_segment: str = "cdr3_segment") -> pl.DataFrame:
+def reconcile_olga(model) -> pl.DataFrame:
     """Catalog how an OLGA-loaded model's germline relates to arda's (the shared-frame audit).
 
     OLGA bootstrap models keep OLGA's germline geometry for exact-Pgen fidelity; this reports,
@@ -144,7 +145,6 @@ def reconcile_olga(model, *, tol_segment: str = "cdr3_segment") -> pl.DataFrame:
 
     Args:
         model: A :class:`~vdjtools.model.model.Model` loaded via ``from_olga``.
-        tol_segment: Which genomic column holds the OLGA CDR3-region germline to compare.
 
     Returns:
         Per-allele report: ``allele, segment, in_arda, germline_equal, olga_len, arda_len``.
@@ -154,7 +154,7 @@ def reconcile_olga(model, *, tol_segment: str = "cdr3_segment") -> pl.DataFrame:
     rows = []
     for seg in ("v", "j"):
         g = model.genomic[f"genes_{seg}"]
-        for allele, olga_seq in zip(g[f"{seg}_allele"], g[tol_segment]):
+        for allele, olga_seq in zip(g[f"{seg}_allele"], g["cdr3_segment"]):
             key = (seg.upper(), allele)
             a = arda_seq.get(key)
             rows.append(

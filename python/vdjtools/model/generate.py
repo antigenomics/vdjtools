@@ -12,6 +12,7 @@ import numpy as np
 import polars as pl
 
 from .model import Model
+from .pgen import _dinucl_matrix, _steady_state
 from .reference import translate
 
 _NT = "ACGT"
@@ -40,19 +41,6 @@ class _GenPrep:
     ins: dict[str, tuple]                             # junction -> (lengths, cum)
     R: dict[str, np.ndarray]
     bias: dict[str, np.ndarray]
-
-
-def _dinucl_matrix(df) -> np.ndarray:
-    R = np.zeros((4, 4))
-    for frm, to, p in df.select(["from_nt", "to_nt", "p"]).iter_rows():
-        R[to, frm] = p
-    return R
-
-
-def _steady_state(R: np.ndarray) -> np.ndarray:
-    w, v = np.linalg.eig(R)
-    x = np.real(v[:, np.argmin(np.abs(w - 1.0))])
-    return x / x.sum()
 
 
 def prepare_generation(model: Model) -> _GenPrep:
@@ -167,7 +155,6 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str]:
     j_contrib = cutj[dj:]
 
     if vdj:
-        idx, _cumd = prep.deld[d]
         n5, n3 = prep.deld_pairs[d][_pick(rng, prep.deld[d])]
         cutd = prep.cut["d"][d]
         start = n5 + prep.maxpal["d_5"]

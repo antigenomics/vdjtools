@@ -30,6 +30,7 @@ pytest.importorskip("olga.load_model", reason="olga (the [oracle] extra) not ins
 pytestmark = pytest.mark.skipif(not OLGA_MODELS.exists(), reason=f"OLGA models not at {OLGA_MODELS}")
 
 TRA = OLGA_MODELS / "human_T_alpha"
+TRB = OLGA_MODELS / "human_T_beta"
 
 
 def _corr(a: dict, b: dict) -> float:
@@ -73,6 +74,30 @@ def test_infer_plumbing():
     assert rep.n_iter == 2
     assert len(rep.loglik) == 2 and len(rep.gene_tv) == 2
     assert set(fit.tables) == set(m.tables)
+
+
+@pytest.mark.slow
+def test_vdj_estep_accumulates():
+    """Cover the VDJ EM soft-count path (_accum_vdj: D-gene / delD / VD+DJ insertion counts).
+
+    A single E-step on one (short) TRB sequence — the full VDJ EM is validated for correctness
+    but is impractically slow in pure Python (~tens of s/seq; the D×deletion×position enumeration
+    is the prime C++/arda-masking target), so this just exercises the path and checks it harvests
+    the D-junction event counts.
+    """
+    from collections import defaultdict
+
+    from vdjtools.model.infer import _estep_seq
+    from vdjtools.model.pgen import prepare
+
+    m = from_olga(TRB, locus="TRB")
+    prep = prepare(m)
+    seq = min(generate(m, 60, seed=1, productive_only=True)["cdr3_nt"].to_list(), key=len)
+    counts = {name: defaultdict(float) for name in m.tables if name != "n_d"}
+    pg = _estep_seq(prep, seq, counts)
+    assert pg > 0
+    for ev in ("d_gene", "d_del", "vd_ins", "dj_ins", "vd_dinucl", "dj_dinucl"):
+        assert counts[ev], f"{ev} soft counts were not accumulated"
 
 
 @pytest.mark.slow

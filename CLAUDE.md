@@ -85,9 +85,14 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   wraps `arda.annotate_sequences`. arda round-trips stitched synthetic contigs (junction + V/J gene),
   `test_stitch.py` (slow, needs arda+mmseqs). The plausible scenario *set* is what pgen/EM enumerate
   for the arda-called (V,J); arda supplies gene identification for real reads.
-- **TODO 1f (native)** port the validated hot loops to `src/` behind `_core` (PackedModel + pgen
-  enumeration/DP, aa VDJ split-DP, sampler, EM E-step); assert C++ == Python == OLGA, benchmark faster
-  than OLGA. This is a **performance** port — all algorithms are done + OLGA-validated in Python.
+- **TODO 1f (native) — REQUIRED for VDJ, not just nice-to-have.** The **VDJ** paths (aa Pgen and the
+  EM E-step `_accum_vdj`) are ~tens of s/seq in pure Python — the D × delD5 × delD3 × position
+  enumeration × the many V candidates that all share the conserved Cys prefix. VJ is fine (~ms/seq).
+  Port the validated hot loops to `src/` behind `_core` (PackedModel + pgen enumeration/DP, aa VDJ
+  split-DP, sampler, EM E-step); assert C++ == Python == OLGA, benchmark faster than OLGA. Alternative
+  that also fixes VDJ EM speed: **arda-masked E-step** — annotate reads with arda, restrict each read's
+  scenario enumeration to arda's called (V,J,D) instead of enumerating all genes. Algorithms are all
+  done + OLGA-validated in Python; this is the performance layer.
 - **TODO D-D extension** (not in OLGA bootstrap): add `n_d`∈{0,1,2}, `d2_gene`, `d2_del`,
   `dd_ins`/`dd_dinucl` events + enumeration; the loader already emits `n_d`=δ(1). Ships with real
   tandem-D data (owner). arda full-length V/J germline helper needed for arda-native stitching.

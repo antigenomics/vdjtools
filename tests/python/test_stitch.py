@@ -24,6 +24,16 @@ pytest.importorskip("olga.load_model", reason="olga (the [oracle] extra) not ins
 pytestmark = pytest.mark.skipif(not OLGA_MODELS.exists(), reason=f"OLGA models not at {OLGA_MODELS}")
 
 
+def test_stitch_contig_none_paths():
+    """stitch_contig returns None when a gene is unknown; stitch_frame yields a null contig."""
+    m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
+    good_v = m.genomic["genes_v"]["v_allele"][0]
+    assert stitch_contig(m, "NOSUCHV", "TRBJ1-1*01", "TGTGCC") is None
+    assert stitch_contig(m, good_v, "NOSUCHJ", "TGTGCC") is None
+    frame = pl.DataFrame({"v_call": ["NOSUCHV"], "j_call": ["TRBJ1-1*01"], "cdr3_nt": ["TGTGCC"]})
+    assert stitch_frame(m, frame)["contig"][0] is None
+
+
 def test_stitch_contig_structure():
     """The contig embeds the CDR3 between the V and J framework germline (no arda needed)."""
     m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")

@@ -36,11 +36,6 @@ def _steady_state(R: np.ndarray) -> np.ndarray:
     return x / x.sum()
 
 
-def _markov(R: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(R, steady-state bias) from a dinucleotide table's implied 4×4 matrix."""
-    return R, _steady_state(R)
-
-
 @dataclass(slots=True)
 class _Prepared:
     """Model unpacked into plain dicts/arrays for the Pgen sum (built once, reused)."""
@@ -282,11 +277,6 @@ def _aa_dp(aa: str, template: list[int], specs: list) -> float:
     return sum(dp.values())
 
 
-def _block_specs(n: int) -> list:
-    """A germline-everywhere specs list of length ``n`` (fill insertion blocks in after)."""
-    return [None] * n
-
-
 def _pgen_aa_vj(prep: _Prepared, aa: str, v: str | None, j: str | None) -> float:
     N = 3 * len(aa)
     pins, R, bias = prep.p_ins["vj"], prep.R["vj"], prep.bias["vj"]
@@ -317,7 +307,7 @@ def _pgen_aa_vj(prep: _Prepared, aa: str, v: str | None, j: str | None) -> float
                     if ins_len < 0 or ins_len >= len(pins) or pins[ins_len] == 0.0:
                         continue
                     template = gv + [-1] * ins_len + [_NT2NUM[c] for c in cutj[idxj:]]
-                    specs = _block_specs(N)
+                    specs = [None] * N
                     for p in range(len_v, len_v + ins_len):
                         specs[p] = ("L", R, bias, p == len_v, p == len_v + ins_len - 1)
                     w = _aa_dp(aa, template, specs)
@@ -411,7 +401,7 @@ def _d_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
                     if not _d_codons_ok(dc, pos, aa):
                         continue
                     template = gv + [-1] * lvd + dc + [-1] * ldj + gj
-                    specs = _block_specs(N)
+                    specs = [None] * N
                     for p in range(len_v, pos):
                         specs[p] = ("L", R_vd, b_vd, p == len_v, p == pos - 1)
                     for p in range(pos + ld, right):

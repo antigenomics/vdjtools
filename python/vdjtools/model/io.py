@@ -46,9 +46,9 @@ def _genomic_table(gen_list, anchors, cut_segs, *, seg: str, has_anchor: bool) -
         name = entry[0]
         if has_anchor:  # genV/genJ entries are [name, cdr3_trim, full_germline]
             cdr3_seg, full = entry[1], entry[2]
-            anchor, func = anchors.get(name, (-1, ""))
+            anchor = anchors.get(name, (-1, ""))[0]
         else:  # genD entries are [name, germline]
-            full, cdr3_seg, anchor, func = entry[1], entry[1], -1, ""
+            full, cdr3_seg, anchor = entry[1], entry[1], -1
         rows.append(
             {
                 f"{seg}_allele": name,
