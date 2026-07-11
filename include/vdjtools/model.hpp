@@ -48,9 +48,13 @@ struct PackedModel {
 // reference exactly.
 double pgen_nt(const PackedModel& m, const std::vector<int8_t>& cdr3, int v_idx, int j_idx);
 
-// Generation probability of an amino-acid CDR3 (codon-marginalizing DP). ``aa`` is the CDR3
-// amino-acid string; v_idx/j_idx as for ``pgen_nt``.
+// Generation probability of an amino-acid CDR3 (codon-marginalizing transfer matrix). ``aa`` is the
+// CDR3 amino-acid string; v_idx/j_idx as for ``pgen_nt`` (-1 = agnostic / sum over all genes).
 double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx);
+
+// Total Pgen of ``aa`` and all its Hamming-distance-1 amino-acid neighbours (one substitution),
+// via the inclusion-exclusion identity over per-position wildcards. v_idx/j_idx as above.
+double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, int j_idx);
 
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.

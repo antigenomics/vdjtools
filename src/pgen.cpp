@@ -151,52 +151,27 @@ namespace {
 static const char CODON[65] =
     "KNKNTTTTRSRSIIMIQHQHPPPPRRRRLLLLEDEDAAAAGGGGVVVV*Y*YSSSS*CWCLFLF";
 
-// Per-position insertion spec for the aa DP: kind -1 germline, 0 = VD/VJ (5'->3'), 1 = DJ (3'->5').
-struct Spec {
-    int kind = -1;
-    const double* R = nullptr;
-    const double* bias = nullptr;
-    bool first = false;
-    bool last = false;
-};
+// Per-codon allowed-codon set: allowed[c] is a 64-bit mask over codon indices (a*16+b*4+c) that
+// pass at amino-acid position c. A singleton mask = one aa (exact query); a wildcard mask (all
+// non-stop codons) = "any amino acid" here, which drives motif/regex and Hamming-ball Pgens
+// without enumerating the set. ok_codon tests membership; the mask replaces the CODON[...]==aa char
+// compare and costs the same.
+inline bool ok_codon(uint64_t allowed_c, int codon_idx) {
+    return (allowed_c >> codon_idx) & 1ULL;
+}
 
-// Codon-constrained left-to-right sum over N-region nt consistent with the aa string, Markov-
-// weighted; state = (nt[i-1], nt[i-2]) with -1 sentinel encoded as index (p1+1)*5 + (p2+1).
-double aa_dp(const char* aa, const std::vector<int8_t>& tmpl, const std::vector<Spec>& specs) {
-    int N = tmpl.size();
-    double dp[25] = {0.0};
-    dp[0] = 1.0;  // (p1=-1, p2=-1)
-    for (int i = 0; i < N; ++i) {
-        int fixed = tmpl[i];
-        const Spec& sp = specs[i];
-        bool ce = (i % 3 == 2);
-        char aai = aa[i / 3];
-        double ndp[25] = {0.0};
-        bool any = false;
-        for (int ps = 0; ps < 25; ++ps) {
-            double w = dp[ps];
-            if (w == 0.0) continue;
-            int p1 = ps / 5 - 1, p2 = ps % 5 - 1;
-            int lo = (fixed >= 0) ? fixed : 0, hi = (fixed >= 0) ? fixed : 3;
-            for (int nt = lo; nt <= hi; ++nt) {
-                double ww = w;
-                if (sp.kind == 0) {
-                    ww *= sp.first ? sp.bias[nt] : sp.R[nt * 4 + p1];
-                } else if (sp.kind == 1) {
-                    if (!sp.first) ww *= sp.R[p1 * 4 + nt];
-                    if (sp.last) ww *= sp.bias[nt];
-                }
-                if (ce && CODON[p2 * 16 + p1 * 4 + nt] != aai) continue;
-                ndp[(nt + 1) * 5 + (p1 + 1)] += ww;
-                any = true;
-            }
-        }
-        if (!any) return 0.0;
-        for (int k = 0; k < 25; ++k) dp[k] = ndp[k];
-    }
-    double s = 0.0;
-    for (int k = 0; k < 25; ++k) s += dp[k];
-    return s;
+uint64_t mask_for_aa(char x) {
+    uint64_t m = 0;
+    for (int t = 0; t < 64; ++t)
+        if (CODON[t] == x) m |= (1ULL << t);
+    return m;
+}
+
+uint64_t mask_wildcard() {  // any of the 20 amino acids (excludes stop) — OLGA's degenerate 'X'
+    uint64_t m = 0;
+    for (int t = 0; t < 64; ++t)
+        if (CODON[t] != '*') m |= (1ULL << t);
+    return m;
 }
 
 std::vector<int> mask_or_all(int idx, const std::vector<int>& all) {
@@ -204,42 +179,240 @@ std::vector<int> mask_or_all(int idx, const std::vector<int>& all) {
     return all;
 }
 
-double pgen_aa_vj(const PackedModel& m, const char* aa, int alen, int v_idx, int j_idx) {
-    int N = 3 * alen;
-    double total = 0.0;
+// ---- aa Pgen: Murugan/OLGA transfer-matrix (Pi_L * Pi_R split) -----------------------------
+// We factorize: the *only* cross-boundary coupling between the V/VD-insertion side and the
+// D-weighted J/DJ-insertion side is codon translation (never the insertion Markov chain), so the
+// left DP (Lf) and right DP (Rb) are each built once and stitched at the D placement. State is the
+// trailing two nt (nt[i-1], nt[i-2]), encoded s = (a+1)*5 + (b+1) in [0,25). Matches OLGA exactly.
+inline int sidx(int a, int b) { return (a + 1) * 5 + (b + 1); }
+
+// Lf[p*25 + s] = weight of V germline (>=1 nt) + N1 insertion filling CDR3 nt positions [0,p),
+// trailing state s = (nt[p-1], nt[p-2]); Pins + first-nt bias baked in; complete codons in [0,p)
+// constrained. p is where the next segment (D for VDJ, J for VJ) starts. The insertion arrays are
+// passed in (VD for VDJ, VJ for VJ). ``jbind`` >= 0 folds the VJ gene weight P(J|V) into the V seed
+// (so Lf sums over V at fixed J); jbind < 0 uses P(V) alone (VDJ, where J decouples from V).
+void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
+                const std::vector<double>& pins, const std::vector<double>& R,
+                const std::vector<double>& bias, int jbind,
+                std::vector<double>& Lf, std::vector<char>& lf_any) {
+    Lf.assign((N + 1) * 25, 0.0);
+    std::vector<double> seed((N + 1) * 25, 0.0);
+    std::vector<char> has_seed(N + 1, 0);
     for (int v : mask_or_all(v_idx, m.func_v)) {
         double pv = m.pv[v];
         if (pv == 0.0) continue;
-        const auto& cutv = m.cut_v[v];
-        int Lv = cutv.size();
-        for (int j : mask_or_all(j_idx, m.func_j)) {
-            double pj = m.pjv[v * m.nJ() + j];
-            if (pj == 0.0) continue;
-            const auto& cutj = m.cut_j[j];
-            int Lj = cutj.size();
-            for (int len_v = 1; len_v <= std::min(Lv, N); ++len_v) {
-                int div = Lv - len_v;
-                if (div < 0 || div >= m.nbins_v) continue;
-                double pdv = m.del_v[v * m.nbins_v + div];
-                if (pdv == 0.0) continue;
-                for (int len_j = 1; len_j <= std::min(Lj, N - len_v); ++len_j) {
-                    int dij = Lj - len_j;
-                    if (dij < 0 || dij >= m.nbins_j) continue;
-                    double pdj = m.del_j[j * m.nbins_j + dij];
-                    if (pdj == 0.0) continue;
-                    int ins_len = N - len_v - len_j;
-                    if (ins_len < 0 || ins_len >= (int)m.ins_vj.size() || m.ins_vj[ins_len] == 0.0) continue;
-                    std::vector<int8_t> tmpl(N);
-                    std::vector<Spec> specs(N);
-                    for (int k = 0; k < len_v; ++k) tmpl[k] = cutv[k];
-                    for (int k = 0; k < ins_len; ++k) {
-                        int p = len_v + k;
-                        tmpl[p] = -1;
-                        specs[p] = {0, m.R_vj.data(), m.bias_vj.data(), k == 0, k == ins_len - 1};
+        if (jbind >= 0) {  // VJ: weight the V seed by P(J|V)
+            double pjv = m.pjv[v * m.nJ() + jbind];
+            if (pjv == 0.0) continue;
+            pv *= pjv;
+        }
+        const auto& gv = m.cut_v[v];
+        int Lv = gv.size();
+        for (int len_v = 1; len_v <= std::min(Lv, N); ++len_v) {
+            int div = Lv - len_v;
+            if (div < 0 || div >= m.nbins_v) continue;
+            double pdv = m.del_v[v * m.nbins_v + div];
+            if (pdv == 0.0) continue;
+            bool ok = true;  // complete codons within [0,len_v) must translate
+            for (int c = 0; c < len_v / 3; ++c) {
+                if (!ok_codon(allowed[c], gv[3 * c] * 16 + gv[3 * c + 1] * 4 + gv[3 * c + 2])) { ok = false; break; }
+            }
+            if (!ok) continue;
+            int a = gv[len_v - 1], b = (len_v >= 2) ? gv[len_v - 2] : -1;
+            seed[len_v * 25 + sidx(a, b)] += pv * pdv;
+            has_seed[len_v] = 1;
+        }
+    }
+    std::vector<double> cur(25), ncur(25);
+    for (int q = 0; q <= N; ++q) {
+        if (!has_seed[q]) continue;
+        for (int s = 0; s < 25; ++s) cur[s] = seed[q * 25 + s];
+        if (!pins.empty() && pins[0] != 0.0)
+            for (int s = 0; s < 25; ++s) Lf[q * 25 + s] += pins[0] * cur[s];
+        for (int ell = 1; q + ell <= N && ell < (int)pins.size(); ++ell) {
+            int mm = q + ell - 1;
+            bool ce = (mm % 3 == 2);
+            uint64_t am = allowed[mm / 3];
+            std::fill(ncur.begin(), ncur.end(), 0.0);
+            bool any = false;
+            for (int s = 0; s < 25; ++s) {
+                double w = cur[s];
+                if (w == 0.0) continue;
+                int p1 = s / 5 - 1, p2 = s % 5 - 1;
+                for (int nt = 0; nt < 4; ++nt) {
+                    double mult = (ell == 1) ? bias[nt] : R[nt * 4 + p1];
+                    if (mult == 0.0) continue;
+                    if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+                    ncur[sidx(nt, p1)] += w * mult;
+                    any = true;
+                }
+            }
+            cur.swap(ncur);
+            if (!any) break;
+            if (pins[ell] != 0.0)
+                for (int s = 0; s < 25; ++s) Lf[(q + ell) * 25 + s] += pins[ell] * cur[s];
+        }
+    }
+    lf_any.assign(N + 1, 0);
+    for (int p = 0; p <= N; ++p)
+        for (int s = 0; s < 25; ++s)
+            if (Lf[p * 25 + s] != 0.0) { lf_any[p] = 1; break; }
+}
+
+// Rb[p*25 + s] = sum_J P(D|J) P(J) P(delJ) over DJ insertion + J germline filling [p,N), trailing
+// state s = (nt[p], nt[p+1]); Pins(DJ) + bias baked in; complete codons in [p,N) constrained. The
+// DJ Markov reads 3'->5', so the backward pass extends leftward from the J boundary.
+void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, int j_idx,
+                 std::vector<double>& Rb, std::vector<char>& rb_any) {
+    Rb.assign((N + 1) * 25, 0.0);
+    const auto& pins = m.ins_dj;
+    const auto& R = m.R_dj;
+    const auto& bias = m.bias_dj;
+    int nD = m.nD();
+    std::vector<double> seed((N + 1) * 25, 0.0);
+    std::vector<char> has_seed(N + 1, 0);
+    for (int j : mask_or_all(j_idx, m.func_j)) {
+        double pj = m.pj[j];
+        if (pj == 0.0) continue;
+        double pdg = m.pd_given_j[j * nD + D];
+        if (pdg == 0.0) continue;
+        const auto& gj = m.cut_j[j];
+        int Lj = gj.size();
+        for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
+            int right = N - len_j, idxj = Lj - len_j;
+            if (idxj < 0 || idxj >= m.nbins_j) continue;
+            double pdj = m.del_j[j * m.nbins_j + idxj];
+            if (pdj == 0.0) continue;
+            bool ok = true;  // complete codons within [right,N) must translate
+            for (int c = (right + 2) / 3; c < N / 3; ++c) {
+                if (3 * c >= right) {
+                    int o = 3 * c - right;
+                    if (!ok_codon(allowed[c], gj[idxj + o] * 16 + gj[idxj + o + 1] * 4 + gj[idxj + o + 2])) { ok = false; break; }
+                }
+            }
+            if (!ok) continue;
+            int cc = gj[idxj], dd = (len_j >= 2) ? gj[idxj + 1] : -1;
+            seed[right * 25 + sidx(cc, dd)] += pdg * pj * pdj;
+            has_seed[right] = 1;
+        }
+    }
+    std::vector<double> cur(25), ncur(25);
+    for (int right = N; right >= 0; --right) {
+        if (!has_seed[right]) continue;
+        for (int s = 0; s < 25; ++s) cur[s] = seed[right * 25 + s];
+        if (!pins.empty() && pins[0] != 0.0)
+            for (int s = 0; s < 25; ++s) Rb[right * 25 + s] += pins[0] * cur[s];
+        for (int ell = 1; right - ell >= 0 && ell < (int)pins.size(); ++ell) {
+            int mm = right - ell;
+            bool ce = (mm % 3 == 0);  // codon [mm,mm+1,mm+2] completes now
+            uint64_t am = allowed[mm / 3];
+            std::fill(ncur.begin(), ncur.end(), 0.0);
+            bool any = false;
+            for (int s = 0; s < 25; ++s) {
+                double w = cur[s];
+                if (w == 0.0) continue;
+                int c = s / 5 - 1, d = s % 5 - 1;  // nt[mm+1], nt[mm+2]
+                for (int nt = 0; nt < 4; ++nt) {
+                    double mult = (ell == 1) ? bias[nt] : R[nt * 4 + c];
+                    if (mult == 0.0) continue;
+                    if (ce && !ok_codon(am, nt * 16 + c * 4 + d)) continue;
+                    ncur[sidx(nt, c)] += w * mult;
+                    any = true;
+                }
+            }
+            cur.swap(ncur);
+            if (!any) break;
+            if (pins[ell] != 0.0)
+                for (int s = 0; s < 25; ++s) Rb[(right - ell) * 25 + s] += pins[ell] * cur[s];
+        }
+    }
+    rb_any.assign(N + 1, 0);
+    for (int p = 0; p <= N; ++p)
+        for (int s = 0; s < 25; ++s)
+            if (Rb[p * 25 + s] != 0.0) { rb_any[p] = 1; break; }
+}
+
+// Stitch left dp (state nt[p-1],nt[p-2]) with right rb (state nt[p],nt[p+1]) at boundary p,
+// checking the single codon (if any) that straddles p against its allowed-codon mask.
+double combine_tm(const std::vector<double>& dp, const double* rb, int p, const uint64_t* allowed) {
+    if (p % 3 == 0) {  // clean cut — no straddling codon
+        double a = 0.0, b = 0.0;
+        for (int s = 0; s < 25; ++s) { a += dp[s]; b += rb[s]; }
+        return a * b;
+    }
+    if (p % 3 == 1) {  // codon [p-1,p,p+1] = (a,c,d), completes at p+1
+        uint64_t am = allowed[(p - 1) / 3];
+        double dpA[4] = {0, 0, 0, 0};
+        for (int s = 0; s < 25; ++s)
+            if (dp[s] != 0.0) { int a = s / 5 - 1; if (a >= 0) dpA[a] += dp[s]; }
+        double tot = 0.0;
+        for (int s = 0; s < 25; ++s) {
+            double w = rb[s];
+            if (w == 0.0) continue;
+            int c = s / 5 - 1, d = s % 5 - 1;
+            if (c < 0 || d < 0) continue;
+            for (int a = 0; a < 4; ++a)
+                if (dpA[a] != 0.0 && ok_codon(am, a * 16 + c * 4 + d)) tot += dpA[a] * w;
+        }
+        return tot;
+    }
+    // p % 3 == 2: codon [p-2,p-1,p] = (b,a,c), completes at p
+    uint64_t am = allowed[p / 3];
+    double rbC[4] = {0, 0, 0, 0};
+    for (int s = 0; s < 25; ++s)
+        if (rb[s] != 0.0) { int c = s / 5 - 1; if (c >= 0) rbC[c] += rb[s]; }
+    double tot = 0.0;
+    for (int s = 0; s < 25; ++s) {
+        double w = dp[s];
+        if (w == 0.0) continue;
+        int a = s / 5 - 1, b = s % 5 - 1;
+        if (a < 0 || b < 0) continue;
+        for (int c = 0; c < 4; ++c)
+            if (rbC[c] != 0.0 && ok_codon(am, b * 16 + a * 4 + c)) tot += w * rbC[c];
+    }
+    return tot;
+}
+
+double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
+    int N = 3 * alen;
+    std::vector<double> Lf, Rb;
+    std::vector<char> lf_any, rb_any;
+    mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);
+    double total = 0.0;
+    std::vector<double> dp(25), ndp(25);
+    for (int D : m.func_d) {
+        mk_right_tm(m, allowed, N, D, j_idx, Rb, rb_any);
+        const auto& cutd = m.cut_d[D];
+        int Ld = cutd.size();
+        for (int idx5 = 0; idx5 <= Ld && idx5 < m.nbins_d5; ++idx5) {
+            for (int idx3 = 0; idx3 <= Ld - idx5 && idx3 < m.nbins_d3; ++idx3) {
+                double pdel = m.del_d[(D * m.nbins_d5 + idx5) * m.nbins_d3 + idx3];
+                if (pdel == 0.0) continue;
+                int ld = Ld - idx5 - idx3;
+                for (int pos = 1; pos <= N - ld; ++pos) {
+                    if (!lf_any[pos]) continue;
+                    int p = pos + ld;
+                    if (p > N || !rb_any[p]) continue;
+                    for (int s = 0; s < 25; ++s) dp[s] = Lf[pos * 25 + s];
+                    bool ok = true;
+                    for (int k = 0; k < ld; ++k) {  // thread the fixed D germline nt
+                        int mm = pos + k, nt = cutd[idx5 + k];
+                        bool ce = (mm % 3 == 2);
+                        uint64_t am = allowed[mm / 3];
+                        std::fill(ndp.begin(), ndp.end(), 0.0);
+                        bool any = false;
+                        for (int s = 0; s < 25; ++s) {
+                            double w = dp[s];
+                            if (w == 0.0) continue;
+                            int p1 = s / 5 - 1, p2 = s % 5 - 1;
+                            if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+                            ndp[sidx(nt, p1)] += w;
+                            any = true;
+                        }
+                        dp.swap(ndp);
+                        if (!any) { ok = false; break; }
                     }
-                    for (int k = 0; k < len_j; ++k) tmpl[len_v + ins_len + k] = cutj[(Lj - len_j) + k];
-                    double w = aa_dp(aa, tmpl, specs);
-                    if (w > 0.0) total += pv * pj * pdv * pdj * m.ins_vj[ins_len] * w;
+                    if (ok) total += pdel * combine_tm(dp, &Rb[p * 25], p, allowed);
                 }
             }
         }
@@ -247,94 +420,48 @@ double pgen_aa_vj(const PackedModel& m, const char* aa, int alen, int v_idx, int
     return total;
 }
 
-double d_aa_middle(const PackedModel& m, const char* aa, const std::vector<int8_t>& gv,
-                   const std::vector<int8_t>& gj, int len_v, int len_j, int N, int j) {
-    int right = N - len_j;
-    int nD = m.nD();
-    double out = 0.0;
-    for (int d : m.func_d) {
-        double pdg = m.pd_given_j[j * nD + d];
-        if (pdg == 0.0) continue;
-        const auto& cutd = m.cut_d[d];
-        int L = cutd.size();
-        for (int idx5 = 0; idx5 <= L && idx5 < m.nbins_d5; ++idx5) {
-            for (int idx3 = 0; idx3 <= L - idx5 && idx3 < m.nbins_d3; ++idx3) {
-                double pdel = m.del_d[(d * m.nbins_d5 + idx5) * m.nbins_d3 + idx3];
-                if (pdel == 0.0) continue;
-                int ld = L - idx5 - idx3;
-                for (int pos = len_v; pos <= right - ld; ++pos) {
-                    int lvd = pos - len_v, ldj = right - pos - ld;
-                    if (lvd >= (int)m.ins_vd.size() || m.ins_vd[lvd] == 0.0) continue;
-                    if (ldj >= (int)m.ins_dj.size() || m.ins_dj[ldj] == 0.0) continue;
-                    bool dok = true;  // D-germline full codons must translate (cheap pre-prune)
-                    for (int c = (pos + 2) / 3; 3 * c + 2 < pos + ld; ++c) {
-                        int o = 3 * c - pos;
-                        if (CODON[cutd[idx5 + o] * 16 + cutd[idx5 + o + 1] * 4 + cutd[idx5 + o + 2]] != aa[c]) {
-                            dok = false;
-                            break;
-                        }
-                    }
-                    if (!dok) continue;
-                    std::vector<int8_t> tmpl(N);
-                    std::vector<Spec> specs(N);
-                    for (int k = 0; k < len_v; ++k) tmpl[k] = gv[k];
-                    for (int k = 0; k < lvd; ++k) {
-                        int p = len_v + k;
-                        tmpl[p] = -1;
-                        specs[p] = {0, m.R_vd.data(), m.bias_vd.data(), k == 0, k == lvd - 1};
-                    }
-                    for (int k = 0; k < ld; ++k) tmpl[pos + k] = cutd[idx5 + k];
-                    for (int k = 0; k < ldj; ++k) {
-                        int p = pos + ld + k;
-                        tmpl[p] = -1;
-                        specs[p] = {1, m.R_dj.data(), m.bias_dj.data(), k == 0, k == ldj - 1};
-                    }
-                    for (int k = 0; k < len_j; ++k) tmpl[right + k] = gj[k];
-                    double w = aa_dp(aa, tmpl, specs);
-                    if (w > 0.0) out += pdg * pdel * m.ins_vd[lvd] * m.ins_dj[ldj] * w;
-                }
-            }
-        }
-    }
-    return out;
-}
-
-double pgen_aa_vdj(const PackedModel& m, const char* aa, int alen, int v_idx, int j_idx) {
+// VJ aa Pgen (TRA/TRG/IGK/IGL): no D, one VJ insertion. J plays the role D does in the VDJ split.
+// For each J we build the left DP (V germline + VJ insertion, weighted by P(V)P(J|V)), then thread
+// the fixed J germline suffix over [N-len_j, N) and sum. O(nJ * N * 25) — replaces the old
+// per-scenario enumeration, which was ~1000x slower on VJ loci with many V/J alleles.
+double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
     int N = 3 * alen;
     double total = 0.0;
-    for (int v : mask_or_all(v_idx, m.func_v)) {
-        double pv = m.pv[v];
-        if (pv == 0.0) continue;
-        const auto& cutv = m.cut_v[v];
-        int Lv = cutv.size();
-        for (int j : mask_or_all(j_idx, m.func_j)) {
-            double pj = m.pj[j];
-            if (pj == 0.0) continue;
-            const auto& cutj = m.cut_j[j];
-            int Lj = cutj.size();
-            for (int len_v = 1; len_v <= std::min(Lv, N); ++len_v) {
-                int div = Lv - len_v;
-                if (div < 0 || div >= m.nbins_v) continue;
-                double pdv = m.del_v[v * m.nbins_v + div];
-                if (pdv == 0.0) continue;
-                bool vok = true;  // V-germline prefix must translate
-                for (int c = 0; c < len_v / 3; ++c) {
-                    if (CODON[cutv[3 * c] * 16 + cutv[3 * c + 1] * 4 + cutv[3 * c + 2]] != aa[c]) {
-                        vok = false;
-                        break;
-                    }
+    std::vector<double> Lf, dp(25), ndp(25);
+    std::vector<char> lf_any;
+    for (int j : mask_or_all(j_idx, m.func_j)) {
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any);
+        const auto& gj = m.cut_j[j];
+        int Lj = gj.size();
+        for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
+            int p = N - len_j, idxj = Lj - len_j;
+            if (p < 1 || !lf_any[p]) continue;  // >=1 V/insertion nt before J
+            if (idxj < 0 || idxj >= m.nbins_j) continue;
+            double pdj = m.del_j[j * m.nbins_j + idxj];
+            if (pdj == 0.0) continue;
+            for (int s = 0; s < 25; ++s) dp[s] = Lf[p * 25 + s];
+            bool ok = true;
+            for (int k = 0; k < len_j; ++k) {  // thread the fixed J germline suffix
+                int mm = p + k, nt = gj[idxj + k];
+                bool ce = (mm % 3 == 2);
+                uint64_t am = allowed[mm / 3];
+                std::fill(ndp.begin(), ndp.end(), 0.0);
+                bool any = false;
+                for (int s = 0; s < 25; ++s) {
+                    double w = dp[s];
+                    if (w == 0.0) continue;
+                    int p1 = s / 5 - 1, p2 = s % 5 - 1;
+                    if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+                    ndp[sidx(nt, p1)] += w;
+                    any = true;
                 }
-                if (!vok) continue;
-                std::vector<int8_t> gv(cutv.begin(), cutv.begin() + len_v);
-                for (int len_j = 1; len_j <= std::min(Lj, N - len_v); ++len_j) {
-                    int dij = Lj - len_j;
-                    if (dij < 0 || dij >= m.nbins_j) continue;
-                    double pdj = m.del_j[j * m.nbins_j + dij];
-                    if (pdj == 0.0) continue;
-                    std::vector<int8_t> gj(cutj.begin() + (Lj - len_j), cutj.end());
-                    total += pv * pj * pdv * pdj * d_aa_middle(m, aa, gv, gj, len_v, len_j, N, j);
-                }
+                dp.swap(ndp);
+                if (!any) { ok = false; break; }
             }
+            if (!ok) continue;
+            double sum = 0.0;
+            for (int s = 0; s < 25; ++s) sum += dp[s];
+            total += pdj * sum;
         }
     }
     return total;
@@ -342,9 +469,39 @@ double pgen_aa_vdj(const PackedModel& m, const char* aa, int alen, int v_idx, in
 
 }  // namespace
 
+namespace {
+double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int v_idx, int j_idx) {
+    return m.vdj ? pgen_aa_vdj(m, allowed, L, v_idx, j_idx)
+                 : pgen_aa_vj(m, allowed, L, v_idx, j_idx);
+}
+}  // namespace
+
 double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx) {
-    return m.vdj ? pgen_aa_vdj(m, aa.c_str(), aa.size(), v_idx, j_idx)
-                 : pgen_aa_vj(m, aa.c_str(), aa.size(), v_idx, j_idx);
+    int L = aa.size();
+    std::vector<uint64_t> allowed(L);
+    for (int c = 0; c < L; ++c) allowed[c] = mask_for_aa(aa[c]);
+    return pgen_aa_masked(m, allowed.data(), L, v_idx, j_idx);
+}
+
+// Total Pgen of the amino-acid CDR3 and every sequence within Hamming distance 1 of it (one aa
+// substitution). By inclusion-exclusion this is  sum_k Pgen(a with position k wildcarded)
+//   - (L-1) Pgen(a)  (OLGA's identity), but each term here is one fast transfer-matrix pass and the
+// wildcard is a single mask (no 19x enumeration). Done entirely in C++ so the packed model is reused.
+double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, int j_idx) {
+    int L = aa.size();
+    if (L == 0) return 0.0;
+    std::vector<uint64_t> allowed(L);
+    for (int c = 0; c < L; ++c) allowed[c] = mask_for_aa(aa[c]);
+    double base = pgen_aa_masked(m, allowed.data(), L, v_idx, j_idx);
+    uint64_t wild = mask_wildcard();
+    double total = 0.0;
+    for (int k = 0; k < L; ++k) {
+        uint64_t save = allowed[k];
+        allowed[k] = wild;
+        total += pgen_aa_masked(m, allowed.data(), L, v_idx, j_idx);
+        allowed[k] = save;
+    }
+    return total - (L - 1) * base;
 }
 
 // ---- EM E-step ----------------------------------------------------------------------------

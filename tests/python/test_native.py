@@ -52,6 +52,66 @@ def test_native_aa_beta_oracle():
     assert np.isclose(p, 1.203646865765782e-10, rtol=1e-6)
 
 
+def _olga_vdj(sub):
+    """Build OLGA's own GenerationProbabilityVDJ for the given model subdir."""
+    from olga import load_model as ol
+    from olga import generation_probability as gp
+
+    d = OLGA_MODELS / sub
+    gen = ol.GenerativeModelVDJ()
+    gen.load_and_process_igor_model(str(d / "model_marginals.txt"))
+    gd = ol.GenomicDataVDJ()
+    gd.load_igor_genomic_data(
+        str(d / "model_params.txt"),
+        str(d / "V_gene_CDR3_anchors.csv"),
+        str(d / "J_gene_CDR3_anchors.csv"),
+    )
+    return gp.GenerationProbabilityVDJ(gen, gd)
+
+
+def test_native_aa_vdj_matches_olga():
+    """Native transfer-matrix VDJ aa-Pgen == OLGA's compute_aa_CDR3_pgen (both fast, exact).
+
+    This is the primary VDJ aa-Pgen check: it compares the native ``_core`` transfer matrix
+    directly against OLGA on unrestricted (sum over all V/J/D) and V/J-restricted queries. The
+    pure-Python enumeration is too slow to be a routine oracle here (``test_native_aa_matches_
+    python_vdj`` covers it under ``-m slow``); OLGA is the authoritative fast oracle.
+    """
+    m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
+    olga = _olga_vdj("human_T_beta")
+    seqs = sorted(
+        generate(m, 40, seed=7, productive_only=True).to_dicts(), key=lambda r: len(r["cdr3_aa"])
+    )
+    for r in seqs[:12]:
+        aa, v, j = r["cdr3_aa"], r["v_call"], r["j_call"]
+        assert np.isclose(native.pgen_aa(m, aa), olga.compute_aa_CDR3_pgen(aa), rtol=1e-9)  # all V/J/D
+        assert np.isclose(native.pgen_aa(m, aa, v, j), olga.compute_aa_CDR3_pgen(aa, v, j), rtol=1e-9)
+
+
+def test_native_aa_hamming1_matches_olga():
+    """Native 1-mismatch aa-Pgen (``mismatches=1``) == OLGA's compute_hamming_dist_1_pgen.
+
+    The native path evaluates the inclusion-exclusion identity with the fast transfer matrix and
+    a single wildcard mask per position (no 19x per-neighbour enumeration), so it is several times
+    faster than OLGA while matching it to machine precision — unrestricted and V/J-restricted.
+    """
+    m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
+    olga = _olga_vdj("human_T_beta")
+    seqs = sorted(
+        generate(m, 40, seed=7, productive_only=True).to_dicts(), key=lambda r: len(r["cdr3_aa"])
+    )
+    for r in seqs[:8]:
+        aa, v, j = r["cdr3_aa"], r["v_call"], r["j_call"]
+        assert np.isclose(
+            native.pgen_aa(m, aa, mismatches=1), olga.compute_hamming_dist_1_pgen(aa), rtol=1e-9
+        )
+        assert np.isclose(
+            native.pgen_aa(m, aa, v, j, mismatches=1),
+            olga.compute_hamming_dist_1_pgen(aa, v, j),
+            rtol=1e-9,
+        )
+
+
 def test_native_aa_matches_python_vj():
     m = from_olga(OLGA_MODELS / "human_T_alpha", locus="TRA")
     prep = prepare(m)

@@ -56,6 +56,9 @@ PYBIND11_MODULE(_core, m) {
     m.def("pgen_aa", &vdjtools::pgen_aa, py::arg("model"), py::arg("aa"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1,
           "Generation probability of an amino-acid CDR3; v_idx/j_idx = -1 sums over all genes.");
+    m.def("pgen_aa_hamming1", &vdjtools::pgen_aa_hamming1, py::arg("model"), py::arg("aa"),
+          py::arg("v_idx") = -1, py::arg("j_idx") = -1,
+          "Total Pgen of the amino-acid CDR3 and all its Hamming-1 neighbours (one substitution).");
 
     py::class_<Counts>(m, "Counts")
         .def_readonly("v_choice", &Counts::v_choice)

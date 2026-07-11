@@ -6,8 +6,6 @@ The result matches the pure-Python reference (and OLGA) exactly — the native p
 """
 from __future__ import annotations
 
-import numpy as np
-
 from .model import Model
 from .pgen import prepare
 
@@ -99,9 +97,36 @@ def pgen_nt(model: Model, cdr3_nt: str, v: str | None = None, j: str | None = No
                     vi.get(v, -1) if v else -1, ji.get(j, -1) if j else -1)
 
 
-def pgen_aa(model: Model, cdr3_aa: str, v: str | None = None, j: str | None = None) -> float:
-    """Native amino-acid Pgen — same result as :func:`vdjtools.model.pgen.pgen_aa`, much faster."""
+def pgen_aa(
+    model: Model,
+    cdr3_aa: str,
+    v: str | None = None,
+    j: str | None = None,
+    mismatches: int = 0,
+) -> float:
+    """Native amino-acid Pgen — same result as :func:`vdjtools.model.pgen.pgen_aa`, much faster.
+
+    Args:
+        model: A recombination :class:`Model`.
+        cdr3_aa: The junction/CDR3 amino-acid sequence (Cys → Phe/Trp inclusive).
+        v: V allele to condition on, or ``None`` to marginalize over all V (V-agnostic).
+        j: J allele to condition on, or ``None`` to marginalize over all J (J-agnostic).
+        mismatches: ``0`` for the exact sequence; ``1`` to also sum the Pgen of every
+            amino-acid sequence within Hamming distance 1 (one substitution) — the total
+            probability mass in the 1-mismatch ball, computed natively far faster than OLGA's
+            per-neighbour approach.
+
+    Returns:
+        Pgen as a float.
+    """
     from .._core import pgen_aa as _pgen_aa
+    from .._core import pgen_aa_hamming1 as _pgen_aa_h1
 
     pm, vi, ji = pack(model)
-    return _pgen_aa(pm, cdr3_aa.upper(), vi.get(v, -1) if v else -1, ji.get(j, -1) if j else -1)
+    vidx = vi.get(v, -1) if v else -1
+    jidx = ji.get(j, -1) if j else -1
+    if mismatches == 0:
+        return _pgen_aa(pm, cdr3_aa.upper(), vidx, jidx)
+    if mismatches == 1:
+        return _pgen_aa_h1(pm, cdr3_aa.upper(), vidx, jidx)
+    raise ValueError("mismatches must be 0 or 1")

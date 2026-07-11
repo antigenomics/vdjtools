@@ -44,6 +44,10 @@ fixtures live on `legacy-1.x` (`src/test/resources/samples/`), pull them over wh
   germline is identical — harmless as long as sources aren't mixed.
 - Delegate rather than reimplement: overlap/TCRnet → vdjmatch (`cluster.overlap`,
   `evalue.query_evalues`); annotation/markup/scenarios → arda; search/e-value → seqtree.
+- **Never modify non-dependency libraries.** The only dependencies are `arda`, `vdjmatch`,
+  `seqtree`. Everything else under `~/vcs/code/` (mirpy, IGoR, OLGA, pygor3, …) is
+  **reference/oracle only — read-only**. If you find a bug in one, surface it (note it here or
+  tell the owner); never edit it. Cross-validate against them; don't touch them.
 - Native code goes through the single `_core` ext. Flip `editable.rebuild=true` in pyproject
   during C++-heavy work for recompile-on-import (needs the `build-dir` already set).
 
@@ -93,10 +97,22 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   == Python (4e-16), **~100x** faster (TRA 13→0.1 s/it), VDJ **masked** EM now practical (~12 ms/seq).
   **arda-masked E-step**: `gene_masks`/`arda_masks` + `infer(masks=)`/`infer_native(masks=)` restrict
   enumeration to aligned genes (15x in Python; combines with native).
-- **TODO native perf gaps**: (a) **VDJ aa Pgen** — the native port is the *enumeration* (correct, faster
-  than Python) but still slower than OLGA's transfer-matrix; a `Pi_L*Pi_R` split-DP would beat OLGA.
-  (b) native **generation sampler** (Python generation is already fast — low priority). (c) parallelize
-  `estep_batch` over reads (GIL released) for another Nx on multicore.
+- **DONE 1g (native aa transfer matrix — VDJ *and* VJ)** `src/pgen.cpp` — replaced both enumerations
+  with the Murugan/OLGA `Pi_L·Pi_R` split-DP: build left (V+VD/VJ-ins) and right partial sums once,
+  stitch at the D placement (VDJ) or thread the J germline per J (VJ; J plays D's role). Key insight:
+  cross-block coupling is codon-only (never the insertion Markov), so left/right factor cleanly. Exact
+  vs OLGA machine-precision; **8.6x** faster on TRB, **1.9x** on TRA (`test_native_aa_vdj_matches_olga`,
+  `appendix/bench_pgen.py`). The VJ enumeration had been ~1000x slower than OLGA — the TM fixes it.
+- **DONE 1h (v/j-agnostic + 1-mismatch aa Pgen)** — the codon check is now a 64-bit **allowed-codon
+  mask** per position (`ok_codon`), so wildcards/motifs run in one pass. `native.pgen_aa(m, aa, v, j,
+  mismatches=)`: `v`/`j`=None marginalizes that gene (V/J-agnostic, always supported); `mismatches=1`
+  sums the Hamming-1 ball via OLGA's inclusion-exclusion identity `Σ_k Pgen(a_{k→*}) − (L−1)Pgen(a)`
+  but each term is one fast TM pass. Matches `compute_hamming_dist_1_pgen` to ~1e-15; **8.7x** faster on
+  TRB, **2.5x** on TRA (`test_native_aa_hamming1_matches_olga`). Documented in `murugan_model.tex` §M.6.
+- **TODO native perf gaps**: (a) **VJ / Hamming-1 codon-boundary sweep** — the 1-mm ball does L+1 TM
+  passes; a forward/backward codon-boundary sweep would collapse them to ~1 pass for VJ loci (VDJ's
+  D-placement sum couples positions, so L+1 is retained there). (b) native **generation sampler** (Python
+  is already fast — low priority). (c) parallelize `estep_batch` over reads (GIL released) for Nx on multicore.
 - **TODO D-D extension** (not in OLGA bootstrap): add `n_d`∈{0,1,2}, `d2_gene`, `d2_del`,
   `dd_ins`/`dd_dinucl` events + enumeration; the loader already emits `n_d`=δ(1). Ships with real
   tandem-D data (owner). arda full-length V/J germline helper needed for arda-native stitching.
