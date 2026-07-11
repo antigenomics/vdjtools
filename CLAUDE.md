@@ -36,6 +36,12 @@ fixtures live on `legacy-1.x` (`src/test/resources/samples/`), pull them over wh
 
 ## Conventions
 - AIRR Rearrangement/Cell + polars `pl.DataFrame` in and out; minimal OO (thin index classes only).
+- **arda germline = single source of truth**: all V/D/J germline + CDR3 anchors resolve from arda
+  by allele name via `model.reference.load_germline` (arda's anchor convention is byte-identical to
+  OLGA's: 0-based Cys104/[FW]118 offset into full germline). Never mix germline sources within a
+  model — OLGA bootstrap models keep OLGA germline (exact-Pgen fidelity); arda-native (EM) models use
+  arda. Raw anchor *indices* can differ by whole framework codons (IMGT drift) though the CDR3-region
+  germline is identical — harmless as long as sources aren't mixed.
 - Delegate rather than reimplement: overlap/TCRnet → vdjmatch (`cluster.overlap`,
   `evalue.query_evalues`); annotation/markup/scenarios → arda; search/e-value → seqtree.
 - Native code goes through the single `_core` ext. Flip `editable.rebuild=true` in pyproject
@@ -57,6 +63,13 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
 - **DONE 1b (nt)** `model/pgen.py` — reference **nucleotide** Pgen (direct scenario sum over the
   tables, no OLGA at runtime). Matches OLGA `compute_nt_CDR3_pgen` exactly, all 7 loci
   (`tests/python/test_pgen_nt.py`; exhaustive check is `-m slow`). This is the quantity EM needs.
+- **DONE 1a′** `model/reference.py` — **arda germline as source of truth**: `load_germline(locus,
+  organism)` from arda (`cdr3fix.load_anchors` + `d_germlines.fasta`), `cut_segment` palindrome
+  derivation (reproduces OLGA's cut segs), `reconcile_olga` audit. Shared frame verified vs OLGA
+  (`tests/python/test_reference.py`). `from_olga` deliberately keeps OLGA germline (exact-Pgen
+  invariant); arda is canonical for arda-native models + scenarios + stitching. arda is the `[model]`
+  extra (`pip install -e ../arda` for dev). Gap: arda ships no full-length V/J germline (needs a
+  helper) — a **P1c/stitching prerequisite**.
 - **TODO aa Pgen** — needs the transfer-matrix codon-marginalizing DP; do it in the native `_core`
   port (P1f) which serves nt+aa in one DP. Reference: OLGA `generation_probability.py` (spec was
   extracted; grid is (4,3L), split-point dot product, `Tvd/Svd/Dvd/lTvd/lDvd` insertion matrices).

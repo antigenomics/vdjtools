@@ -20,4 +20,7 @@ Legacy v1.x is preserved on the `legacy-1.x` branch and under all existing tags.
 
 **Design principles**: AIRR schema + polars everywhere, minimal OO. Python-first — native C++
 (pybind11) only for the Pgen DP, generation sampler, and EM E-step inner loop. Delegate overlap/
-TCRnet to vdjmatch and annotation/markup to arda rather than reimplementing.
+TCRnet to vdjmatch and annotation/markup to arda rather than reimplementing. **arda's germline
+library is the single source of germline truth** — all V/D/J germline + CDR3 anchors resolve from
+arda by allele name (`model.reference.load_germline`), so annotation ↔ scenarios ↔ stitching ↔ Pgen
+share one coordinate frame.

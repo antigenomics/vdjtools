@@ -2,6 +2,21 @@
 
 Provenance of every dataset used or produced by vdjtools. Never guess a source — record it here.
 
+## Germline reference (canonical)
+
+**arda's germline library is the single source of germline truth** — every V/D/J germline
+sequence and CDR3 anchor resolves from it by allele name (`vdjtools.model.reference.load_germline`),
+so annotation ↔ scenarios ↔ stitching ↔ Pgen share one coordinate frame. arda's anchor
+convention is byte-identical to OLGA's (0-based Cys104/[FW]118 offset into the full germline).
+
+| Dataset | Origin | Format | Notes |
+|---|---|---|---|
+| V/J germline + CDR3 anchors | arda `database/vdj/<org>/cdr3_anchors.tsv` (via `arda.cdr3fix.load_anchors`) | TSV, per-allele | CDR3-region germline + anchor + functionality; **full-length V/J germline not shipped** (build-time only) — a P1c/stitching prerequisite |
+| D germline | arda `database/vdj/<org>/d_germlines.fasta` | FASTA `>LOCUS\|allele` | full D germline, no anchor |
+
+**OLGA/IGoR model files contribute recombination probabilities only** (and, for bootstrap
+models, their own IMGT-vintage germline is kept for exact-Pgen fidelity — see the P1a note).
+
 ## Phase 1 — model engine (bootstrap)
 
 | Dataset | Origin | Format | How to obtain | Provenance |
