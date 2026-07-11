@@ -26,6 +26,7 @@ import polars as pl
 from ..io.schema import CDR3_AA, J_CALL, V_CALL
 from .fuzzy import fuzzy_overlap_metrics
 from .metrics import overlap_pair
+from .similarity import similarity_overlap
 
 #: Default clonotype match key (CDR3 aa + V + J), matching the exact-overlap default.
 DEFAULT_KEY = (CDR3_AA, V_CALL, J_CALL)
@@ -36,12 +37,16 @@ _SKLEARN_HINT = (
 )
 
 #: similarity-metric name -> distance transform (legacy OverlapMetricNormalization).
+#: The similarity-weighted overlaps (TINA cosine / Morisita) are already in ``[0, 1]``,
+#: so their distance is simply ``1 - similarity``.
 _TRANSFORM = {
     "F": lambda x: -math.log10(x + 1e-9),
     "F2": lambda x: -math.log10(x + 1e-9),
     "D": lambda x: -math.log10(x + 1e-9),
     "R": lambda x: (1.0 - x) / 2.0,
     "jaccard": lambda x: 1.0 - x,
+    "similarity_cosine": lambda x: 1.0 - x,
+    "similarity_morisita": lambda x: 1.0 - x,
 }
 
 
@@ -60,6 +65,9 @@ def _similarity(a: pl.DataFrame, b: pl.DataFrame, metric: str,
         if metric != "F":
             raise ValueError("fuzzy distances (scope=) support metric='F' only")
         return fuzzy_overlap_metrics(a, b, scope=scope)["fuzzy_F"]
+    if metric in ("similarity_cosine", "similarity_morisita"):
+        sub = "cosine" if metric == "similarity_cosine" else "morisita"
+        return similarity_overlap(a, b, key=key, metric=sub)["similarity"]
     _, m = overlap_pair(a, b, key=key)
     if metric == "jaccard":
         denom = m["d1"] + m["d2"] - m["d12"]
@@ -79,8 +87,10 @@ def pairwise_distances(samples, metric: str = "F", key=DEFAULT_KEY,
         samples: A ``list`` of clonotype frames (named ``"0".."N-1"``) or a ``dict``
             mapping sample name to frame.
         metric: Overlap similarity to base the distance on: ``"F"``, ``"F2"``,
-            ``"D"`` (→ ``-log10``), ``"R"`` (→ ``(1-x)/2``), or ``"jaccard"``
-            (→ ``1-x``). See the module docstring.
+            ``"D"`` (→ ``-log10``), ``"R"`` (→ ``(1-x)/2``), ``"jaccard"`` (→ ``1-x``),
+            or the sequence-similarity-weighted ``"similarity_cosine"`` /
+            ``"similarity_morisita"`` (TINA / Leinster-Cobbold, → ``1-x``). See the
+            module docstring.
         key: Exact-match clonotype key (default CDR3 aa + V + J); ignored when
             ``scope`` is given.
         scope: If set, use fuzzy overlap within this vdjmatch edit scope
