@@ -43,12 +43,14 @@ def sniff_format(path: str | os.PathLike) -> str:
     raise ValueError(f"unrecognised clonotype format; header columns: {sorted(cols)}")
 
 
-def read(path: str | os.PathLike, fmt: str = "auto") -> pl.DataFrame:
+def read(path: str | os.PathLike, fmt: str = "auto",
+         n_rows: int | None = None) -> pl.DataFrame:
     """Read a clonotype table, auto-detecting the format by default.
 
     Args:
         path: Path to a native vdjtools or AIRR Rearrangement table (``.gz`` ok).
         fmt: ``"auto"`` (sniff the header), ``"vdjtools"``, or ``"airr"``.
+        n_rows: If given, read at most this many data rows (preview huge files).
 
     Returns:
         Canonical clonotype frame.
@@ -59,9 +61,9 @@ def read(path: str | os.PathLike, fmt: str = "auto") -> pl.DataFrame:
     if fmt == "auto":
         fmt = sniff_format(path)
     if fmt == "vdjtools":
-        return read_vdjtools(path)
+        return read_vdjtools(path, n_rows=n_rows)
     if fmt == "airr":
-        return read_airr(path)
+        return read_airr(path, n_rows=n_rows)
     raise ValueError(f"fmt must be 'auto', 'vdjtools' or 'airr'; got {fmt!r}")
 
 
