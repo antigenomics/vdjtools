@@ -180,7 +180,15 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
 
     Returns:
         DataFrame with ``cdr3_nt, cdr3_aa, v_call, d_call, j_call, productive``.
+
+    Raises:
+        NotImplementedError: For a tandem-D model — the sampler does not yet draw ``n_D=2``, so it
+            would emit single-D reads only (never a tandem), misrepresenting a D-D model.
     """
+    from .dd import has_tandem
+
+    if has_tandem(model):
+        raise NotImplementedError("generation does not yet sample tandem-D (n_D=2) rearrangements")
     prep = prepare_generation(model)
     rng = np.random.default_rng(seed)
     rows = {k: [] for k in ("cdr3_nt", "cdr3_aa", "v_call", "d_call", "j_call", "productive")}

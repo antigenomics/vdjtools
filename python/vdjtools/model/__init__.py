@@ -5,6 +5,7 @@ recombination Bayes net (:mod:`~vdjtools.model.events`). Bootstrap models are im
 OLGA's format with :func:`from_olga`; native models round-trip through :func:`save_model` /
 :func:`load_model` with no OLGA dependency.
 """
+from . import analyze
 from .events import Event, EventKind
 from .io import from_olga, load_model, save_model
 from .model import Model
@@ -13,6 +14,7 @@ from .schema import Manifest
 from .stitch import stitch_contig, stitch_frame
 
 __all__ = [
+    "analyze",
     "Event",
     "EventKind",
     "Manifest",

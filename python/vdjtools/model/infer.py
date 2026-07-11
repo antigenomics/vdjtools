@@ -271,7 +271,16 @@ def infer(
 
     Returns:
         ``(fitted_model, report)``.
+
+    Raises:
+        NotImplementedError: For a tandem-D template — the E-step does not yet enumerate ``n_D=2``
+            scenarios, so EM would fit the single-D events while ``P(n_D)`` stays fixed, silently
+            mis-training a D-D model.
     """
+    from .dd import has_tandem
+
+    if has_tandem(template):
+        raise NotImplementedError("EM does not yet learn tandem-D (n_D=2) models")
     upper = [s.upper() for s in sequences]
     if init == "template":
         tables = template.tables
@@ -412,9 +421,16 @@ def infer_native(
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments.
+
+    Raises:
+        NotImplementedError: For a tandem-D template (see :func:`infer`).
     """
     from .._core import estep_batch, make_counts
+    from .dd import has_tandem
     from .native import _encode, pack
+
+    if has_tandem(template):
+        raise NotImplementedError("EM does not yet learn tandem-D (n_D=2) models")
 
     upper = [s.upper() for s in sequences]
     if init == "template":

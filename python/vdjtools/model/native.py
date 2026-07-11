@@ -36,7 +36,20 @@ def _del_dense_d(pdel: dict, idx_of: dict, maxdl: int, maxdr: int) -> tuple[list
 
 
 def pack(model: Model):
-    """Build (and cache) the native :class:`PackedModel` for ``model``."""
+    """Build (and cache) the native :class:`PackedModel` for ``model``.
+
+    Raises:
+        NotImplementedError: For a tandem-D model — the native ``_core`` (``PackedModel``, Pgen and
+            the EM E-step) is single-D only; packing would drop the ``d2_gene`` / ``dd`` tables and
+            silently compute a single-D result. Use the pure-Python :func:`vdjtools.model.pgen.pgen_nt`
+            for D-D until the native port lands.
+    """
+    from .dd import has_tandem
+
+    if has_tandem(model):
+        raise NotImplementedError(
+            "native _core does not yet support tandem-D (n_D=2) models; use Python pgen.pgen_nt"
+        )
     key = id(model)
     if key in _pack_cache:
         return _pack_cache[key]

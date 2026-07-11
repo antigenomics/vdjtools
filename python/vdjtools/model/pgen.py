@@ -11,7 +11,7 @@ EM E-step needs (the bootstrap training data is out-of-frame *nucleotide* reads)
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -50,9 +50,13 @@ class _Prepared:
     p_d_given_j: dict[tuple, float]         # {(j, d): P(D|J)}  (VDJ only)
     p_del: dict[str, dict]                  # "v"/"j" -> {(allele, ndel): p}; "d" -> {(allele, n5, n3): p}
     maxpal: dict[str, int]                  # "v_3"/"j_5"/"d_5"/"d_3" -> palindrome max
-    p_ins: dict[str, np.ndarray]            # "vd"/"dj"/"vj" -> P(length)
-    R: dict[str, np.ndarray]                # "vd"/"dj"/"vj" -> 4×4 Markov
-    bias: dict[str, np.ndarray]             # "vd"/"dj"/"vj" -> steady-state first-nt bias
+    p_ins: dict[str, np.ndarray]            # "vd"/"dj"/"vj"/"dd" -> P(length)
+    R: dict[str, np.ndarray]                # "vd"/"dj"/"vj"/"dd" -> 4×4 Markov
+    bias: dict[str, np.ndarray]             # "vd"/"dj"/"vj"/"dd" -> steady-state first-nt bias
+    # D-D (tandem) extension — populated only when the model declares an ``n_d`` mass at 2.
+    p_nd: dict[int, float] = field(default_factory=lambda: {1: 1.0})   # P(n_D)
+    p_d2_given_d1: dict[tuple, float] = field(default_factory=dict)     # {(d1, d2): P(D2|D1)}
+    p_del_d2: dict = field(default_factory=dict)                        # {(d2, n5, n3): p}
 
 
 def _dinucl_matrix(df) -> np.ndarray:
@@ -93,11 +97,26 @@ def prepare(model: Model) -> _Prepared:
             for a, n5, n3, p in t["d_del"].select(["d_allele", "ndel5", "ndel3", "p"]).iter_rows()
         }
 
+    juncs = ["vd", "dj"] if vdj else ["vj"]
+    if vdj and "dd_ins" in t:  # tandem-D middle junction
+        juncs.append("dd")
     p_ins, R, bias = {}, {}, {}
-    for junc in (("vd", "dj") if vdj else ("vj",)):
+    for junc in juncs:
         p_ins[junc] = t[f"{junc}_ins"].sort("length")["p"].to_numpy()
         R[junc] = _dinucl_matrix(t[f"{junc}_dinucl"])
         bias[junc] = _steady_state(R[junc])
+
+    # D-D tables — present only when the model declares the tandem extension.
+    p_nd = {int(n): float(p) for n, p in t["n_d"].select(["n_d", "p"]).iter_rows()} if "n_d" in t else {1: 1.0}
+    p_d2_given_d1: dict[tuple, float] = {}
+    p_del_d2: dict = {}
+    if vdj and "d2_gene" in t:
+        p_d2_given_d1 = {(d1, d2): p for d1, d2, p in t["d2_gene"].select(["d_allele", "d2_allele", "p"]).iter_rows()}
+        p_del_d2 = {(a, n5, n3): p for a, n5, n3, p in t["d2_del"].select(["d2_allele", "ndel5", "ndel3", "p"]).iter_rows()}
+    # A model that places mass on n_D=2 must ship the tandem tables, else _vdj_middle would silently
+    # drop that mass (Pgen under-counts). Reject the malformed state at prepare time.
+    if p_nd.get(2, 0.0) > 0.0 and not p_d2_given_d1:
+        raise ValueError("model has P(n_D=2)>0 but no d2_gene/d2_del/dd tables (malformed tandem model)")
 
     return _Prepared(
         chain_type=model.chain_type,
@@ -113,6 +132,9 @@ def prepare(model: Model) -> _Prepared:
         p_ins=p_ins,
         R=R,
         bias=bias,
+        p_nd=p_nd,
+        p_d2_given_d1=p_d2_given_d1,
+        p_del_d2=p_del_d2,
     )
 
 
@@ -237,6 +259,83 @@ def _d_middle(prep: _Prepared, j: str, middle: str) -> float:
                     w *= _p_insert(middle[pos + ld:], pins_dj, R_dj, b_dj, from_right=True)
                     acc += pdel * w
         total += pdj * acc
+    return total
+
+
+def _dd_middle(prep: _Prepared, j: str, middle: str) -> float:
+    """Σ over the *tandem* (two-D) scenarios producing ``middle`` = [insVD] D1 [insDD] D2 [insDJ] J.
+
+    Both D segments must contribute ≥1 nt (a genuine tandem — a fully-trimmed second D collapses
+    to the single-D case, already summed by :func:`_d_middle`, so excluding it keeps the n_D=1 and
+    n_D=2 scenario sets disjoint and identifiable). ``P(D2|D1)`` carries the genomic-order mask.
+
+    The DD-junction insertion is read 5'→3' (``from_right=False``), like the VD junction; the future
+    native port and the tandem generator must use the same orientation for its dinucleotide Markov.
+    """
+    m = len(middle)
+    maxdl, maxdr = prep.maxpal["d_5"], prep.maxpal["d_3"]
+    pins_vd, R_vd, b_vd = prep.p_ins["vd"], prep.R["vd"], prep.bias["vd"]
+    pins_dd, R_dd, b_dd = prep.p_ins["dd"], prep.R["dd"], prep.bias["dd"]
+    pins_dj, R_dj, b_dj = prep.p_ins["dj"], prep.R["dj"], prep.bias["dj"]
+
+    def d_placements(d, pdel_tbl):
+        """[(contrib_str, pdel)] for each 5'/3' trim of D that leaves ≥1 nt."""
+        cut = prep.cut["d"][d]
+        out = []
+        for idx5 in range(len(cut) + 1):
+            for idx3 in range(len(cut) - idx5 + 1):
+                contrib = cut[idx5:len(cut) - idx3]
+                if not contrib:  # tandem requires each D to contribute ≥1 nt
+                    continue
+                pdel = pdel_tbl.get((d, idx5 - maxdl, idx3 - maxdr), 0.0)
+                if pdel:
+                    out.append((contrib, pdel))
+        return out
+
+    total = 0.0
+    for d1 in prep.functional_d:
+        pd1 = prep.p_d_given_j.get((j, d1), 0.0)
+        if pd1 == 0.0:
+            continue
+        pl1 = d_placements(d1, prep.p_del["d"])
+        if not pl1:
+            continue
+        for d2 in prep.functional_d:
+            pd2 = prep.p_d2_given_d1.get((d1, d2), 0.0)
+            if pd2 == 0.0:
+                continue
+            pl2 = d_placements(d2, prep.p_del_d2)
+            if not pl2:
+                continue
+            w_gene = pd1 * pd2
+            for contrib1, pdel1 in pl1:
+                ld1 = len(contrib1)
+                for pos1 in range(0, m - ld1):  # leave room for D2 (≥1 nt) after
+                    if middle[pos1:pos1 + ld1] != contrib1:
+                        continue
+                    left = _p_insert(middle[:pos1], pins_vd, R_vd, b_vd, from_right=False)
+                    if left == 0.0:
+                        continue
+                    for contrib2, pdel2 in pl2:
+                        ld2 = len(contrib2)
+                        for pos2 in range(pos1 + ld1, m - ld2 + 1):
+                            if middle[pos2:pos2 + ld2] != contrib2:
+                                continue
+                            mid = _p_insert(middle[pos1 + ld1:pos2], pins_dd, R_dd, b_dd, from_right=False)
+                            if mid == 0.0:
+                                continue
+                            right = _p_insert(middle[pos2 + ld2:], pins_dj, R_dj, b_dj, from_right=True)
+                            total += w_gene * pdel1 * pdel2 * left * mid * right
+    return total
+
+
+def _vdj_middle(prep: _Prepared, j: str, middle: str) -> float:
+    """P(middle) mixed over the D-count prior: P(n_D=1)·single-D + P(n_D=2)·tandem-D."""
+    p1 = prep.p_nd.get(1, 0.0) + prep.p_nd.get(0, 0.0)  # 0-D folds into 1-D (fully-trimmed D)
+    total = p1 * _d_middle(prep, j, middle) if p1 else 0.0
+    p2 = prep.p_nd.get(2, 0.0)
+    if p2 and prep.p_d2_given_d1:
+        total += p2 * _dd_middle(prep, j, middle)
     return total
 
 
@@ -422,7 +521,16 @@ def pgen_aa(prep: _Prepared, cdr3_aa: str, v: str | None = None, j: str | None =
 
     Returns:
         Pgen as a float.
+
+    Raises:
+        NotImplementedError: For a tandem-D model (``P(n_D=2)>0``) — the amino-acid transfer-matrix
+            sum does not yet enumerate the ``n_D=2`` scenarios, so it would silently return the
+            single-D Pgen. Use :func:`pgen_nt` (which does sum tandem scenarios) for D-D models.
     """
+    if prep.p_nd.get(2, 0.0) > 0.0 and prep.p_d2_given_d1:
+        raise NotImplementedError(
+            "amino-acid Pgen does not yet sum tandem-D (n_D=2) scenarios; use nucleotide pgen_nt"
+        )
     aa = cdr3_aa.upper()
     if prep.chain_type == "VJ":
         return _pgen_aa_vj(prep, aa, v, j)
@@ -456,7 +564,7 @@ def pgen_nt(prep: _Prepared, cdr3_nt: str, v: str | None = None, j: str | None =
                         continue
                     middle = s[len_v:len(s) - len_j]
                     if vdj:
-                        inner = _d_middle(prep, J, middle)
+                        inner = _vdj_middle(prep, J, middle)
                     else:
                         inner = _p_insert(middle, prep.p_ins["vj"], prep.R["vj"], prep.bias["vj"], from_right=False)
                     total += pv * pj * p_dv * p_dj * inner
