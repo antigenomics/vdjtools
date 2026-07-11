@@ -93,7 +93,7 @@ def _correct_block(block: pl.DataFrame, max_mismatches: int,
 
 
 def correct(df: pl.DataFrame, max_mismatches: int = 2, ratio: float = 0.05,
-            same_vj: bool = True) -> pl.DataFrame:
+            same_vj: bool = False) -> pl.DataFrame:
     """Merge low-frequency sequencing-error clonotypes into their parents.
 
     Reimplements ``Corrector``. Clonotype pairs whose ``cdr3_nt`` are within
@@ -108,8 +108,10 @@ def correct(df: pl.DataFrame, max_mismatches: int = 2, ratio: float = 0.05,
             (legacy default 2); insertions/deletions are not considered.
         ratio: Per-mismatch parent/child count ratio (legacy default 0.05). A child
             is merged when ``child_count < ratio ** m * parent_count``.
-        same_vj: If ``True`` (legacy segment-aware mode) only clonotypes sharing the
-            exact ``v_call`` and ``j_call`` are compared; if ``False`` all
+        same_vj: If ``True`` (the opt-in "match-segment" mode, legacy ``-a`` /
+            ``--match-segment``) only clonotypes sharing the exact ``v_call`` and
+            ``j_call`` are compared; if ``False`` (default, matching legacy
+            fidelity — legacy ``Corrector`` is segment-agnostic by default) all
             clonotypes are compared regardless of segment.
 
     Returns:

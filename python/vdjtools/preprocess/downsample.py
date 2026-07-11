@@ -56,7 +56,10 @@ def downsample(df: pl.DataFrame, size: int, by: str = "reads",
         total = int(counts.sum())
         if size >= total:
             return df
-        drawn = rng.multivariate_hypergeometric(counts.astype(np.int64), size)
+        # numpy's default method='marginals' raises once sum(counts) >= 1e9; use the
+        # slower-but-unbounded method='count' there (else keep the faster default).
+        method = "count" if total >= 1_000_000_000 else "marginals"
+        drawn = rng.multivariate_hypergeometric(counts.astype(np.int64), size, method=method)
         out = df.with_columns(pl.Series(COUNT, drawn, dtype=pl.Int64))
         out = out.filter(pl.col(COUNT) > 0)
         return recompute_frequency(out)

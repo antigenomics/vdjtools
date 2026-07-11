@@ -104,10 +104,7 @@ def _segment_matches(col: str, names: list[str]) -> pl.Expr:
     prefix match on the raw call, so ``TRBV12`` matches ``TRBV12-3*01`` (allele-
     insensitive) while ``TRBV12-3*01`` matches only itself.
     """
-    expr = pl.lit(False)
-    for name in names:
-        expr = expr | pl.col(col).str.starts_with(name)
-    return expr
+    return pl.any_horizontal([pl.col(col).str.starts_with(name) for name in names])
 
 
 def filter_segment(df: pl.DataFrame, v: list[str] | None = None,

@@ -90,13 +90,11 @@ def correct_vj_usage(samples_or_df: "pl.DataFrame | list[pl.DataFrame]", batch_c
 
     # Full (sample x gene) grid within each locus so absent genes get a pseudocount.
     genes = usage.select(["locus", V_CALL, J_CALL]).unique()
-    n_genes = genes.group_by("locus").agg(pl.len().alias("n_genes"))
     sample_loci = usage.select([sample_col, batch_col, "locus"]).unique()
     grid = sample_loci.join(genes, on="locus", how="inner")
     full = (
         grid.join(usage, on=[sample_col, batch_col, "locus", V_CALL, J_CALL], how="left")
         .with_columns(pl.col("count").fill_null(0))
-        .join(n_genes, on="locus", how="left")
     )
     full = full.with_columns(
         (pl.col("count") + pseudocount).sum().over([sample_col, "locus"]).alias("_denom_raw")
