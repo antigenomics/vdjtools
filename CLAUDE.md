@@ -113,9 +113,31 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   passes; a forward/backward codon-boundary sweep would collapse them to ~1 pass for VJ loci (VDJ's
   D-placement sum couples positions, so L+1 is retained there). (b) native **generation sampler** (Python
   is already fast — low priority). (c) parallelize `estep_batch` over reads (GIL released) for Nx on multicore.
-- **TODO D-D extension** (not in OLGA bootstrap): add `n_d`∈{0,1,2}, `d2_gene`, `d2_del`,
-  `dd_ins`/`dd_dinucl` events + enumeration; the loader already emits `n_d`=δ(1). Ships with real
-  tandem-D data (owner). arda full-length V/J germline helper needed for arda-native stitching.
+- **DONE model diagnostics** `model/analyze.py` — Bayes-net→graphviz DOT (nodes=marginal entropy H,
+  edges=mutual information I; bnlearn-style, rendered via the `dot` CLI — no python-graphviz dep),
+  `entropy_table`/`mutual_information`/`compare_entropy`, works on any Model. Cross-locus H table +
+  I(V;J)=0 (VDJ independence made visible), I(delD5;delD3|D)≈1.18 bit (within-D conditional coupling,
+  averaged over D — not the D-marginal). Single-parent factorizations only (raises on ≥2 parents). `test_analyze.py`.
+- **DONE D-D consistency guards** (audit-driven): the not-yet-tandem paths — native `_core`
+  (`native.pack`), amino-acid `pgen_aa`, `generate`, `infer`/`infer_native` — **raise
+  `NotImplementedError` on a model with P(n_D=2)>0** (`dd.has_tandem`) instead of silently returning
+  single-D. Only Python `pgen_nt` sums tandems. `prepare` rejects a malformed model (n_D=2 mass but no
+  d2 tables). D-D model with p_nd2=0 stays byte-identical single-D (native included). `test_dd.py` guards.
+- **DONE D-D Python reference** `model/pgen.py::_dd_middle` + `model/dd.py::to_dd` — n_D∈{1,2}
+  enumeration (0-D folds into 1-D via a fully-trimmed D; tandem requires each D ≥1 nt → disjoint
+  partition, resolves tandem-vs-long-insertion identifiability). `prepare` reads `n_d`/`d2_gene`/
+  `d2_del`/`dd_ins`/`dd_dinucl` when present; `pgen_nt` weights P(n_D=1)·single + P(n_D=2)·tandem.
+  Backward-compatible (p_nd2=0 == single-D, machine-eps on real TRD). Reference is correct-but-slow on
+  TRD (the native port is the speed job). `test_dd.py` (tiny hand-checked model + TRD backward-compat).
+  Real signal: **TRD 4.15% nonfunc / 3.42% func tandem-D** (28-bucket survey, new HF revision).
+- **DONE appendix** `appendix/murugan_model.tex` — §M.4 tandem-D (Prop: disjoint n_D partition) + §M.9
+  diagnostics (entropy/MI, Bayes-net figure `bn_trb.pdf`/`bn_trd_dd.pdf`, cross-locus H table). 9 pages.
+- **TODO native D-D port** (task): add `p_nd`, `d2`/`dd_ins`/`dd_dinucl` to `PackedModel`; extend
+  `pgen_nt`/`pgen_aa`/`estep_batch` over n_D∈{1,2} (one extra D block in Πᵣ, weighted by P(n_D=2)).
+  Match `_dd_middle`. Then EM on real TRD learns P(n_D=2)>0. arda full-length V/J germline helper still
+  needed for arda-native stitching.
+- **TODO real-data EM comparison** (task): `infer_native` on real nonfunc reads (TRB, TRD) → compare
+  inferred vs legacy-OLGA marginals via `analyze` (the "ours vs OLGA on the same data" deliverable).
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
 `(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group

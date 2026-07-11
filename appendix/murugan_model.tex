@@ -142,11 +142,13 @@ conversion is needed. A model never mixes germline sources: bootstrap models imp
 keep \texttt{OLGA} germline to preserve exact-$\Pgen$ fidelity, whereas natively-inferred models use
 \texttt{arda}.
 
-\paragraph{The D-D extension} The schema is built to carry tandem-$D$ ($n_D\!\in\!\{0,1,2\}$)
-rearrangements --- a $D$-count event, a second $D$-gene table and a $DD$ insertion --- which
-\texttt{OLGA}/IGoR cannot represent. The bootstrap data used here (\texttt{OLGA}-drawn out-of-frame
-sequences) contains no tandem $D$ by construction, so $D$-$D$ is exercised only structurally until real
-data lands; the recursions below are written for $n_D\!\le\!1$ and degrade cleanly.
+\paragraph{The D-D extension} The schema carries tandem-$D$ ($n_D\!\in\!\{0,1,2\}$)
+rearrangements --- a $D$-count event $P(n_D)$, a second $D$-gene table $P(D_2\!\mid\!D_1)$, a joint
+second-$D$ deletion and a $DD$ insertion --- which \texttt{OLGA}/IGoR cannot represent
+(\S\ref{sec:dd}). Real 5$'$-RACE TRD repertoires make this concrete: after collapsing to unique
+clonotypes, \emph{$4.15\%$ of out-of-frame and $3.42\%$ of in-frame $\delta$-chain clonotypes carry two
+aligned $D$ segments}, the signal on which the $n_D\!=\!2$ event is trained; the corresponding tandem
+fraction under any single-$D$ model is structurally zero.
 
 \section{Nucleotide generation probability}\label{sec:nt}
 
@@ -171,6 +173,47 @@ Common-prefix / common-suffix matching restricts $\ell_V,\ell_J$ to the genes th
 $\sigma$, so Eq.~\eqref{eq:pgennt} is fast in practice. This nucleotide sum is the quantity the E-step
 needs (\S\ref{sec:em}); the native port reproduces \texttt{OLGA}'s \texttt{compute\_nt\_CDR3\_pgen} to
 machine precision.
+
+\section{Tandem-D (D-D) rearrangements}\label{sec:dd}
+
+A tandem-$D$ locus joins \emph{two} $D$ segments in the junction, $V\!-\!D_1\!-\!D_2\!-\!J$, which
+neither \texttt{OLGA} nor IGoR can represent. We add a $D$-count event $P(n_D)$, a second gene factor
+$P(D_2\!\mid\!D_1)$ (whose zeros carry the genomic-order mask), a joint second-$D$ deletion
+$P(\del_{D_2}^{5'},\del_{D_2}^{3'}\!\mid\!D_2)$ and a $DD$ insertion. A two-$D$ scenario has probability
+\begin{equation}\label{eq:pdd}
+  P(r_2)=P(n_D\!=\!2)\,P(V)P(J)\,P(D_1\!\mid\!J)P(D_2\!\mid\!D_1)\;
+    \textstyle\prod_{s\in\{V,J,D_1,D_2\}}\!P(\del_s)\;
+    P_{\ins}(\mathbf m^{VD})P_{\ins}(\mathbf m^{DD})P_{\ins}(\mathbf m^{DJ}),
+\end{equation}
+and its CDR3 is $\sigma(r_2)=\hat V\,\mathbf m^{VD}\,\hat D_1\,\mathbf m^{DD}\,\hat D_2\,\mathbf m^{DJ}\,\hat J$.
+The middle factor of Eq.~\eqref{eq:pgennt} becomes a mixture over the $D$-count,
+\begin{equation}\label{eq:ximix}
+  \Xi(\mu)=\bigl[P(n_D\!=\!0)+P(n_D\!=\!1)\bigr]\,\Xi_1(\mu)\;+\;P(n_D\!=\!2)\,\Xi_2(\mu),
+\end{equation}
+where $\Xi_1$ is the single-$D$ sum of Eq.~\eqref{eq:dmiddle} and $\Xi_2$ enumerates two ordered,
+non-overlapping $D$ placements with $VD$, $DD$ and $DJ$ insertions between and around them. Two design
+choices keep the mixture a genuine probability.
+
+\begin{proposition}[Disjoint $D$-count partition]\label{prop:dd}
+If every $D$ in a two-$D$ scenario is required to contribute at least one nucleotide
+($\ell_{D_1},\ell_{D_2}\!\ge\!1$), then no CDR3 nucleotide sequence is counted by both $\Xi_1$ and
+$\Xi_2$, and the $n_D\!=\!0$ (D-less) case is exactly the $n_D\!=\!1$ term with a fully-trimmed $D$
+($\ell_D\!=\!0$). Hence Eq.~\eqref{eq:ximix} is a partition of the scenario space and $\Xi$ is normalized
+whenever the event tables are.
+\end{proposition}
+
+\noindent The first clause removes the identifiability trap --- a tandem in which one $D$ is fully
+deleted is indistinguishable from a single $D$ with a longer insertion --- by assigning such realizations
+to $n_D\!=\!1$ alone; the second means the model needs no separate $D$-less insertion table
+($\Xi_1$ already sums the $\ell_D\!=\!0$ placement, which is why the loader's bootstrap $P(n_D)=\delta_1$
+reproduces single-$D$ \texttt{OLGA} $\Pgen$ exactly). The reference implementation of $\Xi_2$ is a direct
+enumeration --- correct but, like the amino-acid sum of \S\ref{sec:aa} before its transfer-matrix
+rewrite, slow; the planned native port will add one $D$ block to the right partial sum $\Pi_R$
+(Eq.~\eqref{eq:rho}), weighted by $P(n_D\!=\!2)$, so that a tandem query costs one extra block-stitch
+rather than a nested placement loop. Until that port and the D-D-aware EM land, the not-yet-tandem paths
+(the native \texttt{\_core}, amino-acid $\Pgen$, generation and inference) refuse a model with
+$P(n_D\!=\!2)>0$ rather than silently returning a single-$D$ result; the $n_D\!=\!2$ event is trained by
+EM on the real TRD clonotypes noted in \S\ref{sec:tables}.
 
 \section{Amino-acid generation probability by transfer matrix}\label{sec:aa}
 
@@ -328,6 +371,74 @@ a single \texttt{polars} \texttt{group\_by} --- reproducing the manifest's Bayes
 \texttt{OLGA}-drawn data this is a closed-loop oracle: EM must recover the generating marginals, giving a
 self-checking target before any real data exists. The E-step inner loop is the second native hot path (the
 first being $\Pgen$); with the aligned-gene mask it makes $VDJ$ inference practical.
+
+\section{Model diagnostics: entropy and mutual information}\label{sec:diag}
+
+Because the Bayesian network is declared as data (\S\ref{sec:tables}), every model is directly
+introspectable: each event table is a (conditional) distribution, so we quantify each part of the
+rearrangement by its Shannon entropy and each network edge by mutual information, straight from the
+tables and with no reference to any sequence. For an event $X$ with parents $\mathrm{Pa}(X)$ we report the
+marginal entropy $H(X)$ (in bits) and, along each declared edge, the information it carries,
+\begin{equation}\label{eq:mi}
+  I\bigl(X;\mathrm{Pa}(X)\bigr)=H(X)-H\bigl(X\mid \mathrm{Pa}(X)\bigr),
+  \qquad H(X\mid\mathrm{Pa})=\!\!\sum_{\mathrm{pa}}\!P(\mathrm{pa})\,H(X\mid \mathrm{pa}),
+\end{equation}
+where parent marginals are obtained by forward propagation over the network. Rendering the manifest as a
+graph, with nodes annotated by $H(X)$ and edges by $I$, gives a \texttt{bnlearn}-style summary of the
+whole model at a glance (Fig.~\ref{fig:bn}).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.49\linewidth]{bn_trb.pdf}\hfill
+  \includegraphics[width=0.49\linewidth]{bn_trd_dd.pdf}
+  \caption{The recombination Bayesian network rendered from the manifest, nodes labelled with marginal
+    entropy $H$ (bits) and edges with mutual information $I$ (bits). \emph{Left:} human TRB (single-$D$).
+    \emph{Right:} human TRD upgraded to the tandem-$D$ model of \S\ref{sec:dd}, adding the $n_D$,
+    $D_2$-gene, $D_2$-deletion and $DD$-insertion nodes.}
+  \label{fig:bn}
+\end{figure}
+
+Table~\ref{tab:entropy} compares the per-event entropy across five loci; each row's most informative
+locus is in bold. The structure is legible. Gene choice dominates in the $\alpha\beta$ loci ($H_V\!\approx\!5.7$
+bits for TRB, $H_J\!\approx\!5.6$ for TRA), whereas TRD spends little on gene choice ($H_V\!=\!2.4$ bits,
+few $\delta$ genes) and the most on non-templated insertion ($H_{VD}\!=\!4.8$ bits) --- the TdT signature.
+The single most entropic event in every $VDJ$ locus is the joint $D$-deletion (up to $7.8$ bits for IGH),
+and its two ends are far from independent: the within-$D$ coupling $I(\del_D^{5'};\del_D^{3'}\!\mid\!D)=1.18$
+bits for TRB (a genuine conditional mutual information, averaged over $D$ so that the shared choice of $D$
+does not inflate it). Two edges are worth naming. First, $I(V;J)=0$ for every $VDJ$ locus is not a
+measurement but an \emph{assumption} made visible --- \texttt{OLGA} factors $P(V,J)=P(V)P(J)$ --- whereas
+the $VJ$ loci carry $I(V;J)>0$ through $P(J\mid V)$ (e.g.\ $0.27$ bits for TRA). Second, the $D$-deletion
+edge $I(\{\del_D\};D)$ is large
+($1.02$ bits for TRB), i.e.\ trimming depends strongly on which $D$ was chosen. The identical routine
+applies to an EM-inferred model, so the same table compares a model learned from real reads against the
+\texttt{OLGA} bootstrap parameter-by-parameter.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{Marginal entropy $H(X)$ (bits) of each recombination event across five human loci, computed
+    from the model tables. Dashes mark events absent from a locus ($VJ$ loci have no $D$; $\alpha\beta$
+    loci no $VJ$ insertion). Bold marks the most entropic locus per event.}
+  \label{tab:entropy}
+  \begin{tabular}{lccccc}
+    \toprule
+    Event & TRB & TRA & TRD & IGH & IGK \\
+    \midrule
+    $V$ choice            & \textbf{5.73} & 5.37 & 2.45 & 5.71 & 4.81 \\
+    $J$ choice            & 3.40 & \textbf{5.57} & 0.65 & 2.17 & 2.83 \\
+    $D$ gene $\mid J$      & 1.42 & --- & 0.71 & \textbf{4.30} & --- \\
+    $V\,3'$ deletion      & 3.58 & \textbf{3.69} & 3.44 & 3.46 & 3.15 \\
+    $J\,5'$ deletion      & 3.66 & 3.89 & 3.74 & \textbf{4.13} & 3.65 \\
+    $D$ deletion (5$'$,3$'$) & 6.44 & --- & 6.47 & \textbf{7.78} & --- \\
+    $VD$ insertion length & 3.84 & --- & \textbf{4.80} & 4.68 & --- \\
+    $DJ$ insertion length & 3.87 & --- & 4.20 & \textbf{4.82} & --- \\
+    $VJ$ insertion length & --- & \textbf{3.84} & --- & --- & 3.59 \\
+    $VD$ dinucleotide     & \textbf{1.99} & --- & 1.96 & 1.98 & --- \\
+    $DJ$ dinucleotide     & 1.96 & --- & 1.98 & \textbf{1.99} & --- \\
+    $VJ$ dinucleotide     & --- & \textbf{1.97} & --- & --- & 1.92 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \bibliographystyle{unsrt}
 \bibliography{refs}
