@@ -9,6 +9,8 @@ from .filter import (
     filter_functional,
     filter_segment,
 )
+from .join import join_samples
+from .pool import pool_samples, resolve_key
 
 __all__ = [
     "downsample",
@@ -17,4 +19,7 @@ __all__ = [
     "filter_frequency",
     "filter_segment",
     "filter_by_sample",
+    "pool_samples",
+    "join_samples",
+    "resolve_key",
 ]
