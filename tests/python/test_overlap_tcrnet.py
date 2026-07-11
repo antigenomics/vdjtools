@@ -51,11 +51,42 @@ def test_tcrnet_planted_cluster_enriched():
     assert clu["p_enrichment"].max() < noi["p_enrichment"].min()
 
 
-def test_tcrnet_explicit_locus_and_no_exact():
-    """Locus can be passed explicitly; exclude_exact toggles self-hit removal."""
+def _neighbors(res):
+    return dict(zip(res[S.CDR3_AA].to_list(), res["n_neighbors"].to_list()))
+
+
+def test_tcrnet_explicit_locus_and_exclude_exact_toggle():
+    """Locus can be passed explicitly; exclude_exact toggles self-hit removal, which
+    is pinned by the neighbour counts (not just the row count)."""
+    # CASSLAPGELFF <-1-> CASSLAPGELFY (1 sub); CASSQQTGELFF is 3 subs from both.
     sample = _sample_from_cdr3(["CASSLAPGELFF", "CASSLAPGELFY", "CASSQQTGELFF"])
-    res = O.tcrnet(sample, locus="TRB", scope="1,0,0,1", exclude_exact=True)
-    assert res.height == 3
+    incl = O.tcrnet(sample, locus="TRB", scope="1,0,0,1", exclude_exact=True)
+    excl = O.tcrnet(sample, locus="TRB", scope="1,0,0,1", exclude_exact=False)
+    # exclude_exact drops the distance-0 self-hit; without it every clonotype gains +1.
+    assert _neighbors(incl) == {"CASSLAPGELFF": 1, "CASSLAPGELFY": 1, "CASSQQTGELFF": 0}
+    assert _neighbors(excl) == {"CASSLAPGELFF": 2, "CASSLAPGELFY": 2, "CASSQQTGELFF": 1}
+
+
+def test_tcrnet_mixed_locus_scored_per_locus():
+    """A sample mixing TRA and TRB clonotypes must be scored PER LOCUS — each locus
+    against its own background — not all against a single inferred control."""
+    trb = _sample_from_cdr3(
+        ["".join(list("CASSXPGELFF")[:4] + [r] + list("CASSXPGELFF")[5:]) for r in "ACDEF"],
+        v="TRBV7-9", j="TRBJ2-1")
+    tra = _sample_from_cdr3(
+        ["".join(list("CAVRXDDKIIF")[:4] + [r] + list("CAVRXDDKIIF")[5:]) for r in "ACDEF"],
+        v="TRAV1-2", j="TRAJ33")
+    res = O.tcrnet(pl.concat([trb, tra]), scope="1,0,0,1")
+
+    assert set(res[S.LOCUS].unique().to_list()) == {"TRA", "TRB"}
+    tra_rows = res.filter(pl.col(S.LOCUS) == "TRA")
+    trb_rows = res.filter(pl.col(S.LOCUS) == "TRB")
+    # Both planted cliques enriched; and TRA is scored against the TRA background
+    # (real n_control neighbours) — under the old single-TRB-background bug a TRA
+    # sequence would have ~0 control neighbours and be spuriously (mis)calibrated.
+    assert (tra_rows["p_enrichment"] < 0.05).all()
+    assert (trb_rows["p_enrichment"] < 0.05).all()
+    assert tra_rows["n_control"].max() > 0
 
 
 def _read_cdr3_gz(path: Path, col: int = 0):

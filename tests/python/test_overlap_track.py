@@ -43,3 +43,12 @@ def test_track_top_n_and_list_input():
 def test_track_default_order():
     tr = O.track_clonotypes({"s1": _sample(["A"], [1]), "s2": _sample(["B"], [1])})
     assert tr.columns[-3:] == ["freq_s1", "freq_s2", "freq_sum"]
+
+
+def test_track_empty_inputs():
+    """No usable samples (empty dict, or an order that filters everything out) return
+    an empty frame with the key schema — the out-is-None early-return branch."""
+    for empty in (O.track_clonotypes({}),
+                  O.track_clonotypes({"s1": _sample(["A"], [1])}, order=["missing"])):
+        assert empty.height == 0
+        assert empty.columns == [S.CDR3_AA, S.V_CALL, S.J_CALL]

@@ -70,6 +70,31 @@ def test_cluster_samples_mds_returns_2d():
     assert coords.columns == ["sample", "mds1", "mds2"]
     assert coords.height == 3
     assert set(coords["sample"].to_list()) == {"a", "b", "c"}
+    # The embedding must preserve the distance structure (a,b share 3/4; a,c share
+    # 1/4), else a degenerate MDS that ignored the matrix would still pass the shape.
+    xy = dict(zip(coords["sample"].to_list(), coords.select("mds1", "mds2").to_numpy()))
+    d = lambda x, y: float(np.linalg.norm(xy[x] - xy[y]))
+    assert d("a", "b") < d("a", "c") and d("a", "b") < d("b", "c")
+
+
+def test_pairwise_distances_fuzzy_scope_path():
+    """The scope-driven fuzzy path (delegating to fuzzy_overlap_metrics) is exercised
+    and rejects metrics other than F."""
+    pytest.importorskip("vdjmatch")
+    dm = O.pairwise_distances(_toy_samples(), metric="F", scope="1,0,0,1")
+    names = dm["sample"].to_list()
+    M = dm.select(names).to_numpy()
+    assert np.allclose(M, M.T) and np.allclose(np.diag(M), 0.0)
+    assert np.isfinite(M[np.triu_indices(len(names), 1)]).all()
+    # Only F is supported with a fuzzy scope.
+    with pytest.raises(ValueError):
+        O.pairwise_distances(_toy_samples(), metric="jaccard", scope="1,0,0,1")
+
+
+def test_pairwise_distances_single_sample():
+    """A single sample yields a 1x1 zero-diagonal matrix (edge case)."""
+    dm = O.pairwise_distances({"only": _toy_samples()["a"]}, metric="F")
+    assert dm.height == 1 and dm.select("only").to_numpy()[0, 0] == 0.0
 
 
 def test_cluster_samples_hclust_labels():

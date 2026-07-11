@@ -4,6 +4,7 @@ The whole point of fuzzy overlap is that it catches near-variant clonotype pairs
 exact overlap misses; these tests pin that behaviour and the summary metrics. vdjmatch
 (the ``overlap`` extra) is guarded with ``importorskip``.
 """
+import numpy as np
 import polars as pl
 import pytest
 
@@ -46,8 +47,8 @@ def test_fuzzy_overlap_metrics_sane():
     m = O.fuzzy_overlap_metrics(a, b, scope="1,0,0,1")
     assert m["pairs"] == 1
     assert m["frac_a_matched"] == 0.5 and m["frac_b_matched"] == 0.5
-    # fuzzy_F = sqrt(freq_a_matched * freq_b_matched) = sqrt((10/15)*(8/11)).
-    assert 0.0 < m["fuzzy_F"] <= 1.0
+    # fuzzy_F = sqrt(freq_a_matched * freq_b_matched) = sqrt((10/15)*(8/11)) = 0.69631.
+    assert np.isclose(m["fuzzy_F"], np.sqrt((10 / 15) * (8 / 11)), atol=1e-6)
 
 
 def test_fuzzy_no_match_empty_and_zero_metrics():
