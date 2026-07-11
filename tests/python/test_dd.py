@@ -379,6 +379,24 @@ def test_dd_full_native_support_and_single_d_untouched():
     assert native.pgen_aa(m_dd0, "CAAAF") == pytest.approx(native.pgen_aa(m, "CAAAF"), rel=1e-12)
 
 
+@pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")
+def test_dd_default_for_d_loci():
+    """EM defaults to a tandem-D model on the D-bearing loci (IGH/TRD/TRB); single_d opts out; VJ
+    loci are unaffected."""
+    from vdjtools.model import generate
+    from vdjtools.model.infer import DD_DEFAULT_LOCI, gene_masks, infer_native
+    pytest.importorskip("vdjtools._core")
+    assert DD_DEFAULT_LOCI == {"TRB", "TRD", "IGH"}
+    m = from_olga(OLGA / "human_T_delta", locus="TRD")
+    df = generate.generate(m, 30, seed=3)
+    seqs = [s.upper() for s in df["cdr3_nt"]]
+    mk = gene_masks(m, df["v_call"].to_list(), df["j_call"].to_list())
+    dd, _ = infer_native(m, seqs, masks=mk, max_iter=1)                 # default → D-D
+    sd, _ = infer_native(m, seqs, masks=mk, max_iter=1, single_d=True)  # opt out → single-D
+    assert dd.tables["n_d"].height == 2 and "d2_gene" in dd.tables
+    assert sd.tables["n_d"].height == 1 and "d2_gene" not in sd.tables
+
+
 def test_generate_dd_fraction_and_scoreable():
     """Tandem generation: the n_D=2 draw fraction matches P(n_D=2), and every tandem draw is
     scoreable by the native D-D Pgen (closed-loop consistency needed for D-D EM)."""
