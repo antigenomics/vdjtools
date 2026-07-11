@@ -111,15 +111,35 @@ def test_dd_middle_with_dd_insertion():
 
 def test_pgen_partitions_over_nd():
     """Full pgen_nt = P(n_D=1)·single-D + P(n_D=2)·tandem, on the tiny model."""
-    m = _tiny_dd_model(p_nd2=0.5)
-    prep = pgen.prepare(m)
-    # sequence: V("G") + D1("AT") + D2("AT") + J("C")  → "GATATC"
-    s = "GATATC"
-    p_full = pgen.pgen_nt(prep, s)
+    # V("GG") + D1("AT") + D2("AT") + J("CC") → "GGATATCC" (tandem-only; single-D can't span "ATAT").
+    s = "GGATATCC"
+    p_full = pgen.pgen_nt(pgen.prepare(_tiny_dd_model(p_nd2=0.5)), s)
     p_single = pgen.pgen_nt(pgen.prepare(_tiny_dd_model(p_nd2=0.0)), s)
-    # tandem-only piece via a p2=1 model
     p_tandem = pgen.pgen_nt(pgen.prepare(_tiny_dd_model(p_nd2=1.0)), s)
+    assert p_tandem > 0.0 and p_single == 0.0  # non-vacuous: this read is genuinely tandem-only
     assert p_full == pytest.approx(0.5 * p_single + 0.5 * p_tandem)
+
+
+def test_dd_estep_total_equals_pgen():
+    """The D-D E-step's soft-count normalizer equals the independently-computed Pgen (all scenarios)."""
+    from collections import defaultdict
+    from vdjtools.model.infer import _estep_seq, _fit_events
+    m = _tiny_dd_model(p_nd2=0.5, pdel_full_only=False)
+    prep = pgen.prepare(m)
+    for s in ("GGATATCC", "GGATCC", "GGATGCC"):
+        counts = {n: defaultdict(float) for n in _fit_events(m.manifest)}
+        assert _estep_seq(prep, s, counts) == pytest.approx(pgen.pgen_nt(prep, s), rel=1e-12, abs=1e-18)
+
+
+def test_em_recovers_p_nd2():
+    """Closed-loop: generate tandem data from a known model → EM recovers P(n_D=2) from a wrong init."""
+    from vdjtools.model import generate
+    from vdjtools.model.infer import infer
+    reads = [r.upper() for r in generate.generate(_tiny_dd_model(p_nd2=0.35, pdel_full_only=False),
+                                                  1500, seed=11)["cdr3_nt"].to_list()]
+    fitted, _ = infer(_tiny_dd_model(p_nd2=0.15, pdel_full_only=False), reads, max_iter=25, init="template")
+    nd = dict(zip(fitted.tables["n_d"]["n_d"].to_list(), fitted.tables["n_d"]["p"].to_list()))
+    assert nd[2] == pytest.approx(0.35, abs=0.05)  # recovered from a deliberately wrong 0.15 start
 
 
 @pytest.mark.slow
@@ -204,11 +224,11 @@ def test_dd_guards_raise_and_single_d_untouched():
     m = from_olga(OLGA / "human_T_delta", locus="TRD")
     m_dd = to_dd(m, p_nd2=0.1)
     s = generate.generate(m, 1, seed=1)["cdr3_nt"][0].upper()
-    # aa Pgen (transfer matrix) and EM do not yet support tandems → must raise.
+    # aa Pgen (transfer matrix) and the *native* E-step do not yet support tandems → must raise.
+    # (Python EM now learns tandem-D — covered by test_em_recovers_p_nd2.)
     for fn in (
         lambda: pgen.pgen_aa(pgen.prepare(m_dd), "CAAAF"),
         lambda: native.pgen_aa(m_dd, "CAAAF"),
-        lambda: infer.infer(m_dd, [s], max_iter=1),
         lambda: infer.infer_native(m_dd, [s], max_iter=1),
     ):
         with pytest.raises(NotImplementedError):
