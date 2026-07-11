@@ -22,14 +22,20 @@ identical), symmetric, with ``Zᵢᵢ = 1``:
   vectors and Morisita to the classical Morisita-Horn index.
 
 The three kernels are the same code on the same spine — identity and step are the exact
-special cases (exact / fuzzy overlap) of the continuous ``exp`` form.
+special cases (exact / fuzzy overlap) of the continuous ``exp`` form. The CDR3 kernel is
+**block-diagonalised by the non-cdr3 key fields** (V/J/locus): exp/step never connect
+clonotypes that differ outside the CDR3, so identity is the exact ``τ→0`` limit of exp on
+the same key.
 
 The penalty is built with **seqtree** (the ``overlap`` extra): the **dense** path scores
 every clonotype pair via :func:`seqtree.score_matrix` (``O(N²)``, for small ``N`` and the
-tests); the **sparse** path restricts to near-neighbours via
-:func:`seqtree.pairwise_batch` and assembles a ``scipy.sparse`` ``Z`` (the practical path
-at scale). Both within-sample blocks (``Z_AA``, ``Z_BB``) are needed in full — a
-diagonal-only approximation of ``pᵀZp`` is wrong.
+tests); the **sparse** path uses :func:`seqtree.pairwise_batch` only to *find* near
+candidates, then **re-scores each with the same gap-block model**
+(:func:`seqtree.gapblock_score`, same matrix / gap_open / gap_prior as dense) and keeps
+those with penalty ``≤`` the threshold — so dense and sparse agree on every retained pair.
+It assembles a ``scipy.sparse`` ``Z`` (the practical path at scale). Both within-sample
+blocks (``Z_AA``, ``Z_BB``) are needed in full — a diagonal-only approximation of ``pᵀZp``
+is wrong.
 """
 from __future__ import annotations
 
@@ -113,6 +119,28 @@ def _keys(agg: pl.DataFrame, key: list[str]) -> list[tuple]:
     return list(agg.select(key).iter_rows())
 
 
+def _block_labels(keys_a: list, keys_b: list, key: list[str]):
+    """Integer block ids from the NON-cdr3 key fields (V/J/locus/…), over a shared space.
+
+    Two clonotypes share a block iff their non-cdr3 key columns are all equal. The exp/step
+    CDR3 kernels are zeroed across blocks (block-diagonalisation) so identity — which matches
+    the full key — is the exact ``τ→0`` limit of exp on the same spine. Returns
+    ``(labels_a, labels_b)`` as ``int`` arrays, or ``(None, None)`` when the key is cdr3-only
+    (no gating).
+    """
+    if len(key) <= 1:
+        return None, None
+    cut = key.index(CDR3_AA)
+    idx: dict = {}
+
+    def label(k):
+        return idx.setdefault(k[:cut] + k[cut + 1:], len(idx))
+
+    la = np.array([label(k) for k in keys_a], dtype=np.int64)
+    lb = np.array([label(k) for k in keys_b], dtype=np.int64)
+    return la, lb
+
+
 def _resolve_matrix(seqtree, matrix, kernel: str):
     """Resolve the substitution matrix: caller value, else blosum62 (exp) / unit (step)."""
     if matrix is not None:
@@ -178,13 +206,13 @@ def _identity_block(keys_x: list, keys_y: list, sparse: bool):
     return Z
 
 
-def _sparse_penalty_pairs(seqtree, qs, rs, matrix, gap_open, max_penalty, threads):
-    """Near-neighbour ``(i, j, penalty)`` triples of ``qs`` vs ``rs`` (score ≤ max_penalty).
+def _sparse_candidate_pairs(seqtree, qs, rs, matrix, gap_open, max_penalty, threads):
+    """Near-neighbour ``(i, j)`` candidate pairs of ``qs`` vs ``rs`` (for later re-scoring).
 
-    Uses :func:`seqtree.pairwise_batch`. Unlike the dense path this has no gap prior
-    (SearchParams carries none), so for unequal-length pairs the block placement — and
-    hence the penalty — can differ from the dense path; this is the documented
-    approximation of the practical sparse route.
+    Uses :func:`seqtree.pairwise_batch` purely to *find* candidates. Its (prior-free)
+    penalty is a lower bound on the gap-block penalty **with** a (non-negative) prior, so
+    this candidate set is a superset of the pairs the re-scoring keeps — nothing scoring
+    ``≤ max_penalty`` under the dense model is missed.
     """
     params = seqtree.SearchParams(
         max_subs=max_penalty, max_ins=max_penalty, max_dels=max_penalty,
@@ -194,20 +222,34 @@ def _sparse_penalty_pairs(seqtree, qs, rs, matrix, gap_open, max_penalty, thread
     res = seqtree.pairwise_batch(qs, rs, params, "aa", threads)
     for i, hits in enumerate(res):
         for h in hits:
-            yield i, h.ref_id, float(h.score)
+            yield i, h.ref_id
 
 
-def _sparse_kernel_block(seqtree, qs, rs, matrix, gap_open, kernel, tau, max_penalty,
-                         threads, self_block: bool):
-    """Assemble a sparse kernel block from near-neighbour pairs (diagonal forced to 1)."""
+def _sparse_kernel_block(seqtree, qs, rs, matrix, gap_open, gap_prior, kernel, tau,
+                         max_penalty, threads, block_q, block_r, self_block: bool):
+    """Sparse kernel block: a genuine sparsification of the dense gap-block model.
+
+    :func:`pairwise_batch` finds candidate near pairs; each is **re-scored with the same
+    gap-block model** (:func:`seqtree.gapblock_score`, same ``matrix`` / ``gap_open`` /
+    ``gap_prior`` as dense) and kept iff its penalty ``≤ max_penalty``. V/J gating zeroes
+    any pair whose non-cdr3 blocks differ. The diagonal is forced to 1 on a self block.
+    """
     from scipy.sparse import coo_matrix
-    rows, cols, data = [], [], []
-    for i, j, pen in _sparse_penalty_pairs(seqtree, qs, rs, matrix, gap_open,
-                                           max_penalty, threads):
-        val = float(np.exp(-pen / tau)) if kernel == "exp" else 1.0
-        rows.append(i)
-        cols.append(j)
-        data.append(val)
+    cells: dict = {}
+    for i, j in _sparse_candidate_pairs(seqtree, qs, rs, matrix, gap_open,
+                                        max_penalty, threads):
+        if block_q is not None and block_q[i] != block_r[j]:
+            continue  # V/J/locus gate: differ outside the CDR3 → no similarity
+        pen, _ = seqtree.gapblock_score(qs[i], rs[j], matrix=matrix,
+                                        gap_open=gap_open, gap_prior=gap_prior)
+        if pen > max_penalty:
+            continue
+        cells[(i, j)] = float(np.exp(-pen / tau)) if kernel == "exp" else 1.0
+    if cells:
+        rows, cols = zip(*cells.keys())
+        data = list(cells.values())
+    else:
+        rows, cols, data = (), (), ()
     Z = coo_matrix((data, (rows, cols)), shape=(len(qs), len(rs))).tocsr()
     if self_block:
         Z.setdiag(1.0)  # exact self-similarity even if the search missed the self hit
@@ -217,7 +259,7 @@ def _sparse_kernel_block(seqtree, qs, rs, matrix, gap_open, kernel, tau, max_pen
 def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
                       key: "tuple[str, ...]" = (CDR3_AA,), kernel: str = "exp",
                       tau: float | None = None, matrix=None, max_penalty: int | None = None,
-                      e_value: float | None = None, gap_prior="frame",
+                      gap_prior="central",
                       gap_open: int | None = None, dense: bool | None = None,
                       threads: int = 0) -> SimilarityMatrices:
     """Build the three CDR3-similarity blocks ``Z_AB, Z_AA, Z_BB`` for a sample pair.
@@ -236,11 +278,10 @@ def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
         max_penalty: Penalty ceiling. Required (and the step threshold) for ``"step"``
             (default ``1`` = one edit); for the sparse ``"exp"`` path it is the
             neighbourhood cutoff (default from ``τ`` so ``exp(−P/τ) ≳ 1e-3``).
-        e_value: Reserved — deriving a penalty ceiling from an E-value needs a background
-            control index (see :func:`seqtree.evalue.threshold_for_evalue`); not wired in
-            this phase. Raises ``NotImplementedError`` if set.
-        gap_prior: Single-indel block placement rule: ``"frame"`` (default, transitive
-            common frame), ``"central"``, ``"none"``, or a ``seqtree.GapPrior``.
+        gap_prior: Single-indel block placement rule: ``"central"`` (default — biases the
+            indel to the loop centre, where CDR3 length variation sits; seqtree's own
+            gapblock recommendation for pairwise scoring), ``"frame"`` (left-anchored
+            common frame), ``"none"``, or a ``seqtree.GapPrior``.
         gap_open: Block-opening cost. Defaults to the seqtree score default for ``"exp"``
             and to a gap-prohibiting value for ``"step"`` (substitution-only, matching
             vdjmatch's default scope).
@@ -254,16 +295,12 @@ def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
     Raises:
         ImportError: If seqtree (or, for the sparse path, scipy) is missing.
         ValueError: On an unknown ``kernel``/``gap_prior`` or a ``key`` without ``cdr3_aa``.
-        NotImplementedError: If ``e_value`` is set.
     """
-    if e_value is not None:
-        raise NotImplementedError(
-            "e_value-derived thresholds need a background control index "
-            "(seqtree.evalue.threshold_for_evalue); pass max_penalty directly.")
     key = list(key)
     a_agg = _aggregate(a, key)
     b_agg = _aggregate(b, key)
     keys_a, keys_b = _keys(a_agg, key), _keys(b_agg, key)
+    block_a, block_b = _block_labels(keys_a, keys_b, key)
     freq_a = a_agg["_freq"].to_numpy().astype(float)
     freq_b = b_agg["_freq"].to_numpy().astype(float)
     n_a, n_b = len(keys_a), len(keys_b)
@@ -308,15 +345,24 @@ def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
         z_ab = _kernel_dense(p_ab, kernel, tau, max_penalty)
         z_aa = _kernel_dense(p_aa, kernel, tau, max_penalty)
         z_bb = _kernel_dense(p_bb, kernel, tau, max_penalty)
+        if block_a is not None:
+            # Block-diagonalise by the non-cdr3 key fields (V/J/locus): zero every entry
+            # whose clonotypes differ outside the CDR3.
+            z_ab = z_ab * (block_a[:, None] == block_b[None, :])
+            z_aa = z_aa * (block_a[:, None] == block_a[None, :])
+            z_bb = z_bb * (block_b[:, None] == block_b[None, :])
         return SimilarityMatrices(z_ab, z_aa, z_bb, keys_a, keys_b,
                                   freq_a, freq_b, kernel, tau, False)
 
-    z_ab = _sparse_kernel_block(seqtree, cdr3_a, cdr3_b, sub_matrix, gap_open,
-                                kernel, tau, max_penalty, threads, self_block=False)
-    z_aa = _sparse_kernel_block(seqtree, cdr3_a, cdr3_a, sub_matrix, gap_open,
-                                kernel, tau, max_penalty, threads, self_block=True)
-    z_bb = _sparse_kernel_block(seqtree, cdr3_b, cdr3_b, sub_matrix, gap_open,
-                                kernel, tau, max_penalty, threads, self_block=True)
+    z_ab = _sparse_kernel_block(seqtree, cdr3_a, cdr3_b, sub_matrix, gap_open, prior,
+                                kernel, tau, max_penalty, threads, block_a, block_b,
+                                self_block=False)
+    z_aa = _sparse_kernel_block(seqtree, cdr3_a, cdr3_a, sub_matrix, gap_open, prior,
+                                kernel, tau, max_penalty, threads, block_a, block_a,
+                                self_block=True)
+    z_bb = _sparse_kernel_block(seqtree, cdr3_b, cdr3_b, sub_matrix, gap_open, prior,
+                                kernel, tau, max_penalty, threads, block_b, block_b,
+                                self_block=True)
     return SimilarityMatrices(z_ab, z_aa, z_bb, keys_a, keys_b,
                               freq_a, freq_b, kernel, tau, True)
 
@@ -342,7 +388,7 @@ def similarity_overlap(a: pl.DataFrame, b: pl.DataFrame, *,
                        key: "tuple[str, ...]" = (CDR3_AA,), metric: str = "cosine",
                        weight: str = "freq", kernel: str = "exp",
                        tau: float | None = None, matrix=None,
-                       max_penalty: int | None = None, e_value: float | None = None,
+                       max_penalty: int | None = None, dense: bool | None = None,
                        threads: int = 0) -> dict:
     """Similarity-weighted overlap between two repertoires.
 
@@ -362,7 +408,8 @@ def similarity_overlap(a: pl.DataFrame, b: pl.DataFrame, *,
         tau: Kernel bandwidth for ``"exp"`` (default ``14``).
         matrix: Substitution matrix (see :func:`similarity_matrix`).
         max_penalty: Penalty ceiling / step threshold (see :func:`similarity_matrix`).
-        e_value: Reserved (see :func:`similarity_matrix`).
+        dense: Force the dense (``True``) or sparse (``False``) kernel path; ``None``
+            auto-selects (see :func:`similarity_matrix`). Both agree on retained pairs.
         threads: Worker threads for the native search.
 
     Returns:
@@ -372,7 +419,7 @@ def similarity_overlap(a: pl.DataFrame, b: pl.DataFrame, *,
         ValueError: On an unknown ``metric``/``weight``/``kernel``.
     """
     sm = similarity_matrix(a, b, key=key, kernel=kernel, tau=tau, matrix=matrix,
-                           max_penalty=max_penalty, e_value=e_value, threads=threads)
+                           max_penalty=max_penalty, dense=dense, threads=threads)
     p = _weights(sm.freq_a, weight)
     q = _weights(sm.freq_b, weight)
     pTZq = _quad(p, sm.z_ab, q)
