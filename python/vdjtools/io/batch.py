@@ -11,7 +11,7 @@ from pathlib import Path
 
 import polars as pl
 
-from .read import read_airr, read_vdjtools
+from .read import read_airr, read_parquet, read_vdjtools
 from .schema import COLUMNS, LOCUS
 
 
@@ -28,13 +28,17 @@ def sniff_format(path: str | os.PathLike) -> str:
         path: Path to a clonotype table.
 
     Returns:
-        ``"vdjtools"`` if the header looks like the native vdjtools table
-        (``cdr3aa`` / ``count`` + ``cdr3nt``), ``"airr"`` if it looks like AIRR
-        Rearrangement (``v_call`` / ``junction_aa`` / ``cdr3_aa``).
+        ``"parquet"`` if the path ends in ``.parquet`` / ``.pq`` (detected by
+        extension, without opening the file), ``"vdjtools"`` if the header looks
+        like the native vdjtools table (``cdr3aa`` / ``count`` + ``cdr3nt``), or
+        ``"airr"`` if it looks like AIRR Rearrangement (``v_call`` /
+        ``junction_aa`` / ``cdr3_aa``).
 
     Raises:
         ValueError: If neither signature is recognised.
     """
+    if Path(path).suffix.lower() in (".parquet", ".pq"):
+        return "parquet"
     cols = set(_header_columns(path))
     if "cdr3aa" in cols or {"count", "cdr3nt"} <= cols:
         return "vdjtools"
@@ -48,8 +52,10 @@ def read(path: str | os.PathLike, fmt: str = "auto",
     """Read a clonotype table, auto-detecting the format by default.
 
     Args:
-        path: Path to a native vdjtools or AIRR Rearrangement table (``.gz`` ok).
-        fmt: ``"auto"`` (sniff the header), ``"vdjtools"``, or ``"airr"``.
+        path: Path to a native vdjtools, AIRR Rearrangement, or Parquet table
+            (``.gz`` ok for the text formats).
+        fmt: ``"auto"`` (sniff the header / extension), ``"vdjtools"``, ``"airr"``,
+            or ``"parquet"``.
         n_rows: If given, read at most this many data rows (preview huge files).
 
     Returns:
@@ -64,7 +70,9 @@ def read(path: str | os.PathLike, fmt: str = "auto",
         return read_vdjtools(path, n_rows=n_rows)
     if fmt == "airr":
         return read_airr(path, n_rows=n_rows)
-    raise ValueError(f"fmt must be 'auto', 'vdjtools' or 'airr'; got {fmt!r}")
+    if fmt == "parquet":
+        return read_parquet(path, n_rows=n_rows)
+    raise ValueError(f"fmt must be 'auto', 'vdjtools', 'airr' or 'parquet'; got {fmt!r}")
 
 
 def read_metadata(path: str | os.PathLike) -> pl.DataFrame:
@@ -88,10 +96,56 @@ def read_metadata(path: str | os.PathLike) -> pl.DataFrame:
     return df
 
 
+def iter_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
+                 sample_col: str = "sample_name", file_template: str = "{sample}.tsv.gz",
+                 fmt: str = "auto", add_metadata: bool = True):
+    """Yield ``(sample_id, frame)`` one sample at a time — O(1-sample) RAM.
+
+    The streaming counterpart to :func:`read_samples`. Because it reads and yields
+    each sample in turn (never accumulating), a caller can reduce-and-discard —
+    per-sample diversity/usage, or sink each sample to a Parquet partition — and so
+    process a 100k-sample cohort whose concatenation would not fit in memory. Each
+    yielded frame carries the canonical columns + ``locus`` + the reserved
+    ``sample_id`` / ``file_name``, and (if ``add_metadata``) that row's metadata.
+
+    Args:
+        metadata: Metadata frame (e.g. from :func:`read_metadata`).
+        base_dir: Directory holding the per-sample clonotype files.
+        sample_col: Metadata column carrying the sample name.
+        file_template: Filename template; ``{sample}`` is substituted with the
+            sample name.
+        fmt: Format for the readers (``"auto"`` / ``"vdjtools"`` / ``"airr"`` /
+            ``"parquet"``).
+        add_metadata: If ``True``, attach the metadata columns to every clonotype row.
+
+    Yields:
+        ``(sample_id, frame)`` tuples in metadata order.
+    """
+    base = Path(base_dir)
+    keep = [*COLUMNS, LOCUS]
+    reserved = {"sample_id", "file_name"}
+    meta_cols = [c for c in metadata.columns if c not in reserved and c != sample_col]
+    for row in metadata.iter_rows(named=True):
+        sample = row[sample_col]
+        fname = file_template.format(sample=sample)
+        clones = read(base / fname, fmt=fmt)
+        clones = clones.select([c for c in keep if c in clones.columns])
+        clones = clones.with_columns(pl.lit(sample).alias("sample_id"),
+                                     pl.lit(fname).alias("file_name"))
+        if add_metadata:
+            clones = clones.with_columns(pl.lit(row[mc]).alias(mc) for mc in meta_cols)
+        yield str(sample), clones
+
+
 def read_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
                  sample_col: str = "sample_name", file_template: str = "{sample}.tsv.gz",
                  fmt: str = "auto", add_metadata: bool = True, as_dict: bool = False):
-    """Read a batch of samples described by a metadata table.
+    """Read a batch of samples described by a metadata table into one frame.
+
+    Eagerly materialises the whole cohort — convenient for tens-to-hundreds of
+    samples, but it holds every sample in RAM at once. For large cohorts (thousands+
+    of samples) use :func:`iter_samples` to stream, or :func:`vdjtools.io.cohort`
+    to persist a hive-partitioned Parquet dataset and scan it lazily.
 
     For each metadata row the file ``base_dir/file_template.format(sample=<sample>)``
     is read into the canonical schema, tagged with the reserved columns ``sample_id``
@@ -105,7 +159,8 @@ def read_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
             ``"sample_name"``).
         file_template: Filename template; ``{sample}`` is substituted with the sample
             name (default ``"{sample}.tsv.gz"``).
-        fmt: Format for the readers (``"auto"`` / ``"vdjtools"`` / ``"airr"``).
+        fmt: Format for the readers (``"auto"`` / ``"vdjtools"`` / ``"airr"`` /
+            ``"parquet"``).
         add_metadata: If ``True``, attach the metadata columns to every clonotype row.
         as_dict: If ``True``, return ``{sample_id: frame}`` instead of one long frame.
 
@@ -114,23 +169,8 @@ def read_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
         ``sample_id`` + ``file_name`` + metadata), or a ``dict[str, pl.DataFrame]``
         if ``as_dict``.
     """
-    base = Path(base_dir)
-    keep = [*COLUMNS, LOCUS]
-    reserved = {"sample_id", "file_name"}
-    meta_cols = [c for c in metadata.columns if c not in reserved]
-    frames: dict[str, pl.DataFrame] = {}
-    for row in metadata.iter_rows(named=True):
-        sample = row[sample_col]
-        fname = file_template.format(sample=sample)
-        clones = read(base / fname, fmt=fmt)
-        clones = clones.select([c for c in keep if c in clones.columns])
-        clones = clones.with_columns(pl.lit(sample).alias("sample_id"),
-                                     pl.lit(fname).alias("file_name"))
-        if add_metadata:
-            clones = clones.with_columns(
-                pl.lit(row[mc]).alias(mc) for mc in meta_cols if mc != sample_col
-            )
-        frames[str(sample)] = clones
+    frames = dict(iter_samples(metadata, base_dir, sample_col, file_template,
+                               fmt, add_metadata))
     if as_dict:
         return frames
     return pl.concat(list(frames.values()), how="vertical_relaxed")
