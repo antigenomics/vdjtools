@@ -3,6 +3,12 @@
 Interpolation is the exact Hurlbert/Coleman expectation (no random draws) — the
 same estimator legacy vdjtools computes in ``ChaoEstimator.chaoI`` — and
 extrapolation follows ``ChaoEstimator.chaoE``. Both are deterministic.
+
+:func:`rarefaction` is the legacy richness-only (``q = 0``) curve. For the full
+iNEXT framework — size- and coverage-based R/E of Hill numbers of orders 0/1/2
+with bootstrap confidence intervals — use :func:`inext`, :func:`inext_coverage`,
+:func:`asymptotic_diversity`, :func:`sample_coverage`, and :func:`estimate_d`
+(implemented in :mod:`vdjtools.stats.inext` and re-exported here).
 """
 from __future__ import annotations
 
@@ -12,6 +18,13 @@ from scipy.special import gammaln
 
 from ..io.schema import COUNT
 from .diversity import observed_richness
+from .inext import (  # noqa: F401  re-exported iNEXT public API
+    asymptotic_diversity,
+    estimate_d,
+    inext,
+    inext_coverage,
+    sample_coverage,
+)
 
 
 def _spectrum(counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

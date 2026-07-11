@@ -10,6 +10,13 @@ from .diversity import (
     observed_richness,
     shannon_wiener,
 )
+from .inext import (
+    asymptotic_diversity,
+    estimate_d,
+    inext,
+    inext_coverage,
+    sample_coverage,
+)
 from .rarefaction import rarefaction
 from .spectratype import spectratype, vj_spectratype
 from .usage import segment_usage, vj_usage
@@ -25,6 +32,11 @@ __all__ = [
     "inverse_simpson",
     "d50",
     "rarefaction",
+    "inext",
+    "inext_coverage",
+    "asymptotic_diversity",
+    "sample_coverage",
+    "estimate_d",
     "segment_usage",
     "vj_usage",
     "spectratype",
