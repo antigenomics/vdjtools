@@ -158,11 +158,12 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str]:
         j = _pick(rng, prep.j_given_v[v])
         d = ""
 
+    # V and J each contribute >= 1 nt to the CDR3 (matches the Pgen model — never fully deleted).
     cutv = prep.cut["v"][v]
-    len_v = max(0, len(cutv) - (_pick(rng, prep.delv[v]) + prep.maxpal["v_3"]))
+    len_v = max(1, len(cutv) - (_pick(rng, prep.delv[v]) + prep.maxpal["v_3"]))
     v_contrib = cutv[:len_v]
     cutj = prep.cut["j"][j]
-    dj = _pick(rng, prep.delj[j]) + prep.maxpal["j_5"]
+    dj = min(_pick(rng, prep.delj[j]) + prep.maxpal["j_5"], len(cutj) - 1)
     j_contrib = cutj[dj:]
 
     if vdj:
