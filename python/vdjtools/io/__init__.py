@@ -3,6 +3,7 @@
 Readers return the canonical clonotype frame defined in :mod:`vdjtools.io.schema`.
 """
 from . import schema
+from .batch import read, read_metadata, read_samples, sniff_format
 from .read import read_airr, read_vdjtools
 from .schema import (
     C_CALL,
@@ -24,8 +25,12 @@ from .schema import (
 
 __all__ = [
     "schema",
+    "read",
     "read_airr",
     "read_vdjtools",
+    "read_metadata",
+    "read_samples",
+    "sniff_format",
     "normalize",
     "add_locus",
     "locus_of",
