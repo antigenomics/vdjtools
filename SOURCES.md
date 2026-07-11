@@ -31,6 +31,13 @@ models, their own IMGT-vintage germline is kept for exact-Pgen fidelity — see 
 |---|---|---|---|---|
 | 10x dCODE dextramer donors (1–4) | HF dataset `isalgo/airr_benchmark`, path `dcode/vdj_v1_hs_aggregated_donor{1..4}_{all_contig_annotations,consensus_annotations,binarized_matrix}.csv.gz` | gzipped CSV (10x CellRanger VDJ all-contig / consensus annotations; CITE-seq binarized dextramer matrix: `barcode` + 50 `*_binder` boolean cols) | `huggingface_hub.hf_hub_download(repo_id="isalgo/airr_benchmark", repo_type="dataset", filename=...)` (fetched at test time into the HF cache; skips cleanly offline) | **experimental** — 10x Genomics "A New Way of Exploring Immunity" dCODE dextramer single-cell TCR + surface-marker dataset; antigen labels are the single-True `*_binder` column per cell |
 
+## Phase 6 — biomarker association (Emerson benchmark + validation)
+
+| Dataset | Origin | Format | How to obtain | Provenance |
+|---|---|---|---|---|
+| Emerson HIP cohort (786 subjects) | HF dataset [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip) — redistributed from Adaptive immuneACCESS **Emerson-2017-NatGen** | per-subject VDJtools tables `corr/HIP#####.txt.gz` (`count freq cdr3nt cdr3aa v d j VEnd…`); `metadata.txt` (TAB-sep: `file_name sample_id age race sex cmv hla`) | `examples/emerson_cmv_hla.py` → `huggingface_hub.snapshot_download(repo_type="dataset", allow_patterns=["corr/{sample}.txt.gz"])`; ingest with `io.ingest_cohort(fmt="vdjtools")` | **experimental** TCRβ repertoires + phenotypes (Emerson et al., *Nat Genet* 2017, doi:10.1038/ng.3822). `cmv` ∈ {`+`,`-`,`NA`}; `hla` = 2-digit HLA-A/B only (`HLA-A*02`); ⚠ `race` contains commas — split on TAB. No discovery/validation split column |
+| VDJdb (CMV validation target) | local checkout `/Users/mikesh/vcs/code/vdjdb-db/database/vdjdb.slim.txt` (canonical `antigenomics/vdjdb-db`, 2024-06 release; 2-digit HLA matches airr_hip) | TSV, 16 cols: `gene cdr3 species antigen.epitope antigen.gene antigen.species … v.segm j.segm … mhc.a mhc.b mhc.class … vdjdb.score` | read with polars; filter `gene==TRB & species==HomoSapiens & antigen.species~CMV` | **curated** TCR↔epitope database; newer 4-digit dump at `/Users/mikesh/vcs/code/vdjdb-iedb-concordance/vdjdb_dump_2026/vdjdb.slim.txt`. Canonical fetch: `antigenomics/vdjdb-db` GitHub releases |
+
 ## Golden fixtures (tests)
 
 | Dataset | Origin | Use |
