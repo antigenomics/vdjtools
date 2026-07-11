@@ -338,7 +338,7 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
     """Annotate nt contigs with arda and build ``(junctions, masks)`` for masked :func:`infer`.
 
     The production path for real reads: ``junctions, masks = arda_masks(contigs, template);
-    infer(template, junctions, masks=masks)``. arda is the ``[model]`` extra.
+    infer_native(template, junctions, masks=masks)``. arda is the ``[model]`` extra.
     """
     from .stitch import annotate
 
@@ -346,3 +346,113 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
     junctions = calls["junction"].to_list()
     masks = gene_masks(model, calls["v_call"].to_list(), calls["j_call"].to_list())
     return junctions, masks
+
+
+# --------------------------------------------------------------------------------------------
+# Native EM: the E-step runs in C++ (_core.estep_batch); the M-step re-normalizes the returned
+# dense soft-count arrays back into polars tables. Same result as pure-Python infer(), much faster.
+
+def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins) -> dict[str, pl.DataFrame]:
+    vdj = template.chain_type == "VDJ"
+    mp = template.manifest.palindrome_max
+    nV, nJ, nD = len(v_alleles), len(j_alleles), len(d_alleles)
+
+    def norm(df, keys):
+        tot = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
+        return df.with_columns(p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
+
+    def deletion(arr, alleles, col, nb, maxpal):
+        a = np.repeat(alleles, nb)
+        ndel = np.tile(np.arange(nb) - maxpal, len(alleles))
+        return norm(pl.DataFrame({col: a, "ndel": ndel.astype(np.int16), "p": list(arr)}), [col])
+
+    def dinucl(arr):
+        i = np.arange(16)  # arr index i = to*4 + from
+        return norm(pl.DataFrame({"from_nt": (i % 4).astype(np.uint8), "to_nt": (i // 4).astype(np.uint8),
+                                  "p": list(arr)}), ["from_nt"])
+
+    t = {}
+    t["v_choice"] = norm(pl.DataFrame({"v_allele": v_alleles, "p": list(counts.v_choice)}), [])
+    t["v_3_del"] = deletion(counts.v_3_del, v_alleles, "v_allele", nbins["v"], mp["v_3"])
+    t["j_5_del"] = deletion(counts.j_5_del, j_alleles, "j_allele", nbins["j"], mp["j_5"])
+    if vdj:
+        t["j_choice"] = norm(pl.DataFrame({"j_allele": j_alleles, "p": list(counts.j_choice)}), [])
+        t["d_gene"] = norm(pl.DataFrame({
+            "j_allele": np.repeat(j_alleles, nD), "d_allele": np.tile(d_alleles, nJ),
+            "p": list(counts.d_gene)}), ["j_allele"])
+        n5, n3 = nbins["d5"], nbins["d3"]
+        t["d_del"] = norm(pl.DataFrame({
+            "d_allele": np.repeat(d_alleles, n5 * n3),
+            "ndel5": np.tile(np.repeat(np.arange(n5) - mp["d_5"], n3), nD).astype(np.int16),
+            "ndel3": np.tile(np.arange(n3) - mp["d_3"], n5 * nD).astype(np.int16),
+            "p": list(counts.d_del)}), ["d_allele"])
+        t["vd_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_vd), dtype=np.int16), "p": list(counts.ins_vd)}), [])
+        t["dj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dj), dtype=np.int16), "p": list(counts.ins_dj)}), [])
+        t["vd_dinucl"] = dinucl(counts.dinucl_vd)
+        t["dj_dinucl"] = dinucl(counts.dinucl_dj)
+        t["n_d"] = template.tables["n_d"]
+    else:
+        t["j_choice"] = norm(pl.DataFrame({
+            "v_allele": np.repeat(v_alleles, nJ), "j_allele": np.tile(j_alleles, nV),
+            "p": list(counts.j_choice)}), ["v_allele"])
+        t["vj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_vj), dtype=np.int16), "p": list(counts.ins_vj)}), [])
+        t["vj_dinucl"] = dinucl(counts.dinucl_vj)
+    return t
+
+
+def infer_native(
+    template: Model,
+    sequences: list[str],
+    *,
+    max_iter: int = 30,
+    tol: float = 1e-3,
+    init: str = "align",
+    masks: list | None = None,
+) -> tuple[Model, InferenceReport]:
+    """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
+
+    Requires the compiled ``_core`` extension. See :func:`infer` for the arguments.
+    """
+    from .._core import estep_batch, make_counts
+    from .native import _encode, pack
+
+    upper = [s.upper() for s in sequences]
+    if init == "template":
+        tables = template.tables
+    elif init == "align":
+        tables = _align_init(template, upper)
+    else:
+        tables = _uniform_init(template)
+    model = Model(manifest=template.manifest, tables=tables, genomic=template.genomic)
+
+    v_alleles = template.genomic["genes_v"]["v_allele"].to_list()
+    j_alleles = template.genomic["genes_j"]["j_allele"].to_list()
+    d_alleles = template.genomic["genes_d"]["d_allele"].to_list() if template.chain_type == "VDJ" else []
+    vi = {a: i for i, a in enumerate(v_alleles)}
+    ji = {a: i for i, a in enumerate(j_alleles)}
+    di = {a: i for i, a in enumerate(d_alleles)}
+    seqs_enc = [_encode(s) for s in upper]
+    if masks is not None:
+        vmasks = [[vi[a] for a in mk[0] if a in vi] for mk in masks]
+        jmasks = [[ji[a] for a in mk[1] if a in ji] for mk in masks]
+        dmasks = [[di[a] for a in (mk[2] or []) if a in di] for mk in masks]
+    else:
+        vmasks = jmasks = dmasks = []
+
+    report = InferenceReport()
+    for it in range(max_iter):
+        pm, _, _ = pack(model)
+        counts = make_counts(pm)
+        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts)
+        report.loglik.append(ll)
+        nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
+        new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins)
+        new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
+        tv = _tv(model.tables["v_choice"], new_model.tables["v_choice"], ["v_allele"])
+        report.gene_tv.append(tv)
+        report.n_iter = it + 1
+        model = new_model
+        if it > 0 and tv < tol:
+            report.converged = True
+            break
+    return model, report

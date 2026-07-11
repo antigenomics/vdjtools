@@ -52,4 +52,24 @@ double pgen_nt(const PackedModel& m, const std::vector<int8_t>& cdr3, int v_idx,
 // amino-acid string; v_idx/j_idx as for ``pgen_nt``.
 double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx);
 
+// EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
+// arrays so the Python M-step can renormalize them directly.
+struct Counts {
+    std::vector<double> v_choice, j_choice, d_gene, v_3_del, j_5_del, d_del;
+    std::vector<double> ins_vd, ins_dj, ins_vj, dinucl_vd, dinucl_dj, dinucl_vj;
+};
+
+// A zeroed :class:`Counts` sized to ``m``.
+Counts make_counts(const PackedModel& m);
+
+// One EM E-step over a batch of CDR3s: accumulate soft counts into ``counts`` and return the
+// summed log-Pgen (over scoreable reads). Per-read ``vmasks[i]`` / ``jmasks[i]`` / ``dmasks[i]``
+// are gene-index lists restricting enumeration (empty => all functional genes of that segment).
+double estep_batch(const PackedModel& m,
+                   const std::vector<std::vector<int8_t>>& seqs,
+                   const std::vector<std::vector<int>>& vmasks,
+                   const std::vector<std::vector<int>>& jmasks,
+                   const std::vector<std::vector<int>>& dmasks,
+                   Counts& counts);
+
 }  // namespace vdjtools

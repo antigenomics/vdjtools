@@ -56,4 +56,23 @@ PYBIND11_MODULE(_core, m) {
     m.def("pgen_aa", &vdjtools::pgen_aa, py::arg("model"), py::arg("aa"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1,
           "Generation probability of an amino-acid CDR3; v_idx/j_idx = -1 sums over all genes.");
+
+    py::class_<Counts>(m, "Counts")
+        .def_readonly("v_choice", &Counts::v_choice)
+        .def_readonly("j_choice", &Counts::j_choice)
+        .def_readonly("d_gene", &Counts::d_gene)
+        .def_readonly("v_3_del", &Counts::v_3_del)
+        .def_readonly("j_5_del", &Counts::j_5_del)
+        .def_readonly("d_del", &Counts::d_del)
+        .def_readonly("ins_vd", &Counts::ins_vd)
+        .def_readonly("ins_dj", &Counts::ins_dj)
+        .def_readonly("ins_vj", &Counts::ins_vj)
+        .def_readonly("dinucl_vd", &Counts::dinucl_vd)
+        .def_readonly("dinucl_dj", &Counts::dinucl_dj)
+        .def_readonly("dinucl_vj", &Counts::dinucl_vj);
+
+    m.def("make_counts", &vdjtools::make_counts, py::arg("model"));
+    m.def("estep_batch", &vdjtools::estep_batch, py::arg("model"), py::arg("seqs"),
+          py::arg("vmasks"), py::arg("jmasks"), py::arg("dmasks"), py::arg("counts"),
+          "One EM E-step: accumulate soft counts, return summed log-Pgen.");
 }
