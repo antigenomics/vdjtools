@@ -49,8 +49,13 @@ cmake.build-type = "Release"
 build-dir = "build/{wheel_tag}"
 # Ext compiles at install time; flip to true during C++-heavy work for recompile-on-import.
 editable.rebuild = false
-# Keep the sdist lean; anchor paths with a leading "/".
-sdist.exclude = ["/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples"]
+# Keep the sdist lean (build inputs only); anchor paths with a leading "/". Dev docs, the LaTeX
+# appendix, and any stray untracked scratch files must not ship to PyPI — the wheel already carries
+# just the package + compiled _core.
+sdist.exclude = [
+    "/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples",
+    "/appendix", "/CLAUDE.md", "/ROADMAP.md", "/SOURCES.md", "/arda-ref.md",
+]
 
 [tool.scikit-build.cmake.define]
 VDJTOOLS_PYTHON = "ON"
