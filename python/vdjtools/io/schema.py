@@ -99,8 +99,9 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame
     """Coerce an arbitrary frame to the canonical clonotype schema.
 
     Missing canonical columns are added as nulls, present ones are cast to their
-    declared dtype (non-strict — unparseable values become null). Canonical
-    columns are ordered first; any extra columns are preserved after them.
+    declared dtype (non-strict — unparseable values become null). The result is
+    exactly the canonical columns in canonical order; any non-canonical columns
+    (e.g. native vdjtools markup like ``VEnd``/``DStart``) are dropped.
 
     Args:
         df: A frame that already uses canonical column names for whatever columns
@@ -109,8 +110,7 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame
             after coercion (use when the source lacks a trustworthy frequency).
 
     Returns:
-        A frame with every canonical column present, correctly typed, canonical
-        columns first.
+        A frame with exactly the canonical columns, correctly typed and ordered.
     """
     exprs = []
     for col, dtype in SCHEMA.items():
@@ -121,8 +121,7 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame
     df = df.with_columns(exprs)
     if recompute_freq:
         df = recompute_frequency(df)
-    extras = [c for c in df.columns if c not in SCHEMA]
-    return df.select([*COLUMNS, *extras])
+    return df.select(COLUMNS)
 
 
 def weight_expr(weight: str) -> pl.Expr:

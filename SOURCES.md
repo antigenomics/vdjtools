@@ -24,4 +24,3 @@ Provenance of every dataset used or produced by vdjtools. Never guess a source â
 |---|---|
 | `resources/profile/aa_property_table.txt` | amino-acid physicochemical properties (Phase 3) |
 | `resources/profile/cdr3contact.txt` | CDR3 contact-probability estimate (Phase 3) |
-| `resources/vj_families.txt` | V/J â†’ family mapping (segments-to-families) |

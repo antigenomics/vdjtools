@@ -17,7 +17,6 @@ from .schema import (
     CDR3_NT,
     COUNT,
     D_CALL,
-    FREQ,
     J_CALL,
     V_CALL,
 )
@@ -28,7 +27,6 @@ from .schema import (
 # integer markup columns we do not carry into the canonical frame.
 _NATIVE_MAP = {
     "count": COUNT,
-    "freq": FREQ,
     "cdr3nt": CDR3_NT,
     "cdr3aa": CDR3_AA,
     "v": V_CALL,
@@ -49,7 +47,7 @@ _AIRR_ALIASES: dict[str, tuple[str, ...]] = {
     CDR3_NT: ("junction", "cdr3"),
     # AIRR-hybrid exports (e.g. isalgo/airr_ankspond) carry a vdjtools-style `count`.
     COUNT: ("duplicate_count", "count", "reads"),
-    FREQ: ("frequency", "freq"),
+    # frequency is always recomputed from counts, never read from source.
 }
 
 

@@ -111,7 +111,8 @@ def physchem_profile(df: pl.DataFrame, group_by=("v_call", "j_call"),
 
     # explode the region into one row per residue
     work = work.with_columns(pl.col("_region").str.len_chars().alias("_L"))
-    work = work.with_columns(pl.int_ranges(0, pl.col("_L")).alias("_pos")).explode("_pos")
+    work = work.with_columns(
+        pl.int_ranges(0, pl.col("_L")).alias("_pos")).explode("_pos", empty_as_null=True)
     work = work.with_columns(pl.col("_region").str.slice(pl.col("_pos"), 1).alias("amino_acid"))
     work = work.join(tbl.select(["amino_acid", *props]), on="amino_acid", how="inner")
 

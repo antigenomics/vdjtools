@@ -28,7 +28,7 @@ def _explode_kmers(df: pl.DataFrame, k: int) -> pl.DataFrame:
     df = df.with_columns(pl.col(CDR3_AA).str.len_chars().alias("_len"))
     df = df.filter(pl.col("_len") >= k)  # shorter/null CDR3s yield no k-mers
     df = df.with_columns(pl.int_ranges(0, pl.col("_len") - k + 1).alias("_pos"))
-    df = df.explode("_pos")
+    df = df.explode("_pos", empty_as_null=True)
     df = df.with_columns(pl.col(CDR3_AA).str.slice(pl.col("_pos"), k).alias("kmer"))
     return df.drop("_len", "_pos")
 
