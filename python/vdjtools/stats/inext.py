@@ -35,6 +35,11 @@ from scipy.stats import norm
 
 from ..io.schema import COUNT
 
+try:  # native size-based iNEXT kernel (curve + bootstrap + parallel batch)
+    from .. import _core as _native
+except Exception:  # pragma: no cover - _core is a build-time dependency
+    _native = None
+
 # Output schema for the size-based / estimate_d rows.
 _RE_SCHEMA = {
     "order_q": pl.Int64,
@@ -308,6 +313,27 @@ def _bootstrap_se(x: np.ndarray, ms, qs, nboot: int, seed: int) -> np.ndarray:
     return vals.std(axis=0, ddof=1)
 
 
+def _bootstrap_se_native(x, ms, qs, nboot: int, seed: int) -> np.ndarray:
+    """Bootstrap SEs via the native ``_core.inext_bootstrap`` (GIL released)."""
+    se = _native.inext_bootstrap(
+        [float(v) for v in x], [int(q) for q in qs], [float(m) for m in ms],
+        int(nboot), int(seed))
+    return np.asarray(se, dtype=np.float64)
+
+
+def _bootstrap_se_dispatch(x, ms, qs, nboot: int, seed: int) -> np.ndarray:
+    """Bootstrap SEs: prefer the native kernel, fall back to the numpy reference.
+
+    The numpy :func:`_bootstrap_se` stays the reference implementation used by the
+    tests; the native path reproduces the same augmented-assemblage bootstrap with
+    a seeded ``std::mt19937_64`` (agreeing in expectation, see
+    ``tests/python/test_inext_native.py``).
+    """
+    if _native is not None:
+        return _bootstrap_se_native(x, ms, qs, nboot, seed)
+    return _bootstrap_se(x, ms, qs, nboot, seed)
+
+
 def _z(conf: float) -> float:
     return float(norm.ppf(1 - (1 - conf) / 2))
 
@@ -359,7 +385,7 @@ def inext(data, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40, se=True,
         grid = np.unique(np.asarray(sizes, dtype=np.int64))
     ms = [int(m) for m in grid if m >= 1]
 
-    se_arr = _bootstrap_se(x, ms, qs, nboot, seed) if se else None
+    se_arr = _bootstrap_se_dispatch(x, ms, qs, nboot, seed) if se else None
     z = _z(conf) if se else 0.0
     rows = []
     for i, qq in enumerate(qs):
@@ -568,3 +594,123 @@ def estimate_d(data, base="size", level=None, q=(0, 1, 2), *, se=True, nboot=50,
             lo = hi = None
         rows.append((qq, float(m), method, cov, qd, lo, hi))
     return pl.DataFrame(rows, schema=schema, orient="row")
+
+
+# --------------------------------------------------------------------------- #
+# many-sample batch (native, parallel across samples)
+# --------------------------------------------------------------------------- #
+def _batch_items(samples):
+    """Resolve ``samples`` to ``[(label, count_vector), ...]``.
+
+    Accepts a list of count vectors (labelled by 0-based index) or a clonotype
+    ``pl.DataFrame`` carrying a ``sample_id`` column (grouped by it, in
+    first-appearance order, weighted by ``duplicate_count``).
+    """
+    if isinstance(samples, pl.DataFrame):
+        if "sample_id" not in samples.columns:
+            raise ValueError(
+                "inext_batch DataFrame input requires a 'sample_id' column")
+        labels = samples["sample_id"].unique(maintain_order=True).to_list()
+        return [(lab, _as_counts(samples.filter(pl.col("sample_id") == lab)))
+                for lab in labels]
+    return [(i, _as_counts(s)) for i, s in enumerate(samples)]
+
+
+def _size_grid(n: int, sizes, endpoint, knots) -> list[float]:
+    """Per-sample sampling-depth grid (matches :func:`inext`)."""
+    if sizes is None:
+        end = 2 * n if endpoint is None else int(endpoint)
+        grid = np.floor(np.linspace(1, end, knots)).astype(np.int64)
+        grid = np.unique(np.concatenate([grid, np.array([n], dtype=np.int64)]))
+    else:
+        grid = np.unique(np.asarray(sizes, dtype=np.int64))
+    return [float(m) for m in grid if m >= 1]
+
+
+def inext_batch(samples, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40,
+                se=True, nboot=50, conf=0.95, seed=0, threads=0) -> pl.DataFrame:
+    """Size-based R/E of Hill-number diversity for many samples at once.
+
+    Computes the point curve and (optionally) bootstrap confidence intervals for
+    every sample, parallelizing the per-sample work across a native thread pool
+    (``_core.inext_batch``, GIL released). This is the "cohort of many
+    repertoires, quickly" entry point; a single sample is better served by
+    :func:`inext`.
+
+    Args:
+        samples: A list of clonotype count vectors, or a clonotype ``pl.DataFrame``
+            with a ``sample_id`` column (grouped by it, weighted by
+            ``duplicate_count``).
+        q: Hill orders (non-negative integers); default ``(0, 1, 2)``.
+        sizes: Explicit sampling depths applied to every sample. If ``None``, each
+            sample gets ``knots`` depths from 1 to ``endpoint`` (its own default),
+            always including its observed depth ``n``.
+        endpoint: Maximum depth for the default per-sample grid. Defaults to ``2*n``.
+        knots: Number of depths when ``sizes`` is ``None``.
+        se: If ``True``, compute bootstrap confidence intervals.
+        nboot: Number of bootstrap replicates per sample.
+        conf: Confidence level for the intervals.
+        seed: Base RNG seed; sample ``i`` is seeded ``seed + i``.
+        threads: Worker threads (0 = ``hardware_concurrency``), capped at the
+            number of samples.
+
+    Returns:
+        A tidy long ``pl.DataFrame`` with one block per sample: columns ``sample``,
+        ``order_q``, ``m``, ``method`` (``rarefaction`` | ``observed`` |
+        ``extrapolation``), ``sample_coverage``, ``qD``, ``qD_lo``, ``qD_hi`` (the
+        CI columns are null when ``se=False``).
+
+    Raises:
+        RuntimeError: If the native ``_core`` extension is unavailable.
+        ValueError: If a ``pl.DataFrame`` input lacks a ``sample_id`` column.
+    """
+    if _native is None:  # pragma: no cover - _core is a build-time dependency
+        raise RuntimeError("inext_batch requires the native _core extension")
+    qs = _as_orders(q)
+    items = _batch_items(samples)
+    ns = [int(x.sum()) for _, x in items]
+    sizes_list = [_size_grid(n, sizes, endpoint, knots) for n in ns]
+    count_vecs = [[float(v) for v in x] for _, x in items]
+
+    nb = int(nboot) if se else 0
+    results = _native.inext_batch(count_vecs, sizes_list, [int(v) for v in qs],
+                                  nb, int(seed), int(threads))
+
+    z = _z(conf) if se else 0.0
+    sample_col, order_col, m_col, method_col = [], [], [], []
+    cov_col, qd_col, lo_col, hi_col = [], [], [], []
+    for (lab, _x), res, n, ms in zip(items, results, ns, sizes_list):
+        for i, qq in enumerate(qs):
+            for j, m in enumerate(ms):
+                qd = res.qD[i][j]
+                method = ("observed" if m == n
+                          else "rarefaction" if m < n else "extrapolation")
+                if se:
+                    s = res.se[i][j]
+                    lo, hi = max(0.0, qd - z * s), qd + z * s
+                else:
+                    lo = hi = None
+                sample_col.append(lab)
+                order_col.append(qq)
+                m_col.append(int(m))
+                method_col.append(method)
+                cov_col.append(res.coverage[j])
+                qd_col.append(qd)
+                lo_col.append(lo)
+                hi_col.append(hi)
+    return pl.DataFrame(
+        {
+            "sample": sample_col, "order_q": order_col, "m": m_col,
+            "method": method_col, "sample_coverage": cov_col, "qD": qd_col,
+            "qD_lo": lo_col, "qD_hi": hi_col,
+        },
+        schema_overrides={
+            "order_q": pl.Int64, "m": pl.Int64, "method": pl.Utf8,
+            "sample_coverage": pl.Float64, "qD": pl.Float64,
+            "qD_lo": pl.Float64, "qD_hi": pl.Float64,
+        },
+    )
+
+
+#: Alias of :func:`inext_batch` under the canonical rarefaction name.
+rarefaction_batch = inext_batch

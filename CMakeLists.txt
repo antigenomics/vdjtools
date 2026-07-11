@@ -15,11 +15,16 @@ option(VDJTOOLS_TESTS  "Build C++ tests" OFF)
 option(VDJTOOLS_PYTHON "Build the pybind11 module" OFF)
 
 # Native core: Pgen DP, generation sampler, EM E-step inner loop land here (Phase 1).
-# Currently a minimal hot-path primitive (hamming) so the toolchain + seam are testable.
+# hamming is a minimal hot-path primitive; inext.cpp is the iNEXT size-based
+# diversity kernel (curve + bootstrap + parallel batch).
 add_library(vdjtools_core STATIC
   src/core.cpp
+  src/inext.cpp
 )
 target_include_directories(vdjtools_core PUBLIC include PRIVATE src)
+
+find_package(Threads REQUIRED)
+target_link_libraries(vdjtools_core PUBLIC Threads::Threads)
 
 if(VDJTOOLS_PYTHON)
   find_package(pybind11 CONFIG REQUIRED)

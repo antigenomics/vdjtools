@@ -15,7 +15,9 @@ from .inext import (
     coverage,
     estimate_d,
     inext,
+    inext_batch,
     inext_coverage,
+    rarefaction_batch,
     sample_coverage,
 )
 from .rarefaction import rarefaction
@@ -34,6 +36,8 @@ __all__ = [
     "d50",
     "rarefaction",
     "inext",
+    "inext_batch",
+    "rarefaction_batch",
     "inext_coverage",
     "asymptotic_diversity",
     "coverage",

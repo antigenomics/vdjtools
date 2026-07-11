@@ -21,7 +21,9 @@ from .inext import (  # noqa: F401  re-exported iNEXT public API
     coverage,
     estimate_d,
     inext,
+    inext_batch,
     inext_coverage,
+    rarefaction_batch,
     sample_coverage,
 )
 
