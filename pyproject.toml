@@ -62,4 +62,5 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
-addopts = "-ra"
+addopts = "-ra -m 'not slow'"
+markers = ["slow: oracle-heavy checks (compare against OLGA's own slow Pgen); run with -m slow"]
