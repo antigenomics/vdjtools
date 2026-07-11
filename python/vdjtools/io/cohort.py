@@ -29,6 +29,7 @@ from pathlib import Path
 import polars as pl
 
 from .batch import iter_samples
+from .schema import LOCUS, SCHEMA
 
 #: Reserved partition-key column recovered from the ``sample_id=<id>`` path.
 SAMPLE_ID = "sample_id"
@@ -90,11 +91,18 @@ def scan_cohort(out_dir: str | os.PathLike, *, join_metadata: bool = True) -> pl
         columns + ``sample_id`` + metadata).
     """
     out = Path(out_dir)
-    # Explicit sample_id=*/*.parquet glob so the top-level metadata.parquet is
-    # never pulled into the clonotype scan; hive parsing still recovers sample_id.
+    # Empty cohort (no partitions written): return an empty LazyFrame with the
+    # canonical clonotype schema rather than letting the scan raise on a no-match glob.
+    if not any(out.glob(f"{SAMPLE_ID}=*/*.parquet")):
+        return pl.DataFrame(schema={**SCHEMA, LOCUS: pl.Utf8, SAMPLE_ID: pl.Utf8}).lazy()
+    # Explicit sample_id=*/*.parquet glob so the top-level metadata.parquet is never
+    # pulled into the clonotype scan; hive parsing recovers sample_id. Force it to
+    # Utf8 (hive_schema) so numeric sample ids ('1','2') don't infer as Int64 and
+    # break the join with the all-Utf8 metadata — and partition pruning is preserved.
     clones = pl.scan_parquet(str(out / f"{SAMPLE_ID}=*" / "*.parquet"),
-                             hive_partitioning=True)
+                             hive_partitioning=True, hive_schema={SAMPLE_ID: pl.String})
     meta_path = out / "metadata.parquet"
     if join_metadata and meta_path.exists():
-        clones = clones.join(pl.scan_parquet(meta_path), on=SAMPLE_ID, how="left")
+        meta = pl.scan_parquet(meta_path).with_columns(pl.col(SAMPLE_ID).cast(pl.Utf8))
+        clones = clones.join(meta, on=SAMPLE_ID, how="left")
     return clones

@@ -69,6 +69,33 @@ def test_scan_cohort_streamed_groupby_and_lazy_metadata(tmp_path):
     assert usage.height == 6                                # 2 genes x 3 samples
 
 
+def test_scan_cohort_numeric_sample_ids(tmp_path):
+    """Numeric sample ids ('1','2') must not break the metadata join: hive would infer
+    them as Int64 while the metadata sample_id is Utf8 — scan_cohort forces Utf8."""
+    base = tmp_path / "raw"
+    base.mkdir()
+    for sid in ("1", "2"):
+        pl.DataFrame({"v_call": ["TRBV5-1"], "j_call": ["TRBJ2-1"],
+                      "junction_aa": ["CASSL"], "duplicate_count": [7]}
+                     ).write_csv(base / f"{sid}.tsv", separator="\t")
+    meta = pl.DataFrame({"sample_name": ["1", "2"], "age": ["30", "70"]})
+    out = vio.ingest_cohort(meta, base, tmp_path / "cohort", file_template="{sample}.tsv")
+    lf = vio.scan_cohort(out)
+    assert lf.collect_schema()["sample_id"] == pl.String
+    joined = lf.select(["sample_id", "age"]).unique().collect().sort("sample_id")
+    assert joined["age"].to_list() == ["30", "70"]          # join succeeded, not a SchemaError
+
+
+def test_scan_cohort_empty(tmp_path):
+    """An empty cohort (zero samples) scans to an empty LazyFrame, not a crash."""
+    out = vio.ingest_cohort(pl.DataFrame({"sample_name": []}), tmp_path / "raw",
+                            tmp_path / "cohort", file_template="{sample}.tsv")
+    lf = vio.scan_cohort(out)
+    assert isinstance(lf, pl.LazyFrame)
+    assert lf.collect().height == 0
+    assert "sample_id" in lf.collect_schema().names()
+
+
 def test_scan_cohort_without_metadata_join(tmp_path):
     meta = _write_cohort(tmp_path / "raw")
     out = vio.ingest_cohort(meta, tmp_path / "raw", tmp_path / "cohort",
