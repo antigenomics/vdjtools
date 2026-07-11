@@ -99,6 +99,56 @@ def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None) -> pl.Data
     return schema.add_locus(df)
 
 
+def read_parquet(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
+    """Read a Parquet clonotype table into the canonical frame.
+
+    Parquet is the at-scale storage format for repertoire cohorts: typed, columnar,
+    compressed, and — laid out as a hive-partitioned directory — scannable as one
+    :class:`polars.LazyFrame` with predicate/projection pushdown (see
+    :mod:`vdjtools.io.cohort`). Columns already using the canonical names (e.g. a
+    file written by :meth:`polars.DataFrame.write_parquet` from a canonical frame)
+    are kept as-is; AIRR source names (``junction_aa``, ``duplicate_count`` …) are
+    mapped to canonical only to fill a canonical column that is otherwise absent.
+    Unlike the TSV path this reads native dtypes directly (no all-Utf8 pass), so it
+    is both faster and lower-peak-memory on large files.
+
+    Args:
+        path: Path to a ``.parquet`` / ``.pq`` clonotype table.
+        n_rows: If given, read at most this many data rows (preview huge files).
+
+    Returns:
+        Canonical clonotype frame with a derived ``locus`` column.
+
+    Raises:
+        ValueError: If no CDR3 amino-acid column (``cdr3_aa`` / ``junction_aa``)
+            is present.
+    """
+    df = pl.read_parquet(Path(path), n_rows=n_rows)
+    have = set(df.columns)
+    # Resolve each canonical column from its AIRR aliases with the SAME first-match
+    # preference as read_airr (junction_aa before cdr3_aa, so the junction wins even
+    # when a raw-AIRR parquet carries both). cdr3_nt is the one canonical column that
+    # is not an AIRR alias, so fall back to an already-canonical column by name.
+    found: dict[str, str] = {}
+    for canon in schema.COLUMNS:
+        src = next((s for s in _AIRR_ALIASES.get(canon, ()) if s in have), None)
+        if src is None and canon in have:
+            src = canon
+        if src is not None:
+            found[canon] = src
+    if CDR3_AA not in found:
+        raise ValueError(
+            f"Parquet file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {df.columns}"
+        )
+    df = df.select([pl.col(src).alias(canon) for canon, src in found.items()])
+    df = df.with_columns(_first_call(pl.col(c)) for c in (V_CALL, D_CALL, J_CALL)
+                         if c in df.columns)
+    if COUNT not in df.columns:
+        df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
+    df = schema.normalize(df, recompute_freq=True)
+    return schema.add_locus(df)
+
+
 def read_airr(path: str | os.PathLike, *, collapse: bool = True,
               n_rows: int | None = None) -> pl.DataFrame:
     """Read an AIRR Rearrangement TSV into the canonical frame.
