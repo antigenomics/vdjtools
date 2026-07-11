@@ -456,10 +456,14 @@ def _pgen_aa_vdj(prep: _Prepared, aa: str, v: str | None, j: str | None) -> floa
                     ):
                         continue
                     gj = [_NT2NUM[c] for c in gj_seq]
-                    total += pv * pj * pdv * pdj_del * _d_aa_middle(
-                        aa, gv, gj, len_v, len_j, N, J, prep,
-                        pins_vd, R_vd, b_vd, pins_dj, R_dj, b_dj, maxdl, maxdr,
-                    )
+                    args = (aa, gv, gj, len_v, len_j, N, J, prep,
+                            pins_vd, R_vd, b_vd, pins_dj, R_dj, b_dj, maxdl, maxdr)
+                    p1 = prep.p_nd.get(1, 0.0) + prep.p_nd.get(0, 0.0)  # 0-D folds into 1-D
+                    mid_aa = p1 * _d_aa_middle(*args) if p1 else 0.0
+                    p2 = prep.p_nd.get(2, 0.0)
+                    if p2 and prep.p_d2_given_d1:  # tandem-D contribution
+                        mid_aa += p2 * _dd_aa_middle(*args)
+                    total += pv * pj * pdv * pdj_del * mid_aa
     return total
 
 
@@ -511,6 +515,71 @@ def _d_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
     return out
 
 
+def _dd_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
+                  pins_dj, R_dj, b_dj, maxdl, maxdr) -> float:
+    """Σ over the *tandem* (two-D) scenarios × the N-region codon DP — the aa analogue of
+    :func:`_dd_middle`. Middle = [insVD] D1 [insDD] D2 [insDJ]; each D contributes ≥1 nt. The
+    DD-junction insertion is read 5'→3' (kind ``"L"``, like VD), matching the nt reference."""
+    pins_dd, R_dd, b_dd = prep.p_ins["dd"], prep.R["dd"], prep.bias["dd"]
+    right = N - len_j  # DJ insertion + J start here
+    out = 0.0
+    for d1 in prep.functional_d:
+        pd1 = prep.p_d_given_j.get((J, d1), 0.0)
+        if pd1 == 0.0:
+            continue
+        cut1 = prep.cut["d"][d1]
+        for i5 in range(len(cut1) + 1):
+            for i3 in range(len(cut1) - i5 + 1):
+                pdel1 = prep.p_del["d"].get((d1, i5 - maxdl, i3 - maxdr), 0.0)
+                if pdel1 == 0.0:
+                    continue
+                dc1 = [_NT2NUM[c] for c in cut1[i5:len(cut1) - i3]]
+                ld1 = len(dc1)
+                if ld1 < 1:
+                    continue
+                for pos1 in range(len_v, right - ld1):  # leave ≥1 nt (and a slot) for D2 after
+                    lvd = pos1 - len_v
+                    if lvd >= len(pins_vd) or pins_vd[lvd] == 0.0:
+                        continue
+                    if not _d_codons_ok(dc1, pos1, aa):
+                        continue
+                    for d2 in prep.functional_d:
+                        pd2g = prep.p_d2_given_d1.get((d1, d2), 0.0)
+                        if pd2g == 0.0:
+                            continue
+                        cut2 = prep.cut["d"][d2]
+                        for k5 in range(len(cut2) + 1):
+                            for k3 in range(len(cut2) - k5 + 1):
+                                pdel2 = prep.p_del_d2.get((d2, k5 - maxdl, k3 - maxdr), 0.0)
+                                if pdel2 == 0.0:
+                                    continue
+                                dc2 = [_NT2NUM[c] for c in cut2[k5:len(cut2) - k3]]
+                                ld2 = len(dc2)
+                                if ld2 < 1:
+                                    continue
+                                for pos2 in range(pos1 + ld1, right - ld2 + 1):
+                                    ldd, ldj = pos2 - (pos1 + ld1), right - (pos2 + ld2)
+                                    if ldd >= len(pins_dd) or pins_dd[ldd] == 0.0:
+                                        continue
+                                    if ldj >= len(pins_dj) or pins_dj[ldj] == 0.0:
+                                        continue
+                                    if not _d_codons_ok(dc2, pos2, aa):
+                                        continue
+                                    template = gv + [-1] * lvd + dc1 + [-1] * ldd + dc2 + [-1] * ldj + gj
+                                    specs = [None] * N
+                                    for p in range(len_v, pos1):
+                                        specs[p] = ("L", R_vd, b_vd, p == len_v, p == pos1 - 1)
+                                    for p in range(pos1 + ld1, pos2):
+                                        specs[p] = ("L", R_dd, b_dd, p == pos1 + ld1, p == pos2 - 1)
+                                    for p in range(pos2 + ld2, right):
+                                        specs[p] = ("R", R_dj, b_dj, p == pos2 + ld2, p == right - 1)
+                                    w = _aa_dp(aa, template, specs)
+                                    if w > 0.0:
+                                        out += (pd1 * pd2g * pdel1 * pdel2
+                                                * pins_vd[lvd] * pins_dd[ldd] * pins_dj[ldj] * w)
+    return out
+
+
 def pgen_aa(prep: _Prepared, cdr3_aa: str, v: str | None = None, j: str | None = None) -> float:
     """Generation probability of an amino-acid CDR3, marginalizing over synonymous codons.
 
@@ -520,17 +589,9 @@ def pgen_aa(prep: _Prepared, cdr3_aa: str, v: str | None = None, j: str | None =
         v, j: Optional gene names to restrict the sum to.
 
     Returns:
-        Pgen as a float.
-
-    Raises:
-        NotImplementedError: For a tandem-D model (``P(n_D=2)>0``) — the amino-acid transfer-matrix
-            sum does not yet enumerate the ``n_D=2`` scenarios, so it would silently return the
-            single-D Pgen. Use :func:`pgen_nt` (which does sum tandem scenarios) for D-D models.
+        Pgen as a float. Sums tandem-D (``n_D=2``) scenarios for a D-D model, mixed with the
+        single-D term by ``P(n_D)`` — consistent with :func:`pgen_nt`.
     """
-    if prep.p_nd.get(2, 0.0) > 0.0 and prep.p_d2_given_d1:
-        raise NotImplementedError(
-            "amino-acid Pgen does not yet sum tandem-D (n_D=2) scenarios; use nucleotide pgen_nt"
-        )
     aa = cdr3_aa.upper()
     if prep.chain_type == "VJ":
         return _pgen_aa_vj(prep, aa, v, j)

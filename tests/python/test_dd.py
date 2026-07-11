@@ -201,6 +201,87 @@ def test_native_dd_em_recovers_p_nd2():
     assert nd[2] == pytest.approx(0.35, abs=0.05)
 
 
+def _tiny_aligned_dd_model(p_nd2=0.6) -> Model:
+    """Codon-aligned tiny D-D model (V=TGT=Cys, D=CA, J=TTT=Phe) with nonzero VD/DD/DJ insertions
+    (len 0/1/2) and a non-uniform DD dinucleotide, so an aa CDR3 can require a real insDD block."""
+    def genes(seg, a, cut):
+        return pl.DataFrame({f"{seg}_allele": [a], "cut_segment": [cut], "functional": [True]})
+    ins = pl.DataFrame({"length": pl.Series([0, 1, 2], dtype=pl.Int16), "p": [0.2, 0.3, 0.5]})
+    unif = pl.DataFrame({"from_nt": pl.Series([f for f in range(4) for _ in range(4)], dtype=pl.UInt8),
+                         "to_nt": pl.Series([t for _ in range(4) for t in range(4)], dtype=pl.UInt8), "p": [0.25] * 16})
+    ddn = pl.DataFrame({"from_nt": pl.Series([f for f in range(4) for _ in range(4)], dtype=pl.UInt8),
+                        "to_nt": pl.Series([t for _ in range(4) for t in range(4)], dtype=pl.UInt8), "p": [0.4, 0.3, 0.2, 0.1] * 4})
+    ddel = pl.DataFrame({"d_allele": ["D"], "ndel5": pl.Series([0], dtype=pl.Int16),
+                         "ndel3": pl.Series([0], dtype=pl.Int16), "p": [1.0]})
+    tables = {
+        "v_choice": pl.DataFrame({"v_allele": ["V"], "p": [1.0]}),
+        "j_choice": pl.DataFrame({"j_allele": ["J"], "p": [1.0]}),
+        "d_gene": pl.DataFrame({"j_allele": ["J"], "d_allele": ["D"], "p": [1.0]}),
+        "n_d": pl.DataFrame({"n_d": pl.Series([1, 2], dtype=pl.UInt8), "p": [1 - p_nd2, p_nd2]}),
+        "v_3_del": pl.DataFrame({"v_allele": ["V"], "ndel": pl.Series([0], dtype=pl.Int16), "p": [1.0]}),
+        "j_5_del": pl.DataFrame({"j_allele": ["J"], "ndel": pl.Series([0], dtype=pl.Int16), "p": [1.0]}),
+        "d_del": ddel, "vd_ins": ins, "dj_ins": ins, "dd_ins": ins,
+        "vd_dinucl": unif, "dj_dinucl": unif, "dd_dinucl": ddn,
+        "d2_gene": pl.DataFrame({"d_allele": ["D"], "d2_allele": ["D"], "p": [1.0]}),
+        "d2_del": ddel.rename({"d_allele": "d2_allele"})}
+    ev = {"v_choice": Event("v_choice", EventKind.GENE_CHOICE), "j_choice": Event("j_choice", EventKind.GENE_CHOICE),
+          "d_gene": Event("d_gene", EventKind.GENE_CHOICE, ("j_choice",)), "n_d": Event("n_d", EventKind.N_D),
+          "v_3_del": Event("v_3_del", EventKind.DELETION, ("v_choice",)),
+          "j_5_del": Event("j_5_del", EventKind.DELETION, ("j_choice",)),
+          "d_del": Event("d_del", EventKind.DELETION_2D, ("d_gene",)), "vd_ins": Event("vd_ins", EventKind.INS_LENGTH),
+          "dj_ins": Event("dj_ins", EventKind.INS_LENGTH), "vd_dinucl": Event("vd_dinucl", EventKind.DINUCLEOTIDE),
+          "dj_dinucl": Event("dj_dinucl", EventKind.DINUCLEOTIDE),
+          "d2_gene": Event("d2_gene", EventKind.GENE_CHOICE, ("d_gene",)),
+          "d2_del": Event("d2_del", EventKind.DELETION_2D, ("d2_gene",)),
+          "dd_ins": Event("dd_ins", EventKind.INS_LENGTH), "dd_dinucl": Event("dd_dinucl", EventKind.DINUCLEOTIDE)}
+    man = Manifest(locus="TEST", organism="synthetic", chain_type="VDJ", events=ev,
+                   palindrome_max={"v_3": 0, "j_5": 0, "d_5": 0, "d_3": 0, "d2_5": 0, "d2_3": 0}, source="tiny")
+    gen = {"genes_v": genes("v", "V", "TGT"), "genes_j": genes("j", "J", "TTT"), "genes_d": genes("d", "D", "CA")}
+    return Model(manifest=man, tables=tables, genomic=gen)
+
+
+def test_aa_dd_equals_nt_sum():
+    """aa D-D Pgen (Python and native) == Σ nt-Pgen over synonymous codons, on a codon-aligned model.
+
+    ``CHHF`` is tandem-only (single D can't tile it); ``CHIF`` requires a real DD insertion.
+    """
+    import itertools
+    from collections import defaultdict
+
+    from vdjtools.model import native
+    from vdjtools.model.reference import _CODON_TABLE
+    pytest.importorskip("vdjtools._core")
+    m = _tiny_aligned_dd_model(p_nd2=0.6)
+    prep = pgen.prepare(m)
+    syn = defaultdict(list)
+    for cod, a in _CODON_TABLE.items():
+        syn[a].append(cod)
+    tandem_seen = False
+    for aa in ("CHF", "CHHF", "CHIF"):
+        brute = sum(pgen.pgen_nt(prep, "".join(c), "V", "J") for c in itertools.product(*[syn[a] for a in aa]))
+        assert pgen.pgen_aa(prep, aa, "V", "J") == pytest.approx(brute, rel=1e-9, abs=1e-300)
+        assert native.pgen_aa(m, aa, "V", "J") == pytest.approx(brute, rel=1e-8, abs=1e-300)
+        if aa == "CHHF":
+            tandem_seen = brute > 0.0
+    assert tandem_seen  # the tandem-only CDR3 must have nonzero Pgen
+
+
+def test_native_aa_dd_hamming1_and_agnostic():
+    """Native aa D-D: the Hamming-1 ball equals the brute-force neighbour sum, and the v/j-agnostic
+    query equals the Python reference."""
+    from vdjtools.model import native
+    pytest.importorskip("vdjtools._core")
+    aas = "ACDEFGHIKLMNPQRSTVWY"
+    m = _tiny_aligned_dd_model(p_nd2=0.6)
+    prep = pgen.prepare(m)
+    for aa in ("CHF", "CHHF", "CHIF"):
+        assert native.pgen_aa(m, aa) == pytest.approx(pgen.pgen_aa(prep, aa), rel=1e-8, abs=1e-300)  # v/j-agnostic
+        ball = native.pgen_aa(m, aa, "V", "J") + sum(
+            native.pgen_aa(m, aa[:k] + x + aa[k + 1:], "V", "J")
+            for k in range(len(aa)) for x in aas if x != aa[k])
+        assert native.pgen_aa(m, aa, "V", "J", mismatches=1) == pytest.approx(ball, rel=1e-9, abs=1e-300)
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")
 def test_dd_backward_compatible_on_trd():
@@ -277,27 +358,25 @@ def test_to_dd_tables_wellformed():
 
 
 @pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")
-def test_dd_guards_raise_and_single_d_untouched():
-    """Not-yet-tandem paths refuse a D-D model; single-D (incl. to_dd p_nd2=0) flows through."""
+def test_dd_full_native_support_and_single_d_untouched():
+    """The whole pipeline supports tandem-D natively (nothing raises); single-D stays byte-identical."""
     from vdjtools.model import generate, infer, native
     m = from_olga(OLGA / "human_T_delta", locus="TRD")
     m_dd = to_dd(m, p_nd2=0.1)
     s = generate.generate(m, 1, seed=1)["cdr3_nt"][0].upper()
-    # Only the amino-acid Pgen (transfer matrix) still lacks a tandem path → must raise.
-    # (nt Pgen, generation, and both EM E-steps now support tandem-D — covered by the tests above.)
-    for fn in (
-        lambda: pgen.pgen_aa(pgen.prepare(m_dd), "CAAAF"),
-        lambda: native.pgen_aa(m_dd, "CAAAF"),
-    ):
-        with pytest.raises(NotImplementedError):
-            fn()
-    # native *nt* Pgen, generation, and native EM DO support tandems now: must not raise.
+    # nt Pgen, aa Pgen, Hamming-1, v/j-agnostic, generation, native EM — all native, none raise.
+    # (aa D-D numerical correctness vs the Python reference / Σnt is test_aa_dd_equals_nt_sum; the
+    # pure-Python aa D-D is intractable on real-length TRD, so it is not exercised here.)
+    assert native.pgen_aa(m_dd, "CAAAF") >= 0.0                     # native aa D-D transfer matrix
+    assert native.pgen_aa(m_dd, "CAAAF", mismatches=1) >= 0.0       # native Hamming-1 D-D
+    assert native.pgen_aa(m_dd, "CAAAF", v=None, j=None) >= 0.0     # native v/j-agnostic D-D
     assert native.pgen_nt(m_dd, s) >= 0.0
     assert generate.generate(m_dd, 3, seed=1).height == 3
     assert infer.infer_native(m_dd, [s], max_iter=1)[0].tables["n_d"].height == 2
     # to_dd(p_nd2=0) is generatively single-D → native stays byte-identical to the single-D model.
     m_dd0 = to_dd(m, p_nd2=0.0)
     assert native.pgen_nt(m_dd0, s) == pytest.approx(native.pgen_nt(m, s), rel=1e-12)
+    assert native.pgen_aa(m_dd0, "CAAAF") == pytest.approx(native.pgen_aa(m, "CAAAF"), rel=1e-12)
 
 
 def test_generate_dd_fraction_and_scoreable():
