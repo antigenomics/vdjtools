@@ -81,11 +81,16 @@ Counts make_counts(const PackedModel& m);
 // One EM E-step over a batch of CDR3s: accumulate soft counts into ``counts`` and return the
 // summed log-Pgen (over scoreable reads). Per-read ``vmasks[i]`` / ``jmasks[i]`` / ``dmasks[i]``
 // are gene-index lists restricting enumeration (empty => all functional genes of that segment).
+// ``nthreads`` partitions the reads across worker threads (each with a private accumulator, reduced
+// in a fixed order); 0 = auto (hardware_concurrency - 2). Small batches run single-threaded so their
+// result stays bitwise-identical. The soft counts are exact regardless of thread count (up to the
+// float summation order, which the fixed reduction keeps deterministic per ``nthreads``).
 double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int8_t>>& seqs,
                    const std::vector<std::vector<int>>& vmasks,
                    const std::vector<std::vector<int>>& jmasks,
                    const std::vector<std::vector<int>>& dmasks,
-                   Counts& counts);
+                   Counts& counts,
+                   int nthreads = 0);
 
 }  // namespace vdjtools

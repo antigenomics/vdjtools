@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 namespace vdjtools {
 namespace {
@@ -912,17 +913,19 @@ Counts make_counts(const PackedModel& m) {
     return c;
 }
 
-double estep_batch(const PackedModel& m,
+namespace {
+// One thread's slice of the read batch → its private accumulator ``acc`` and summed log-Pgen.
+double estep_range(const PackedModel& m,
                    const std::vector<std::vector<int8_t>>& seqs,
                    const std::vector<std::vector<int>>& vmasks,
                    const std::vector<std::vector<int>>& jmasks,
                    const std::vector<std::vector<int>>& dmasks,
-                   Counts& counts) {
+                   size_t lo, size_t hi, Counts& acc) {
     Counts local = make_counts(m);
     bool have_masks = !vmasks.empty();
     std::vector<int> empty;
     double ll = 0.0;
-    for (size_t i = 0; i < seqs.size(); ++i) {
+    for (size_t i = lo; i < hi; ++i) {
         zero(local);
         const std::vector<int>& vm = have_masks ? vmasks[i] : empty;
         const std::vector<int>& jm = have_masks ? jmasks[i] : empty;
@@ -930,9 +933,45 @@ double estep_batch(const PackedModel& m,
         double total = estep_one(m, seqs[i], vm, jm, dm, local);
         if (total > 0.0) {
             ll += std::log(total);
-            add_scaled(counts, local, 1.0 / total);
+            add_scaled(acc, local, 1.0 / total);
         }
     }
+    return ll;
+}
+constexpr size_t kEstepThreadMin = 64;  // batches smaller than this run single-threaded (stay bitwise-exact)
+}  // namespace
+
+double estep_batch(const PackedModel& m,
+                   const std::vector<std::vector<int8_t>>& seqs,
+                   const std::vector<std::vector<int>>& vmasks,
+                   const std::vector<std::vector<int>>& jmasks,
+                   const std::vector<std::vector<int>>& dmasks,
+                   Counts& counts,
+                   int nthreads) {
+    size_t n = seqs.size();
+    int T = nthreads;
+    if (T <= 0) {
+        unsigned hw = std::thread::hardware_concurrency();
+        T = hw > 3 ? static_cast<int>(hw) - 2 : 1;
+    }
+    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, 0, n, counts);
+    if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
+
+    std::vector<Counts> acc(T);
+    for (int t = 0; t < T; ++t) acc[t] = make_counts(m);
+    std::vector<double> lls(T, 0.0);
+    std::vector<std::thread> pool;
+    size_t chunk = (n + T - 1) / T;
+    for (int t = 0; t < T; ++t) {
+        size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
+        if (lo >= hi) break;
+        pool.emplace_back([&, t, lo, hi] {
+            lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, lo, hi, acc[t]);
+        });
+    }
+    for (auto& th : pool) th.join();
+    double ll = 0.0;  // reduce in fixed thread order → deterministic for a given nthreads
+    for (int t = 0; t < T; ++t) { ll += lls[t]; add_scaled(counts, acc[t], 1.0); }
     return ll;
 }
 
