@@ -36,8 +36,18 @@ fixtures live on `legacy-1.x` (`src/test/resources/samples/`), pull them over wh
 
 ## Conventions
 - AIRR Rearrangement/Cell + polars `pl.DataFrame` in and out; minimal OO (thin index classes only).
+- **arda germline = single source of truth**: all V/D/J germline + CDR3 anchors resolve from arda
+  by allele name via `model.reference.load_germline` (arda's anchor convention is byte-identical to
+  OLGA's: 0-based Cys104/[FW]118 offset into full germline). Never mix germline sources within a
+  model — OLGA bootstrap models keep OLGA germline (exact-Pgen fidelity); arda-native (EM) models use
+  arda. Raw anchor *indices* can differ by whole framework codons (IMGT drift) though the CDR3-region
+  germline is identical — harmless as long as sources aren't mixed.
 - Delegate rather than reimplement: overlap/TCRnet → vdjmatch (`cluster.overlap`,
   `evalue.query_evalues`); annotation/markup/scenarios → arda; search/e-value → seqtree.
+- **Never modify non-dependency libraries.** The only dependencies are `arda`, `vdjmatch`,
+  `seqtree`. Everything else under `~/vcs/code/` (mirpy, IGoR, OLGA, pygor3, …) is
+  **reference/oracle only — read-only**. If you find a bug in one, surface it (note it here or
+  tell the owner); never edit it. Cross-validate against them; don't touch them.
 - Native code goes through the single `_core` ext. Flip `editable.rebuild=true` in pyproject
   during C++-heavy work for recompile-on-import (needs the `build-dir` already set).
 
@@ -46,19 +56,97 @@ Phase 0 (scaffold, git surgery, CI) is **done and pushed**. See `ROADMAP.md` for
 `SOURCES.md` for data provenance. The full approved design lives in the session plan file
 (`~/.claude/plans/i-want-to-complenely-gleaming-snail.md`).
 
-**Next: Phase 1 — `feature/model-engine`** (native V(D)J recombination model, supersedes OLGA+IGoR):
-- `python/vdjtools/model/`: `events schema reference io model scenario stitch pgen generate infer validate`.
-- Model = directory of **long-format polars parquet** marginal tables + `manifest.json` (Bayes net
-  declared as data via `events{}.given`). **D-D capable**: `p_nd(n_d∈{0,1,2})`, `p_d1`, `p_d2`, `DD`
-  insertion junction. VJ loci degrade cleanly (no D tables).
-- Scenario enumeration from **arda** best alignment → plausible set (slide V3'/J5' over a window;
-  seed D via `arda.map_d_junction`; emit n_D∈{0,1,2}). `stitch_contig` rebuilds full nt reads from
-  OLGA's (V,J,CDR3) output so synthetic + real reads share the arda→scenarios→EM path.
-- **C++ (`_core`)**: Pgen DP (OLGA transfer-matrix factorization + D-D term; one DP for nt & aa),
-  generation sampler, EM E-step. Python/polars: I/O, marginals, EM driver, validation.
-- Bootstrap data: mirpy's OLGA models (7 loci) + ~100k OLGA-synthetic out-of-frame seqs/chain
-  (`mirpy/mir/resources/olga/default_models/`, reference only). **No tandem D in bootstrap** — build
-  D-D but unit-test it structurally; closed-loop oracle: EM must recover OLGA marginals, Pgen must
-  match OLGA. Real out-of-frame data (all 7 loci) ships later from the owner.
-- Watch: arda↔OLGA coordinate convention (1-based junction vs 0-based CDR3 grid) — one authoritative
-  converter in `reference.py` with fixtures both ways; Pgen float64 underflow on long aa-CDR3.
+**Phase 1 — `feature/model-engine`** (native V(D)J model, supersedes OLGA+IGoR). Model = directory
+of **long-format polars parquet** marginal tables + `manifest.json` (Bayes net declared as data via
+each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mirpy's OLGA models
+(7 loci) + OLGA-synthetic out-of-frame seqs (`mirpy/mir/resources/olga/default_models/`, ref only;
+**no tandem D in bootstrap**). Progress on branch:
+
+- **DONE 1a** `model/{events,schema,model,io}.py` — OLGA→polars loader, `manifest.json`, parquet
+  round-trip. Lossless vs OLGA's arrays across all 7 loci (`tests/python/test_model_loader.py`).
+- **DONE 1b (nt)** `model/pgen.py` — reference **nucleotide** Pgen (direct scenario sum over the
+  tables, no OLGA at runtime). Matches OLGA `compute_nt_CDR3_pgen` exactly, all 7 loci
+  (`tests/python/test_pgen_nt.py`; exhaustive check is `-m slow`). This is the quantity EM needs.
+- **DONE 1a′** `model/reference.py` — **arda germline as source of truth**: `load_germline(locus,
+  organism)` from arda (`cdr3fix.load_anchors` + `d_germlines.fasta`), `cut_segment` palindrome
+  derivation (reproduces OLGA's cut segs), `reconcile_olga` audit. Shared frame verified vs OLGA
+  (`tests/python/test_reference.py`). `from_olga` deliberately keeps OLGA germline (exact-Pgen
+  invariant); arda is canonical for arda-native models + scenarios + stitching. arda is the `[model]`
+  extra (`pip install -e ../arda` for dev). Gap: arda ships no full-length V/J germline (needs a
+  helper) — a **P1c/stitching prerequisite**.
+- **DONE aa Pgen** `model/pgen.py::pgen_aa` — codon-marginalizing left-to-right DP. VJ is fast;
+  VDJ enumerates D placements + a multi-block DP handling the DJ insertion 3'→5' (reference impl:
+  correct but 1–30 s/seq — the prime native-port target). Matches OLGA exactly (VJ 200 seqs; VDJ
+  beta oracle 1.2036e-10 + shorts); `aa == Σ nt over synonymous` (`tests/python/test_pgen_aa.py`).
+  **nt Pgen exactness fix**: V and J must each contribute ≥1 nt (never fully deleted) — OLGA excludes
+  `len==0`; we now match nt+aa to ratio 1.0 (was ≤0.34% high on heavily-deleted seqs).
+- **DONE 1e** `model/generate.py` — ancestral sampler → polars DataFrame; every draw scoreable
+  (functional genes, ≥1 nt V/J); usage/length dists match OLGA (`test_generate.py`).
+- **DONE 1d** `model/infer.py` — EM (E-step scenario soft counts; M-step polars normalize; align-init
+  seeds gene usage). Closed-loop recovery of OLGA marginals (insertion 0.99, dinucl 0.999, Jmarg 0.94,
+  aggP(delV) 0.97, germline-group V 0.93; per-allele V is germline-ambiguity-limited). `test_infer.py`.
+- **DONE 1c** `model/stitch.py` — `stitch_contig(model,v,j,cdr3)` rebuilds full nt reads; `annotate`
+  wraps `arda.annotate_sequences`. arda round-trips stitched synthetic contigs (junction + V/J gene),
+  `test_stitch.py` (slow, needs arda+mmseqs). The plausible scenario *set* is what pgen/EM enumerate
+  for the arda-called (V,J); arda supplies gene identification for real reads.
+- **DONE 1f (native `_core`)** — `include/vdjtools/model.hpp` (`PackedModel`, `Counts`) + `src/pgen.cpp`
+  + `python/vdjtools/model/native.py` (`pack`, `pgen_nt`, `pgen_aa`) and `infer.py::infer_native`.
+  `pack` reconstructs the polars model into dense C++ arrays; the hot loops are ported behind the
+  pybind11 `_core` module. Verified exact (`tests/python/test_native.py`): native **nt Pgen** ==
+  Python/OLGA (machine-eps), **89x** faster for VDJ (210→2.4 ms/seq); native **EM E-step** soft counts
+  == Python (4e-16), **~100x** faster (TRA 13→0.1 s/it), VDJ **masked** EM now practical (~12 ms/seq).
+  **arda-masked E-step**: `gene_masks`/`arda_masks` + `infer(masks=)`/`infer_native(masks=)` restrict
+  enumeration to aligned genes (15x in Python; combines with native).
+- **DONE 1g (native aa transfer matrix — VDJ *and* VJ)** `src/pgen.cpp` — replaced both enumerations
+  with the Murugan/OLGA `Pi_L·Pi_R` split-DP: build left (V+VD/VJ-ins) and right partial sums once,
+  stitch at the D placement (VDJ) or thread the J germline per J (VJ; J plays D's role). Key insight:
+  cross-block coupling is codon-only (never the insertion Markov), so left/right factor cleanly. Exact
+  vs OLGA machine-precision; **8.6x** faster on TRB, **1.9x** on TRA (`test_native_aa_vdj_matches_olga`,
+  `appendix/bench_pgen.py`). The VJ enumeration had been ~1000x slower than OLGA — the TM fixes it.
+- **DONE 1h (v/j-agnostic + 1-mismatch aa Pgen)** — the codon check is now a 64-bit **allowed-codon
+  mask** per position (`ok_codon`), so wildcards/motifs run in one pass. `native.pgen_aa(m, aa, v, j,
+  mismatches=)`: `v`/`j`=None marginalizes that gene (V/J-agnostic, always supported); `mismatches=1`
+  sums the Hamming-1 ball via OLGA's inclusion-exclusion identity `Σ_k Pgen(a_{k→*}) − (L−1)Pgen(a)`
+  but each term is one fast TM pass. Matches `compute_hamming_dist_1_pgen` to ~1e-15; **8.7x** faster on
+  TRB, **2.5x** on TRA (`test_native_aa_hamming1_matches_olga`). Documented in `murugan_model.tex` §M.6.
+- **TODO native perf gaps**: (a) **VJ / Hamming-1 codon-boundary sweep** — the 1-mm ball does L+1 TM
+  passes; a forward/backward codon-boundary sweep would collapse them to ~1 pass for VJ loci (VDJ's
+  D-placement sum couples positions, so L+1 is retained there). (b) native **generation sampler** (Python
+  is already fast — low priority). (c) parallelize `estep_batch` over reads (GIL released) for Nx on multicore.
+- **DONE model diagnostics** `model/analyze.py` — Bayes-net→graphviz DOT (nodes=marginal entropy H,
+  edges=mutual information I; bnlearn-style, rendered via the `dot` CLI — no python-graphviz dep),
+  `entropy_table`/`mutual_information`/`compare_entropy`, works on any Model. Cross-locus H table +
+  I(V;J)=0 (VDJ independence made visible), I(delD5;delD3|D)≈1.18 bit (within-D conditional coupling,
+  averaged over D — not the D-marginal). Single-parent factorizations only (raises on ≥2 parents). `test_analyze.py`.
+- **DONE D-D consistency guards** (audit-driven): the not-yet-tandem paths — native `_core`
+  (`native.pack`), amino-acid `pgen_aa`, `generate`, `infer`/`infer_native` — **raise
+  `NotImplementedError` on a model with P(n_D=2)>0** (`dd.has_tandem`) instead of silently returning
+  single-D. Only Python `pgen_nt` sums tandems. `prepare` rejects a malformed model (n_D=2 mass but no
+  d2 tables). D-D model with p_nd2=0 stays byte-identical single-D (native included). `test_dd.py` guards.
+- **DONE D-D Python reference** `model/pgen.py::_dd_middle` + `model/dd.py::to_dd` — n_D∈{1,2}
+  enumeration (0-D folds into 1-D via a fully-trimmed D; tandem requires each D ≥1 nt → disjoint
+  partition, resolves tandem-vs-long-insertion identifiability). `prepare` reads `n_d`/`d2_gene`/
+  `d2_del`/`dd_ins`/`dd_dinucl` when present; `pgen_nt` weights P(n_D=1)·single + P(n_D=2)·tandem.
+  Backward-compatible (p_nd2=0 == single-D, machine-eps on real TRD). Reference is correct-but-slow on
+  TRD (the native port is the speed job). `test_dd.py` (tiny hand-checked model + TRD backward-compat).
+  Real signal: **TRD 4.15% nonfunc / 3.42% func tandem-D** (28-bucket survey, new HF revision).
+- **DONE appendix** `appendix/murugan_model.tex` — §M.4 tandem-D (Prop: disjoint n_D partition) + §M.9
+  diagnostics (entropy/MI, Bayes-net figure `bn_trb.pdf`/`bn_trd_dd.pdf`, cross-locus H table). 9 pages.
+- **DONE native D-D nt Pgen** `src/pgen.cpp::dd_middle` + `PackedModel` (`p_nd1/p_nd2`, `pd2_given_d1`,
+  `del_d2`, `ins_dd`/`R_dd`/`bias_dd`, `dd` flag). Factorized per-D1 left/right partial sums + O(N²)
+  DD-insertion sweep (O(nD²L²N + nD·N²), not naive O(nD²L⁴N²)). Exact vs Python reference on the tiny
+  model; ~255 ms/seq on real TRD (naive was seconds/seq → timed out). `native.pgen_nt` supports tandems
+  (`pack` no longer guards); OLGA cannot compute D-D Pgen at all. `test_native_dd_matches_python_reference`.
+- **DONE real-data EM comparison** `appendix/bench_em.py` — `infer_native` on real nonfunc TRB+TRD reads
+  (single-D, arda-masked) vs legacy OLGA via `analyze`. Finding: **real repertoires have broader
+  trim/insertion entropy than OLGA's synthetic model** (TRB d_del 6.4→7.6 bit, vd_ins 3.8→4.5); within-D
+  coupling I(delD5;delD3|D)≈1.1 bit robust across both. Held-out loglik improves.
+- **TODO native D-D aa + E-step**: `pgen_aa` (aa transfer matrix — one extra D block in Πᵣ) and
+  `estep_batch` (n_D=2 soft counts: n_d, d2_gene, d2_del, dd_ins/dd_dinucl) still single-D (guarded).
+  The E-step D-D is the prerequisite for **TRD D-D EM** (learning P(n_D=2)>0). arda full-length V/J
+  germline helper still needed for arda-native stitching.
+
+Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
+`(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group
+to sum to 1 **or 0** (undefined conditional for an unused gene, kept for gene-index alignment).
+Pgen/gen/EM invariant: **V and J each contribute ≥1 nt** to the CDR3 (OLGA-compatible).
