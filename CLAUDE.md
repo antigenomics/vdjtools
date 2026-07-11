@@ -164,9 +164,25 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   100% on genuinely-tandem reads. n_D=2 mass is concentrated (top 20% of reads = 85%); a length-gate that
   skips the shortest 25% biases learned P(n_D=2) by −2.5% (skipping 50% → −11%). Conclusion: keep D-D
   exact by default (correctness ethos); the clean **exact** speedup is read-parallelization, not gating.
-- **TODO native D-D aa Pgen** (`pgen_aa` — one extra D block in Πᵣ; still guarded, not needed for EM).
-  **TODO** parallelize `estep_batch` over reads (GIL released, exact ~8×) — the recommended speedup over
-  a biased gate. arda full-length V/J germline helper still needed for arda-native stitching. (Task #24.)
+- **DONE native aa D-D + Hamming-1 + v/j-agnostic** `src/pgen.cpp::pgen_aa_vdj_dd` — tandem aa Pgen
+  transfer matrix: Lf (V+insVD) reused; per-J D-less right DP (`mk_right_tm` D=−1); D1 middle-left `Mf`
+  (thread D1 germline out of Lf + `extend_ins_into` through insDD); D2 threaded + `combine_tm`. J looped
+  explicitly (P(D1|J) couples D1↔J). `pgen_aa_masked` mixes p_nd1·single + p_nd2·tandem. Hamming-1 and
+  v/j-agnostic fall out of the same masked call. **No Python fallback** (removed). native == Python
+  `_dd_aa_middle` == Σnt exact on the codon-aligned tiny model; Hamming-1 == brute ball; fast on real TRD
+  (fixed 0ms/agnostic 10ms/ham1 60ms) where Python is intractable. Also added `pgen._dd_aa_middle` (oracle).
+- **DONE native estep threading** — `estep_batch(…, threads=0)` partitions reads over workers (private
+  Counts, fixed-order reduce, GIL released); <64-read batches stay single-threaded (bitwise-exact tests).
+  **6.7× on 8 threads**, exact (Δcount 2e-13). This is the exact speedup that replaces a biased read-gate.
+- **DONE D-D default for the D-bearing loci** — `infer`/`infer_native(single_d=False, p_nd2_init=0.02)`
+  promote a single-D template to D-D for `DD_DEFAULT_LOCI={TRB,TRD,IGH}` (via `_maybe_promote_dd`→`to_dd`);
+  EM learns P(n_D=2) out of the box. `single_d=True`, VJ loci, already-tandem all unchanged. `from_olga`
+  stays single-D (exact OLGA fidelity — the default applies at inference).
+- **DONE 7-chain concordance** `appendix/concordance.py` — native nt & aa Pgen vs the OLGA oracle across
+  all 7 loci: **r(log10 Pgen)=1.00000 everywhere**, max-rel ~1e-14–1e-16 (aa==Σnt confirmed). The two
+  larger outliers (TRG nt 1.6e-2, TRD nt 5.7e-4) are deep-tail sequences (Pgen ~1e-28) where FP
+  summation order dominates — absolute agreement ~1e-30; `test_pgen_nt` proves exactness on all 7 loci.
+- **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual).
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
 `(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group
