@@ -485,7 +485,21 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         t["dj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dj), dtype=np.int16), "p": list(counts.ins_dj)}), [])
         t["vd_dinucl"] = dinucl(counts.dinucl_vd)
         t["dj_dinucl"] = dinucl(counts.dinucl_dj)
-        t["n_d"] = template.tables["n_d"]
+        # n_d learned from the soft counts (indexed by the n_D value): single-D emits only n_D=1 mass
+        # -> renormalizes to delta(1) (a no-op); D-D emits n_D=1 and n_D=2 -> learns P(n_D=2).
+        nd = template.tables["n_d"]
+        t["n_d"] = norm(nd.with_columns(p=pl.Series("p", [float(counts.n_d[int(k)]) for k in nd["n_d"]])), [])
+        if "d2_gene" in template.manifest.events:  # tandem-D model — learn the second-D events too
+            t["d2_gene"] = norm(pl.DataFrame({
+                "d_allele": np.repeat(d_alleles, nD), "d2_allele": np.tile(d_alleles, nD),
+                "p": list(counts.d2_gene)}), ["d_allele"])
+            t["d2_del"] = norm(pl.DataFrame({
+                "d2_allele": np.repeat(d_alleles, n5 * n3),
+                "ndel5": np.tile(np.repeat(np.arange(n5) - mp["d_5"], n3), nD).astype(np.int16),
+                "ndel3": np.tile(np.arange(n3) - mp["d_3"], n5 * nD).astype(np.int16),
+                "p": list(counts.d2_del)}), ["d2_allele"])
+            t["dd_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dd), dtype=np.int16), "p": list(counts.ins_dd)}), [])
+            t["dd_dinucl"] = dinucl(counts.dinucl_dd)
     else:
         t["j_choice"] = norm(pl.DataFrame({
             "v_allele": np.repeat(v_alleles, nJ), "j_allele": np.tile(j_alleles, nV),
@@ -506,17 +520,12 @@ def infer_native(
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
-    Requires the compiled ``_core`` extension. See :func:`infer` for the arguments.
-
-    Raises:
-        NotImplementedError: For a tandem-D template (see :func:`infer`).
+    Requires the compiled ``_core`` extension. See :func:`infer` for the arguments. Learns tandem-D
+    (``n_D=2``) models: the native E-step accumulates the second-D soft counts via a factorized
+    forward/backward pass (the fast path for real TRD EM).
     """
     from .._core import estep_batch, make_counts
-    from .dd import has_tandem
     from .native import _encode, pack
-
-    if has_tandem(template):
-        raise NotImplementedError("EM does not yet learn tandem-D (n_D=2) models")
 
     upper = [s.upper() for s in sequences]
     if init == "template":

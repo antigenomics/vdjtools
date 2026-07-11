@@ -69,6 +69,10 @@ double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, 
 struct Counts {
     std::vector<double> v_choice, j_choice, d_gene, v_3_del, j_5_del, d_del;
     std::vector<double> ins_vd, ins_dj, ins_vj, dinucl_vd, dinucl_dj, dinucl_vj;
+    // D-D (tandem) soft counts — sized/populated only for a `dd` model. n_d[k] = P(n_D=k) mass
+    // (k in {1,2}); d2_gene = P(D2|D1) [nD*nD]; d2_del [nD*nbins_d5*nbins_d3]; ins_dd/dinucl_dd
+    // like the vd junction. Single-D E-step fills n_d[1] only (renormalizes to delta(1), a no-op).
+    std::vector<double> n_d, d2_gene, d2_del, ins_dd, dinucl_dd;
 };
 
 // A zeroed :class:`Counts` sized to ``m``.

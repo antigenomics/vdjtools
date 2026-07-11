@@ -49,12 +49,18 @@ def _del_dense_d_fixed(pdel: dict, idx_of: dict, maxdl: int, maxdr: int, n5: int
 def pack(model: Model):
     """Build (and cache) the native :class:`PackedModel` for ``model``.
 
-    The native **nt** Pgen (:func:`pgen_nt`) supports tandem-D (``n_D=2``); the amino-acid Pgen and
-    the EM E-step do not yet, so their callers guard separately.
+    The native **nt** Pgen (:func:`pgen_nt`) and the EM E-step (:func:`~vdjtools.model.infer.infer_native`)
+    support tandem-D (``n_D=2``); the amino-acid Pgen does not yet, so its caller guards separately.
+
+    The cache is keyed by ``id(model)`` but stores the model reference and verifies identity on hit:
+    CPython recycles object ids after GC, so a bare-id cache could return a stale :class:`PackedModel`
+    for a *different* model that reused a freed id (e.g. running TRB then TRD EM in one process — the
+    stale TRB pack has a different gene count and crashes the M-step). Keeping the ref also pins the id.
     """
     key = id(model)
-    if key in _pack_cache:
-        return _pack_cache[key]
+    hit = _pack_cache.get(key)
+    if hit is not None and hit[3] is model:
+        return hit[:3]
 
     from .._core import PackedModel
 
@@ -109,8 +115,8 @@ def pack(model: Model):
         pm.R_vj = prep.R["vj"].reshape(-1).tolist()
         pm.bias_vj = prep.bias["vj"].tolist()
 
-    _pack_cache[key] = (pm, vi, ji)
-    return _pack_cache[key]
+    _pack_cache[key] = (pm, vi, ji, model)
+    return pm, vi, ji
 
 
 def pgen_nt(model: Model, cdr3_nt: str, v: str | None = None, j: str | None = None) -> float:
