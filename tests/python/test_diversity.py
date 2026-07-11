@@ -40,9 +40,10 @@ def test_inverse_simpson_value():
 
 
 def test_d50_dominance_fraction():
-    # top clone alone covers 100/105 >= 0.5 -> 1 clone / 5 = 0.2
-    assert stats.d50(np.array([100, 1, 1, 2, 1])) == 0.2
-    # perfectly even 4 clones: need 2 of 4 to reach 0.5 -> 0.5
+    # legacy getDxxIndex = 1 - k/Sobs. Top clone alone covers 100/105 >= 0.5,
+    # so k=1 of Sobs=5 -> 1 - 1/5 = 0.8
+    assert stats.d50(np.array([100, 1, 1, 2, 1])) == 0.8
+    # perfectly even 4 clones: need k=2 of 4 to reach 0.5 -> 1 - 2/4 = 0.5
     assert stats.d50(np.array([1, 1, 1, 1])) == 0.5
 
 

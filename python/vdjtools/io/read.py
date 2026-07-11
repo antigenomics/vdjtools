@@ -42,9 +42,11 @@ _AIRR_ALIASES: dict[str, tuple[str, ...]] = {
     D_CALL: ("d_call",),
     J_CALL: ("j_call",),
     C_CALL: ("c_call",),
-    # Prefer IMGT CDR3 (anchors excluded); fall back to junction (anchors included).
-    CDR3_AA: ("cdr3_aa", "junction_aa"),
-    CDR3_NT: ("cdr3", "junction"),
+    # Prefer the junction (conserved anchors INCLUDED) — the canonical vdjtools /
+    # AIRR ``junction_aa`` convention; fall back to the IMGT ``cdr3_aa``/``cdr3``
+    # (anchors excluded) only if no junction column is present.
+    CDR3_AA: ("junction_aa", "cdr3_aa"),
+    CDR3_NT: ("junction", "cdr3"),
     # AIRR-hybrid exports (e.g. isalgo/airr_ankspond) carry a vdjtools-style `count`.
     COUNT: ("duplicate_count", "count", "reads"),
     FREQ: ("frequency", "freq"),
@@ -101,25 +103,33 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
               n_rows: int | None = None) -> pl.DataFrame:
     """Read an AIRR Rearrangement TSV into the canonical frame.
 
-    Prefers the IMGT ``cdr3_aa`` / ``cdr3`` columns (anchors excluded) and falls
-    back to ``junction_aa`` / ``junction`` (anchors included) when they are absent.
+    Prefers the junction columns ``junction_aa`` / ``junction`` (conserved anchors
+    INCLUDED — the canonical vdjtools / AIRR convention) over the IMGT ``cdr3_aa`` /
+    ``cdr3`` columns (anchors excluded), which are used only as a fallback. Known
+    limitation: a file that provides *only* the IMGT ``cdr3_aa`` yields sequences two
+    residues shorter than the junction, so downstream lengths / k-mers will differ.
     The count column may be ``duplicate_count`` or a vdjtools-style ``count`` /
     ``reads`` (AIRR-hybrid exports); absent, it defaults to 1. Per-read files (one
     row per rearrangement) collapse to unique clonotypes with summed counts;
     already-aggregated files pass through unchanged. ``frequency`` is always
     recomputed after collapsing.
 
+    Clonotype identity for collapsing is ``(v_call, j_call, cdr3_nt, cdr3_aa)`` —
+    matching legacy ``Clonotype`` equality (V, J, CDR3nt); ``d_call`` and ``c_call``
+    are *not* part of the identity, so a representative (first non-null) value is
+    attached to each collapsed clonotype.
+
     Args:
         path: Path to a ``.tsv`` / ``.tsv.gz`` AIRR Rearrangement file.
-        collapse: If ``True`` (default), sum the count over identical
-            ``(v_call, d_call, j_call, c_call, cdr3_aa, cdr3_nt)`` clonotypes.
+        collapse: If ``True`` (default), sum the count over clonotypes identical on
+            ``(v_call, j_call, cdr3_nt, cdr3_aa)``.
         n_rows: If given, read at most this many data rows (preview huge files).
 
     Returns:
         Canonical clonotype frame with a derived ``locus`` column.
 
     Raises:
-        ValueError: If no CDR3 amino-acid column (``cdr3_aa`` or ``junction_aa``)
+        ValueError: If no CDR3 amino-acid column (``junction_aa`` or ``cdr3_aa``)
             is present.
     """
     raw = _read_tsv(path, n_rows=n_rows)
@@ -140,8 +150,13 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     else:
         df = df.with_columns(pl.col(COUNT).cast(pl.Int64, strict=False).fill_null(1))
 
-    key = [c for c in (V_CALL, D_CALL, J_CALL, C_CALL, CDR3_AA, CDR3_NT) if c in df.columns]
+    # Legacy clonotype identity is (V, J, CDR3nt); cdr3_aa is kept in the key so
+    # files with no nt column still collapse (redundant when nt is present). D and C
+    # are not identity — carry a representative (first non-null) value per clonotype.
+    key = [c for c in (V_CALL, J_CALL, CDR3_NT, CDR3_AA) if c in df.columns]
     if collapse:
-        df = df.group_by(key, maintain_order=True).agg(pl.col(COUNT).sum())
+        reps = [pl.col(c).drop_nulls().first().alias(c)
+                for c in (D_CALL, C_CALL) if c in df.columns]
+        df = df.group_by(key, maintain_order=True).agg(pl.col(COUNT).sum(), *reps)
     df = schema.normalize(df, recompute_freq=True)
     return schema.add_locus(df)

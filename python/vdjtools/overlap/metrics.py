@@ -33,9 +33,13 @@ def overlap_pair(a: pl.DataFrame, b: pl.DataFrame,
     - **D** (diversity): ``d12 / (d1 * d2)``.
     - **F** (frequency): ``sqrt(Σ_shared f_a · Σ_shared f_b)``.
     - **F2**: ``Σ_shared sqrt(f_a · f_b)``.
-    - **R**: Pearson correlation of ``log10`` shared frequencies. ``log10`` is used
-      because clonotype frequencies span orders of magnitude (legacy plots the scatter
-      on log axes); requires ``d12 > 2`` else ``R = 0`` (matching the legacy guard).
+    - **R**: Pearson correlation of the **raw** shared-clonotype frequencies (legacy
+      ``OverlapEvaluator``: ``x[k] = it.getFreq(i)`` fed straight to
+      ``PearsonsCorrelation``, no log transform). Requires at least three shared
+      clonotypes (legacy guard ``n > 2``); with fewer, or when the correlation is
+      undefined (a constant/degenerate vector yields NaN), ``R`` is ``None``. Legacy
+      coerced both of these cases to ``0.0``; ``None`` keeps "undefined" distinct
+      from a genuine zero correlation.
 
     Args:
         a: First clonotype frame.
@@ -47,7 +51,8 @@ def overlap_pair(a: pl.DataFrame, b: pl.DataFrame,
     Returns:
         A tuple ``(shared, metrics)`` where ``shared`` is a ``pl.DataFrame`` of the
         joined shared clonotypes (key columns plus ``count_a, count_b, freq_a,
-        freq_b``) and ``metrics`` is a dict with keys ``D, F, F2, R, d1, d2, d12``.
+        freq_b``) and ``metrics`` is a dict with keys ``D, F, F2, R, d1, d2, d12``
+        (``R`` is ``None`` when undefined; see above).
     """
     key = list(key)
     a_agg = _aggregate(a, key)
@@ -65,11 +70,12 @@ def overlap_pair(a: pl.DataFrame, b: pl.DataFrame,
     freq = float(np.sqrt(fa.sum() * fb.sum())) if d12 else 0.0
     freq2 = float(np.sum(np.sqrt(fa * fb))) if d12 else 0.0
     if d12 > 2:
-        r = float(np.corrcoef(np.log10(fa), np.log10(fb))[0, 1])
+        with np.errstate(invalid="ignore", divide="ignore"):
+            r = float(np.corrcoef(fa, fb)[0, 1])
         if np.isnan(r):
-            r = 0.0
+            r = None
     else:
-        r = 0.0
+        r = None
 
     metrics = {"D": div, "F": freq, "F2": freq2, "R": r, "d1": d1, "d2": d2, "d12": d12}
     return shared.select([*key, "count_a", "count_b", "freq_a", "freq_b"]), metrics

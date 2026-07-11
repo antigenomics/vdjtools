@@ -95,9 +95,11 @@ def efron_thisted(counts: np.ndarray, max_depth: int = 20,
     """Efron–Thisted total-diversity lower-bound estimate.
 
     Direct port of legacy ``ExactEstimator.getEfronThisted``: increases the
-    truncation depth until the coefficient of variation ``D/S`` reaches
-    ``cv_threshold``, accumulating alternating binomial coefficients over the
-    count-frequency spectrum ``f_x`` (number of clonotypes seen exactly ``x`` times).
+    truncation depth (up to ``max_depth``) until the coefficient of variation
+    ``D/S`` reaches ``cv_threshold``, accumulating alternating binomial coefficients
+    over the count-frequency spectrum ``f_x`` (number of clonotypes seen exactly
+    ``x`` times). The CV stopping rule is the *only* stopping rule — legacy has no
+    "stop at the max observed count" cap.
 
     Args:
         counts: Per-clonotype count vector.
@@ -108,7 +110,6 @@ def efron_thisted(counts: np.ndarray, max_depth: int = 20,
         The Efron–Thisted richness estimate.
     """
     sobs = observed_richness(counts)
-    max_count = int(counts.max()) if counts.size else 0
     fx = {int(k): int(v) for k, v in zip(*np.unique(counts, return_counts=True))}
     s = float(sobs)
     for depth in range(1, max_depth + 1):
@@ -120,8 +121,6 @@ def efron_thisted(counts: np.ndarray, max_depth: int = 20,
                 h[x - 1] += coef if x % 2 == 1 else -coef
         s = sobs + sum(h[i] * nx[i] for i in range(depth))
         d = math.sqrt(sum(h[i] * h[i] * nx[i] for i in range(depth)))
-        if depth >= max_count:
-            break
         if s != 0 and d / s >= cv_threshold:
             break
     return float(s)
@@ -187,22 +186,20 @@ def inverse_simpson(counts: np.ndarray) -> float:
 
 
 def d50(counts: np.ndarray, fraction: float = 0.5) -> float:
-    """D50 — dominance fraction: clones covering ``fraction`` of reads, over ``Sobs``.
+    """D50 — the legacy ``getDxxIndex`` dominance index ``1 - k/Sobs``.
 
-    Ranks clonotypes by descending frequency and finds the minimum number ``k`` whose
-    cumulative frequency reaches ``fraction``; returns ``k / Sobs``.
-
-    Note:
-        Legacy ``getDxxIndex`` returns the complement ``1 - k/Sobs``. This function
-        follows the task's explicit definition (the covering fraction itself), which
-        is the more common reading of "D50".
+    Ranks clonotypes by descending count and finds the minimum number ``k`` whose
+    cumulative read fraction reaches ``fraction``; returns ``1 - k/Sobs`` — the
+    fraction of clonotypes *not* needed to cover ``fraction`` of the reads. This is
+    the exact legacy ``ExactEstimator.getDxxIndex`` definition
+    (``1.0 - div / frequencyTable.diversity``).
 
     Args:
         counts: Per-clonotype count vector.
         fraction: Cumulative-frequency target in ``[0, 1]`` (default ``0.5``).
 
     Returns:
-        ``k / Sobs`` in ``(0, 1]``.
+        ``1 - k/Sobs`` in ``[0, 1)``; ``0.0`` when ``Sobs == 0``.
     """
     sobs = observed_richness(counts)
     if sobs == 0:
@@ -212,7 +209,7 @@ def d50(counts: np.ndarray, fraction: float = 0.5) -> float:
     cum = np.cumsum(order) / n
     k = int(np.searchsorted(cum, fraction, side="left")) + 1
     k = min(k, sobs)
-    return k / sobs
+    return 1.0 - k / sobs
 
 
 def diversity_stats(df: pl.DataFrame, extrapolate_to: int | None = None) -> pl.DataFrame:

@@ -8,8 +8,12 @@ no classes) to mirror the vdjmatch / arda convention.
 Columns:
     ``v_call, d_call, j_call, c_call`` (Utf8, nullable) — IMGT segment calls;
         ``c_call`` is frequently absent in native vdjtools data.
-    ``cdr3_aa`` (Utf8) — CDR3 amino-acid sequence.
-    ``cdr3_nt`` (Utf8, nullable) — CDR3 nucleotide sequence.
+    ``cdr3_aa`` (Utf8) — the junction amino-acid sequence (conserved anchors
+        Cys104 … Phe/Trp118 **INCLUDED**), per the legacy vdjtools ``cdr3aa`` and
+        AIRR ``junction_aa`` convention. This is two residues longer than the IMGT
+        ``cdr3_aa`` (anchors excluded); readers prefer the junction form.
+    ``cdr3_nt`` (Utf8, nullable) — the junction nucleotide sequence (anchors
+        included), matching ``cdr3_aa`` above.
     ``duplicate_count`` (Int64) — read/UMI count for the clonotype.
     ``frequency`` (Float64) — ``duplicate_count`` normalised within the sample.
     ``locus`` (Utf8, derived) — first three characters of ``v_call`` (``TRB``, ``IGH`` …).

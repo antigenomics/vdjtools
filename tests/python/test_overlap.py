@@ -33,16 +33,25 @@ def test_overlap_no_shared():
     b = _sample(["CASSB"], [1])
     m = O.overlap_metrics(a, b)
     assert m["d12"] == 0 and m["D"] == 0.0 and m["F"] == 0.0 and m["F2"] == 0.0
-    assert m["R"] == 0.0
+    assert m["R"] is None                                  # <3 shared -> R undefined
 
 
-def test_overlap_correlation_positive_on_log_freq():
-    # concordant frequencies over >2 shared clonotypes -> positive Pearson R
+def test_overlap_r_none_below_three_shared():
+    # 2 shared clonotypes: legacy guard n>2 not met -> R is None (not 0.0)
+    a = _sample(["CASSL", "CASSF", "CASSX"], [10, 30, 60])
+    b = _sample(["CASSL", "CASSF", "CASSY"], [40, 40, 20])
+    assert O.overlap_metrics(a, b)["R"] is None
+
+
+def test_overlap_correlation_raw_freq():
+    # Pearson on RAW shared frequencies over >=3 shared clonotypes. The two samples
+    # are scale multiples of each other, so their recomputed frequencies are
+    # identical vectors -> Pearson R == 1.0 (no log transform).
     a = _sample(["A", "B", "C", "D"], [1, 10, 100, 1000])
     b = _sample(["A", "B", "C", "D"], [2, 20, 200, 2000])
     m = O.overlap_metrics(a, b, key=(S.CDR3_AA,))
     assert m["d12"] == 4
-    assert m["R"] > 0.99                                   # perfectly rank/scale concordant
+    assert math.isclose(m["R"], 1.0, rel_tol=1e-12)
 
 
 def test_overlap_cdr3_only_key():

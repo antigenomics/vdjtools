@@ -56,17 +56,46 @@ def test_read_vdjtools_native(tmp_path):
 def test_read_airr_collapses_per_read(tmp_path):
     p = tmp_path / "a.tsv"
     p.write_text(
-        "v_call\tj_call\tcdr3_aa\tjunction_aa\tc_call\n"
-        "TRBV12-3\tTRBJ1-1\tCASSL\tCCASSLF\tIGHM\n"
-        "TRBV12-3\tTRBJ1-1\tCASSL\tCCASSLF\tIGHM\n"
-        "TRBV20-1\tTRBJ2-1\tCASSF\tCCASSFF\t\n"
+        "v_call\tj_call\tjunction_aa\tc_call\n"
+        "TRBV12-3\tTRBJ1-1\tCCASSLF\tIGHM\n"
+        "TRBV12-3\tTRBJ1-1\tCCASSLF\tIGHM\n"
+        "TRBV20-1\tTRBJ2-1\tCCASSFF\t\n"
     )
     df = vio.read_airr(p)
     assert df.height == 2                                  # two identical rows collapsed
-    row = df.filter(pl.col(S.CDR3_AA) == "CASSL").row(0, named=True)
+    row = df.filter(pl.col(S.CDR3_AA) == "CCASSLF").row(0, named=True)
     assert row[S.COUNT] == 2
     assert abs(row[S.FREQ] - 2 / 3) < 1e-9
-    assert df.filter(pl.col(S.CDR3_AA) == "CASSF")[S.C_CALL].to_list() == [None]
+    assert df.filter(pl.col(S.CDR3_AA) == "CCASSFF")[S.C_CALL].to_list() == [None]
+
+
+def test_read_airr_prefers_junction_over_imgt_cdr3(tmp_path):
+    # Both junction_aa (anchors included) and IMGT cdr3_aa (anchors excluded, 2 aa
+    # shorter) are present; canonical cdr3_aa must be the JUNCTION.
+    p = tmp_path / "j.tsv"
+    p.write_text(
+        "v_call\tj_call\tcdr3_aa\tjunction_aa\tcdr3\tjunction\n"
+        "TRBV12-3\tTRBJ1-1\tASSLR\tCASSLRF\tGCTAGT\tTGTGCTAGTTTT\n"
+    )
+    df = vio.read_airr(p)
+    assert df[S.CDR3_AA].to_list() == ["CASSLRF"]          # junction, not IMGT ASSLR
+    assert df[S.CDR3_AA].str.len_chars().to_list() == [7]  # 2 longer than ASSLR
+    assert df[S.CDR3_NT].to_list() == ["TGTGCTAGTTTT"]     # junction nt, not cdr3 nt
+
+
+def test_read_airr_collapse_key_ignores_d_call(tmp_path):
+    # Same (v, j, cdr3nt) with d_call TRBD1 in one row and null in another must
+    # collapse to ONE clonotype (D is not part of clonotype identity).
+    p = tmp_path / "d.tsv"
+    p.write_text(
+        "v_call\td_call\tj_call\tjunction\tjunction_aa\n"
+        "TRBV12-3\tTRBD1\tTRBJ1-1\tTGTGCTAGT\tCASS\n"
+        "TRBV12-3\t\tTRBJ1-1\tTGTGCTAGT\tCASS\n"
+    )
+    df = vio.read_airr(p)
+    assert df.height == 1
+    assert df[S.COUNT].to_list() == [2]                    # counts summed
+    assert df[S.D_CALL].to_list() == ["TRBD1"]             # representative non-null D
 
 
 def test_read_vdjtools_rejects_foreign_header(tmp_path):
