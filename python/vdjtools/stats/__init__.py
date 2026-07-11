@@ -12,6 +12,7 @@ from .diversity import (
 )
 from .inext import (
     asymptotic_diversity,
+    coverage,
     estimate_d,
     inext,
     inext_coverage,
@@ -35,6 +36,7 @@ __all__ = [
     "inext",
     "inext_coverage",
     "asymptotic_diversity",
+    "coverage",
     "sample_coverage",
     "estimate_d",
     "segment_usage",

@@ -319,6 +319,10 @@ def inext(data, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40, se=True,
           nboot=50, conf=0.95, seed=0) -> pl.DataFrame:
     """Size-based rarefaction/extrapolation of Hill-number diversity.
 
+    This is the size-based engine; the canonical entry point is
+    :func:`vdjtools.stats.rarefaction` with ``base="size"`` — ``inext`` is kept
+    as an alias for discoverability (people search for "iNEXT").
+
     Interpolates (``m < n``) and extrapolates (``m > n``) the Hill number of each
     order in ``q`` across a grid of sampling depths, following Chao et al. (2014)
     and the ``iNEXT`` R package (Hsieh et al. 2016). Point estimates are computed
@@ -376,6 +380,10 @@ def inext(data, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40, se=True,
 def inext_coverage(data, q=(0, 1, 2), *, coverages=None, knots=40, se=True,
                    nboot=50, conf=0.95, seed=0) -> pl.DataFrame:
     """Coverage-based rarefaction/extrapolation of Hill-number diversity.
+
+    This is the coverage-based engine; the canonical entry point is
+    :func:`vdjtools.stats.rarefaction` with ``base="coverage"`` — ``inext_coverage``
+    is kept as an alias for discoverability (people search for "iNEXT").
 
     Each target sample coverage is inverted to a sampling depth ``m`` (``iNEXT``
     ``invChat.Ind``) and the Hill number is then evaluated at that depth.
@@ -503,6 +511,10 @@ def sample_coverage(data, m=None):
             "sample_coverage": [min(max(_chat(x, v), 0.0), 1.0) for v in ms],
         })
     return min(max(_chat(x, float(m)), 0.0), 1.0)
+
+
+#: Clean top-level name for the sample-coverage curve Ĉ(n)/Ĉ(m).
+coverage = sample_coverage
 
 
 def estimate_d(data, base="size", level=None, q=(0, 1, 2), *, se=True, nboot=50,
