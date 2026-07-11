@@ -45,6 +45,11 @@ jobs:
           # pulls cmake + ninja into the build env automatically — no extra container setup.
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32"
+          # scipy/numpy/polars ship only manylinux_2_28 wheels for recent versions, so the Linux
+          # build must use the 2_28 baseline (GCC 12, glibc 2.28). On the default manylinux2014
+          # image the wheel install-test — and end-user installs — try to build scipy from source
+          # (no OpenBLAS) and fail. The C++ ext is portable C++20 and builds fine on either image.
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           # import test: __init__ only needs the compiled ext (no runtime deps at import time).
           CIBW_TEST_COMMAND: 'python -c "import vdjtools, vdjtools._core; print(vdjtools.__file__)"'
       - name: Upload wheel artifacts
