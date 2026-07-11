@@ -1,4 +1,6 @@
 """Tests for vdjtools.preprocess.batch — VJ-usage batch-effect correction."""
+import math
+
 import polars as pl
 
 from vdjtools import preprocess as pp
@@ -49,6 +51,15 @@ def test_batch_preserves_within_batch_variation():
     s1 = res.filter((pl.col("sample_id") == "s1") & (pl.col("j_call") == "TRBJ1"))["p_corrected"][0]
     s2 = res.filter((pl.col("sample_id") == "s2") & (pl.col("j_call") == "TRBJ1"))["p_corrected"][0]
     assert s1 != s2
+
+
+def test_batch_corrected_value_pins_grand_mean():
+    # Value pin that guards the `+ mu_grand` restore term (step 4). With the term,
+    # s1/TRBJ1 corrects to 0.524768; dropping `+ mu_grand` shifts it to 0.553693,
+    # so this assertion fails if the grand-mean restore is ever removed.
+    res = pp.correct_vj_usage(_long(), batch_col="batch")
+    row = res.filter((pl.col("sample_id") == "s1") & (pl.col("j_call") == "TRBJ1"))
+    assert math.isclose(row["p_corrected"][0], 0.524768, rel_tol=1e-5)
 
 
 def test_batch_accepts_list_of_frames():

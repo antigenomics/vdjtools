@@ -56,6 +56,17 @@ def test_join_min_samples_one_keeps_private():
     assert set(j[S.CDR3_AA].to_list()) == {"A", "P"}
 
 
+def test_join_min_samples_above_n_empty_result():
+    # Only 2 samples but min_samples=3 -> nothing can pass; the empty-result path must
+    # still return the full joint schema (key + per-sample freq/count + incidence/freq/count).
+    s1 = _sample(["A", "B"], [10, 90])
+    s2 = _sample(["A", "B"], [40, 60])
+    j = pp.join_samples([s1, s2], key="aa", min_samples=3)
+    assert j.height == 0
+    assert set(j.columns) == {S.CDR3_AA, "freq_0", "freq_1", "count_0", "count_1",
+                              "incidence", S.FREQ, S.COUNT}
+
+
 def test_join_named_columns():
     s1 = _sample(["A", "B"], [10, 90])
     s2 = _sample(["A", "B"], [40, 60])

@@ -42,6 +42,31 @@ def test_downsample_reads_guard_size_ge_total():
     assert out[S.COUNT].to_list() == [10, 30]
 
 
+def test_downsample_reads_count_weighted_allocation_pinned():
+    # The count-weighted (multivariate hypergeometric) allocation is seed-deterministic:
+    # counts [10,30,60], size 50, seed 7 -> [7,13,30]. Mis-weighting the counts changes
+    # the split, so this pins the count-weighting itself (not just the total).
+    a = _sample(["CASSA", "CASSB", "CASSC"], [10, 30, 60])
+    out = pp.downsample(a, 50, by="reads", seed=7)
+    assert out[S.COUNT].to_list() == [7, 13, 30]
+    assert out[S.COUNT].sum() == 50                           # exact target depth
+
+
+def test_downsample_reads_robust_above_1e9():
+    # numpy's default method='marginals' raises once sum(counts) >= 1e9; method='count'
+    # keeps large libraries working. Tiny size keeps it fast (count allocates ~size).
+    a = _sample(["CASSA", "CASSB"], [600_000_000, 600_000_000])   # total 1.2e9
+    out = pp.downsample(a, 5, by="reads", seed=0)                 # must not raise
+    assert out[S.COUNT].sum() == 5
+
+
+def test_downsample_clones_size_ge_n_unchanged():
+    a = _sample(["CASSA", "CASSB", "CASSC"], [10, 30, 60])
+    out = pp.downsample(a, 5, by="clones")                    # size >= n_clones -> unchanged
+    assert out.equals(a)
+    assert out[S.COUNT].to_list() == [10, 30, 60]
+
+
 def test_downsample_clones_uniform_without_replacement():
     a = _sample(["CASSA", "CASSB", "CASSC", "CASSD"], [10, 20, 30, 40])
     out = pp.downsample(a, 2, by="clones", seed=3)
