@@ -47,19 +47,66 @@ def test_d50_dominance_fraction():
     assert stats.d50(np.array([1, 1, 1, 1])) == 0.5
 
 
-def test_efron_thisted_at_least_observed():
-    c = np.array([1, 1, 2, 3, 5])
-    est = stats.efron_thisted(c)
-    assert est >= stats.observed_richness(c)
-    assert math.isfinite(est)
+def _efron_reference(counts, max_depth=20, cv_threshold=0.05):
+    """Independent re-derivation of the Efron-Thisted Euler/CV series (for pinning)."""
+    from collections import Counter
+    sobs = len(counts)
+    fx = Counter(int(c) for c in counts)
+    s = float(sobs)
+    for depth in range(1, max_depth + 1):
+        h = [0.0] * depth
+        for y in range(1, depth + 1):
+            for x in range(1, y + 1):
+                coef = math.comb(y - 1, x - 1)
+                h[x - 1] += coef if x % 2 == 1 else -coef
+        nx = [fx.get(y, 0) for y in range(1, depth + 1)]
+        s = sobs + sum(h[i] * nx[i] for i in range(depth))
+        d = math.sqrt(sum(h[i] * h[i] * nx[i] for i in range(depth)))
+        if s != 0 and d / s >= cv_threshold:
+            break
+    return float(s)
 
 
-def test_chao_e_extrapolates_up_and_validates():
-    c = np.array([1, 1, 2, 3, 5])
+def test_efron_thisted_all_singletons_closed_form():
+    # With the (non-legacy) max_count cap removed, only legacy's CV stopping rule
+    # remains. For an all-singletons sample the CV = sqrt(Sobs)/(2*Sobs) fires at
+    # depth 1 (= 0.158 >= 0.05 for Sobs=10), so the estimate is Sobs + Sobs = 2*Sobs.
+    # (This is the true legacy-faithful value; an unconditional run to max_depth
+    #  would instead give Sobs*(1+max_depth)=210, but the CV rule prevents that.)
+    assert stats.efron_thisted(np.array([1] * 10)) == 20.0
+
+
+def test_efron_thisted_matches_independent_reference():
+    c = np.array([5, 4, 3, 3, 2, 2, 1])
+    assert stats.efron_thisted(c) == _efron_reference(c) == 8.0
+
+
+def test_chao_e_extrapolation_hand_value():
+    c = np.array([1, 1, 2, 3, 5])                     # n=12, Sobs=5, F1=2, F2=1, F0=0.5
     n = int(c.sum())
-    assert stats.chao_e(c, extrapolate_to=n) >= stats.observed_richness(c)
-    # extrapolating farther yields >= closer target
+    # Chao extrapolation: 5 + 0.5*(1 - (1 - 2/(12*0.5))^12) = 5 + 0.5*(1 - (2/3)^12)
+    assert math.isclose(stats.chao_e(c, 24), 5.496146326685371, rel_tol=1e-9)
+    # extrapolate_to == n gives m*=0 -> exactly Sobs (the old test's "tautology")
+    assert stats.chao_e(c, n) == float(stats.observed_richness(c))
     assert stats.chao_e(c, 2 * n) >= stats.chao_e(c, n)
+
+
+def test_diversity_degenerate_empty_and_single():
+    empty = np.array([], dtype=np.int64)
+    assert stats.observed_richness(empty) == 0
+    assert stats.chao1(empty) == 0.0
+    assert stats.chao_e(empty) == 0.0
+    assert stats.efron_thisted(empty) == 0.0
+    assert stats.inverse_simpson(empty) == 0.0
+    assert stats.d50(empty) == 0.0
+    # single clonotype: Sobs fall-throughs and freq == 1.0
+    one = np.array([5], dtype=np.int64)
+    assert stats.observed_richness(one) == 1
+    assert stats.chao1(one) == 1.0                    # F0=0 -> Chao1 == Sobs
+    assert stats.inverse_simpson(one) == 1.0
+    assert stats.d50(one) == 0.0                      # 1 - 1/1
+    df = _frame([5])
+    assert df[S.FREQ].to_list() == [1.0]              # single clonotype -> freq 1.0
 
 
 def test_diversity_stats_frame_shape():

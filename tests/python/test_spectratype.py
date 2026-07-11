@@ -1,4 +1,6 @@
 """Tests for vdjtools.stats.spectratype — CDR3-length distributions."""
+import math
+
 import polars as pl
 
 from vdjtools.io import schema as S
@@ -39,3 +41,13 @@ def test_vj_spectratype_breakdown():
     rows = {(r["v_call"], r["j_call"], r["length"]): r["weight"] for r in vs.iter_rows(named=True)}
     assert rows[("TRBV1", "TRBJ1", 5)] == 10
     assert rows[("TRBV2", "TRBJ2", 7)] == 5
+
+
+def test_spectratype_freq_weight_hand_value():
+    # counts [3,7,5] (total 15) at lengths 5,5,7 -> freqs .2, .4667, .3333.
+    # weight='freq' sums frequency per length: len5 = 3/15 + 7/15 = 10/15,
+    # len7 = 5/15. Frequencies are recomputed over the whole sample, not per length.
+    sp = stats.spectratype(_frame(), kind="aa", weight="freq", by_locus=False)
+    got = dict(zip(sp["length"].to_list(), sp["weight"].to_list()))
+    assert math.isclose(got[5], 10 / 15, rel_tol=1e-12)
+    assert math.isclose(got[7], 5 / 15, rel_tol=1e-12)

@@ -1,4 +1,6 @@
 """Tests for vdjtools.stats.rarefaction — analytic interpolation/extrapolation."""
+import math
+
 import polars as pl
 
 from vdjtools.io import schema as S
@@ -40,3 +42,24 @@ def test_rarefaction_ci_brackets_mean():
     rc = stats.rarefaction(df, steps=15)
     assert (rc["ci_lo"] <= rc["mean"]).all()
     assert (rc["ci_hi"] >= rc["mean"]).all()
+
+
+def test_rarefaction_interpolation_hand_value():
+    # [1,1,1,1]: N=4, Sobs=4. Exact Hurlbert E[S] at subsample m=2 is
+    #   4 * (1 - C(3,2)/C(4,2)) = 4 * (1 - 3/6) = 2.0
+    # steps=5 samples x in {0,2,4,6,8}, so the x=2 interpolation point exists.
+    rc = stats.rarefaction(_frame([1, 1, 1, 1]), steps=5)
+    pt = rc.filter(pl.col("x") == 2)
+    assert pt["kind"][0] == "interpolated"
+    assert math.isclose(pt["mean"][0], 2.0, rel_tol=1e-12)
+
+
+def test_rarefaction_extrapolation_hand_value():
+    # [1,1,2,3,5]: n=12, Sobs=5, F1=2, F2=1, F0=0.5. At x=24 (2n) the extrapolated
+    # richness equals the analytic Chao extrapolation 5 + 0.5*(1 - (2/3)^12), and
+    # exceeds Sobs. steps=5 samples x in {0,6,12,18,24}, so x=24 exists.
+    rc = stats.rarefaction(_frame([1, 1, 2, 3, 5]), steps=5, extrapolate_to=24)
+    pt = rc.filter(pl.col("x") == 24)
+    assert pt["kind"][0] == "extrapolated"
+    assert math.isclose(pt["mean"][0], 5.496146326685371, rel_tol=1e-12)
+    assert pt["mean"][0] > 5.0                              # > Sobs at x > N
