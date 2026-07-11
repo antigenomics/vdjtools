@@ -62,15 +62,23 @@ def _insert_markov(seq: str, R: np.ndarray, bias: np.ndarray, *, from_right: boo
     return w, trans
 
 
-def _estep_seq(prep, s: str, counts: dict) -> float:
-    """Accumulate one sequence's soft counts into ``counts``; return its Pgen (for log-lik)."""
+def _estep_seq(prep, s: str, counts: dict, mask=None) -> float:
+    """Accumulate one sequence's soft counts into ``counts``; return its Pgen (for log-lik).
+
+    ``mask`` optionally restricts enumeration to a read's aligned genes — ``(v_genes, j_genes,
+    d_genes)`` name lists (e.g. from arda). This is what makes VDJ inference tractable: without it
+    every V that shares the conserved Cys prefix is a candidate and the D enumeration runs for each.
+    """
     N = len(s)
     vdj = prep.chain_type == "VDJ"
     local: dict = defaultdict(float)
     total = 0.0
 
-    v_cands = _v_candidates(prep, s, prep.functional_v)
-    j_cands = _j_candidates(prep, s, prep.functional_j)
+    v_mask = mask[0] if mask else prep.functional_v
+    j_mask = mask[1] if mask else prep.functional_j
+    d_mask = mask[2] if mask and mask[2] else (prep.functional_d if vdj else None)
+    v_cands = _v_candidates(prep, s, v_mask)
+    j_cands = _j_candidates(prep, s, j_mask)
     for V, pv, v_opts in v_cands:
         for J, j_opts in j_cands:
             pj = prep.p_j.get(J if vdj else (V, J), 0.0)
@@ -83,7 +91,7 @@ def _estep_seq(prep, s: str, counts: dict) -> float:
                     mid = s[len_v:N - len_j]
                     base = pv * pj * p_dv * p_dj
                     if vdj:
-                        total += _accum_vdj(prep, J, V, nv, nj, mid, base, local)
+                        total += _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask)
                     else:
                         total += _accum_vj(prep, V, J, nv, nj, mid, base, local)
 
@@ -113,12 +121,12 @@ def _accum_vj(prep, V, J, nv, nj, mid, base, local) -> float:
     return w
 
 
-def _accum_vdj(prep, J, V, nv, nj, mid, base, local) -> float:
+def _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
     pins_vd, pins_dj = prep.p_ins["vd"], prep.p_ins["dj"]
     maxdl, maxdr = prep.maxpal["d_5"], prep.maxpal["d_3"]
     m = len(mid)
     seq_total = 0.0
-    for D in prep.functional_d:
+    for D in (d_mask if d_mask is not None else prep.functional_d):
         pdj = prep.p_d_given_j.get((J, D), 0.0)
         if pdj == 0.0:
             continue
@@ -244,6 +252,7 @@ def infer(
     max_iter: int = 30,
     tol: float = 1e-3,
     init: str = "align",
+    masks: list | None = None,
 ) -> tuple[Model, InferenceReport]:
     """Re-estimate a model's marginals from nucleotide CDR3s by EM.
 
@@ -255,28 +264,33 @@ def infer(
         tol: Stop when the V-usage total-variation between iterations falls below this.
         init: ``"align"`` (seed gene usage from a best-match vote — the default and fastest),
             ``"uniform"`` (each event uniform on its support), or ``"template"`` (warm start).
+        masks: Optional per-sequence ``(v_genes, j_genes, d_genes)`` name lists (e.g. from
+            :func:`arda_masks`) restricting each read's scenario enumeration to its aligned genes.
+            **Strongly recommended for VDJ** — without it the E-step enumerates every Cys-sharing
+            V × the full D grid per read (tens of s/seq); with it, VDJ inference is tractable.
 
     Returns:
         ``(fitted_model, report)``.
     """
+    upper = [s.upper() for s in sequences]
     if init == "template":
         tables = template.tables
     elif init == "align":
-        tables = _align_init(template, [s.upper() for s in sequences])
+        tables = _align_init(template, upper)
     else:
         tables = _uniform_init(template)
     model = Model(manifest=template.manifest, tables=tables, genomic=template.genomic)
     report = InferenceReport()
     fit = _fit_events(template.manifest)
-    upper = [s.upper() for s in sequences]
+    seq_masks = masks if masks is not None else [None] * len(upper)
 
     for it in range(max_iter):
         prep = prepare(model)
         counts = {name: defaultdict(float) for name in fit}
         ll = 0.0
         n_ok = 0
-        for s in upper:
-            pg = _estep_seq(prep, s, counts)
+        for s, mask in zip(upper, seq_masks):
+            pg = _estep_seq(prep, s, counts, mask)
             if pg > 0.0:
                 ll += log(pg)
                 n_ok += 1
@@ -296,3 +310,39 @@ def infer(
             break
 
     return model, report
+
+
+def _gene_to_alleles(model: Model, seg: str) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = defaultdict(list)
+    for a in model.genomic[f"genes_{seg}"][f"{seg}_allele"]:
+        out[a.split("*")[0]].append(a)
+    return out
+
+
+def gene_masks(model: Model, v_calls: list[str], j_calls: list[str]) -> list[tuple]:
+    """Build per-read ``(v_genes, j_genes, d_genes)`` E-step masks from V/J gene calls.
+
+    Each call is expanded from an allele to *all* model alleles of its gene, so allele-level
+    ambiguity (a call of ``TRBV20-1*03`` vs the true ``*01``) never excludes the right scenario.
+    D is left unrestricted (few D genes, and D calls on the short D germline are unreliable).
+    """
+    va, ja = _gene_to_alleles(model, "v"), _gene_to_alleles(model, "j")
+
+    def alleles(m, call):
+        return m.get(call.split("*")[0], []) if call else []
+
+    return [(alleles(va, v), alleles(ja, j), None) for v, j in zip(v_calls, j_calls)]
+
+
+def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> tuple[list[str], list[tuple]]:
+    """Annotate nt contigs with arda and build ``(junctions, masks)`` for masked :func:`infer`.
+
+    The production path for real reads: ``junctions, masks = arda_masks(contigs, template);
+    infer(template, junctions, masks=masks)``. arda is the ``[model]`` extra.
+    """
+    from .stitch import annotate
+
+    calls = annotate(contigs, organism=organism)
+    junctions = calls["junction"].to_list()
+    masks = gene_masks(model, calls["v_call"].to_list(), calls["j_call"].to_list())
+    return junctions, masks

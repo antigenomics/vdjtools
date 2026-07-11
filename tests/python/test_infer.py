@@ -76,6 +76,18 @@ def test_infer_plumbing():
     assert set(fit.tables) == set(m.tables)
 
 
+def test_gene_masks():
+    """gene_masks expands an allele call to all model alleles of that gene (handles ambiguity)."""
+    from vdjtools.model.infer import gene_masks
+
+    m = from_olga(TRB, locus="TRB")
+    masks = gene_masks(m, ["TRBV20-1*03", "TRBV7-9*01"], ["TRBJ1-1*01", "TRBJ2-1*01"])
+    assert all(a.startswith("TRBV20-1*") for a in masks[0][0])
+    assert "TRBV20-1*01" in masks[0][0]  # true allele included even though *03 was called
+    assert all(a.startswith("TRBJ1-1*") for a in masks[0][1])
+    assert masks[0][2] is None  # D is left unrestricted
+
+
 @pytest.mark.slow
 def test_vdj_estep_accumulates():
     """Cover the VDJ EM soft-count path (_accum_vdj: D-gene / delD / VD+DJ insertion counts).
