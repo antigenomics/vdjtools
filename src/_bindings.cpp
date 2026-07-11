@@ -83,7 +83,12 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("ins_vj", &Counts::ins_vj)
         .def_readonly("dinucl_vd", &Counts::dinucl_vd)
         .def_readonly("dinucl_dj", &Counts::dinucl_dj)
-        .def_readonly("dinucl_vj", &Counts::dinucl_vj);
+        .def_readonly("dinucl_vj", &Counts::dinucl_vj)
+        .def_readonly("n_d", &Counts::n_d)
+        .def_readonly("d2_gene", &Counts::d2_gene)
+        .def_readonly("d2_del", &Counts::d2_del)
+        .def_readonly("ins_dd", &Counts::ins_dd)
+        .def_readonly("dinucl_dd", &Counts::dinucl_dd);
 
     m.def("make_counts", &vdjtools::make_counts, py::arg("model"));
     m.def("estep_batch", &vdjtools::estep_batch, py::arg("model"), py::arg("seqs"),

@@ -141,10 +141,21 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   (single-D, arda-masked) vs legacy OLGA via `analyze`. Finding: **real repertoires have broader
   trim/insertion entropy than OLGA's synthetic model** (TRB d_del 6.4→7.6 bit, vd_ins 3.8→4.5); within-D
   coupling I(delD5;delD3|D)≈1.1 bit robust across both. Held-out loglik improves.
-- **TODO native D-D aa + E-step**: `pgen_aa` (aa transfer matrix — one extra D block in Πᵣ) and
-  `estep_batch` (n_D=2 soft counts: n_d, d2_gene, d2_del, dd_ins/dd_dinucl) still single-D (guarded).
-  The E-step D-D is the prerequisite for **TRD D-D EM** (learning P(n_D=2)>0). arda full-length V/J
-  germline helper still needed for arda-native stitching.
+- **DONE native D-D E-step** `src/pgen.cpp::accum_dd` + `Counts` (`n_d, d2_gene, d2_del, ins_dd,
+  dinucl_dd`) + `_mstep_native`/`infer_native` (guard removed). Factorized forward/backward: same per-D1
+  A[e1]/B[s2] partial sums as `dd_middle` (so the soft-count normalizer == Pgen by construction), plus a
+  backward message C[e1]=Σ insDD·B and forward message Dmsg[s2]=Σ A·insDD from the combine sweep;
+  re-enumerating each block once attributes every per-realization soft count. Soft counts == Python
+  `_accum_dd` **exactly** (2e-16, all 15 events); closed-loop native EM recovers P(n_D=2) (0.0565 vs
+  0.058 empirical on 500 synthetic TRD reads); **~370x** faster than naive (68 ms/read masked vs
+  >25 s/read timeout). Single-D unchanged (p_nd1=1 → n_d renorm to δ(1)). `test_native_dd_estep_matches_
+  python_reference`, `test_native_dd_em_recovers_p_nd2`. **Bug found+fixed** (pre-existing): `native.pack`
+  cached by `id(model)` returned a stale `PackedModel` after CPython id-reuse (TRB→TRD in one process
+  crashed the M-step, 89 vs 18 V) — now stores+verifies the model ref.
+- **TODO native D-D aa Pgen** (`pgen_aa` — one extra D block in Πᵣ; still guarded, not needed for EM).
+  **TODO** parallelize `estep_batch` over reads (GIL released) — 68 ms/read × 2000 × 15 iters ≈ 34 min
+  single-threaded; ~4 min on 8 threads would make the full **TRD D-D EM** run comfortable. arda
+  full-length V/J germline helper still needed for arda-native stitching.
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
 `(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group

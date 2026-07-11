@@ -1,8 +1,10 @@
 """Real-data EM vs OLGA: infer a recombination model from real out-of-frame reads and compare its
 marginals (entropy + mutual information) to the legacy OLGA bootstrap model on the same locus.
 
-Runs single-D EM (arda-masked, native E-step). TRD is inferred as single-D here; learning the
-tandem event P(n_D=2) additionally needs the native D-D E-step (a separate, pending native task).
+Runs single-D EM (arda-masked, native E-step). TRD is inferred as single-D here; to additionally
+learn the tandem event P(n_D=2), wrap the template in ``model.dd.to_dd`` before ``infer_native`` —
+the native D-D E-step (``pgen.cpp::accum_dd``) learns it (validated closed-loop; ~68 ms/read masked,
+so a full real-TRD D-D run wants the pending ``estep_batch`` read-parallelization for comfort).
 
 Reproduce (needs the [model] extra + arda/mmseqs2 + HuggingFace access for the read data):
 

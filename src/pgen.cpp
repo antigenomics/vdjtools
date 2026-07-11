@@ -657,6 +657,152 @@ double accum_vdj(const PackedModel& m, int j, int v, int div, int dij,
     return seq_total;
 }
 
+// One tandem (n_D=2) block: soft counts for [insVD] D1 [insDD] D2 [insDJ], each D >=1 nt. Factorized
+// like `dd_middle` (per D1: left partial sums A[e1], right partial sums B[s2] carrying P(D2|D1)),
+// so seq_total is byte-identical to the Pgen. The combine sweep additionally builds the backward
+// message C[e1]=sum_{s2} insDD(e1->s2)*B[s2] and forward message Dmsg[s2]=sum_{e1} A[e1]*insDD(e1->s2);
+// re-enumerating each block once then attributes every per-realization soft count (matches the pure-
+// Python reference _accum_dd exactly). V/J and their trims are constant per (V,J) => the whole DD mass.
+// Returns base*seq_total (the n_D=2 Pgen contribution for this V,J,vop,jop); caller folds it into n_d[2].
+double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
+                const int8_t* mid, int mlen, double base, const std::vector<int>& dm, Counts& c) {
+    int nD = m.nD();
+    int ddlen = static_cast<int>(m.ins_dd.size());
+    std::vector<double> A(mlen + 1), B(mlen + 1), C(mlen + 1), Dmsg(mlen + 1);
+    double seq_total = 0.0;
+    for (int d1 : dm) {
+        double pd1 = m.pd_given_j[j * nD + d1];
+        if (pd1 == 0.0) continue;
+        const auto& cut1 = m.cut_d[d1];
+        int L1 = cut1.size();
+        // A[e1]: [insVD] D1 (>=1 nt) ending at e1.
+        A.assign(mlen + 1, 0.0);
+        for (int i5 = 0; i5 <= L1 && i5 < m.nbins_d5; ++i5)
+            for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
+                int ld1 = L1 - i5 - i3;
+                if (ld1 < 1) continue;
+                double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                if (pdel1 == 0.0) continue;
+                for (int pos1 = 0; pos1 + ld1 <= mlen; ++pos1) {
+                    bool ok = true;
+                    for (int k = 0; k < ld1; ++k)
+                        if (cut1[i5 + k] != mid[pos1 + k]) { ok = false; break; }
+                    if (!ok) continue;
+                    double wvd = p_insert(m.ins_vd, m.R_vd, m.bias_vd, mid, 0, pos1, false);
+                    if (wvd != 0.0) A[pos1 + ld1] += pd1 * pdel1 * wvd;
+                }
+            }
+        // B[s2]: D2 (>=1 nt) starting at s2 then [insDJ] to the end, weighted by P(D2|D1).
+        B.assign(mlen + 1, 0.0);
+        for (int d2 : dm) {
+            double pd2 = m.pd2_given_d1[d1 * nD + d2];
+            if (pd2 == 0.0) continue;
+            const auto& cut2 = m.cut_d[d2];
+            int L2 = cut2.size();
+            for (int k5 = 0; k5 <= L2 && k5 < m.nbins_d5; ++k5)
+                for (int k3 = 0; k3 <= L2 - k5 && k3 < m.nbins_d3; ++k3) {
+                    int ld2 = L2 - k5 - k3;
+                    if (ld2 < 1) continue;
+                    double pdel2 = m.del_d2[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3];
+                    if (pdel2 == 0.0) continue;
+                    for (int pos2 = 0; pos2 + ld2 <= mlen; ++pos2) {
+                        bool ok = true;
+                        for (int k = 0; k < ld2; ++k)
+                            if (cut2[k5 + k] != mid[pos2 + k]) { ok = false; break; }
+                        if (!ok) continue;
+                        double wdj = p_insert(m.ins_dj, m.R_dj, m.bias_dj, mid, pos2 + ld2, mlen, true);
+                        if (wdj != 0.0) B[pos2] += pd2 * pdel2 * wdj;
+                    }
+                }
+        }
+        // Combine: total_D1, C[e1] (backward), Dmsg[s2] (forward); attribute dd_ins/dd_dinucl here.
+        C.assign(mlen + 1, 0.0);
+        Dmsg.assign(mlen + 1, 0.0);
+        double total_D1 = 0.0;
+        for (int e1 = 0; e1 <= mlen; ++e1) {
+            if (A[e1] == 0.0) continue;
+            double markov = 1.0;  // product of DD transitions over mid[e1+1..s2-1]
+            for (int s2 = e1; s2 <= mlen; ++s2) {
+                int len = s2 - e1;
+                if (len >= ddlen) break;
+                double pins = m.ins_dd[len];
+                if (pins != 0.0 && B[s2] != 0.0) {
+                    double wdd = (len == 0) ? pins : pins * m.bias_dd[mid[e1]] * markov;
+                    double comb = A[e1] * wdd * B[s2];
+                    total_D1 += comb;
+                    C[e1] += wdd * B[s2];
+                    Dmsg[s2] += A[e1] * wdd;
+                    double bw = base * comb;
+                    c.ins_dd[len] += bw;
+                    accum_dinucl(c.dinucl_dd, mid, e1, s2, false, bw);
+                }
+                if (s2 >= e1 + 1) markov *= m.R_dd[mid[s2] * 4 + mid[s2 - 1]];
+            }
+        }
+        if (total_D1 == 0.0) continue;
+        c.d_gene[j * nD + d1] += base * total_D1;
+        seq_total += total_D1;
+        // Re-enumerate LEFT: attribute d_del(D1), vd_ins, vd_dinucl with weight (left realization)*C[e1].
+        for (int i5 = 0; i5 <= L1 && i5 < m.nbins_d5; ++i5)
+            for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
+                int ld1 = L1 - i5 - i3;
+                if (ld1 < 1) continue;
+                double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                if (pdel1 == 0.0) continue;
+                for (int pos1 = 0; pos1 + ld1 <= mlen; ++pos1) {
+                    int e1 = pos1 + ld1;
+                    if (C[e1] == 0.0) continue;
+                    bool ok = true;
+                    for (int k = 0; k < ld1; ++k)
+                        if (cut1[i5 + k] != mid[pos1 + k]) { ok = false; break; }
+                    if (!ok) continue;
+                    double wvd = p_insert(m.ins_vd, m.R_vd, m.bias_vd, mid, 0, pos1, false);
+                    if (wvd == 0.0) continue;
+                    double bw = base * pd1 * pdel1 * wvd * C[e1];
+                    c.d_del[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3] += bw;
+                    c.ins_vd[pos1] += bw;
+                    accum_dinucl(c.dinucl_vd, mid, 0, pos1, false, bw);
+                }
+            }
+        // Re-enumerate RIGHT: attribute d2_gene, d2_del(D2), dj_ins, dj_dinucl with weight (right)*Dmsg[s2].
+        for (int d2 : dm) {
+            double pd2 = m.pd2_given_d1[d1 * nD + d2];
+            if (pd2 == 0.0) continue;
+            const auto& cut2 = m.cut_d[d2];
+            int L2 = cut2.size();
+            for (int k5 = 0; k5 <= L2 && k5 < m.nbins_d5; ++k5)
+                for (int k3 = 0; k3 <= L2 - k5 && k3 < m.nbins_d3; ++k3) {
+                    int ld2 = L2 - k5 - k3;
+                    if (ld2 < 1) continue;
+                    double pdel2 = m.del_d2[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3];
+                    if (pdel2 == 0.0) continue;
+                    for (int pos2 = 0; pos2 + ld2 <= mlen; ++pos2) {
+                        if (Dmsg[pos2] == 0.0) continue;
+                        bool ok = true;
+                        for (int k = 0; k < ld2; ++k)
+                            if (cut2[k5 + k] != mid[pos2 + k]) { ok = false; break; }
+                        if (!ok) continue;
+                        double wdj = p_insert(m.ins_dj, m.R_dj, m.bias_dj, mid, pos2 + ld2, mlen, true);
+                        if (wdj == 0.0) continue;
+                        double bw = base * pd2 * pdel2 * wdj * Dmsg[pos2];
+                        c.d2_gene[d1 * nD + d2] += bw;
+                        c.d2_del[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3] += bw;
+                        c.ins_dj[mlen - pos2 - ld2] += bw;
+                        accum_dinucl(c.dinucl_dj, mid, pos2 + ld2, mlen, true, bw);
+                    }
+                }
+        }
+    }
+    if (seq_total > 0.0) {
+        double bw = base * seq_total;
+        c.v_choice[v] += bw;
+        c.j_choice[j] += bw;
+        c.v_3_del[v * m.nbins_v + div] += bw;
+        c.j_5_del[j * m.nbins_j + dij] += bw;
+    }
+    return base * seq_total;
+}
+
 double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                  const std::vector<int>& vmask, const std::vector<int>& jmask,
                  const std::vector<int>& dmask, Counts& local) {
@@ -695,9 +841,19 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                     const int8_t* mid = s + vop.len;
                     double base = pv * pj * vop.p * jop.p;
                     int div = Lv - vop.len, dij = Lj - jop.len;
-                    total += m.vdj
-                        ? accum_vdj(m, J.j, v, div, dij, mid, midlen, base, dm, local)
-                        : accum_vj(m, v, J.j, div, dij, mid, midlen, base, local);
+                    if (!m.vdj) {
+                        total += accum_vj(m, v, J.j, div, dij, mid, midlen, base, local);
+                    } else {
+                        // n_D=1 (0-D folds in via a fully-trimmed D); weighted by P(n_D<=1).
+                        double c1 = accum_vdj(m, J.j, v, div, dij, mid, midlen, base * m.p_nd1, dm, local);
+                        local.n_d[1] += c1;
+                        total += c1;
+                        if (m.dd && m.p_nd2 > 0.0) {  // n_D=2 tandem, weighted by P(n_D=2)
+                            double c2 = accum_dd(m, J.j, v, div, dij, mid, midlen, base * m.p_nd2, dm, local);
+                            local.n_d[2] += c2;
+                            total += c2;
+                        }
+                    }
                 }
             }
         }
@@ -707,7 +863,8 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
 
 void zero(Counts& c) {
     for (auto* v : {&c.v_choice, &c.j_choice, &c.d_gene, &c.v_3_del, &c.j_5_del, &c.d_del,
-                    &c.ins_vd, &c.ins_dj, &c.ins_vj, &c.dinucl_vd, &c.dinucl_dj, &c.dinucl_vj}) {
+                    &c.ins_vd, &c.ins_dj, &c.ins_vj, &c.dinucl_vd, &c.dinucl_dj, &c.dinucl_vj,
+                    &c.n_d, &c.d2_gene, &c.d2_del, &c.ins_dd, &c.dinucl_dd}) {
         std::fill(v->begin(), v->end(), 0.0);
     }
 }
@@ -720,6 +877,8 @@ void add_scaled(Counts& dst, const Counts& src, double s) {
     go(dst.v_3_del, src.v_3_del); go(dst.j_5_del, src.j_5_del); go(dst.d_del, src.d_del);
     go(dst.ins_vd, src.ins_vd); go(dst.ins_dj, src.ins_dj); go(dst.ins_vj, src.ins_vj);
     go(dst.dinucl_vd, src.dinucl_vd); go(dst.dinucl_dj, src.dinucl_dj); go(dst.dinucl_vj, src.dinucl_vj);
+    go(dst.n_d, src.n_d); go(dst.d2_gene, src.d2_gene); go(dst.d2_del, src.d2_del);
+    go(dst.ins_dd, src.ins_dd); go(dst.dinucl_dd, src.dinucl_dd);
 }
 
 }  // namespace
@@ -738,6 +897,13 @@ Counts make_counts(const PackedModel& m) {
         c.ins_dj.assign(m.ins_dj.size(), 0.0);
         c.dinucl_vd.assign(16, 0.0);
         c.dinucl_dj.assign(16, 0.0);
+        c.n_d.assign(3, 0.0);  // buckets for n_D in {0,1,2}; only 1 and 2 ever accumulate
+        if (m.dd) {
+            c.d2_gene.assign(nD * nD, 0.0);
+            c.d2_del.assign(nD * m.nbins_d5 * m.nbins_d3, 0.0);
+            c.ins_dd.assign(m.ins_dd.size(), 0.0);
+            c.dinucl_dd.assign(16, 0.0);
+        }
     } else {
         c.j_choice.assign(nV * nJ, 0.0);
         c.ins_vj.assign(m.ins_vj.size(), 0.0);

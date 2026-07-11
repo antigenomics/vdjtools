@@ -46,8 +46,8 @@ def test_productive_only():
 
 def test_columns_and_calls():
     df = generate(_tra(), 20, seed=0)
-    assert df.columns == ["cdr3_nt", "cdr3_aa", "v_call", "d_call", "j_call", "productive"]
-    assert df["d_call"].is_null().all()  # VJ locus has no D
+    assert df.columns == ["cdr3_nt", "cdr3_aa", "v_call", "d_call", "d2_call", "j_call", "productive"]
+    assert df["d_call"].is_null().all() and df["d2_call"].is_null().all()  # VJ locus has no D
     assert df["v_call"].str.starts_with("TRAV").all()
 
 

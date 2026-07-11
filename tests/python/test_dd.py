@@ -111,15 +111,94 @@ def test_dd_middle_with_dd_insertion():
 
 def test_pgen_partitions_over_nd():
     """Full pgen_nt = P(n_D=1)·single-D + P(n_D=2)·tandem, on the tiny model."""
-    m = _tiny_dd_model(p_nd2=0.5)
-    prep = pgen.prepare(m)
-    # sequence: V("G") + D1("AT") + D2("AT") + J("C")  → "GATATC"
-    s = "GATATC"
-    p_full = pgen.pgen_nt(prep, s)
+    # V("GG") + D1("AT") + D2("AT") + J("CC") → "GGATATCC" (tandem-only; single-D can't span "ATAT").
+    s = "GGATATCC"
+    p_full = pgen.pgen_nt(pgen.prepare(_tiny_dd_model(p_nd2=0.5)), s)
     p_single = pgen.pgen_nt(pgen.prepare(_tiny_dd_model(p_nd2=0.0)), s)
-    # tandem-only piece via a p2=1 model
     p_tandem = pgen.pgen_nt(pgen.prepare(_tiny_dd_model(p_nd2=1.0)), s)
+    assert p_tandem > 0.0 and p_single == 0.0  # non-vacuous: this read is genuinely tandem-only
     assert p_full == pytest.approx(0.5 * p_single + 0.5 * p_tandem)
+
+
+def test_dd_estep_total_equals_pgen():
+    """The D-D E-step's soft-count normalizer equals the independently-computed Pgen (all scenarios)."""
+    from collections import defaultdict
+    from vdjtools.model.infer import _estep_seq, _fit_events
+    m = _tiny_dd_model(p_nd2=0.5, pdel_full_only=False)
+    prep = pgen.prepare(m)
+    for s in ("GGATATCC", "GGATCC", "GGATGCC"):
+        counts = {n: defaultdict(float) for n in _fit_events(m.manifest)}
+        assert _estep_seq(prep, s, counts) == pytest.approx(pgen.pgen_nt(prep, s), rel=1e-12, abs=1e-18)
+
+
+def test_em_recovers_p_nd2():
+    """Closed-loop: generate tandem data from a known model → EM recovers P(n_D=2) from a wrong init."""
+    from vdjtools.model import generate
+    from vdjtools.model.infer import infer
+    reads = [r.upper() for r in generate.generate(_tiny_dd_model(p_nd2=0.35, pdel_full_only=False),
+                                                  1500, seed=11)["cdr3_nt"].to_list()]
+    fitted, _ = infer(_tiny_dd_model(p_nd2=0.15, pdel_full_only=False), reads, max_iter=25, init="template")
+    nd = dict(zip(fitted.tables["n_d"]["n_d"].to_list(), fitted.tables["n_d"]["p"].to_list()))
+    assert nd[2] == pytest.approx(0.35, abs=0.05)  # recovered from a deliberately wrong 0.15 start
+
+
+def test_native_dd_estep_matches_python_reference():
+    """The native C++ D-D E-step accumulates the *same* soft counts as the pure-Python ``_accum_dd``
+    reference — exactly (factorized forward/backward attribution vs the naive two-D enumeration)."""
+    from collections import defaultdict
+
+    from vdjtools.model import native
+    from vdjtools.model.infer import _estep_seq, _fit_events
+    _core = pytest.importorskip("vdjtools._core")
+
+    m = _tiny_dd_model(p_nd2=0.5, pdel_full_only=False, dd_ins1=0.3)
+    seqs = ["GGATATCC", "GGATCC", "GGATAATCC", "GGATATATCC"]
+    prep = pgen.prepare(m)
+    pyc = {n: defaultdict(float) for n in _fit_events(m.manifest)}
+    for s in seqs:  # _estep_seq already stores the posterior-weighted counts (w / Pgen)
+        _estep_seq(prep, s, pyc, None)
+
+    pm, _vi, _ji = native.pack(m)
+    cn = _core.make_counts(pm)
+    _core.estep_batch(pm, [native._encode(s) for s in seqs], [], [], [], cn)
+
+    d = m.genomic["genes_d"]["d_allele"].to_list()
+    nD, n5, n3 = len(d), pm.nbins_d5, pm.nbins_d3
+    m5, m3 = prep.maxpal["d_5"], prep.maxpal["d_3"]
+
+    def diff(name, arr, key_of):
+        nd_ = {key_of(i): arr[i] for i in range(len(arr))}
+        return max((abs(nd_.get(k, 0.0) - pyc[name].get(k, 0.0)) for k in set(nd_) | set(pyc[name])), default=0.0)
+
+    checks = {
+        "v_choice": (cn.v_choice, lambda i: ("V",)),
+        "j_choice": (cn.j_choice, lambda i: ("J",)),
+        "d_gene": (cn.d_gene, lambda i: ("J", d[i % nD])),
+        "d2_gene": (cn.d2_gene, lambda i: (d[i // nD], d[i % nD])),
+        "d_del": (cn.d_del, lambda i: (d[i // (n5 * n3)], (i // n3) % n5 - m5, i % n3 - m3)),
+        "d2_del": (cn.d2_del, lambda i: (d[i // (n5 * n3)], (i // n3) % n5 - m5, i % n3 - m3)),
+        "vd_ins": (cn.ins_vd, lambda i: (i,)),
+        "dd_ins": (cn.ins_dd, lambda i: (i,)),
+        "dj_ins": (cn.ins_dj, lambda i: (i,)),
+        "n_d": (cn.n_d, lambda i: (i,)),
+        "vd_dinucl": (cn.dinucl_vd, lambda i: (i % 4, i // 4)),
+        "dd_dinucl": (cn.dinucl_dd, lambda i: (i % 4, i // 4)),
+        "dj_dinucl": (cn.dinucl_dj, lambda i: (i % 4, i // 4)),
+    }
+    for name, (arr, key_of) in checks.items():
+        assert diff(name, arr, key_of) < 1e-12, f"{name} native vs python soft counts differ"
+
+
+def test_native_dd_em_recovers_p_nd2():
+    """Closed-loop with the native E-step: native EM recovers P(n_D=2) from a wrong init (fast path)."""
+    from vdjtools.model import generate
+    from vdjtools.model.infer import infer_native
+    pytest.importorskip("vdjtools._core")
+    reads = [r.upper() for r in generate.generate(_tiny_dd_model(p_nd2=0.35, pdel_full_only=False),
+                                                  1500, seed=11)["cdr3_nt"].to_list()]
+    fitted, _ = infer_native(_tiny_dd_model(p_nd2=0.15, pdel_full_only=False), reads, max_iter=25, init="template")
+    nd = dict(zip(fitted.tables["n_d"]["n_d"].to_list(), fitted.tables["n_d"]["p"].to_list()))
+    assert nd[2] == pytest.approx(0.35, abs=0.05)
 
 
 @pytest.mark.slow
@@ -204,21 +283,33 @@ def test_dd_guards_raise_and_single_d_untouched():
     m = from_olga(OLGA / "human_T_delta", locus="TRD")
     m_dd = to_dd(m, p_nd2=0.1)
     s = generate.generate(m, 1, seed=1)["cdr3_nt"][0].upper()
-    # aa Pgen, native aa Pgen, generation and EM do not yet support tandems → must raise.
+    # Only the amino-acid Pgen (transfer matrix) still lacks a tandem path → must raise.
+    # (nt Pgen, generation, and both EM E-steps now support tandem-D — covered by the tests above.)
     for fn in (
         lambda: pgen.pgen_aa(pgen.prepare(m_dd), "CAAAF"),
         lambda: native.pgen_aa(m_dd, "CAAAF"),
-        lambda: generate.generate(m_dd, 1, seed=1),
-        lambda: infer.infer(m_dd, [s], max_iter=1),
-        lambda: infer.infer_native(m_dd, [s], max_iter=1),
     ):
         with pytest.raises(NotImplementedError):
             fn()
-    # native *nt* Pgen DOES support tandems: must not raise, must be nonnegative.
+    # native *nt* Pgen, generation, and native EM DO support tandems now: must not raise.
     assert native.pgen_nt(m_dd, s) >= 0.0
+    assert generate.generate(m_dd, 3, seed=1).height == 3
+    assert infer.infer_native(m_dd, [s], max_iter=1)[0].tables["n_d"].height == 2
     # to_dd(p_nd2=0) is generatively single-D → native stays byte-identical to the single-D model.
     m_dd0 = to_dd(m, p_nd2=0.0)
     assert native.pgen_nt(m_dd0, s) == pytest.approx(native.pgen_nt(m, s), rel=1e-12)
+
+
+def test_generate_dd_fraction_and_scoreable():
+    """Tandem generation: the n_D=2 draw fraction matches P(n_D=2), and every tandem draw is
+    scoreable by the native D-D Pgen (closed-loop consistency needed for D-D EM)."""
+    from vdjtools.model import generate, native
+    m = _tiny_dd_model(p_nd2=0.4, pdel_full_only=False)
+    df = generate.generate(m, 4000, seed=1)
+    assert df["d2_call"].is_not_null().mean() == pytest.approx(0.4, abs=0.03)  # ~ P(n_D=2)
+    tand = df.filter(df["d2_call"].is_not_null()).head(20)
+    assert all(native.pgen_nt(m, r["cdr3_nt"].upper(), r["v_call"], r["j_call"]) > 0
+               for r in tand.to_dicts())
 
 
 def test_native_dd_matches_python_reference():

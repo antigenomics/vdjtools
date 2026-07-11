@@ -91,7 +91,12 @@ def _estep_seq(prep, s: str, counts: dict, mask=None) -> float:
                     mid = s[len_v:N - len_j]
                     base = pv * pj * p_dv * p_dj
                     if vdj:
-                        total += _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask)
+                        p1 = prep.p_nd.get(0, 0.0) + prep.p_nd.get(1, 0.0)
+                        if p1 > 0.0:
+                            total += _accum_vdj(prep, J, V, nv, nj, mid, base * p1, local, d_mask)
+                        p2 = prep.p_nd.get(2, 0.0)
+                        if p2 > 0.0 and prep.p_d2_given_d1:
+                            total += _accum_dd(prep, J, V, nv, nj, mid, base * p2, local, d_mask)
                     else:
                         total += _accum_vj(prep, V, J, nv, nj, mid, base, local)
 
@@ -161,6 +166,7 @@ def _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
                     local[("d_del", (D, idx5 - maxdl, idx3 - maxdr))] += w
                     local[("vd_ins", (lvd,))] += w
                     local[("dj_ins", (ldj,))] += w
+                    local[("n_d", (1,))] += w  # this scenario has exactly one D
                     for fr, to in tvd:
                         local[("vd_dinucl", (fr, to))] += w
                     for fr, to in tdj:
@@ -168,15 +174,102 @@ def _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
     return seq_total
 
 
-# Events re-estimated by EM (n_d and the germline stay fixed from the template).
+def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
+    """Two-D (tandem) soft-count accumulation: ``mid`` = [insVD] D1 [insDD] D2 [insDJ], each D ≥1 nt.
+
+    The reference (naive) enumeration mirroring :func:`~vdjtools.model.pgen._dd_middle`; correctness
+    over speed (validated closed-loop on small synthetic models — the native E-step is the fast path).
+    """
+    maxdl, maxdr = prep.maxpal["d_5"], prep.maxpal["d_3"]
+    pins_vd, pins_dd, pins_dj = prep.p_ins["vd"], prep.p_ins["dd"], prep.p_ins["dj"]
+    m = len(mid)
+    dset = d_mask if d_mask is not None else prep.functional_d
+    seq_total = 0.0
+    for D1 in dset:
+        pd1 = prep.p_d_given_j.get((J, D1), 0.0)
+        if pd1 == 0.0:
+            continue
+        cut1 = prep.cut["d"][D1]
+        for i5 in range(len(cut1) + 1):
+            for i3 in range(len(cut1) - i5 + 1):
+                pdel1 = prep.p_del["d"].get((D1, i5 - maxdl, i3 - maxdr), 0.0)
+                if pdel1 == 0.0:
+                    continue
+                dc1 = cut1[i5:len(cut1) - i3]
+                ld1 = len(dc1)
+                if ld1 < 1:
+                    continue
+                for pos1 in range(0, m - ld1):  # leave ≥1 nt for D2
+                    if mid[pos1:pos1 + ld1] != dc1:
+                        continue
+                    lvd = pos1
+                    if lvd >= len(pins_vd) or pins_vd[lvd] == 0.0:
+                        continue
+                    mwvd, tvd = _insert_markov(mid[:pos1], prep.R["vd"], prep.bias["vd"], from_right=False)
+                    left = base * pd1 * pdel1 * pins_vd[lvd] * mwvd
+                    if left <= 0.0:
+                        continue
+                    for D2 in dset:
+                        pd2g = prep.p_d2_given_d1.get((D1, D2), 0.0)
+                        if pd2g == 0.0:
+                            continue
+                        cut2 = prep.cut["d"][D2]
+                        for k5 in range(len(cut2) + 1):
+                            for k3 in range(len(cut2) - k5 + 1):
+                                pdel2 = prep.p_del_d2.get((D2, k5 - maxdl, k3 - maxdr), 0.0)
+                                if pdel2 == 0.0:
+                                    continue
+                                dc2 = cut2[k5:len(cut2) - k3]
+                                ld2 = len(dc2)
+                                if ld2 < 1:
+                                    continue
+                                for pos2 in range(pos1 + ld1, m - ld2 + 1):
+                                    if mid[pos2:pos2 + ld2] != dc2:
+                                        continue
+                                    ins_dd, ins_dj = mid[pos1 + ld1:pos2], mid[pos2 + ld2:]
+                                    ldd, ldj = len(ins_dd), len(ins_dj)
+                                    if ldd >= len(pins_dd) or pins_dd[ldd] == 0.0:
+                                        continue
+                                    if ldj >= len(pins_dj) or pins_dj[ldj] == 0.0:
+                                        continue
+                                    mwdd, tdd = _insert_markov(ins_dd, prep.R["dd"], prep.bias["dd"], from_right=False)
+                                    mwdj, tdj = _insert_markov(ins_dj, prep.R["dj"], prep.bias["dj"], from_right=True)
+                                    w = left * pd2g * pdel2 * pins_dd[ldd] * mwdd * pins_dj[ldj] * mwdj
+                                    if w <= 0.0:
+                                        continue
+                                    seq_total += w
+                                    local[("v_choice", (V,))] += w
+                                    local[("j_choice", (J,))] += w
+                                    local[("d_gene", (J, D1))] += w
+                                    local[("d2_gene", (D1, D2))] += w
+                                    local[("v_3_del", (V, nv))] += w
+                                    local[("j_5_del", (J, nj))] += w
+                                    local[("d_del", (D1, i5 - maxdl, i3 - maxdr))] += w
+                                    local[("d2_del", (D2, k5 - maxdl, k3 - maxdr))] += w
+                                    local[("vd_ins", (lvd,))] += w
+                                    local[("dd_ins", (ldd,))] += w
+                                    local[("dj_ins", (ldj,))] += w
+                                    local[("n_d", (2,))] += w  # this scenario has two Ds
+                                    for fr, to in tvd:
+                                        local[("vd_dinucl", (fr, to))] += w
+                                    for fr, to in tdd:
+                                        local[("dd_dinucl", (fr, to))] += w
+                                    for fr, to in tdj:
+                                        local[("dj_dinucl", (fr, to))] += w
+    return seq_total
+
+
+# Events re-estimated by EM (the germline stays fixed from the template). n_d is fit too: for a
+# single-D model the E-step only ever emits n_D=1 counts, so it renormalizes to δ(1) (a no-op);
+# for a D-D model it learns P(n_D=2) from the tandem soft counts.
 def _fit_events(manifest) -> list[str]:
-    return [n for n, ev in manifest.events.items() if ev.kind.value != "n_d"]
+    return list(manifest.events)
 
 
 def _mstep(template: Model, counts: dict) -> dict[str, pl.DataFrame]:
     tables = {}
     for name, event in template.manifest.events.items():
-        if event.kind.value == "n_d":
+        if not counts.get(name):  # event never accumulated (e.g. n_d on a VJ locus) — keep template
             tables[name] = template.tables[name]
             continue
         cols = list(table_columns(event))  # value cols..., "p"
@@ -270,17 +363,10 @@ def infer(
             V × the full D grid per read (tens of s/seq); with it, VDJ inference is tractable.
 
     Returns:
-        ``(fitted_model, report)``.
-
-    Raises:
-        NotImplementedError: For a tandem-D template — the E-step does not yet enumerate ``n_D=2``
-            scenarios, so EM would fit the single-D events while ``P(n_D)`` stays fixed, silently
-            mis-training a D-D model.
+        ``(fitted_model, report)``. For a tandem-D template the E-step enumerates ``n_D=2``
+        scenarios and the M-step learns ``P(n_D=2)`` along with the ``d2_gene`` / ``d2_del`` / ``dd``
+        events (the pure-Python reference; :func:`infer_native` is single-D only for now).
     """
-    from .dd import has_tandem
-
-    if has_tandem(template):
-        raise NotImplementedError("EM does not yet learn tandem-D (n_D=2) models")
     upper = [s.upper() for s in sequences]
     if init == "template":
         tables = template.tables
@@ -399,7 +485,21 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         t["dj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dj), dtype=np.int16), "p": list(counts.ins_dj)}), [])
         t["vd_dinucl"] = dinucl(counts.dinucl_vd)
         t["dj_dinucl"] = dinucl(counts.dinucl_dj)
-        t["n_d"] = template.tables["n_d"]
+        # n_d learned from the soft counts (indexed by the n_D value): single-D emits only n_D=1 mass
+        # -> renormalizes to delta(1) (a no-op); D-D emits n_D=1 and n_D=2 -> learns P(n_D=2).
+        nd = template.tables["n_d"]
+        t["n_d"] = norm(nd.with_columns(p=pl.Series("p", [float(counts.n_d[int(k)]) for k in nd["n_d"]])), [])
+        if "d2_gene" in template.manifest.events:  # tandem-D model — learn the second-D events too
+            t["d2_gene"] = norm(pl.DataFrame({
+                "d_allele": np.repeat(d_alleles, nD), "d2_allele": np.tile(d_alleles, nD),
+                "p": list(counts.d2_gene)}), ["d_allele"])
+            t["d2_del"] = norm(pl.DataFrame({
+                "d2_allele": np.repeat(d_alleles, n5 * n3),
+                "ndel5": np.tile(np.repeat(np.arange(n5) - mp["d_5"], n3), nD).astype(np.int16),
+                "ndel3": np.tile(np.arange(n3) - mp["d_3"], n5 * nD).astype(np.int16),
+                "p": list(counts.d2_del)}), ["d2_allele"])
+            t["dd_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dd), dtype=np.int16), "p": list(counts.ins_dd)}), [])
+            t["dd_dinucl"] = dinucl(counts.dinucl_dd)
     else:
         t["j_choice"] = norm(pl.DataFrame({
             "v_allele": np.repeat(v_alleles, nJ), "j_allele": np.tile(j_alleles, nV),
@@ -420,17 +520,12 @@ def infer_native(
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
-    Requires the compiled ``_core`` extension. See :func:`infer` for the arguments.
-
-    Raises:
-        NotImplementedError: For a tandem-D template (see :func:`infer`).
+    Requires the compiled ``_core`` extension. See :func:`infer` for the arguments. Learns tandem-D
+    (``n_D=2``) models: the native E-step accumulates the second-D soft counts via a factorized
+    forward/backward pass (the fast path for real TRD EM).
     """
     from .._core import estep_batch, make_counts
-    from .dd import has_tandem
     from .native import _encode, pack
-
-    if has_tandem(template):
-        raise NotImplementedError("EM does not yet learn tandem-D (n_D=2) models")
 
     upper = [s.upper() for s in sequences]
     if init == "template":
