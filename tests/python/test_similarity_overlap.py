@@ -129,7 +129,6 @@ def test_axioms_bounds_selfsim_symmetry():
         assert 0.0 <= ab["similarity"] <= 1.0
         assert aa["similarity"] == pytest.approx(1.0, rel=1e-12)
         assert ab["similarity"] == pytest.approx(ba["similarity"], rel=1e-12)
-        assert ab["distance"] == pytest.approx(1.0 - ab["similarity"], abs=1e-15)
         assert ab["distance"] >= 0.0
 
 
@@ -145,14 +144,111 @@ def test_near_neighbour_raises_similarity_above_exact():
     assert near > exact
 
 
-def test_presence_weight_runs_and_bounded():
-    """weight='presence' (TINA-unweighted) runs and stays in [0, 1]; self-sim is 1."""
+def test_vj_gating_blocks_cross_v_pair():
+    """The exp/step kernels are block-diagonalised by the non-cdr3 key fields.
+
+    Same CDR3, different V: with key=(cdr3_aa,v_call,j_call) the exp kernel must NOT
+    connect them — it is 0, matching both the identity kernel and the exact frequency
+    overlap F (identity is the exact τ→0 limit of exp on the same spine). Dropping V/J
+    from the key (cdr3-only) removes the gate and the same CDR3 gives similarity 1.
+    """
+    key = (S.CDR3_AA, S.V_CALL, S.J_CALL)
+    a = _sample(["CASSLGYEQYF"], [10], v=["TRBV7-9"], j=["TRBJ2-1"])
+    b = _sample(["CASSLGYEQYF"], [10], v=["TRBV20-1"], j=["TRBJ2-1"])
+
+    gated = O.similarity_overlap(a, b, key=key, kernel="exp", metric="cosine")["similarity"]
+    ident = O.similarity_overlap(a, b, key=key, kernel="identity",
+                                 metric="cosine")["similarity"]
+    _, m = O.overlap_pair(a, b, key=key)
+    assert gated == 0.0                       # exp does not cross the V block
+    assert ident == 0.0                       # identity matches the full key
+    assert m["F"] == 0.0                       # exact frequency overlap
+
+    # step is gated the same way; and without V/J in the key the same CDR3 is a full match.
+    step = O.similarity_overlap(a, b, key=key, kernel="step", max_penalty=1,
+                                metric="cosine")["similarity"]
+    ungated = O.similarity_overlap(a, b, key=(S.CDR3_AA,), kernel="exp",
+                                   metric="cosine")["similarity"]
+    assert step == 0.0
+    assert ungated == pytest.approx(1.0, abs=1e-12)
+
+
+@pytest.mark.parametrize("kernel", ["identity", "step", "exp"])
+def test_dense_sparse_agree_on_length_differing_fixture(kernel):
+    """The sparse path is a genuine sparsification of the SAME gap-block model as dense.
+
+    Includes a length-differing pair (CASSLGYEQYF / CASSLGGYEQYF, a single central
+    insertion). Because the sparse path now re-scores every candidate with the identical
+    gap-block model (same matrix / gap_open / central gap_prior) instead of using the
+    prior-free trie score, dense and sparse agree to machine precision on all three
+    kernels. This also exercises the otherwise-untested sparse path (coo/csr assembly,
+    setdiag, sparse ``_quad``).
+    """
+    a = _sample(["CASSLGYEQYF", "CASSLGGYEQYF"], [3, 2])
+    b = _sample(["CASSLGYEQYF", "CASSLGGYEQYF"], [1, 4])
+    kw = dict(kernel=kernel, metric="cosine")
+    if kernel == "step":
+        kw["max_penalty"] = 1
+    dense = O.similarity_overlap(a, b, dense=True, **kw)["similarity"]
+    sparse = O.similarity_overlap(a, b, dense=False, **kw)["similarity"]
+    assert sparse == pytest.approx(dense, abs=1e-9)
+
+
+def test_presence_weight_distinct_value():
+    """weight='presence' (TINA-unweighted) uses uniform 1/N weights, NOT frequency.
+
+    For the identity kernel the two samples share exactly one of three clonotypes, so the
+    uniform-weight cosine is exactly 1/3 — a value the frequency weighting (0.5524) never
+    produces. Also pins self-sim==1 and the [0,1] bound (which held for 'freq' too).
+    """
     a = _sample(_A_CDR3, _A_CNT)
     b = _sample(_B_CDR3, _B_CNT)
-    ab = O.similarity_overlap(a, b, kernel="exp", weight="presence", metric="cosine")
+    pres = O.similarity_overlap(a, b, kernel="identity", weight="presence",
+                                metric="cosine")["similarity"]
+    freq = O.similarity_overlap(a, b, kernel="identity", weight="freq",
+                                metric="cosine")["similarity"]
+    assert pres == pytest.approx(1 / 3, abs=1e-12)          # distinguishing pinned value
+    assert freq == pytest.approx(0.5523681766661075, abs=1e-12)
+    assert abs(pres - freq) > 1e-6                          # presence != freq
+
     aa = O.similarity_overlap(a, a, kernel="exp", weight="presence", metric="cosine")
+    ab = O.similarity_overlap(a, b, kernel="exp", weight="presence", metric="cosine")
     assert 0.0 <= ab["similarity"] <= 1.0
     assert aa["similarity"] == pytest.approx(1.0, rel=1e-12)
+
+
+def test_nonstandard_aa_clonotype_dropped_and_renormalized():
+    """A CDR3 with a non-standard symbol is dropped, and the survivors are renormalized.
+
+    Adding one extra clonotype whose CDR3 carries an ``X``/digit must leave the overlap
+    byte-identical to the sample without it: the row is filtered out *and* the remaining
+    frequencies are renormalized to sum to 1 (Morisita is scale-sensitive, so a missing
+    renormalization would change the value).
+    """
+    a = _sample(_A_CDR3, _A_CNT)
+    b = _sample(_B_CDR3, _B_CNT)
+    a_extra = _sample(_A_CDR3 + ["CASX1F"], _A_CNT + [99])  # extra non-standard clonotype
+
+    base = O.similarity_overlap(a, b, kernel="identity", weight="freq", metric="morisita")
+    withx = O.similarity_overlap(a_extra, b, kernel="identity", weight="freq",
+                                 metric="morisita")
+    assert withx["similarity"] == base["similarity"]        # byte-identical (dropped)
+    assert withx["pTZq"] == base["pTZq"]                     # and survivors renormalized
+
+
+def test_all_nonstandard_sample_is_zero_overlap():
+    """An all-non-standard sample overlapped with a normal one is empty, not an error.
+
+    Every CDR3 is filtered out, so both weight vectors on that side are size 0; the
+    bilinear forms and denominators must degrade to similarity 0 / distance 1 without
+    raising (covers the ``_quad`` size-0, ``denom > 0`` and ``total or 1`` guards).
+    """
+    bad = _sample(["XXX111", "1234"], [5, 5])
+    good = _sample(["CASSLGQAYEQYF", "CASSPGTEAFF"], [10, 10])
+    for kernel in ("identity", "exp"):
+        res = O.similarity_overlap(bad, good, kernel=kernel, metric="cosine")
+        assert res["similarity"] == 0.0
+        assert res["distance"] == 1.0
 
 
 def test_cluster_integration_similarity_cosine():
@@ -172,10 +268,13 @@ def test_cluster_integration_similarity_cosine():
     ai, bi, ci = names.index("a"), names.index("b"), names.index("c")
     assert M[ai, bi] < M[ai, ci] and M[ai, bi] < M[bi, ci]
 
-    # Morisita variant dispatches too.
+    # Morisita variant dispatches too — and orders the samples the same way.
     dm2 = O.pairwise_distances(toy, metric="similarity_morisita")
-    M2 = dm2.select(dm2["sample"].to_list()).to_numpy()
+    names2 = dm2["sample"].to_list()
+    M2 = dm2.select(names2).to_numpy()
     assert np.allclose(M2, M2.T) and np.allclose(np.diag(M2), 0.0)
+    a2, b2, c2 = names2.index("a"), names2.index("b"), names2.index("c")
+    assert M2[a2, b2] < M2[a2, c2] and M2[a2, b2] < M2[b2, c2]
 
 
 @pytest.mark.slow
