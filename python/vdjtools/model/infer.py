@@ -338,6 +338,25 @@ def _set_p(df: pl.DataFrame, key, votes: dict, norm_keys: list[str]) -> pl.DataF
     return out.with_columns(p=pl.when(total > 0).then(pl.col("p") / total).otherwise(0.0))
 
 
+# The D-bearing loci where tandem-D (D-D) recombination is biologically documented and modelled by
+# default. VJ loci (TRA/TRG/IGK/IGL) have no D and are always single-chain-D-free.
+DD_DEFAULT_LOCI = frozenset({"TRB", "TRD", "IGH"})
+
+
+def _maybe_promote_dd(template: Model, single_d: bool, p_nd2_init: float) -> Model:
+    """Promote a single-D VDJ template to a tandem-D model by default (unless ``single_d``).
+
+    D-D is the default for the D-bearing loci; ``single_d=True``, a VJ locus, or an already-tandem
+    template all leave it unchanged.
+    """
+    from .dd import has_tandem, to_dd
+    if single_d or template.chain_type != "VDJ" or has_tandem(template):
+        return template
+    if template.manifest.locus not in DD_DEFAULT_LOCI:
+        return template
+    return to_dd(template, p_nd2=p_nd2_init)
+
+
 def infer(
     template: Model,
     sequences: list[str],
@@ -346,6 +365,8 @@ def infer(
     tol: float = 1e-3,
     init: str = "align",
     masks: list | None = None,
+    single_d: bool = False,
+    p_nd2_init: float = 0.02,
 ) -> tuple[Model, InferenceReport]:
     """Re-estimate a model's marginals from nucleotide CDR3s by EM.
 
@@ -361,12 +382,18 @@ def infer(
             :func:`arda_masks`) restricting each read's scenario enumeration to its aligned genes.
             **Strongly recommended for VDJ** — without it the E-step enumerates every Cys-sharing
             V × the full D grid per read (tens of s/seq); with it, VDJ inference is tractable.
+        single_d: By default a **tandem-D (D-D)** model is learned for the D-bearing loci
+            (IGH/TRD/TRB): a single-D template is promoted with :func:`~vdjtools.model.dd.to_dd`
+            (seeding ``P(n_D=2)=p_nd2_init``) and EM learns the true ``P(n_D=2)``. Set ``True`` to
+            keep a strict single-D model. No effect on VJ loci or an already-tandem template.
+        p_nd2_init: Initial ``P(n_D=2)`` seed when promoting to D-D (ignored if ``single_d``).
 
     Returns:
         ``(fitted_model, report)``. For a tandem-D template the E-step enumerates ``n_D=2``
         scenarios and the M-step learns ``P(n_D=2)`` along with the ``d2_gene`` / ``d2_del`` / ``dd``
-        events (the pure-Python reference; :func:`infer_native` is single-D only for now).
+        events.
     """
+    template = _maybe_promote_dd(template, single_d, p_nd2_init)
     upper = [s.upper() for s in sequences]
     if init == "template":
         tables = template.tables
@@ -517,15 +544,20 @@ def infer_native(
     tol: float = 1e-3,
     init: str = "align",
     masks: list | None = None,
+    single_d: bool = False,
+    p_nd2_init: float = 0.02,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
-    Requires the compiled ``_core`` extension. See :func:`infer` for the arguments. Learns tandem-D
-    (``n_D=2``) models: the native E-step accumulates the second-D soft counts via a factorized
-    forward/backward pass (the fast path for real TRD EM).
+    Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
+    ``single_d`` / ``p_nd2_init``). Learns tandem-D (``n_D=2``) by default on the D-bearing loci: the
+    native E-step accumulates the second-D soft counts via a factorized forward/backward pass, so a
+    full real-data D-D EM run is fast (and read-parallelized across cores).
     """
     from .._core import estep_batch, make_counts
     from .native import _encode, pack
+
+    template = _maybe_promote_dd(template, single_d, p_nd2_init)
 
     upper = [s.upper() for s in sequences]
     if init == "template":

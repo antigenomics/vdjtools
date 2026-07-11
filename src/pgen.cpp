@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 namespace vdjtools {
 namespace {
@@ -356,7 +357,7 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
     for (int j : mask_or_all(j_idx, m.func_j)) {
         double pj = m.pj[j];
         if (pj == 0.0) continue;
-        double pdg = m.pd_given_j[j * nD + D];
+        double pdg = (D < 0) ? 1.0 : m.pd_given_j[j * nD + D];  // D<0: no D weight (tandem right DP)
         if (pdg == 0.0) continue;
         const auto& gj = m.cut_j[j];
         int Lj = gj.size();
@@ -502,6 +503,129 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
     return total;
 }
 
+// Thread a fixed germline block g[0..ld) starting at CDR3 position `start` forward through the
+// codon-constrained state DP (25 states). Returns false if the codon masks kill all mass.
+inline bool thread_fixed(std::vector<double>& dp, std::vector<double>& ndp,
+                         const int8_t* g, int ld, int start, const uint64_t* allowed) {
+    for (int k = 0; k < ld; ++k) {
+        int mm = start + k, nt = g[k];
+        bool ce = (mm % 3 == 2);
+        uint64_t am = allowed[mm / 3];
+        std::fill(ndp.begin(), ndp.end(), 0.0);
+        bool any = false;
+        for (int s = 0; s < 25; ++s) {
+            double w = dp[s];
+            if (w == 0.0) continue;
+            int p1 = s / 5 - 1, p2 = s % 5 - 1;
+            if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+            ndp[sidx(nt, p1)] += w;
+            any = true;
+        }
+        dp.swap(ndp);
+        if (!any) return false;
+    }
+    return true;
+}
+
+// From a seed state `dp0` at boundary q0, extend forward through an insertion block (pins/R/bias,
+// read 5'->3' like VD), accumulating Pins·bias·markov (codon-constrained) into Mf[q*25+s] for
+// q in [q0, N]. Same recurrence as mk_left_tm's insertion loop but seeded from an arbitrary state.
+void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64_t* allowed,
+                     const std::vector<double>& pins, const std::vector<double>& R,
+                     const std::vector<double>& bias, std::vector<double>& Mf) {
+    if (!pins.empty() && pins[0] != 0.0)
+        for (int s = 0; s < 25; ++s) Mf[q0 * 25 + s] += pins[0] * dp0[s];
+    std::vector<double> cur(dp0), ncur(25);
+    for (int ell = 1; q0 + ell <= N && ell < (int)pins.size(); ++ell) {
+        int mm = q0 + ell - 1;
+        bool ce = (mm % 3 == 2);
+        uint64_t am = allowed[mm / 3];
+        std::fill(ncur.begin(), ncur.end(), 0.0);
+        bool any = false;
+        for (int s = 0; s < 25; ++s) {
+            double w = cur[s];
+            if (w == 0.0) continue;
+            int p1 = s / 5 - 1, p2 = s % 5 - 1;
+            for (int nt = 0; nt < 4; ++nt) {
+                double mult = (ell == 1) ? bias[nt] : R[nt * 4 + p1];
+                if (mult == 0.0) continue;
+                if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+                ncur[sidx(nt, p1)] += w * mult;
+                any = true;
+            }
+        }
+        cur.swap(ncur);
+        if (!any) break;
+        if (pins[ell] != 0.0)
+            for (int s = 0; s < 25; ++s) Mf[(q0 + ell) * 25 + s] += pins[ell] * cur[s];
+    }
+}
+
+// Tandem (n_D=2) aa Pgen middle: V+insVD (Lf, reused) → D1 → insDD (Mf) → D2 → insDJ+J (Rb per J).
+// P(D1|J) couples D1 to J, so J is looped explicitly (few J on the D-bearing loci) and its P(J),
+// P(delJ), insDJ+J go into a D-less right DP; P(D1|J)·P(D2|D1) apply at the D placements. Matches
+// the pure-Python `_dd_aa_middle` reference (which matches Σ nt over synonymous codons) exactly.
+double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
+    int N = 3 * alen, nD = m.nD();
+    std::vector<double> Lf, RbJ, Mf, dp(25), ndp(25);
+    std::vector<char> lf_any, rb_any;
+    mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);  // V + insVD, once
+    int8_t g[128];
+    double total = 0.0;
+    for (int j : mask_or_all(j_idx, m.func_j)) {
+        if (m.pj[j] == 0.0) continue;
+        mk_right_tm(m, allowed, N, /*D=*/-1, /*j_idx=*/j, RbJ, rb_any);  // insDJ + J, P(J)·P(delJ), no D
+        for (int d1 : m.func_d) {
+            double pd1 = m.pd_given_j[j * nD + d1];
+            if (pd1 == 0.0) continue;
+            Mf.assign((N + 1) * 25, 0.0);
+            const auto& cut1 = m.cut_d[d1];
+            int L1 = cut1.size();
+            for (int i5 = 0; i5 <= L1 && i5 < m.nbins_d5; ++i5)
+                for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
+                    int ld1 = L1 - i5 - i3;
+                    if (ld1 < 1) continue;
+                    double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                    if (pdel1 == 0.0) continue;
+                    for (int k = 0; k < ld1; ++k) g[k] = cut1[i5 + k];
+                    for (int pos1 = 1; pos1 + ld1 < N; ++pos1) {  // leave ≥1 nt for D2 after
+                        if (!lf_any[pos1]) continue;
+                        double wgt = pd1 * pdel1;
+                        for (int s = 0; s < 25; ++s) dp[s] = Lf[pos1 * 25 + s] * wgt;
+                        if (!thread_fixed(dp, ndp, g, ld1, pos1, allowed)) continue;
+                        extend_ins_into(dp, pos1 + ld1, N, allowed, m.ins_dd, m.R_dd, m.bias_dd, Mf);
+                    }
+                }
+            for (int d2 : m.func_d) {
+                double pd2 = m.pd2_given_d1[d1 * nD + d2];
+                if (pd2 == 0.0) continue;
+                const auto& cut2 = m.cut_d[d2];
+                int L2 = cut2.size();
+                for (int k5 = 0; k5 <= L2 && k5 < m.nbins_d5; ++k5)
+                    for (int k3 = 0; k3 <= L2 - k5 && k3 < m.nbins_d3; ++k3) {
+                        int ld2 = L2 - k5 - k3;
+                        if (ld2 < 1) continue;
+                        double pdel2 = m.del_d2[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3];
+                        if (pdel2 == 0.0) continue;
+                        for (int k = 0; k < ld2; ++k) g[k] = cut2[k5 + k];
+                        for (int pos2 = 1; pos2 + ld2 <= N; ++pos2) {
+                            int p2 = pos2 + ld2;
+                            if (!rb_any[p2]) continue;
+                            bool anyq = false;
+                            for (int s = 0; s < 25; ++s) if (Mf[pos2 * 25 + s] != 0.0) { anyq = true; break; }
+                            if (!anyq) continue;
+                            double wgt = pd2 * pdel2;
+                            for (int s = 0; s < 25; ++s) dp[s] = Mf[pos2 * 25 + s] * wgt;
+                            if (!thread_fixed(dp, ndp, g, ld2, pos2, allowed)) continue;
+                            total += combine_tm(dp, &RbJ[p2 * 25], p2, allowed);
+                        }
+                    }
+            }
+        }
+    }
+    return total;
+}
+
 // VJ aa Pgen (TRA/TRG/IGK/IGL): no D, one VJ insertion. J plays the role D does in the VDJ split.
 // For each J we build the left DP (V germline + VJ insertion, weighted by P(V)P(J|V)), then thread
 // the fixed J germline suffix over [N-len_j, N) and sum. O(nJ * N * 25) — replaces the old
@@ -553,8 +677,11 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
 
 namespace {
 double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int v_idx, int j_idx) {
-    return m.vdj ? pgen_aa_vdj(m, allowed, L, v_idx, j_idx)
-                 : pgen_aa_vj(m, allowed, L, v_idx, j_idx);
+    if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx);
+    // n_D mixture: P(n_D≤1)·single-D + P(n_D=2)·tandem. Non-D-D models have p_nd1=1, p_nd2=0.
+    double r = m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx);
+    if (m.dd && m.p_nd2 > 0.0) r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, v_idx, j_idx);
+    return r;
 }
 }  // namespace
 
@@ -912,17 +1039,19 @@ Counts make_counts(const PackedModel& m) {
     return c;
 }
 
-double estep_batch(const PackedModel& m,
+namespace {
+// One thread's slice of the read batch → its private accumulator ``acc`` and summed log-Pgen.
+double estep_range(const PackedModel& m,
                    const std::vector<std::vector<int8_t>>& seqs,
                    const std::vector<std::vector<int>>& vmasks,
                    const std::vector<std::vector<int>>& jmasks,
                    const std::vector<std::vector<int>>& dmasks,
-                   Counts& counts) {
+                   size_t lo, size_t hi, Counts& acc) {
     Counts local = make_counts(m);
     bool have_masks = !vmasks.empty();
     std::vector<int> empty;
     double ll = 0.0;
-    for (size_t i = 0; i < seqs.size(); ++i) {
+    for (size_t i = lo; i < hi; ++i) {
         zero(local);
         const std::vector<int>& vm = have_masks ? vmasks[i] : empty;
         const std::vector<int>& jm = have_masks ? jmasks[i] : empty;
@@ -930,9 +1059,45 @@ double estep_batch(const PackedModel& m,
         double total = estep_one(m, seqs[i], vm, jm, dm, local);
         if (total > 0.0) {
             ll += std::log(total);
-            add_scaled(counts, local, 1.0 / total);
+            add_scaled(acc, local, 1.0 / total);
         }
     }
+    return ll;
+}
+constexpr size_t kEstepThreadMin = 64;  // batches smaller than this run single-threaded (stay bitwise-exact)
+}  // namespace
+
+double estep_batch(const PackedModel& m,
+                   const std::vector<std::vector<int8_t>>& seqs,
+                   const std::vector<std::vector<int>>& vmasks,
+                   const std::vector<std::vector<int>>& jmasks,
+                   const std::vector<std::vector<int>>& dmasks,
+                   Counts& counts,
+                   int nthreads) {
+    size_t n = seqs.size();
+    int T = nthreads;
+    if (T <= 0) {
+        unsigned hw = std::thread::hardware_concurrency();
+        T = hw > 3 ? static_cast<int>(hw) - 2 : 1;
+    }
+    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, 0, n, counts);
+    if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
+
+    std::vector<Counts> acc(T);
+    for (int t = 0; t < T; ++t) acc[t] = make_counts(m);
+    std::vector<double> lls(T, 0.0);
+    std::vector<std::thread> pool;
+    size_t chunk = (n + T - 1) / T;
+    for (int t = 0; t < T; ++t) {
+        size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
+        if (lo >= hi) break;
+        pool.emplace_back([&, t, lo, hi] {
+            lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, lo, hi, acc[t]);
+        });
+    }
+    for (auto& th : pool) th.join();
+    double ll = 0.0;  // reduce in fixed thread order → deterministic for a given nthreads
+    for (int t = 0; t < T; ++t) { ll += lls[t]; add_scaled(counts, acc[t], 1.0); }
     return ll;
 }
 

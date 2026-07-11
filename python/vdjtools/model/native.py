@@ -49,8 +49,8 @@ def _del_dense_d_fixed(pdel: dict, idx_of: dict, maxdl: int, maxdr: int, n5: int
 def pack(model: Model):
     """Build (and cache) the native :class:`PackedModel` for ``model``.
 
-    The native **nt** Pgen (:func:`pgen_nt`) and the EM E-step (:func:`~vdjtools.model.infer.infer_native`)
-    support tandem-D (``n_D=2``); the amino-acid Pgen does not yet, so its caller guards separately.
+    The native nt Pgen, aa Pgen (incl. Hamming-1 and v/j-agnostic), and the EM E-step
+    (:func:`~vdjtools.model.infer.infer_native`) all support tandem-D (``n_D=2``).
 
     The cache is keyed by ``id(model)`` but stores the model reference and verifies identity on hit:
     CPython recycles object ids after GC, so a bare-id cache could return a stale :class:`PackedModel`
@@ -152,12 +152,7 @@ def pgen_aa(
     """
     from .._core import pgen_aa as _pgen_aa
     from .._core import pgen_aa_hamming1 as _pgen_aa_h1
-    from .dd import has_tandem
 
-    if has_tandem(model):
-        raise NotImplementedError(
-            "native amino-acid Pgen does not yet sum tandem-D (n_D=2); use native pgen_nt"
-        )
     pm, vi, ji = pack(model)
     vidx = vi.get(v, -1) if v else -1
     jidx = ji.get(j, -1) if j else -1
