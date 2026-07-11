@@ -23,10 +23,21 @@ import polars as pl
 
 _COMP = str.maketrans("ACGT", "TGCA")
 
+# Standard genetic code (DNA codons -> amino acid; '*' = stop).
+_BASES = "TCAG"
+_AA = "FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG"
+_CODON_TABLE = {a + b + c: _AA[i * 16 + j * 4 + k]
+                for i, a in enumerate(_BASES) for j, b in enumerate(_BASES) for k, c in enumerate(_BASES)}
+
 
 def reverse_complement(seq: str) -> str:
     """Reverse complement of a nucleotide string (ACGT)."""
     return seq.translate(_COMP)[::-1]
+
+
+def translate(seq: str) -> str:
+    """Translate a nucleotide string to amino acids (standard code; trailing partial codon dropped)."""
+    return "".join(_CODON_TABLE[seq[i:i + 3]] for i in range(0, len(seq) - len(seq) % 3, 3))
 
 
 def _append_3p_palindrome(seq: str, k: int) -> str:
