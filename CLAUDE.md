@@ -70,21 +70,29 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   invariant); arda is canonical for arda-native models + scenarios + stitching. arda is the `[model]`
   extra (`pip install -e ../arda` for dev). Gap: arda ships no full-length V/J germline (needs a
   helper) — a **P1c/stitching prerequisite**.
-- **TODO aa Pgen** — needs the transfer-matrix codon-marginalizing DP; do it in the native `_core`
-  port (P1f) which serves nt+aa in one DP. Reference: OLGA `generation_probability.py` (spec was
-  extracted; grid is (4,3L), split-point dot product, `Tvd/Svd/Dvd/lTvd/lDvd` insertion matrices).
-- **TODO 1c** `scenario.py` + `stitch.py` — `stitch_contig(V,J,CDR3)` rebuilds full nt reads (OLGA
-  emits only V+J+CDR3); **arda** best alignment → plausible scenario set (slide V3'/J5' window; seed
-  D via `arda.map_d_junction`; emit n_D∈{0,1,2}). Needs the **D-D schema extension**: add `n_d`,
-  `d2_gene`, `d2_del`, `dd_ins`/`dd_dinucl` events (the loader already emits `n_d`=δ(1) for OLGA VDJ).
-  Watch: arda↔OLGA coordinate convention (1-based junction vs 0-based CDR3 grid) — one authoritative
-  converter, fixtures both ways.
-- **TODO 1d** `infer.py`/`validate.py` — EM (E-step soft counts over scenarios; M-step polars
-  group-normalize). Closed-loop oracle: EM must recover OLGA marginals on the synthetic bootstrap.
-- **TODO 1e** `generate.py` — ancestral sampler → polars DataFrame.
-- **TODO 1f** native `_core`: fast transfer-matrix Pgen (nt+aa, +D-D term), sampler, EM E-step;
-  assert C++ == reference-Python == OLGA, benchmark faster than OLGA. `arda` is a hard dep here.
+- **DONE aa Pgen** `model/pgen.py::pgen_aa` — codon-marginalizing left-to-right DP. VJ is fast;
+  VDJ enumerates D placements + a multi-block DP handling the DJ insertion 3'→5' (reference impl:
+  correct but 1–30 s/seq — the prime native-port target). Matches OLGA exactly (VJ 200 seqs; VDJ
+  beta oracle 1.2036e-10 + shorts); `aa == Σ nt over synonymous` (`tests/python/test_pgen_aa.py`).
+  **nt Pgen exactness fix**: V and J must each contribute ≥1 nt (never fully deleted) — OLGA excludes
+  `len==0`; we now match nt+aa to ratio 1.0 (was ≤0.34% high on heavily-deleted seqs).
+- **DONE 1e** `model/generate.py` — ancestral sampler → polars DataFrame; every draw scoreable
+  (functional genes, ≥1 nt V/J); usage/length dists match OLGA (`test_generate.py`).
+- **DONE 1d** `model/infer.py` — EM (E-step scenario soft counts; M-step polars normalize; align-init
+  seeds gene usage). Closed-loop recovery of OLGA marginals (insertion 0.99, dinucl 0.999, Jmarg 0.94,
+  aggP(delV) 0.97, germline-group V 0.93; per-allele V is germline-ambiguity-limited). `test_infer.py`.
+- **DONE 1c** `model/stitch.py` — `stitch_contig(model,v,j,cdr3)` rebuilds full nt reads; `annotate`
+  wraps `arda.annotate_sequences`. arda round-trips stitched synthetic contigs (junction + V/J gene),
+  `test_stitch.py` (slow, needs arda+mmseqs). The plausible scenario *set* is what pgen/EM enumerate
+  for the arda-called (V,J); arda supplies gene identification for real reads.
+- **TODO 1f (native)** port the validated hot loops to `src/` behind `_core` (PackedModel + pgen
+  enumeration/DP, aa VDJ split-DP, sampler, EM E-step); assert C++ == Python == OLGA, benchmark faster
+  than OLGA. This is a **performance** port — all algorithms are done + OLGA-validated in Python.
+- **TODO D-D extension** (not in OLGA bootstrap): add `n_d`∈{0,1,2}, `d2_gene`, `d2_del`,
+  `dd_ins`/`dd_dinucl` events + enumeration; the loader already emits `n_d`=δ(1). Ships with real
+  tandem-D data (owner). arda full-length V/J germline helper needed for arda-native stitching.
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
 `(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group
 to sum to 1 **or 0** (undefined conditional for an unused gene, kept for gene-index alignment).
+Pgen/gen/EM invariant: **V and J each contribute ≥1 nt** to the CDR3 (OLGA-compatible).
