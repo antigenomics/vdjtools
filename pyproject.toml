@@ -47,9 +47,8 @@ Documentation = "https://antigenomics.github.io/vdjtools/"
 wheel.packages = ["python/vdjtools"]
 cmake.build-type = "Release"
 build-dir = "build/{wheel_tag}"
-# Ext is compiled at install time. Flip to true during the C++-heavy Phase 1 for
-# auto-recompile-on-import (that needs build-dir set, above).
-editable.rebuild = false
+# Auto-recompile the C++ ext on import during native-core dev (needs build-dir, above).
+editable.rebuild = true
 # Keep the sdist lean; anchor paths with a leading "/".
 sdist.exclude = ["/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples"]
 

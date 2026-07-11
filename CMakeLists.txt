@@ -18,6 +18,7 @@ option(VDJTOOLS_PYTHON "Build the pybind11 module" OFF)
 # Currently a minimal hot-path primitive (hamming) so the toolchain + seam are testable.
 add_library(vdjtools_core STATIC
   src/core.cpp
+  src/pgen.cpp
 )
 target_include_directories(vdjtools_core PUBLIC include PRIVATE src)
 
