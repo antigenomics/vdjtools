@@ -1,16 +1,21 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_dark.png">
-    <img alt="vdjtools" src="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_light.png" width="440">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/vdjtools_dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/vdjtools_light.svg">
+    <!-- Absolute PNG fallback: PyPI strips <picture>/<source> and cannot render a relative or
+         raw-served SVG, so the logo must be an absolute-URL raster here. GitHub uses the SVG sources. -->
+    <img alt="vdjtools" src="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_dark.png" width="320">
   </picture>
 </p>
+
+<h1 align="center">vdjtools — immune-repertoire analysis</h1>
 
 <p align="center">
   <a href="https://pypi.org/project/vdjtools/"><img alt="PyPI" src="https://img.shields.io/pypi/v/vdjtools"></a>
   <a href="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://antigenomics.github.io/vdjtools/"><img alt="docs" src="https://github.com/antigenomics/vdjtools/actions/workflows/docs.yml/badge.svg"></a>
+  <a href="https://docs.isalgo.dev/vdjtools/"><img alt="docs" src="https://github.com/antigenomics/vdjtools/actions/workflows/docs.yml/badge.svg"></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue">
-  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPLv3-green"></a>
+  <img alt="license" src="https://img.shields.io/badge/license-GPLv3-green">
 </p>
 
 TCR/BCR immune-repertoire analysis — a clean-room **Python + C++** rewrite of the legacy
