@@ -52,8 +52,8 @@ build-dir = "build/{wheel_tag}"
 # Ext is compiled at install time. Flip to true during the C++-heavy Phase 1 for
 # auto-recompile-on-import (that needs build-dir set, above).
 editable.rebuild = false
-# Keep the sdist lean; anchor paths with a leading "/".
-sdist.exclude = ["/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples"]
+# Keep the sdist lean; anchor paths with a leading "/". assets/ holds README logos (not code).
+sdist.exclude = ["/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples", "/assets"]
 
 [tool.scikit-build.cmake.define]
 VDJTOOLS_PYTHON = "ON"

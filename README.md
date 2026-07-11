@@ -1,4 +1,17 @@
-# vdjtools 2.0
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_dark.png">
+    <img alt="vdjtools" src="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_light.png" width="440">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/vdjtools/"><img alt="PyPI" src="https://img.shields.io/pypi/v/vdjtools"></a>
+  <a href="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://antigenomics.github.io/vdjtools/"><img alt="docs" src="https://github.com/antigenomics/vdjtools/actions/workflows/docs.yml/badge.svg"></a>
+  <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue">
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPLv3-green"></a>
+</p>
 
 TCR/BCR immune-repertoire analysis — a clean-room **Python + C++** rewrite of the legacy
 Groovy/Java [vdjtools](https://doi.org/10.1371/journal.pcbi.1004503), standardised on the
@@ -13,6 +26,31 @@ Built on the antigenomics ecosystem:
 > [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch and its
 > releases remain available under the repository tags (`v0.0.1` … `1.2.1`).
 
+## Install
+
+```bash
+pip install vdjtools
+```
+
+Prebuilt wheels ship for CPython 3.10–3.13 on Linux, macOS (Apple Silicon), and Windows; the
+native `_core` C++ extension is bundled (the source distribution compiles it on install). The
+pure-analytics paths (diversity / spectratype / usage / overlap) work out of the box; the model
+and annotation paths additionally pull in [arda](https://github.com/antigenomics/arda) (MMseqs2):
+
+```bash
+pip install "vdjtools[model]"
+```
+
+### Development
+
+```bash
+conda env create -f environment.yml   # python + mmseqs2 (arda backend) + C++ toolchain
+conda activate vdjtools
+pip install -e ".[dev,test]"          # builds the _core C++ extension
+```
+
+Or run the bootstrap script: `bash setup.sh --dev-parents --tests`.
+
 ## Capabilities (rolling out by phase — see [ROADMAP.md](ROADMAP.md))
 
 - **Model** — native V(D)J recombination model: generation probability (Pgen), sequence
@@ -24,19 +62,6 @@ Built on the antigenomics ecosystem:
 - **Preprocess** — downsampling, error-correction, VJ-usage batch-effect correction, pooling/joining.
 - **Biomarker** — incidence-based association (Fisher) vs HLA / condition / chain-pairing; metaclonotypes.
 - **Single-cell** — AIRR Cell / 10x interoperability.
-
-## Install
-
-```bash
-conda env create -f environment.yml   # python + mmseqs2 (arda backend) + C++ toolchain
-conda activate vdjtools
-pip install -e ".[dev,test]"          # builds the _core C++ extension
-```
-
-Or run the bootstrap script: `bash setup.sh --dev-parents --tests`.
-
-Pure-analytics use (diversity / spectratype / usage) does not require MMseqs2; the model and
-annotation paths do (via arda).
 
 ## License
 
