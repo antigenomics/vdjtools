@@ -51,7 +51,15 @@ PYBIND11_MODULE(_core, m) {
         .def_readwrite("R_vj", &PackedModel::R_vj)
         .def_readwrite("bias_vd", &PackedModel::bias_vd)
         .def_readwrite("bias_dj", &PackedModel::bias_dj)
-        .def_readwrite("bias_vj", &PackedModel::bias_vj);
+        .def_readwrite("bias_vj", &PackedModel::bias_vj)
+        .def_readwrite("dd", &PackedModel::dd)
+        .def_readwrite("p_nd1", &PackedModel::p_nd1)
+        .def_readwrite("p_nd2", &PackedModel::p_nd2)
+        .def_readwrite("pd2_given_d1", &PackedModel::pd2_given_d1)
+        .def_readwrite("del_d2", &PackedModel::del_d2)
+        .def_readwrite("ins_dd", &PackedModel::ins_dd)
+        .def_readwrite("R_dd", &PackedModel::R_dd)
+        .def_readwrite("bias_dd", &PackedModel::bias_dd);
 
     m.def("pgen_nt", &vdjtools::pgen_nt, py::arg("model"), py::arg("cdr3"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1,

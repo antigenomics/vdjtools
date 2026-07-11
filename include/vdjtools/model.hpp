@@ -38,6 +38,14 @@ struct PackedModel {
     std::vector<double> R_vd, R_dj, R_vj;        // each length 16
     std::vector<double> bias_vd, bias_dj, bias_vj;  // each length 4
 
+    // D-D (tandem, n_D=2) extension — populated only when `dd` is true (P(n_D=2)>0). D2 draws
+    // from the same D germline (cut_d) as D1, so it reuses nbins_d5/nbins_d3 and maxpal_d5/d3.
+    bool dd = false;
+    double p_nd1 = 1.0, p_nd2 = 0.0;        // P(n_D=1) (0-D folds in via a fully-trimmed D), P(n_D=2)
+    std::vector<double> pd2_given_d1;       // [nD*nD] row-major, P(D2|D1)
+    std::vector<double> del_d2;             // [nD*nbins_d5*nbins_d3], second-D joint 5'/3' deletion
+    std::vector<double> ins_dd, R_dd, bias_dd;  // DD insertion junction (same layout as vd/dj)
+
     int nV() const { return static_cast<int>(cut_v.size()); }
     int nJ() const { return static_cast<int>(cut_j.size()); }
     int nD() const { return static_cast<int>(cut_d.size()); }

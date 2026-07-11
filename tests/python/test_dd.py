@@ -204,10 +204,9 @@ def test_dd_guards_raise_and_single_d_untouched():
     m = from_olga(OLGA / "human_T_delta", locus="TRD")
     m_dd = to_dd(m, p_nd2=0.1)
     s = generate.generate(m, 1, seed=1)["cdr3_nt"][0].upper()
-    # D-D must raise on every not-yet-supported path
+    # aa Pgen, native aa Pgen, generation and EM do not yet support tandems → must raise.
     for fn in (
         lambda: pgen.pgen_aa(pgen.prepare(m_dd), "CAAAF"),
-        lambda: native.pgen_nt(m_dd, s),
         lambda: native.pgen_aa(m_dd, "CAAAF"),
         lambda: generate.generate(m_dd, 1, seed=1),
         lambda: infer.infer(m_dd, [s], max_iter=1),
@@ -215,9 +214,21 @@ def test_dd_guards_raise_and_single_d_untouched():
     ):
         with pytest.raises(NotImplementedError):
             fn()
-    # to_dd(p_nd2=0) is generatively single-D → native must NOT raise and stays byte-identical
+    # native *nt* Pgen DOES support tandems: must not raise, must be nonnegative.
+    assert native.pgen_nt(m_dd, s) >= 0.0
+    # to_dd(p_nd2=0) is generatively single-D → native stays byte-identical to the single-D model.
     m_dd0 = to_dd(m, p_nd2=0.0)
     assert native.pgen_nt(m_dd0, s) == pytest.approx(native.pgen_nt(m, s), rel=1e-12)
+
+
+def test_native_dd_matches_python_reference():
+    """Native tandem-D nt Pgen == the pure-Python reference, exactly (tiny hand-checkable model)."""
+    from vdjtools.model import native
+    for kw in (dict(p_nd2=0.3), dict(p_nd2=0.3, pdel_full_only=False), dict(p_nd2=0.5, dd_ins1=0.5)):
+        m = _tiny_dd_model(**kw)
+        prep = pgen.prepare(m)
+        for s in ("GATATC", "GATC", "GATGATC", "GATGGATC"):
+            assert native.pgen_nt(m, s) == pytest.approx(pgen.pgen_nt(prep, s), rel=1e-12, abs=1e-18)
 
 
 @pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")

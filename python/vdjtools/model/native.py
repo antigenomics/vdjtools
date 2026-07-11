@@ -35,21 +35,23 @@ def _del_dense_d(pdel: dict, idx_of: dict, maxdl: int, maxdr: int) -> tuple[list
     return arr, n5, n3
 
 
+def _del_dense_d_fixed(pdel: dict, idx_of: dict, maxdl: int, maxdr: int, n5: int, n3: int) -> list[float]:
+    """Pack a D-deletion dict into an explicit ``[nD*n5*n3]`` grid (for the second D, which must
+    share the first D's ``nbins`` so the C++ index arithmetic matches)."""
+    arr = [0.0] * (len(idx_of) * n5 * n3)
+    for (d, a, b), p in pdel.items():
+        i5, i3 = a + maxdl, b + maxdr
+        if 0 <= i5 < n5 and 0 <= i3 < n3:
+            arr[(idx_of[d] * n5 + i5) * n3 + i3] = p
+    return arr
+
+
 def pack(model: Model):
     """Build (and cache) the native :class:`PackedModel` for ``model``.
 
-    Raises:
-        NotImplementedError: For a tandem-D model — the native ``_core`` (``PackedModel``, Pgen and
-            the EM E-step) is single-D only; packing would drop the ``d2_gene`` / ``dd`` tables and
-            silently compute a single-D result. Use the pure-Python :func:`vdjtools.model.pgen.pgen_nt`
-            for D-D until the native port lands.
+    The native **nt** Pgen (:func:`pgen_nt`) supports tandem-D (``n_D=2``); the amino-acid Pgen and
+    the EM E-step do not yet, so their callers guard separately.
     """
-    from .dd import has_tandem
-
-    if has_tandem(model):
-        raise NotImplementedError(
-            "native _core does not yet support tandem-D (n_D=2) models; use Python pgen.pgen_nt"
-        )
     key = id(model)
     if key in _pack_cache:
         return _pack_cache[key]
@@ -91,6 +93,16 @@ def pack(model: Model):
         pm.R_dj = prep.R["dj"].reshape(-1).tolist()
         pm.bias_vd = prep.bias["vd"].tolist()
         pm.bias_dj = prep.bias["dj"].tolist()
+        # D-D (tandem) extension — populated only when the model declares it.
+        pm.p_nd1 = float(prep.p_nd.get(0, 0.0) + prep.p_nd.get(1, 0.0))
+        pm.p_nd2 = float(prep.p_nd.get(2, 0.0))
+        pm.dd = bool(prep.p_d2_given_d1)
+        if pm.dd:
+            pm.pd2_given_d1 = [float(prep.p_d2_given_d1.get((d1, d2), 0.0)) for d1 in d_alleles for d2 in d_alleles]
+            pm.del_d2 = _del_dense_d_fixed(prep.p_del_d2, di, prep.maxpal["d_5"], prep.maxpal["d_3"], pm.nbins_d5, pm.nbins_d3)
+            pm.ins_dd = prep.p_ins["dd"].tolist()
+            pm.R_dd = prep.R["dd"].reshape(-1).tolist()
+            pm.bias_dd = prep.bias["dd"].tolist()
     else:
         pm.pjv = [float(prep.p_j.get((v, j), 0.0)) for v in v_alleles for j in j_alleles]
         pm.ins_vj = prep.p_ins["vj"].tolist()
@@ -134,7 +146,12 @@ def pgen_aa(
     """
     from .._core import pgen_aa as _pgen_aa
     from .._core import pgen_aa_hamming1 as _pgen_aa_h1
+    from .dd import has_tandem
 
+    if has_tandem(model):
+        raise NotImplementedError(
+            "native amino-acid Pgen does not yet sum tandem-D (n_D=2); use native pgen_nt"
+        )
     pm, vi, ji = pack(model)
     vidx = vi.get(v, -1) if v else -1
     jidx = ji.get(j, -1) if j else -1

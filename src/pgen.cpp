@@ -99,6 +99,88 @@ double d_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
     return total;
 }
 
+// Sum over the two-D (tandem) scenarios producing `mid` = [insVD] D1 [insDD] D2 [insDJ]. Each D
+// contributes >=1 nt (disjoint n_D=1/n_D=2 partition; mirrors the Python reference _dd_middle).
+// Factorized per D1 into left/right partial sums so it is O(nD^2 L^2 N + nD N^2), not the naive
+// O(nD^2 L^4 N^2): A[e1] = weight of [insVD] D1 ending at position e1; B[s2] = weight of D2
+// starting at s2 then [insDJ] to the end (with P(D2|D1)); the DD insertion couples them in one
+// O(N^2) sweep that accumulates the DD Markov product incrementally.
+double dd_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
+    double total = 0.0;
+    int nD = m.nD();
+    std::vector<double> A(mlen + 1), B(mlen + 1);
+    for (int d1 : m.func_d) {
+        double pd1 = m.pd_given_j[j * nD + d1];
+        if (pd1 == 0.0) continue;
+        const auto& cut1 = m.cut_d[d1];
+        int L1 = cut1.size();
+        // A[e1]: [insVD] D1 with D1 (>=1 nt) ending at e1.
+        A.assign(mlen + 1, 0.0);
+        for (int i5 = 0; i5 <= L1 && i5 < m.nbins_d5; ++i5)
+            for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
+                int ld1 = L1 - i5 - i3;
+                if (ld1 < 1) continue;
+                double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                if (pdel1 == 0.0) continue;
+                for (int pos1 = 0; pos1 + ld1 <= mlen; ++pos1) {
+                    bool ok = true;
+                    for (int k = 0; k < ld1; ++k)
+                        if (cut1[i5 + k] != mid[pos1 + k]) { ok = false; break; }
+                    if (!ok) continue;
+                    double left = p_insert(m.ins_vd, m.R_vd, m.bias_vd, mid, 0, pos1, false);
+                    if (left != 0.0) A[pos1 + ld1] += pd1 * pdel1 * left;
+                }
+            }
+        // B[s2]: D2 (>=1 nt) starting at s2 then [insDJ] to the end, weighted by P(D2|D1).
+        B.assign(mlen + 1, 0.0);
+        for (int d2 : m.func_d) {
+            double pd2 = m.pd2_given_d1[d1 * nD + d2];
+            if (pd2 == 0.0) continue;
+            const auto& cut2 = m.cut_d[d2];
+            int L2 = cut2.size();
+            for (int k5 = 0; k5 <= L2 && k5 < m.nbins_d5; ++k5)
+                for (int k3 = 0; k3 <= L2 - k5 && k3 < m.nbins_d3; ++k3) {
+                    int ld2 = L2 - k5 - k3;
+                    if (ld2 < 1) continue;
+                    double pdel2 = m.del_d2[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3];
+                    if (pdel2 == 0.0) continue;
+                    for (int pos2 = 0; pos2 + ld2 <= mlen; ++pos2) {
+                        bool ok = true;
+                        for (int k = 0; k < ld2; ++k)
+                            if (cut2[k5 + k] != mid[pos2 + k]) { ok = false; break; }
+                        if (!ok) continue;
+                        double right = p_insert(m.ins_dj, m.R_dj, m.bias_dj, mid, pos2 + ld2, mlen, true);
+                        if (right != 0.0) B[pos2] += pd2 * pdel2 * right;
+                    }
+                }
+        }
+        // Combine: sum_{e1 <= s2} A[e1] * P_insDD(mid[e1:s2]) * B[s2].
+        int ddlen = static_cast<int>(m.ins_dd.size());
+        for (int e1 = 0; e1 <= mlen; ++e1) {
+            if (A[e1] == 0.0) continue;
+            double markov = 1.0;  // product of DD transitions over mid[e1+1..s2-1]
+            for (int s2 = e1; s2 <= mlen; ++s2) {
+                int len = s2 - e1;
+                if (len >= ddlen) break;
+                double pins = m.ins_dd[len];
+                if (pins != 0.0 && B[s2] != 0.0) {
+                    double w = (len == 0) ? pins : pins * m.bias_dd[mid[e1]] * markov;
+                    total += A[e1] * w * B[s2];
+                }
+                if (s2 >= e1 + 1) markov *= m.R_dd[mid[s2] * 4 + mid[s2 - 1]];
+            }
+        }
+    }
+    return total;
+}
+
+// P(mid) mixed over the D-count prior: P(n_D=1)*single-D + P(n_D=2)*tandem.
+double vdj_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
+    double t = m.p_nd1 * d_middle(m, j, mid, mlen);
+    if (m.dd && m.p_nd2 > 0.0) t += m.p_nd2 * dd_middle(m, j, mid, mlen);
+    return t;
+}
+
 }  // namespace
 
 double pgen_nt(const PackedModel& m, const std::vector<int8_t>& cdr3, int v_idx, int j_idx) {
@@ -135,7 +217,7 @@ double pgen_nt(const PackedModel& m, const std::vector<int8_t>& cdr3, int v_idx,
                     int midlen = N - vo.len - jo.len;
                     const int8_t* mid = s + vo.len;
                     double inner = m.vdj
-                        ? d_middle(m, jc.j, mid, midlen)
+                        ? vdj_middle(m, jc.j, mid, midlen)
                         : p_insert(m.ins_vj, m.R_vj, m.bias_vj, mid, 0, midlen, false);
                     total += pv * pj * vo.p * jo.p * inner;
                 }
