@@ -97,3 +97,11 @@ def pgen_nt(model: Model, cdr3_nt: str, v: str | None = None, j: str | None = No
     pm, vi, ji = pack(model)
     return _pgen_nt(pm, _encode(cdr3_nt.upper()),
                     vi.get(v, -1) if v else -1, ji.get(j, -1) if j else -1)
+
+
+def pgen_aa(model: Model, cdr3_aa: str, v: str | None = None, j: str | None = None) -> float:
+    """Native amino-acid Pgen — same result as :func:`vdjtools.model.pgen.pgen_aa`, much faster."""
+    from .._core import pgen_aa as _pgen_aa
+
+    pm, vi, ji = pack(model)
+    return _pgen_aa(pm, cdr3_aa.upper(), vi.get(v, -1) if v else -1, ji.get(j, -1) if j else -1)

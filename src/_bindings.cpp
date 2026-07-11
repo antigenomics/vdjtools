@@ -53,4 +53,7 @@ PYBIND11_MODULE(_core, m) {
     m.def("pgen_nt", &vdjtools::pgen_nt, py::arg("model"), py::arg("cdr3"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1,
           "Generation probability of an int-coded nt CDR3; v_idx/j_idx = -1 sums over all genes.");
+    m.def("pgen_aa", &vdjtools::pgen_aa, py::arg("model"), py::arg("aa"),
+          py::arg("v_idx") = -1, py::arg("j_idx") = -1,
+          "Generation probability of an amino-acid CDR3; v_idx/j_idx = -1 sums over all genes.");
 }

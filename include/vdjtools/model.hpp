@@ -48,4 +48,8 @@ struct PackedModel {
 // reference exactly.
 double pgen_nt(const PackedModel& m, const std::vector<int8_t>& cdr3, int v_idx, int j_idx);
 
+// Generation probability of an amino-acid CDR3 (codon-marginalizing DP). ``aa`` is the CDR3
+// amino-acid string; v_idx/j_idx as for ``pgen_nt``.
+double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx);
+
 }  // namespace vdjtools

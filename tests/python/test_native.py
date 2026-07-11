@@ -13,6 +13,7 @@ import pytest
 
 from vdjtools.model import from_olga, native
 from vdjtools.model.generate import generate
+from vdjtools.model.pgen import pgen_aa as py_pgen_aa
 from vdjtools.model.pgen import pgen_nt as py_pgen_nt
 from vdjtools.model.pgen import prepare
 
@@ -43,3 +44,27 @@ def test_native_matches_python(sub, locus):
     # unrestricted (sum over all genes) must also agree
     nt = df["cdr3_nt"][0]
     assert np.isclose(native.pgen_nt(m, nt), py_pgen_nt(prep, nt), rtol=1e-9)
+
+
+def test_native_aa_beta_oracle():
+    m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
+    p = native.pgen_aa(m, "CAWSVAPDRGGYTF", "TRBV30*01", "TRBJ1-2*01")
+    assert np.isclose(p, 1.203646865765782e-10, rtol=1e-6)
+
+
+def test_native_aa_matches_python_vj():
+    m = from_olga(OLGA_MODELS / "human_T_alpha", locus="TRA")
+    prep = prepare(m)
+    for r in generate(m, 6, seed=3, productive_only=True).to_dicts():
+        aa, v, j = r["cdr3_aa"], r["v_call"], r["j_call"]
+        assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6)
+
+
+@pytest.mark.slow
+def test_native_aa_matches_python_vdj():
+    m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
+    prep = prepare(m)
+    # short beta CDR3s (the VDJ aa enumeration is O(D x deletions x positions))
+    for r in sorted(generate(m, 60, seed=3, productive_only=True).to_dicts(), key=lambda r: len(r["cdr3_aa"]))[:3]:
+        aa, v, j = r["cdr3_aa"], r["v_call"], r["j_call"]
+        assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6)
