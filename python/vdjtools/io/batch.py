@@ -71,7 +71,9 @@ def read_metadata(path: str | os.PathLike) -> pl.DataFrame:
     """Read a sample metadata TSV.
 
     The literal string ``"nan"`` (and empty strings) are treated as null. All columns
-    are read as strings so metadata joins are stable.
+    are read as strings so metadata joins are stable. A leading ``#`` on the first
+    column name (some metadata sheets comment out the header line, e.g.
+    ``#file_name\tsample_id\t...``) is stripped.
 
     Args:
         path: Path to a metadata TSV (one row per sample).
@@ -79,8 +81,11 @@ def read_metadata(path: str | os.PathLike) -> pl.DataFrame:
     Returns:
         A ``pl.DataFrame`` of metadata, all-Utf8, with ``"nan"`` → null.
     """
-    return pl.read_csv(Path(path), separator="\t", infer_schema_length=0,
-                       null_values=["nan", "NaN", ""])
+    df = pl.read_csv(Path(path), separator="\t", infer_schema_length=0,
+                     null_values=["nan", "NaN", ""])
+    if df.columns and df.columns[0].startswith("#"):
+        df = df.rename({df.columns[0]: df.columns[0].lstrip("#")})
+    return df
 
 
 def read_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,

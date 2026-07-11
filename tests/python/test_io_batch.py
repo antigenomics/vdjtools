@@ -35,6 +35,16 @@ def test_read_metadata_nan_to_null(tmp_path):
     assert m["fraction"].to_list() == [None, "cd8"]
 
 
+def test_read_metadata_commented_header(tmp_path):
+    # Some metadata sheets comment out the header line (``#file_name\t...``); the
+    # leading ``#`` on the first column name must be stripped.
+    p = tmp_path / "meta.tsv"
+    p.write_text("#file_name\tsample_id\tage\nS1.txt\tS1\t30\nS2.txt\tS2\t70\n")
+    m = vio.read_metadata(p)
+    assert m.columns[0] == "file_name"
+    assert m["sample_id"].to_list() == ["S1", "S2"]
+
+
 def test_read_samples_batch(tmp_path):
     _write_native(tmp_path / "S1.tsv.gz", [(4, "TGT", "CASSL", "TRBV1", ".", "TRBJ1")])
     _write_native(tmp_path / "S2.tsv.gz", [(6, "TGT", "CASSF", "TRBV2", ".", "TRBJ2"),
