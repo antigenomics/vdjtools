@@ -610,9 +610,10 @@ def _batch_items(samples):
         if "sample_id" not in samples.columns:
             raise ValueError(
                 "inext_batch DataFrame input requires a 'sample_id' column")
-        labels = samples["sample_id"].unique(maintain_order=True).to_list()
-        return [(lab, _as_counts(samples.filter(pl.col("sample_id") == lab)))
-                for lab in labels]
+        # One partitioning pass, not one full-frame filter per sample_id — the latter
+        # is O(n_samples x cohort_rows) and blows up on large cohorts.
+        parts = samples.partition_by("sample_id", maintain_order=True)
+        return [(sub["sample_id"][0], _as_counts(sub)) for sub in parts]
     return [(i, _as_counts(s)) for i, s in enumerate(samples)]
 
 
