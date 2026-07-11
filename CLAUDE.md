@@ -85,14 +85,18 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   wraps `arda.annotate_sequences`. arda round-trips stitched synthetic contigs (junction + V/J gene),
   `test_stitch.py` (slow, needs arda+mmseqs). The plausible scenario *set* is what pgen/EM enumerate
   for the arda-called (V,J); arda supplies gene identification for real reads.
-- **TODO 1f (native) — REQUIRED for VDJ, not just nice-to-have.** The **VDJ** paths (aa Pgen and the
-  EM E-step `_accum_vdj`) are ~tens of s/seq in pure Python — the D × delD5 × delD3 × position
-  enumeration × the many V candidates that all share the conserved Cys prefix. VJ is fine (~ms/seq).
-  Port the validated hot loops to `src/` behind `_core` (PackedModel + pgen enumeration/DP, aa VDJ
-  split-DP, sampler, EM E-step); assert C++ == Python == OLGA, benchmark faster than OLGA. Alternative
-  that also fixes VDJ EM speed: **arda-masked E-step** — annotate reads with arda, restrict each read's
-  scenario enumeration to arda's called (V,J,D) instead of enumerating all genes. Algorithms are all
-  done + OLGA-validated in Python; this is the performance layer.
+- **DONE 1f (native `_core`)** — `include/vdjtools/model.hpp` (`PackedModel`, `Counts`) + `src/pgen.cpp`
+  + `python/vdjtools/model/native.py` (`pack`, `pgen_nt`, `pgen_aa`) and `infer.py::infer_native`.
+  `pack` reconstructs the polars model into dense C++ arrays; the hot loops are ported behind the
+  pybind11 `_core` module. Verified exact (`tests/python/test_native.py`): native **nt Pgen** ==
+  Python/OLGA (machine-eps), **89x** faster for VDJ (210→2.4 ms/seq); native **EM E-step** soft counts
+  == Python (4e-16), **~100x** faster (TRA 13→0.1 s/it), VDJ **masked** EM now practical (~12 ms/seq).
+  **arda-masked E-step**: `gene_masks`/`arda_masks` + `infer(masks=)`/`infer_native(masks=)` restrict
+  enumeration to aligned genes (15x in Python; combines with native).
+- **TODO native perf gaps**: (a) **VDJ aa Pgen** — the native port is the *enumeration* (correct, faster
+  than Python) but still slower than OLGA's transfer-matrix; a `Pi_L*Pi_R` split-DP would beat OLGA.
+  (b) native **generation sampler** (Python generation is already fast — low priority). (c) parallelize
+  `estep_batch` over reads (GIL released) for another Nx on multicore.
 - **TODO D-D extension** (not in OLGA bootstrap): add `n_d`∈{0,1,2}, `d2_gene`, `d2_del`,
   `dd_ins`/`dd_dinucl` events + enumeration; the loader already emits `n_d`=δ(1). Ships with real
   tandem-D data (owner). arda full-length V/J germline helper needed for arda-native stitching.
