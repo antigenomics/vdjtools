@@ -211,9 +211,9 @@ def read_airr_cell(path: str | Path) -> pl.DataFrame:
     if CELL_ID not in cols:
         raise ValueError(f"read_airr_cell: {path!r} has no 'cell_id' column")
 
-    def _str(name, *alts) -> pl.Expr:
+    def _str(name, *alts, alias=None) -> pl.Expr:
         src = _pick(cols, name, *alts)
-        return (pl.col(src) if src else pl.lit(None, dtype=pl.Utf8)).alias(name)
+        return (pl.col(src) if src else pl.lit(None, dtype=pl.Utf8)).alias(alias or name)
 
     def _int(name, *alts) -> pl.Expr:
         src = _pick(cols, name, *alts)
@@ -231,7 +231,10 @@ def read_airr_cell(path: str | Path) -> pl.DataFrame:
         _str(SEQUENCE_ID),
         locus_expr.alias(LOCUS),
         _str(V_CALL), _str(D_CALL), _str(J_CALL), _str(C_CALL),
-        _str(CDR3_AA, "junction_aa"), _str(CDR3_NT, "junction"),
+        # Prefer the junction (anchors INCLUDED) over IMGT cdr3_aa/cdr3_nt (excluded),
+        # matching io/read.py and the canonical cdr3_aa=junction convention.
+        _str("junction_aa", CDR3_AA, alias=CDR3_AA),
+        _str("junction", CDR3_NT, alias=CDR3_NT),
         _int(COUNT, "reads"), _int(UMI_COUNT, "umis"),
         _str(CLONE_ID, "raw_clonotype_id", "clonotype_id"),
     )

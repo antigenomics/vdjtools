@@ -1,7 +1,6 @@
 """Clustering-evaluation metric oracle pins (from clustereval's test_scores.py)."""
 from __future__ import annotations
 
-import math
 
 import pytest
 
@@ -82,10 +81,12 @@ def test_assign_singleton_ids():
     assert parsimony(TRUE, pred) == pytest.approx(0.0, abs=1e-12)
 
 
-def test_natural_log_entropy_basis():
-    """Sanity: parsimony denom uses ln N (all-singletons floor is exactly 0)."""
-    # For all-singletons, H(K|C) == ln N - H(C) so parsimony == 0 exactly.
-    n, k = 6, 3
-    h_c = math.log(k)  # three equal classes of 2
-    denom = math.log(n) - h_c
-    assert denom == pytest.approx(math.log(2))
+def test_parsimony_pins_lnN_denominator():
+    """parsimony's denominator is ``ln N - H(C)``: a partial fragmentation yields an
+    independently hand-computed value, so the ln-N basis is pinned through the library
+    (this breaks if the denominator formula drifts)."""
+    true = [1, 1, 2, 2, 3, 3]
+    pred = [10, 10, 20, 20, 30, 40]      # classes 1,2 intact; class 3 split in two
+    # n rows [2],[2],[1,1]: H(C)=ln3, H(K|C)=(1/3)ln2, denom=ln6-ln3=ln2
+    #   -> parsimony = 1 - (1/3 ln2)/ln2 = 2/3
+    assert parsimony(true, pred) == pytest.approx(2.0 / 3.0)

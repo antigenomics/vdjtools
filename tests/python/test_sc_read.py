@@ -129,3 +129,17 @@ def test_read_airr_cell_roundtrip(tmp_path):
     assert back.columns == SC_COLUMNS
     assert back["cell_id"].to_list() == ["bc1"]
     assert back["duplicate_count"].to_list() == [5]
+
+
+def test_read_airr_cell_prefers_junction_over_imgt_cdr3(tmp_path):
+    """When both junction_aa (anchors included) and IMGT cdr3_aa (excluded) are present,
+    the reader takes the junction — the canonical cdr3_aa=junction convention."""
+    tsv = tmp_path / "cells.tsv"
+    pl.DataFrame({
+        "cell_id": ["bc1"], "locus": ["TRB"], "v_call": ["TRBV1"], "j_call": ["TRBJ1"],
+        "junction_aa": ["CASSLGQAYEQYF"], "cdr3_aa": ["ASSLGQAYEQY"],   # 13-mer vs 11-mer
+        "junction": ["TGTGCC"], "cdr3": ["GCC"],
+    }).write_csv(tsv, separator="\t")
+    back = sc.read_airr_cell(tsv)
+    assert back["cdr3_aa"].to_list() == ["CASSLGQAYEQYF"]   # junction, not the IMGT 11-mer
+    assert back["cdr3_nt"].to_list() == ["TGTGCC"]

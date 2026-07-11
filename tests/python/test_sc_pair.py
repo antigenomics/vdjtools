@@ -155,6 +155,62 @@ def test_flag_mispairing_drop_keeps_canonical():
     assert "mispairing_flag" not in kept.columns
 
 
+def test_resolve_drops_second_light_below_min_dup():
+    """Second alpha passing ratio + min-UMI but failing only secondary_min_dup (absolute
+    read floor) is dropped — isolates secondary_min_dup as the deciding condition."""
+    df = _sc([
+        _chain("c1", "a1", "TRA", "CAVA1", dup=20, umi=10),
+        _chain("c1", "a2", "TRA", "CAVA2", dup=4, umi=3),   # 0.2/0.3 ratios ok, umi>=2, dup 4 < 5
+    ])
+    out = sc.resolve_chains(df)
+    assert out.height == 1 and out["sequence_id"].to_list() == ["a1"]
+
+
+def test_resolve_ranks_null_counts_last():
+    """A null-count contig must not outrank a real high-count chain (nulls sort last)."""
+    df = _sc([
+        _chain("c1", "b_real", "TRB", "CASSREAL", dup=500, umi=10),
+        _chain("c1", "b_null", "TRB", "CASSNULL", dup=None, umi=None),
+    ])
+    out = sc.resolve_chains(df)
+    assert out.height == 1 and out["sequence_id"].to_list() == ["b_real"]
+
+
+def test_resolve_and_pair_bcr_igk_igl():
+    """B-cell: IGH is heavy, IGK+IGL are jointly light (dual light kept), and
+    pair_chains routes IGK/IGL to alpha_* and IGH to beta_* for each BCR family."""
+    df = _sc([
+        _chain("b", "h", "IGH", "CARHEAVY", dup=100, umi=10),
+        _chain("b", "k", "IGK", "CQKLIGHT", dup=80, umi=8),
+        _chain("b", "l", "IGL", "CQLLIGHT", dup=60, umi=6),   # clears the joint 2nd-light rule
+    ])
+    resolved = sc.resolve_chains(df)
+    assert set(resolved["locus"]) == {"IGH", "IGK", "IGL"} and resolved.height == 3
+    igk = sc.pair_chains(df, locus_pair="IGH_IGK")
+    assert igk.height == 1
+    assert igk["alpha_cdr3_aa"][0] == "CQKLIGHT" and igk["beta_cdr3_aa"][0] == "CARHEAVY"
+    igl = sc.pair_chains(df, locus_pair="IGH_IGL")
+    assert igl["alpha_cdr3_aa"][0] == "CQLLIGHT" and igl["beta_cdr3_aa"][0] == "CARHEAVY"
+
+
+def test_flag_mispairing_within_cell_dual_alpha_not_flagged():
+    """A cell's legitimate second alpha (with the canonical alpha present in the SAME
+    cell) is NOT flagged — within-cell dual-alpha is biology, not contamination."""
+    dual = {**_pair("c1", "A2", "B1"), "pair_id": "c1_2"}    # c1 also carries canonical A1
+    paired = pl.from_dicts([
+        _pair("c1", "A1", "B1"), dual,                       # cell c1: both A1 and A2 vs B1
+        _pair("c2", "A1", "B1"), _pair("c3", "A1", "B1"),    # A1 is B1's canonical slave
+    ])
+    res = sc.flag_mispairing(paired)
+    assert res["mispairing_flag"].sum() == 0                 # nothing flagged
+    # sanity: the SAME A2 in a cell lacking A1 IS flagged (cross-barcode smear).
+    smear = pl.from_dicts([
+        _pair("c1", "A1", "B1"), _pair("c2", "A1", "B1"), _pair("c4", "A2", "B1"),
+    ])
+    assert sc.flag_mispairing(smear).filter(pl.col("alpha_cdr3_aa") == "A2")[
+        "mispairing_flag"].sum() == 1
+
+
 def test_pair_chains_bad_locus_pair():
     df = _sc([_chain("c1", "b1", "TRB", "CASSB", dup=10, umi=5)])
     with pytest.raises(ValueError):

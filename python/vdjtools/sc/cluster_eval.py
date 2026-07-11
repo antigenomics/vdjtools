@@ -77,23 +77,14 @@ def assign_singleton_ids(pred, *, sentinel=None):
     return out
 
 
-def purity(labels_true, labels_pred) -> float:
-    """Cluster purity: mean over clusters of the dominant true class fraction.
-
-    ``purity = (1/N) · Σ_j max_i n[i, j]`` — 1.0 when every cluster is class-pure.
-    """
-    n = _contingency(labels_true, labels_pred)
+# --------------------------------------------------------------------------- #
+# metric cores — operate on a precomputed contingency matrix ``n``
+# --------------------------------------------------------------------------- #
+def _purity(n: np.ndarray) -> float:
     return float(n.max(axis=0).sum() / n.sum())
 
 
-def normalized_purity(labels_true, labels_pred) -> float:
-    """Purity rescaled against its one-cluster floor ``pmin = max_i n_i. / N``.
-
-    ``(purity - pmin) / (1 - pmin)``; returns 1.0 when ``pmin == 1`` (a single true
-    class). This maps the trivial "everything in one cluster" purity to 0 and the
-    perfect clustering to 1.
-    """
-    n = _contingency(labels_true, labels_pred)
+def _normalized_purity(n: np.ndarray) -> float:
     total = n.sum()
     pur = n.max(axis=0).sum() / total
     pmin = n.sum(axis=1).max() / total
@@ -102,22 +93,11 @@ def normalized_purity(labels_true, labels_pred) -> float:
     return float((pur - pmin) / (1.0 - pmin))
 
 
-def inverse_purity(labels_true, labels_pred) -> float:
-    """Inverse purity: mean over true classes of the dominant cluster fraction.
-
-    ``(1/N) · Σ_i max_j n[i, j]`` — the completeness-flavoured dual of purity.
-    """
-    n = _contingency(labels_true, labels_pred)
+def _inverse_purity(n: np.ndarray) -> float:
     return float(n.max(axis=1).sum() / n.sum())
 
 
-def normalized_inverse_purity(labels_true, labels_pred) -> float:
-    """Inverse purity rescaled against its all-singletons floor.
-
-    ``(inv - imin) / (1 - imin)`` with ``imin = |unique(true)| / N`` (the inverse
-    purity you get when every item is its own cluster); returns 1.0 when ``imin == 1``.
-    """
-    n = _contingency(labels_true, labels_pred)
+def _normalized_inverse_purity(n: np.ndarray) -> float:
     total = n.sum()
     inv = n.max(axis=1).sum() / total
     imin = n.shape[0] / total
@@ -126,13 +106,7 @@ def normalized_inverse_purity(labels_true, labels_pred) -> float:
     return float((inv - imin) / (1.0 - imin))
 
 
-def homogeneity(labels_true, labels_pred) -> float:
-    """Homogeneity: ``1 - H(C|K) / H(C)`` — do clusters contain a single true class?
-
-    Returns 1.0 when ``H(C) == 0`` (a single true class, trivially homogeneous).
-    ``H(C|K) = max(0, H(C,K) - H(K))`` with all entropies in natural logs.
-    """
-    n = _contingency(labels_true, labels_pred)
+def _homogeneity(n: np.ndarray) -> float:
     h_c = _entropy(n.sum(axis=1))
     if h_c <= 0.0:
         return 1.0
@@ -142,21 +116,78 @@ def homogeneity(labels_true, labels_pred) -> float:
     return float(1.0 - h_c_given_k / h_c)
 
 
+def _parsimony(n: np.ndarray) -> float:
+    h_c = _entropy(n.sum(axis=1))
+    denom = np.log(n.sum()) - h_c
+    if denom <= 0.0:
+        return 1.0
+    h_ck = _entropy(n.ravel())
+    h_k_given_c = max(0.0, h_ck - h_c)
+    return float(1.0 - h_k_given_c / denom)
+
+
+def _q_measure(n: np.ndarray, beta: float = 1.0) -> float:
+    h = _homogeneity(n)
+    p = _parsimony(n)
+    if h <= 0.0 or p <= 0.0:
+        return 0.0
+    return float((1.0 + beta) * h * p / (beta * h + p))
+
+
+# --------------------------------------------------------------------------- #
+# public metrics — each builds its own contingency from the label arrays
+# --------------------------------------------------------------------------- #
+def purity(labels_true, labels_pred) -> float:
+    """Cluster purity: mean over clusters of the dominant true class fraction.
+
+    ``purity = (1/N) · Σ_j max_i n[i, j]`` — 1.0 when every cluster is class-pure.
+    """
+    return _purity(_contingency(labels_true, labels_pred))
+
+
+def normalized_purity(labels_true, labels_pred) -> float:
+    """Purity rescaled against its one-cluster floor ``pmin = max_i n_i. / N``.
+
+    ``(purity - pmin) / (1 - pmin)``; returns 1.0 when ``pmin == 1`` (a single true
+    class). This maps the trivial "everything in one cluster" purity to 0 and the
+    perfect clustering to 1.
+    """
+    return _normalized_purity(_contingency(labels_true, labels_pred))
+
+
+def inverse_purity(labels_true, labels_pred) -> float:
+    """Inverse purity: mean over true classes of the dominant cluster fraction.
+
+    ``(1/N) · Σ_i max_j n[i, j]`` — the completeness-flavoured dual of purity.
+    """
+    return _inverse_purity(_contingency(labels_true, labels_pred))
+
+
+def normalized_inverse_purity(labels_true, labels_pred) -> float:
+    """Inverse purity rescaled against its all-singletons floor.
+
+    ``(inv - imin) / (1 - imin)`` with ``imin = |unique(true)| / N`` (the inverse
+    purity you get when every item is its own cluster); returns 1.0 when ``imin == 1``.
+    """
+    return _normalized_inverse_purity(_contingency(labels_true, labels_pred))
+
+
+def homogeneity(labels_true, labels_pred) -> float:
+    """Homogeneity: ``1 - H(C|K) / H(C)`` — do clusters contain a single true class?
+
+    Returns 1.0 when ``H(C) == 0`` (a single true class, trivially homogeneous).
+    ``H(C|K) = max(0, H(C,K) - H(K))`` with all entropies in natural logs.
+    """
+    return _homogeneity(_contingency(labels_true, labels_pred))
+
+
 def parsimony(labels_true, labels_pred) -> float:
     """Parsimony: ``1 - H(K|C) / (ln N - H(C))`` — penalises fragmenting a class.
 
     Returns 1.0 when the denominator ``ln N - H(C)`` is 0. ``H(K|C) = max(0, H(C,K)
     - H(C))``. Falls to 0 when every item is its own cluster (maximal fragmentation).
     """
-    n = _contingency(labels_true, labels_pred)
-    total = n.sum()
-    h_c = _entropy(n.sum(axis=1))
-    denom = np.log(total) - h_c
-    if denom <= 0.0:
-        return 1.0
-    h_ck = _entropy(n.ravel())
-    h_k_given_c = max(0.0, h_ck - h_c)
-    return float(1.0 - h_k_given_c / denom)
+    return _parsimony(_contingency(labels_true, labels_pred))
 
 
 def q_measure(labels_true, labels_pred, beta: float = 1.0) -> float:
@@ -165,11 +196,7 @@ def q_measure(labels_true, labels_pred, beta: float = 1.0) -> float:
     ``(1 + beta) · h · p / (beta · h + p)``; 0 when either ``h`` or ``p`` is ``≤ 0``
     (there is nothing to balance). ``beta`` weights homogeneity relative to parsimony.
     """
-    h = homogeneity(labels_true, labels_pred)
-    p = parsimony(labels_true, labels_pred)
-    if h <= 0.0 or p <= 0.0:
-        return 0.0
-    return float((1.0 + beta) * h * p / (beta * h + p))
+    return _q_measure(_contingency(labels_true, labels_pred), beta=beta)
 
 
 def cluster_eval(labels_true, labels_pred, *, beta: float = 1.0) -> dict:
@@ -190,12 +217,13 @@ def cluster_eval(labels_true, labels_pred, *, beta: float = 1.0) -> dict:
         ImportError: If scikit-learn is not installed (see the ``sc`` extra).
         ValueError: If the label arrays are empty or unequal length.
     """
+    n = _contingency(labels_true, labels_pred)  # built once, shared by every metric
     return {
-        "purity": purity(labels_true, labels_pred),
-        "normalized_purity": normalized_purity(labels_true, labels_pred),
-        "inverse_purity": inverse_purity(labels_true, labels_pred),
-        "normalized_inverse_purity": normalized_inverse_purity(labels_true, labels_pred),
-        "homogeneity": homogeneity(labels_true, labels_pred),
-        "parsimony": parsimony(labels_true, labels_pred),
-        "q_measure": q_measure(labels_true, labels_pred, beta=beta),
+        "purity": _purity(n),
+        "normalized_purity": _normalized_purity(n),
+        "inverse_purity": _inverse_purity(n),
+        "normalized_inverse_purity": _normalized_inverse_purity(n),
+        "homogeneity": _homogeneity(n),
+        "parsimony": _parsimony(n),
+        "q_measure": _q_measure(n, beta=beta),
     }

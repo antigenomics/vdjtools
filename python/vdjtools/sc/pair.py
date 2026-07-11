@@ -34,13 +34,6 @@ LOCUS_PAIR_TO_LOCI: dict[str, tuple[str, str]] = {
     "IGH_IGL": ("IGL", "IGH"),
 }
 
-#: master(heavy) locus -> slave(light) loci, for the mispairing / ambient graph.
-_MASTER_TO_SLAVE: dict[str, tuple[str, ...]] = {
-    "TRB": ("TRA",),
-    "TRD": ("TRG",),
-    "IGH": ("IGK", "IGL"),
-}
-
 #: Rank key: most reads, then most UMIs, then stable sequence_id.
 _SORT = [COUNT, UMI_COUNT, SEQUENCE_ID]
 _DESC = [True, True, False]
@@ -66,7 +59,7 @@ def _keep_light(
     """Keep the top light chain, plus a second only if it clears every threshold."""
     if group.height <= 1:
         return group
-    ranked = group.sort(_SORT, descending=_DESC)
+    ranked = group.sort(_SORT, descending=_DESC, nulls_last=True)
     first, second = ranked.row(0, named=True), ranked.row(1, named=True)
     first_dup = max(1, int(first[COUNT] or 0))
     first_umi = max(1, int(first[UMI_COUNT] or 0))
@@ -116,7 +109,7 @@ def resolve_chains(
     for _, cell in withrole.group_by(CELL_ID, maintain_order=True):
         heavies = cell.filter(pl.col("_role") == "heavy")
         if heavies.height:
-            kept.append(heavies.sort(_SORT, descending=_DESC).head(1))
+            kept.append(heavies.sort(_SORT, descending=_DESC, nulls_last=True).head(1))
         for role in ("light", "b_light"):
             grp = cell.filter(pl.col("_role") == role)
             if grp.height:
@@ -170,8 +163,10 @@ def pair_chains(
     rows: list[dict] = []
     for cell_id, cell in rearr.group_by(CELL_ID, maintain_order=True):
         cid = cell_id[0] if isinstance(cell_id, tuple) else cell_id
-        alphas = cell.filter(pl.col(LOCUS) == light_locus).sort(_SORT, descending=_DESC)
-        betas = cell.filter(pl.col(LOCUS) == heavy_locus).sort(_SORT, descending=_DESC)
+        alphas = cell.filter(pl.col(LOCUS) == light_locus).sort(
+            _SORT, descending=_DESC, nulls_last=True)
+        betas = cell.filter(pl.col(LOCUS) == heavy_locus).sort(
+            _SORT, descending=_DESC, nulls_last=True)
         if alphas.height == 0 or betas.height == 0:
             continue  # incomplete cell: counted in chain_multiplicity, not emitted
         pairs = [(a, b) for b in betas.to_dicts() for a in alphas.to_dicts()]
@@ -300,12 +295,21 @@ def flag_mispairing(
 
     work = work.join(canonical, on="_mkey", how="left").join(degree, on="_mkey", how="left")
 
+    # Within-cell dual-α is legitimate biology (10-30% of T cells carry two productive
+    # TRA), not contamination: if a master's canonical α is ALSO present in this cell,
+    # the cell's other α for that master is a real second chain, not a mispairing. Only
+    # flag a non-canonical α whose cell LACKS the canonical α (a cross-barcode smear).
+    canon_in_cell = (work.group_by("cell_id", "_mkey")
+                     .agg((pl.col("_skey") == pl.col("_canonical_skey")).any()
+                          .alias("_canon_in_cell")))
+    work = work.join(canon_in_cell, on=["cell_id", "_mkey"], how="left")
+
     ambient = (
         (pl.col("_master_degree") > max_slaves_per_master)
         if max_slaves_per_master is not None
         else pl.lit(False)
     )
-    noncanon = pl.col("_skey") != pl.col("_canonical_skey")
+    noncanon = (pl.col("_skey") != pl.col("_canonical_skey")) & ~pl.col("_canon_in_cell")
     work = work.with_columns(
         pl.when(ambient).then(pl.lit("ambient_master"))
         .when(noncanon).then(pl.lit("noncanonical_alpha"))
@@ -314,7 +318,8 @@ def flag_mispairing(
         (pl.col("mispairing_reason") != "ok").alias("mispairing_flag"),
     )
 
-    work = work.drop("_mkey", "_skey", "_support", "_canonical_skey", "_master_degree")
+    work = work.drop("_mkey", "_skey", "_support", "_canonical_skey", "_master_degree",
+                     "_canon_in_cell")
     if drop:
         return work.filter(~pl.col("mispairing_flag")).drop("mispairing_flag", "mispairing_reason")
     return work
