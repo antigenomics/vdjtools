@@ -419,6 +419,16 @@ Chain resolution, alpha/beta pairing and mispairing flags.
    :undoc-members:
    :show-inheritance:
 
+``vdjtools.sc.pgen``
+~~~~~~~~~~~~~~~~~~~~~
+
+Paired-chain generation probability (``Pgen(α)·Pgen(β)``) via the native model.
+
+.. automodule:: vdjtools.sc.pgen
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 ``vdjtools.sc.cluster_eval``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

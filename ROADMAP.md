@@ -165,8 +165,11 @@ AIRR **junction** — so this is a correctness alignment, not just cosmetics.
    and dispatch them. Fixtures copied to `tests/python/fixtures/legacy/`; conformance oracles in
    `test_convert.py` (migmap is already read by `read_vdjtools`). Adaptive→IMGT gene conversion +
    bidirectional `translate()` ported verbatim from `CommonUtil`.
-3. **Paired α/β Pgen** (Phase 7 residual) — single-cell paired-chain generation probability via
-   `vdjmatch.evalue.paired`, wired into `vdjtools.sc`.
+3. **Paired α/β Pgen** (Phase 7 residual) — **DONE**: `vdjtools.sc.paired_pgen` adds
+   `pgen_alpha`/`pgen_beta`/`pgen_paired` (= `Pgen(α)·Pgen(β)`) to a paired-chain frame using the
+   **native model** + bundled per-locus models (no `vdjmatch` dependency — supersedes the
+   `evalue.paired` route). Loci inferred from V-call prefixes; V/J conditioning when the call
+   matches a model allele, else marginalised. `test_sc_pgen.py`.
 
 ### Phase 13 — `feature/model-residuals` — model-engine residuals (the "phase-1 4/5" items)
 
