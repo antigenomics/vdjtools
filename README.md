@@ -78,6 +78,49 @@ pip install "vdjtools[examples]"
 marimo edit notebooks/model_explorer.py
 ```
 
+## Command line
+
+`pip install vdjtools` installs the `vdjtools` command — the model engine (OLGA/IGoR-style) and the
+repertoire analytics (over sample files or a metadata table, like the legacy tool):
+
+```bash
+# recombination model engine — built-in models for all 7 loci (no download)
+vdjtools models                                # list the bundled models
+vdjtools generate -m TRB -n 1000 -o gen.tsv    # sample sequences   (cf. olga-generate_sequences)
+vdjtools pgen seqs.tsv -m TRB -o pgen.tsv      # Pgen per CDR3       (cf. olga-compute_pgen)
+vdjtools pgen seqs.tsv -m TRB --mismatches 1   # + the Hamming-1 ball; --v-col/--j-col to condition
+
+# repertoire analytics — sample files, or a cohort via -m/--metadata + --base-dir
+vdjtools diversity      sampleA.tsv sampleB.tsv -o diversity.tsv
+vdjtools overlap        *.tsv -o overlap.tsv
+vdjtools segment-usage  *.tsv --segment v -o usage.tsv
+vdjtools spectratype    *.tsv -o spectra.tsv
+```
+
+Native vdjtools and AIRR Rearrangement inputs are auto-detected; every command writes TSV to `-o`
+(or stdout, so it pipes). Run `vdjtools <command> --help` for options.
+
+## Performance
+
+The Pgen / generation / EM / diversity hot paths are a native C++ (pybind11) core; everything else is
+polars. Amino-acid Pgen matches OLGA to machine precision (1e-15) across all 7 loci while being
+several times faster, and the built-in models keep the resident set small. Single thread, Apple M3
+(arm64), bundled human TRB model:
+
+| operation | throughput | vs OLGA |
+|---|---|---|
+| nucleotide Pgen (single-D VDJ) | **~0.5 ms/seq** | **9×** |
+| amino-acid Pgen | **~0.6–0.9 ms/seq** | **8.6×** |
+| Pgen + Hamming-1 ball (1 substitution) | **~15 ms/seq** | **8.7×** |
+| sequence generation | **~32 000 seq/s** | — |
+
+Nucleotide Pgen (via the same transfer-matrix DP as the aa path — an in-frame CDR3 is an aa query with
+one codon fixed per position) is exact vs OLGA across all loci; the EM E-step parallelises over reads (~6.7× on 8
+threads); diversity/rarefaction run on a native iNEXT kernel (bootstrap + parallel batch). Memory
+stays light — **~63 MB** resident for `import vdjtools` plus one loaded model, **~123 MB** with all
+seven bundled models resident. Reproduce with `appendix/bench_pgen.py` and the `test_*_benchmark.py`
+suites (`RUN_BENCHMARK=1`).
+
 ## Capabilities (rolling out by phase — see [ROADMAP.md](ROADMAP.md))
 
 - **Model** — native V(D)J recombination model: generation probability (Pgen — nt, aa,
