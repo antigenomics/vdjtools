@@ -161,3 +161,46 @@ def pgen_aa(
     if mismatches == 1:
         return _pgen_aa_h1(pm, cdr3_aa.upper(), vidx, jidx)
     raise ValueError("mismatches must be 0 or 1")
+
+
+def pgen_aa_batch(
+    model: Model,
+    cdr3_aas: list[str],
+    v: list[str | None] | None = None,
+    j: list[str | None] | None = None,
+    mismatches: int = 0,
+    threads: int = 0,
+) -> list[float]:
+    """Batch amino-acid Pgen over many CDR3s, parallelized across sequences in native code.
+
+    Computes the same value as calling :func:`pgen_aa` per sequence, but releases the GIL and
+    partitions the sequences across worker threads — the clean, exact speedup for the real
+    workload (Pgen / 1-mismatch matching over many clonotypes). The result is bitwise-identical
+    to the serial per-sequence computation for any ``threads``.
+
+    Args:
+        model: A recombination :class:`Model`.
+        cdr3_aas: Junction/CDR3 amino-acid sequences.
+        v: Optional per-sequence V alleles to condition on (same length as ``cdr3_aas``); ``None``
+            marginalises over all V for every sequence. Individual entries may be ``None``.
+        j: Optional per-sequence J alleles (as ``v``).
+        mismatches: ``0`` for exact Pgen, ``1`` for the Hamming-1 ball (as :func:`pgen_aa`).
+        threads: Worker threads; ``0`` = auto (``hardware_concurrency - 2``). Batches under 64
+            sequences run single-threaded.
+
+    Returns:
+        Per-sequence Pgen in input order.
+    """
+    if mismatches not in (0, 1):
+        raise ValueError("mismatches must be 0 or 1")
+    from .._core import pgen_aa_batch as _batch
+
+    pm, vi, ji = pack(model)
+    seqs = [s.upper() for s in cdr3_aas]
+    v_idxs = [vi.get(x, -1) if x else -1 for x in v] if v is not None else []
+    j_idxs = [ji.get(x, -1) if x else -1 for x in j] if j is not None else []
+    if v_idxs and len(v_idxs) != len(seqs):
+        raise ValueError("v must have the same length as cdr3_aas")
+    if j_idxs and len(j_idxs) != len(seqs):
+        raise ValueError("j must have the same length as cdr3_aas")
+    return _batch(pm, seqs, v_idxs, j_idxs, mismatches, threads)

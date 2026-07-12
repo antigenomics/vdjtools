@@ -735,6 +735,45 @@ double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, 
     return total - (L - 1) * base;
 }
 
+// Batch aa Pgen over many sequences, parallelized across sequences. Each output is the exact
+// per-sequence pgen_aa (mismatches=0) or pgen_aa_hamming1 (mismatches=1) — the parallelism is
+// embarrassingly disjoint (no shared state, no reduction), so the result is bitwise-identical to
+// the serial computation regardless of thread count. This is the clean exact speedup for the real
+// workload (Pgen/1mm over many clonotypes, e.g. TCRnet / biomarker matching); the packed model is
+// shared read-only across threads. Per-sequence v_idxs/j_idxs (empty → all -1 = gene-agnostic).
+std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::string>& seqs,
+                                  const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
+                                  int mismatches, int nthreads) {
+    size_t n = seqs.size();
+    std::vector<double> out(n, 0.0);
+    auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
+    auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
+    auto one = [&](size_t i) {
+        return mismatches == 1 ? pgen_aa_hamming1(m, seqs[i], vi(i), ji(i))
+                               : pgen_aa(m, seqs[i], vi(i), ji(i));
+    };
+    int T = nthreads;
+    if (T <= 0) {
+        unsigned hw = std::thread::hardware_concurrency();
+        T = hw > 3 ? static_cast<int>(hw) - 2 : 1;
+    }
+    constexpr size_t kBatchThreadMin = 64;  // small batches stay single-threaded (bitwise-exact)
+    if (n < kBatchThreadMin || T <= 1) {
+        for (size_t i = 0; i < n; ++i) out[i] = one(i);
+        return out;
+    }
+    if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
+    std::vector<std::thread> pool;
+    size_t chunk = (n + T - 1) / T;
+    for (int t = 0; t < T; ++t) {
+        size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
+        if (lo >= hi) break;
+        pool.emplace_back([&, lo, hi] { for (size_t i = lo; i < hi; ++i) out[i] = one(i); });
+    }
+    for (auto& th : pool) th.join();
+    return out;
+}
+
 // ---- EM E-step ----------------------------------------------------------------------------
 namespace {
 

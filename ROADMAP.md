@@ -182,12 +182,21 @@ AIRR **junction** — so this is a correctness alignment, not just cosmetics.
    stitch-ready `{(seg, allele): (full_germline, anchor)}` with anchors derived self-consistently
    from the CDR3-region germline (verified: `full_V[anchor:]` == CDR3-region germline for all 895
    functional V / 132 J alleles). arda-native models can now stitch full contigs. `test_full_germline.py`.
-5. **Native perf** — *(deferred to a focused perf session; optimisation of already-exact+fast code,
-   not required for v2.2.0)*: (a) VJ / Hamming-1 codon-boundary sweep to collapse the L+1
-   transfer-matrix passes to ~1 for VJ loci — a delicate `src/pgen.cpp` rewrite that must preserve
-   the exact-Pgen invariant (best done with before/after OLGA-concordance + benchmarks, not rushed);
-   (b) native generation sampler (low priority — Python is already fast). *(`estep_batch`
-   read-parallelization is already done.)*
+5. **Native perf** — **DONE (the exact, safe win):** `native.pgen_aa_batch(model, seqs, v=, j=,
+   mismatches=, threads=)` parallelizes Pgen / Hamming-1-ball across sequences (GIL released, disjoint
+   workers → **bitwise-identical** to the per-sequence calls, thread-count-invariant); **11.3× exact /
+   11.6× 1-mm on 16 cores**. Also releases the GIL on the single `pgen_aa`/`pgen_aa_hamming1` bindings
+   so pure-Python threading works too. `test_native_pgen_batch.py`. This is the real-workload speedup
+   (Pgen over many clonotypes — TCRnet / biomarker matching) and matches the engine ethos ("the clean
+   exact speedup is read-parallelization, not gating").
+   - *Set aside (not rushed):* the literal VJ / Hamming-1 **codon-boundary sweep** (collapse the L+1
+     TM passes to ~1). Analysis of `pgen_aa_vj`: the V/J combine boundary **migrates with the delJ
+     sum**, so a wildcarded codon is left-of-boundary for some delJ and right-of-boundary for others
+     — there is no clean O(1)-per-codon leave-one-out. Forcing it is a high-risk rewrite of
+     numerically-delicate code for a non-bottleneck; batch parallelization delivers the same
+     end-goal (fast large-scale 1-mm Pgen) safely.
+   - *Still low-priority:* (b) native generation sampler — Python is already fast. *(`estep_batch`
+     read-parallelization was already done.)*
 
 ## Design principles
 
