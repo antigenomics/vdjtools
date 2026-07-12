@@ -7,9 +7,9 @@ alongside. Everything downstream (pairing, QC, clustering) consumes that frame; 
 AIRR *Data File* export (:func:`write_airr_cell`) is a secondary interchange layer.
 
 10x CellRanger ``all_contig_annotations.csv`` names the junction column ``cdr3`` (with
-the conserved Cys/Phe-Trp anchors included) — byte-identical to our ``cdr3_aa`` /
+the conserved Cys/Phe-Trp anchors included) — content-identical to our ``junction_aa`` /
 AIRR ``junction_aa`` convention (see ``io.schema``) — and ``cdr3_nt`` for the
-nucleotide junction, so they map straight across.
+nucleotide junction; the reader maps those straight onto ``junction_aa`` / ``junction_nt``.
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ import polars as pl
 
 from ..io.schema import (
     C_CALL,
-    CDR3_AA,
-    CDR3_NT,
+    JUNCTION_AA,
+    JUNCTION_NT,
     COUNT,
     D_CALL,
     J_CALL,
@@ -40,7 +40,7 @@ CLONE_ID = "clone_id"
 SC_COLUMNS: list[str] = [
     CELL_ID, SEQUENCE_ID, LOCUS,
     V_CALL, D_CALL, J_CALL, C_CALL,
-    CDR3_AA, CDR3_NT, COUNT, UMI_COUNT, CLONE_ID,
+    JUNCTION_AA, JUNCTION_NT, COUNT, UMI_COUNT, CLONE_ID,
 ]
 
 _TRUTHY = ("1", "true", "t", "yes", "y")
@@ -98,7 +98,7 @@ def read_10x(
 
     Returns:
         A ``pl.DataFrame`` with columns ``cell_id, sequence_id, locus, v_call, d_call,
-        j_call, c_call, cdr3_aa, cdr3_nt, duplicate_count, umi_count, clone_id`` — one
+        j_call, c_call, junction_aa, junction_nt, duplicate_count, umi_count, clone_id`` — one
         row per surviving productive contig.
 
     Raises:
@@ -147,8 +147,8 @@ def read_10x(
         _seg(d_col).alias(D_CALL),
         _seg(j_col).alias(J_CALL),
         _seg(c_col).alias(C_CALL),
-        pl.col("cdr3").alias(CDR3_AA),
-        (pl.col("cdr3_nt") if "cdr3_nt" in cols else pl.lit(None, dtype=pl.Utf8)).alias(CDR3_NT),
+        pl.col("cdr3").alias(JUNCTION_AA),
+        (pl.col("cdr3_nt") if "cdr3_nt" in cols else pl.lit(None, dtype=pl.Utf8)).alias(JUNCTION_NT),
         _count(reads_col).alias(COUNT),
         _count(umis_col).alias(UMI_COUNT),
         (pl.col(clone_col) if clone_col else pl.lit(None, dtype=pl.Utf8)).alias(CLONE_ID),
@@ -200,7 +200,7 @@ def read_airr_cell(path: str | Path) -> pl.DataFrame:
     Returns:
         A ``pl.DataFrame`` in the canonical sc long-frame layout (:data:`SC_COLUMNS`);
         columns absent from the file are filled with nulls. ``junction_aa`` /
-        ``junction`` are accepted as sources for ``cdr3_aa`` / ``cdr3_nt``.
+        ``junction`` are accepted as sources for ``junction_aa`` / ``junction_nt``.
 
     Raises:
         ValueError: If the file has no ``cell_id`` column.
@@ -232,9 +232,9 @@ def read_airr_cell(path: str | Path) -> pl.DataFrame:
         locus_expr.alias(LOCUS),
         _str(V_CALL), _str(D_CALL), _str(J_CALL), _str(C_CALL),
         # Prefer the junction (anchors INCLUDED) over IMGT cdr3_aa/cdr3_nt (excluded),
-        # matching io/read.py and the canonical cdr3_aa=junction convention.
-        _str("junction_aa", CDR3_AA, alias=CDR3_AA),
-        _str("junction", CDR3_NT, alias=CDR3_NT),
+        # matching io/read.py and the canonical junction_aa=junction convention.
+        _str("junction_aa", "cdr3_aa", alias=JUNCTION_AA),
+        _str("junction_nt", "junction", "cdr3_nt", "cdr3", alias=JUNCTION_NT),
         _int(COUNT, "reads"), _int(UMI_COUNT, "umis"),
         _str(CLONE_ID, "raw_clonotype_id", "clonotype_id"),
     )
@@ -264,7 +264,7 @@ def write_airr_cell(
     .. note::
         The AIRR spec's ``receptor_variable_domain_{1,2}_aa`` is the **full mature
         V-domain** amino-acid sequence. 10x contigs only expose the junction, so this
-        field is populated with the **junction** (``cdr3_aa``) and that limitation is
+        field is populated with the **junction** (``junction_aa``) and that limitation is
         recorded in the file's ``Info`` block. Downstream code should treat these as
         junction-level, not full-domain, sequences.
 
@@ -304,8 +304,8 @@ def write_airr_cell(
             lights = [c for c in contigs if (c.get(LOCUS) or "") not in heavy]
             for h in heavies:
                 for lt in lights:
-                    dom1 = h.get(CDR3_AA) or ""
-                    dom2 = lt.get(CDR3_AA) or ""
+                    dom1 = h.get(JUNCTION_AA) or ""
+                    dom2 = lt.get(JUNCTION_AA) or ""
                     rid = f"{cid}:{h.get(SEQUENCE_ID)}:{lt.get(SEQUENCE_ID)}"
                     receptor_ids.append(rid)
                     rtype = "TCR" if (h.get(LOCUS) or "").startswith("TR") else "BCR"

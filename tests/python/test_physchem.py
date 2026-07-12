@@ -11,7 +11,7 @@ def _frame(cdr3, counts=None, v=None, j=None):
     n = len(cdr3)
     df = pl.DataFrame({
         S.V_CALL: v or ["TRBV1"] * n, S.J_CALL: j or ["TRBJ1"] * n,
-        S.CDR3_AA: cdr3, S.COUNT: counts or [1] * n,
+        S.JUNCTION_AA: cdr3, S.COUNT: counts or [1] * n,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 

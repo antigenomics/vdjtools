@@ -15,7 +15,7 @@ from __future__ import annotations
 import polars as pl
 
 from ..io.schema import (
-    CDR3_AA,
+    JUNCTION_AA,
     COUNT,
     D_CALL,
     FREQ,
@@ -35,13 +35,13 @@ def filter_functional(df: pl.DataFrame, keep: str = "coding") -> pl.DataFrame:
     """Keep only coding (or only non-coding) clonotypes.
 
     A clonotype is *coding* when it is in-frame **and** has no stop codon, derived
-    from ``cdr3_aa``: legacy ``isCoding() = isInFrame() && isNoStop()``, where
+    from ``junction_aa``: legacy ``isCoding() = isInFrame() && isNoStop()``, where
     ``isNoStop`` means no ``*`` and ``isInFrame`` means no out-of-frame marker
-    (``[atgc#~_?]``) in the amino-acid string. A null ``cdr3_aa`` is treated as
+    (``[atgc#~_?]``) in the amino-acid string. A null ``junction_aa`` is treated as
     non-coding.
 
     Args:
-        df: A clonotype frame with a ``cdr3_aa`` column.
+        df: A clonotype frame with a ``junction_aa`` column.
         keep: ``"coding"`` (default) keeps coding clonotypes; ``"noncoding"`` keeps
             the complement.
 
@@ -53,7 +53,7 @@ def filter_functional(df: pl.DataFrame, keep: str = "coding") -> pl.DataFrame:
     """
     if keep not in ("coding", "noncoding"):
         raise ValueError(f"keep must be 'coding' or 'noncoding'; got {keep!r}")
-    is_coding = pl.col(CDR3_AA).is_not_null() & ~pl.col(CDR3_AA).str.contains(_NONCODING_CHARS)
+    is_coding = pl.col(JUNCTION_AA).is_not_null() & ~pl.col(JUNCTION_AA).str.contains(_NONCODING_CHARS)
     out = df.filter(is_coding if keep == "coding" else ~is_coding)
     return recompute_frequency(out)
 
@@ -138,7 +138,7 @@ def filter_segment(df: pl.DataFrame, v: list[str] | None = None,
 
 
 def filter_by_sample(df: pl.DataFrame, other: pl.DataFrame, keep: bool = True,
-                     key: "tuple[str, ...]" = (CDR3_AA, V_CALL, J_CALL)) -> pl.DataFrame:
+                     key: "tuple[str, ...]" = (JUNCTION_AA, V_CALL, J_CALL)) -> pl.DataFrame:
     """Keep or remove clonotypes by exact-key presence in another sample.
 
     Reimplements ``ApplySampleAsFilter`` / ``IntersectionClonotypeFilter``: build
@@ -152,7 +152,7 @@ def filter_by_sample(df: pl.DataFrame, other: pl.DataFrame, keep: bool = True,
         keep: If ``True`` (default) keep clonotypes present in ``other``; if
             ``False`` remove them (legacy ``--negative``).
         key: Columns forming the match key (default
-            ``("cdr3_aa", "v_call", "j_call")`` — legacy "strict"-style at the aa
+            ``("junction_aa", "v_call", "j_call")`` — legacy "strict"-style at the aa
             level).
 
     Returns:

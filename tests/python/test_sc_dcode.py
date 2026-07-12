@@ -131,11 +131,11 @@ def test_dcode_tcrnet_clustering_purity(hf, capsys):
             .sort(_SORT, descending=_DESC)
             .group_by("cell_id", maintain_order=True).first())
     cell_beta = (beta.join(labels, left_on="cell_id", right_on="barcode", how="left")
-                 .filter(pl.col("antigen").is_in(EPITOPES) & pl.col("cdr3_aa").is_not_null()))
+                 .filter(pl.col("antigen").is_in(EPITOPES) & pl.col("junction_aa").is_not_null()))
     assert cell_beta.height > 500  # enough cells to be meaningful
 
     labels_true = cell_beta["antigen"].to_list()
-    labels_pred = _components(cell_beta["cdr3_aa"].to_list())
+    labels_pred = _components(cell_beta["junction_aa"].to_list())
 
     real = cluster_eval(labels_true, labels_pred)
     shuffled = labels_true[:]

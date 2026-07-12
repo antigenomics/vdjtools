@@ -22,7 +22,7 @@ def _sc(rows):
 
 
 def _chain(cell, seq, locus, cdr3, dup, umi, v=None, j=None):
-    return dict(cell_id=cell, sequence_id=seq, locus=locus, cdr3_aa=cdr3,
+    return dict(cell_id=cell, sequence_id=seq, locus=locus, junction_aa=cdr3,
                 duplicate_count=dup, umi_count=umi,
                 v_call=v or f"{locus}V1", j_call=j or f"{locus}J1")
 
@@ -81,8 +81,8 @@ def test_pair_chains_cartesian_two_alpha():
     paired = sc.pair_chains(df)
     assert paired.height == 2
     assert paired["pair_id"].to_list() == ["c1_1", "c1_2"]
-    assert set(paired["alpha_cdr3_aa"]) == {"CAVA1", "CAVA2"}
-    assert set(paired["beta_cdr3_aa"]) == {"CASSB"}
+    assert set(paired["alpha_junction_aa"]) == {"CAVA1", "CAVA2"}
+    assert set(paired["beta_junction_aa"]) == {"CASSB"}
 
 
 def test_pair_chains_incomplete_not_emitted():
@@ -112,9 +112,9 @@ def test_chain_multiplicity_quadrants():
 
 def _pair(cell, av, bv, adup=10, aumi=5):
     return dict(cell_id=cell, pair_id=cell,
-                alpha_v_call="TRAV1", alpha_j_call="TRAJ1", alpha_cdr3_aa=av,
+                alpha_v_call="TRAV1", alpha_j_call="TRAJ1", alpha_junction_aa=av,
                 alpha_umi_count=aumi, alpha_duplicate_count=adup,
-                beta_v_call="TRBV1", beta_j_call="TRBJ1", beta_cdr3_aa=bv,
+                beta_v_call="TRBV1", beta_j_call="TRBJ1", beta_junction_aa=bv,
                 beta_umi_count=5, beta_duplicate_count=10)
 
 
@@ -127,10 +127,10 @@ def test_flag_mispairing_noncanonical_alpha():
     res = sc.flag_mispairing(paired)
     assert res["mispairing_flag"].sum() == 2
     flagged = res.filter(pl.col("mispairing_flag"))
-    assert set(flagged["alpha_cdr3_aa"]) == {"A2", "A3"}
+    assert set(flagged["alpha_junction_aa"]) == {"A2", "A3"}
     assert set(flagged["mispairing_reason"]) == {"noncanonical_alpha"}
     # canonical (majority) alpha is not flagged.
-    assert res.filter(pl.col("alpha_cdr3_aa") == "A1")["mispairing_flag"].sum() == 0
+    assert res.filter(pl.col("alpha_junction_aa") == "A1")["mispairing_flag"].sum() == 0
 
 
 def test_flag_mispairing_ambient_master():
@@ -151,7 +151,7 @@ def test_flag_mispairing_drop_keeps_canonical():
     ])
     kept = sc.flag_mispairing(paired, drop=True)
     assert kept.height == 3
-    assert set(kept["alpha_cdr3_aa"]) == {"A1"}
+    assert set(kept["alpha_junction_aa"]) == {"A1"}
     assert "mispairing_flag" not in kept.columns
 
 
@@ -188,9 +188,9 @@ def test_resolve_and_pair_bcr_igk_igl():
     assert set(resolved["locus"]) == {"IGH", "IGK", "IGL"} and resolved.height == 3
     igk = sc.pair_chains(df, locus_pair="IGH_IGK")
     assert igk.height == 1
-    assert igk["alpha_cdr3_aa"][0] == "CQKLIGHT" and igk["beta_cdr3_aa"][0] == "CARHEAVY"
+    assert igk["alpha_junction_aa"][0] == "CQKLIGHT" and igk["beta_junction_aa"][0] == "CARHEAVY"
     igl = sc.pair_chains(df, locus_pair="IGH_IGL")
-    assert igl["alpha_cdr3_aa"][0] == "CQLLIGHT" and igl["beta_cdr3_aa"][0] == "CARHEAVY"
+    assert igl["alpha_junction_aa"][0] == "CQLLIGHT" and igl["beta_junction_aa"][0] == "CARHEAVY"
 
 
 def test_flag_mispairing_within_cell_dual_alpha_not_flagged():
@@ -207,7 +207,7 @@ def test_flag_mispairing_within_cell_dual_alpha_not_flagged():
     smear = pl.from_dicts([
         _pair("c1", "A1", "B1"), _pair("c2", "A1", "B1"), _pair("c4", "A2", "B1"),
     ])
-    assert sc.flag_mispairing(smear).filter(pl.col("alpha_cdr3_aa") == "A2")[
+    assert sc.flag_mispairing(smear).filter(pl.col("alpha_junction_aa") == "A2")[
         "mispairing_flag"].sum() == 1
 
 

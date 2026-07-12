@@ -132,7 +132,13 @@ no near-germline member was sampled; indel-bearing SHM (not just substitutions).
 
 ### Phase 11 — `feature/airr-junction` — AIRR field-name consistency
 
-**Status: `v2.2.0` (next minor), item 1 of 3.**
+**Status: DONE (`v2.2.0`, item 1 of 3).** Canonical columns renamed `cdr3_aa`/`cdr3_nt` →
+`junction_aa`/`junction_nt` across schema/io/model/stats/features/overlap/preprocess/biomarker/sc/cli
++ tests + docstrings (paired sc cols → `alpha_junction_aa`/`beta_junction_aa`). **Decision locked**:
+owner's `junction_nt`/`junction_aa` internally + on output; readers stay liberal, accepting strict-AIRR
+`junction`, legacy `cdr3_nt`/`cdr3_aa` (compat shim), IMGT `cdr3`, native `cdr3nt`/`cdr3aa`, and 10x
+fields as input aliases. Sequence-arg params in `model.pgen`/`native`/`stitch` intentionally unchanged
+(they name a sequence, not a column). 315 tests green; adversarial diff review clean.
 
 Rename the legacy vdjtools clonotype columns `cdr3nt` / `cdr3aa` → **`junction_nt` / `junction_aa`**
 throughout (schema, IO, model, stats, features, overlap, preprocess, biomarker, sc, cli, tests,

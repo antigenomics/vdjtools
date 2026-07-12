@@ -84,6 +84,6 @@ def test_control_native_schema_capped(hf):
     assert df.height == 50_000
     for col, dtype in S.SCHEMA.items():
         assert col in df.columns and df[col].dtype == dtype
-    assert df[S.CDR3_AA].null_count() == 0
+    assert df[S.JUNCTION_AA].null_count() == 0
     assert df[S.COUNT].min() >= 1
     assert df[S.LOCUS].str.starts_with("TR").all() or df[S.LOCUS].str.starts_with("IG").all()

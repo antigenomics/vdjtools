@@ -9,10 +9,10 @@ from __future__ import annotations
 import numpy as np
 import polars as pl
 
-from ..io.schema import CDR3_AA, COUNT, J_CALL, V_CALL
+from ..io.schema import JUNCTION_AA, COUNT, J_CALL, V_CALL
 
 #: Default exact match key (legacy "Strict" overlap: CDR3 aa + V + J).
-DEFAULT_KEY = (CDR3_AA, V_CALL, J_CALL)
+DEFAULT_KEY = (JUNCTION_AA, V_CALL, J_CALL)
 
 
 def _aggregate(df: pl.DataFrame, key: list[str]) -> pl.DataFrame:
@@ -45,8 +45,8 @@ def overlap_pair(a: pl.DataFrame, b: pl.DataFrame,
         a: First clonotype frame.
         b: Second clonotype frame.
         key: Columns forming the exact match key (default
-            ``("cdr3_aa", "v_call", "j_call")``; use ``("cdr3_aa",)`` for CDR3-only
-            or add ``"cdr3_nt"`` for nucleotide-level matching).
+            ``("junction_aa", "v_call", "j_call")``; use ``("junction_aa",)`` for CDR3-only
+            or add ``"junction_nt"`` for nucleotide-level matching).
 
     Returns:
         A tuple ``(shared, metrics)`` where ``shared`` is a ``pl.DataFrame`` of the
