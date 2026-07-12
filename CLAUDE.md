@@ -93,7 +93,9 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   + `python/vdjtools/model/native.py` (`pack`, `pgen_nt`, `pgen_aa`) and `infer.py::infer_native`.
   `pack` reconstructs the polars model into dense C++ arrays; the hot loops are ported behind the
   pybind11 `_core` module. Verified exact (`tests/python/test_native.py`): native **nt Pgen** ==
-  Python/OLGA (machine-eps), **89x** faster for VDJ (210→2.4 ms/seq); native **EM E-step** soft counts
+  Python/OLGA (machine-eps) — VDJ nt was originally a per-scenario D enumeration (~28 ms/seq TRB, i.e.
+  ~6× *slower* than OLGA; a docs figure once wrongly claimed 2.4 ms/89×) and is now routed through the
+  aa transfer matrix — see the nt-TM bullet below; native **EM E-step** soft counts
   == Python (4e-16), **~100x** faster (TRA 13→0.1 s/it), VDJ **masked** EM now practical (~12 ms/seq).
   **arda-masked E-step**: `gene_masks`/`arda_masks` + `infer(masks=)`/`infer_native(masks=)` restrict
   enumeration to aligned genes (15x in Python; combines with native).
@@ -109,6 +111,19 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   sums the Hamming-1 ball via OLGA's inclusion-exclusion identity `Σ_k Pgen(a_{k→*}) − (L−1)Pgen(a)`
   but each term is one fast TM pass. Matches `compute_hamming_dist_1_pgen` to ~1e-15; **8.7x** faster on
   TRB, **2.5x** on TRA (`test_native_aa_hamming1_matches_olga`). Documented in `murugan_model.tex` §M.6.
+- **DONE 1i (native nt Pgen via the aa transfer matrix — single-D *and* D-D)** `src/pgen.cpp::pgen_nt`
+  — an in-frame nt CDR3 (length always ×3, Cys→Phe/Trp) is exactly an aa query with a **singleton
+  allowed-codon mask** per position, so the same `pgen_aa_masked` Pi_L·Pi_R DP gives the identical value
+  far faster than the per-`(V,J,delV,delJ)` D enumeration it used before. `pgen_aa_masked` mixes the
+  D-count prior itself (`p_nd1`·single-D + `p_nd2`·`pgen_aa_vdj_dd`), so **both single-D and D-D nt route
+  through the TM**. Gated only on `m.vdj && N%3==0`; the enumeration (`pgen_nt` outer loop → `d_middle`/
+  `dd_middle`) is retained solely for non-in-frame nt (`N%3≠0`, never a real CDR3) and as the oracle.
+  Speed: single-D VDJ nt **0.53 ms/seq TRB** (was ~28 ms → **53×**, **9×** faster than OLGA's 4.8 ms);
+  D-D nt **~15 ms/seq TRD** (was ~350 ms via `dd_middle` → **24×**). Exact vs OLGA on all 7 loci
+  (`test_native.py::test_native_matches_python` rtol 1e-9; slow exhaustive + `appendix/concordance.py`
+  nt r(log10)=1.0) and vs the D-D enumeration/`_dd_middle` reference (real TRD max-rel 3.8e-15;
+  `test_dd.py::test_aa_dd_equals_nt_sum` now pins native D-D nt per synonymous codon incl. tandem-only
+  `CHHF`). NB: the earlier "89× / 2.4 ms" nt figure was never real — see the 1f note.
 - **TODO native perf gaps**: (a) **VJ / Hamming-1 codon-boundary sweep** — the 1-mm ball does L+1 TM
   passes; a forward/backward codon-boundary sweep would collapse them to ~1 pass for VJ loci (VDJ's
   D-placement sum couples positions, so L+1 is retained there). (b) native **generation sampler** (Python
@@ -137,6 +152,8 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   DD-insertion sweep (O(nD²L²N + nD·N²), not naive O(nD²L⁴N²)). Exact vs Python reference on the tiny
   model; ~255 ms/seq on real TRD (naive was seconds/seq → timed out). `native.pgen_nt` supports tandems
   (`pack` no longer guards); OLGA cannot compute D-D Pgen at all. `test_native_dd_matches_python_reference`.
+  **Superseded for in-frame nt by the aa transfer matrix (1i, ~15 ms/seq, 24×)** — `dd_middle` now runs
+  only for non-in-frame nt and as the correctness oracle; it stays exact and is the reference the TM checks against.
 - **DONE real-data EM comparison** `appendix/bench_em.py` — `infer_native` on real nonfunc TRB+TRD reads
   (single-D, arda-masked) vs legacy OLGA via `analyze`. Finding: **real repertoires have broader
   trim/insertion entropy than OLGA's synthetic model** (TRB d_del 6.4→7.6 bit, vd_ins 3.8→4.5); within-D
@@ -182,6 +199,17 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   all 7 loci: **r(log10 Pgen)=1.00000 everywhere**, max-rel ~1e-14–1e-16 (aa==Σnt confirmed). The two
   larger outliers (TRG nt 1.6e-2, TRD nt 5.7e-4) are deep-tail sequences (Pgen ~1e-28) where FP
   summation order dominates — absolute agreement ~1e-30; `test_pgen_nt` proves exactness on all 7 loci.
+- **DONE bundled models + loader** `model/bundled.py` (`load_bundled(locus, source)`, `list_bundled`) —
+  ship all 7 loci × {`olga`, `learned`} in the wheel (`model/_bundled/`, ~1 MB; scikit-build-core packs
+  them automatically). `learned` = native EM on real HF out-of-frame reads (`appendix/build_bundled_models.py`,
+  2k clonotypes/locus, held-out LL improves on every locus).
+- **DONE arda-anchored D-D learning** — unregularized D-D EM over-attributes tandems on real data
+  (identifiability; TRB→0.28). Two regularizers, both native==Python exact: **`dd_allowed`** per-read gate
+  (a read may be n_D=2 only where arda called a `d2_call`) and **`nd_prior`** Dirichlet single-D pseudocount.
+  `infer/infer_native(..., dd_allowed=, nd_prior=)`; native `estep_batch(..., dd_allowed)`. Anchored learned
+  D-loci: TRB **0.000**, TRD **0.006**, IGH **0.009** (plausible; arda hard-call ~4%). `test_dd_anchor_and_prior…`.
+- **DONE marimo explorer** `notebooks/model_explorer.py` — reactive Bayes-net/entropy/MI/marginal explorer
+  over any bundled model (OLGA vs learned); `[examples]` extra. README/docs/SOURCES updated.
 - **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual).
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row

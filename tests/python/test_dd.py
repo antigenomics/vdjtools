@@ -201,6 +201,31 @@ def test_native_dd_em_recovers_p_nd2():
     assert nd[2] == pytest.approx(0.35, abs=0.05)
 
 
+def test_dd_anchor_and_prior_regularize_and_match():
+    """The per-read D-D gate (``dd_allowed``) and the ``nd_prior`` Dirichlet pseudocount both pull the
+    learned ``P(n_D=2)`` below the unregularized value, and native == Python for each."""
+    from vdjtools.model import generate
+    from vdjtools.model.infer import infer, infer_native
+    pytest.importorskip("vdjtools._core")
+    reads = [r.upper() for r in generate.generate(_tiny_dd_model(p_nd2=0.35, pdel_full_only=False),
+                                                  1200, seed=11)["cdr3_nt"].to_list()]
+    gate = [i % 2 == 0 for i in range(len(reads))]  # allow D-D on half the reads
+
+    def p2(model_and_report):
+        m = model_and_report[0]
+        return dict(zip(m.tables["n_d"]["n_d"].to_list(), m.tables["n_d"]["p"].to_list()))[2]
+
+    def seed():
+        return _tiny_dd_model(p_nd2=0.15, pdel_full_only=False)
+
+    base = p2(infer_native(seed(), reads, max_iter=20, init="template"))
+    for kw in ({"dd_allowed": gate}, {"nd_prior": 200.0}):
+        py = p2(infer(seed(), reads, max_iter=20, init="template", **kw))
+        nat = p2(infer_native(seed(), reads, max_iter=20, init="template", **kw))
+        assert nat == pytest.approx(py, abs=1e-4)  # native E-step == Python reference
+        assert nat < base - 0.02                    # regularizer lowered the tandem estimate
+
+
 def _tiny_aligned_dd_model(p_nd2=0.6) -> Model:
     """Codon-aligned tiny D-D model (V=TGT=Cys, D=CA, J=TTT=Phe) with nonzero VD/DD/DJ insertions
     (len 0/1/2) and a non-uniform DD dinucleotide, so an aa CDR3 can require a real insDD block."""
@@ -243,7 +268,10 @@ def _tiny_aligned_dd_model(p_nd2=0.6) -> Model:
 def test_aa_dd_equals_nt_sum():
     """aa D-D Pgen (Python and native) == Σ nt-Pgen over synonymous codons, on a codon-aligned model.
 
-    ``CHHF`` is tandem-only (single D can't tile it); ``CHIF`` requires a real DD insertion.
+    Also pins native nt D-D Pgen: ``native.pgen_nt`` routes an in-frame CDR3 through the aa transfer
+    matrix (singleton codon masks, incl. the ``p_nd2`` tandem term) and must equal the Python
+    ``_dd_middle`` enumeration per nt. ``CHHF`` is tandem-only (single D can't tile it); ``CHIF``
+    requires a real DD insertion.
     """
     import itertools
     from collections import defaultdict
@@ -258,7 +286,12 @@ def test_aa_dd_equals_nt_sum():
         syn[a].append(cod)
     tandem_seen = False
     for aa in ("CHF", "CHHF", "CHIF"):
-        brute = sum(pgen.pgen_nt(prep, "".join(c), "V", "J") for c in itertools.product(*[syn[a] for a in aa]))
+        brute = 0.0
+        for c in itertools.product(*[syn[a] for a in aa]):
+            nt = "".join(c)
+            p_ref = pgen.pgen_nt(prep, nt, "V", "J")  # Python enumeration (single-D + _dd_middle)
+            assert native.pgen_nt(m, nt, "V", "J") == pytest.approx(p_ref, rel=1e-9, abs=1e-300)
+            brute += p_ref
         assert pgen.pgen_aa(prep, aa, "V", "J") == pytest.approx(brute, rel=1e-9, abs=1e-300)
         assert native.pgen_aa(m, aa, "V", "J") == pytest.approx(brute, rel=1e-8, abs=1e-300)
         if aa == "CHHF":

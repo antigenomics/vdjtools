@@ -1,0 +1,88 @@
+{
+  "locus": "IGH",
+  "organism": "human",
+  "chain_type": "VDJ",
+  "model_version": "2.0.0",
+  "source": "olga:human_B_heavy+dd",
+  "error_rate": null,
+  "palindrome_max": {
+    "v_3": 6,
+    "d_5": 6,
+    "d_3": 6,
+    "j_5": 6
+  },
+  "events": {
+    "v_choice": {
+      "kind": "gene_choice",
+      "given": []
+    },
+    "j_choice": {
+      "kind": "gene_choice",
+      "given": []
+    },
+    "d_gene": {
+      "kind": "gene_choice",
+      "given": [
+        "j_choice"
+      ]
+    },
+    "n_d": {
+      "kind": "n_d",
+      "given": []
+    },
+    "v_3_del": {
+      "kind": "deletion",
+      "given": [
+        "v_choice"
+      ]
+    },
+    "j_5_del": {
+      "kind": "deletion",
+      "given": [
+        "j_choice"
+      ]
+    },
+    "d_del": {
+      "kind": "deletion_2d",
+      "given": [
+        "d_gene"
+      ]
+    },
+    "vd_ins": {
+      "kind": "ins_length",
+      "given": []
+    },
+    "dj_ins": {
+      "kind": "ins_length",
+      "given": []
+    },
+    "vd_dinucl": {
+      "kind": "dinucleotide",
+      "given": []
+    },
+    "dj_dinucl": {
+      "kind": "dinucleotide",
+      "given": []
+    },
+    "d2_gene": {
+      "kind": "gene_choice",
+      "given": [
+        "d_gene"
+      ]
+    },
+    "d2_del": {
+      "kind": "deletion_2d",
+      "given": [
+        "d2_gene"
+      ]
+    },
+    "dd_ins": {
+      "kind": "ins_length",
+      "given": []
+    },
+    "dd_dinucl": {
+      "kind": "dinucleotide",
+      "given": []
+    }
+  }
+}
