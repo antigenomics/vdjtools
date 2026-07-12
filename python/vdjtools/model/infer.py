@@ -62,12 +62,13 @@ def _insert_markov(seq: str, R: np.ndarray, bias: np.ndarray, *, from_right: boo
     return w, trans
 
 
-def _estep_seq(prep, s: str, counts: dict, mask=None) -> float:
+def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> float:
     """Accumulate one sequence's soft counts into ``counts``; return its Pgen (for log-lik).
 
     ``mask`` optionally restricts enumeration to a read's aligned genes — ``(v_genes, j_genes,
     d_genes)`` name lists (e.g. from arda). This is what makes VDJ inference tractable: without it
     every V that shares the conserved Cys prefix is a candidate and the D enumeration runs for each.
+    ``allow_dd`` gates the tandem (n_D=2) enumeration for this read (arda-anchored D-D learning).
     """
     N = len(s)
     vdj = prep.chain_type == "VDJ"
@@ -95,7 +96,7 @@ def _estep_seq(prep, s: str, counts: dict, mask=None) -> float:
                         if p1 > 0.0:
                             total += _accum_vdj(prep, J, V, nv, nj, mid, base * p1, local, d_mask)
                         p2 = prep.p_nd.get(2, 0.0)
-                        if p2 > 0.0 and prep.p_d2_given_d1:
+                        if p2 > 0.0 and prep.p_d2_given_d1 and allow_dd:
                             total += _accum_dd(prep, J, V, nv, nj, mid, base * p2, local, d_mask)
                     else:
                         total += _accum_vj(prep, V, J, nv, nj, mid, base, local)
@@ -266,7 +267,9 @@ def _fit_events(manifest) -> list[str]:
     return list(manifest.events)
 
 
-def _mstep(template: Model, counts: dict) -> dict[str, pl.DataFrame]:
+def _mstep(template: Model, counts: dict, nd_prior: float = 0.0) -> dict[str, pl.DataFrame]:
+    if nd_prior and counts.get("n_d"):  # Dirichlet pseudocount on the single-D (n_D=1) bucket
+        counts["n_d"][(1,)] += nd_prior
     tables = {}
     for name, event in template.manifest.events.items():
         if not counts.get(name):  # event never accumulated (e.g. n_d on a VJ locus) — keep template
@@ -367,6 +370,8 @@ def infer(
     masks: list | None = None,
     single_d: bool = False,
     p_nd2_init: float = 0.02,
+    dd_allowed: list | None = None,
+    nd_prior: float = 0.0,
 ) -> tuple[Model, InferenceReport]:
     """Re-estimate a model's marginals from nucleotide CDR3s by EM.
 
@@ -387,6 +392,12 @@ def infer(
             (seeding ``P(n_D=2)=p_nd2_init``) and EM learns the true ``P(n_D=2)``. Set ``True`` to
             keep a strict single-D model. No effect on VJ loci or an already-tandem template.
         p_nd2_init: Initial ``P(n_D=2)`` seed when promoting to D-D (ignored if ``single_d``).
+        dd_allowed: Optional per-read booleans gating the tandem (``n_D=2``) E-step — a read may be
+            tandem only where ``dd_allowed[i]`` is true (e.g. reads arda flags with a ``d2_call``).
+            Anchors D-D learning to alignment-detected tandems, countering the tandem-vs-long-insertion
+            identifiability that inflates unregularized ``P(n_D=2)`` on real data. ``None`` = all reads.
+        nd_prior: Dirichlet/Beta pseudocount added to the single-D (``n_D=1``) soft count each M-step,
+            regularizing ``P(n_D=2)`` toward 0. Both anchors combine.
 
     Returns:
         ``(fitted_model, report)``. For a tandem-D template the E-step enumerates ``n_D=2``
@@ -405,14 +416,15 @@ def infer(
     report = InferenceReport()
     fit = _fit_events(template.manifest)
     seq_masks = masks if masks is not None else [None] * len(upper)
+    dd_gate = dd_allowed if dd_allowed is not None else [True] * len(upper)
 
     for it in range(max_iter):
         prep = prepare(model)
         counts = {name: defaultdict(float) for name in fit}
         ll = 0.0
         n_ok = 0
-        for s, mask in zip(upper, seq_masks):
-            pg = _estep_seq(prep, s, counts, mask)
+        for s, mask, allow_dd in zip(upper, seq_masks, dd_gate):
+            pg = _estep_seq(prep, s, counts, mask, bool(allow_dd))
             if pg > 0.0:
                 ll += log(pg)
                 n_ok += 1
@@ -420,7 +432,7 @@ def infer(
         report.n_scoreable.append(n_ok)
         report.n_iter = it + 1
 
-        new_tables = _mstep(template, counts)
+        new_tables = _mstep(template, counts, nd_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
         # Converge on marginal stability (V-usage total variation), which is robust to the
         # changing set of scoreable reads that makes raw mean-log-lik non-monotonic.
@@ -474,7 +486,7 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
 # Native EM: the E-step runs in C++ (_core.estep_batch); the M-step re-normalizes the returned
 # dense soft-count arrays back into polars tables. Same result as pure-Python infer(), much faster.
 
-def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins) -> dict[str, pl.DataFrame]:
+def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0) -> dict[str, pl.DataFrame]:
     vdj = template.chain_type == "VDJ"
     mp = template.manifest.palindrome_max
     nV, nJ, nD = len(v_alleles), len(j_alleles), len(d_alleles)
@@ -515,7 +527,10 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         # n_d learned from the soft counts (indexed by the n_D value): single-D emits only n_D=1 mass
         # -> renormalizes to delta(1) (a no-op); D-D emits n_D=1 and n_D=2 -> learns P(n_D=2).
         nd = template.tables["n_d"]
-        t["n_d"] = norm(nd.with_columns(p=pl.Series("p", [float(counts.n_d[int(k)]) for k in nd["n_d"]])), [])
+        # Dirichlet/Beta prior: nd_prior pseudocounts added to the single-D (n_D=1) bucket regularize
+        # away the tandem over-attribution of unregularized D-D EM on real data.
+        nd_counts = [float(counts.n_d[int(k)]) + (nd_prior if int(k) == 1 else 0.0) for k in nd["n_d"]]
+        t["n_d"] = norm(nd.with_columns(p=pl.Series("p", nd_counts)), [])
         if "d2_gene" in template.manifest.events:  # tandem-D model — learn the second-D events too
             t["d2_gene"] = norm(pl.DataFrame({
                 "d_allele": np.repeat(d_alleles, nD), "d2_allele": np.tile(d_alleles, nD),
@@ -546,18 +561,21 @@ def infer_native(
     masks: list | None = None,
     single_d: bool = False,
     p_nd2_init: float = 0.02,
+    dd_allowed: list | None = None,
+    nd_prior: float = 0.0,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
-    ``single_d`` / ``p_nd2_init``). Learns tandem-D (``n_D=2``) by default on the D-bearing loci: the
-    native E-step accumulates the second-D soft counts via a factorized forward/backward pass, so a
-    full real-data D-D EM run is fast (and read-parallelized across cores).
+    ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior``). Learns tandem-D (``n_D=2``) by
+    default on the D-bearing loci: the native E-step accumulates the second-D soft counts via a
+    factorized forward/backward pass, read-parallelized across cores.
     """
     from .._core import estep_batch, make_counts
     from .native import _encode, pack
 
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
+    ddflags = [1 if a else 0 for a in dd_allowed] if dd_allowed is not None else []
 
     upper = [s.upper() for s in sequences]
     if init == "template":
@@ -586,10 +604,10 @@ def infer_native(
     for it in range(max_iter):
         pm, _, _ = pack(model)
         counts = make_counts(pm)
-        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts)
+        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, 0, ddflags)
         report.loglik.append(ll)
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
-        new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins)
+        new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
         tv = _tv(model.tables["v_choice"], new_model.tables["v_choice"], ["v_allele"])
         report.gene_tv.append(tv)

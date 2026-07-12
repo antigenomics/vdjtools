@@ -33,7 +33,7 @@ loaded with `vdjtools.model.load_bundled(locus, source)`. ~0.4 MB total (30–15
 | Model set | Origin | How to rebuild | Provenance |
 |---|---|---|---|
 | `olga` (7 loci) | `from_olga` on the OLGA default models above | `python appendix/build_bundled_models.py` (the OLGA part is inline in the precompute) | **derived** — OLGA generative parameters converted to the polars schema (keeps OLGA germline; exact-Pgen bootstrap, single-D) |
-| `learned` (7 loci) | native EM (`infer_native`) on real out-of-frame HF reads (2 000 unique clonotypes/locus, 12 fixed iters, arda V/J[/D]-masked) seeded from the `olga` model | `python appendix/build_bundled_models.py` | **computed from experimental data** — real-repertoire gene-usage/trim/insertion marginals. **Shipped single-D** (`single_d=True`): unregularized D-D EM over-attributes tandems on real data (tandem-vs-long-insertion identifiability; TRB drifted to P(n_D=2)≈0.28), so learning `P(n_D=2)` needs an arda-anchored per-read n_D gate (pending). The D-D capability itself is validated closed-loop. |
+| `learned` (7 loci) | native EM (`infer_native`) on real out-of-frame HF reads (2 000 unique clonotypes/locus, 12 fixed iters, arda V/J[/D]-masked) seeded from the `olga` model | `python appendix/build_bundled_models.py` | **computed from experimental data** — real-repertoire gene-usage/trim/insertion marginals. D-bearing loci (IGH/TRD/TRB) carry an **arda-anchored tandem-D** event: a read may be `n_D=2` only where arda called a second D (`d2_call`), which counters the tandem-vs-long-insertion identifiability that inflates unregularized D-D EM (TRB 0.28→**0.00**, TRD 0.18→**0.006**, IGH **0.009**). `EM_SINGLE_D=1` / `ND_PRIOR` are alternative regularizers. |
 
 ## Golden fixtures (tests)
 

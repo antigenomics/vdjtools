@@ -932,7 +932,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
 
 double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                  const std::vector<int>& vmask, const std::vector<int>& jmask,
-                 const std::vector<int>& dmask, Counts& local) {
+                 const std::vector<int>& dmask, Counts& local, bool allow_dd = true) {
     int N = cdr3.size();
     const int8_t* s = cdr3.data();
     const std::vector<int>& vm = vmask.empty() ? m.func_v : vmask;
@@ -975,7 +975,7 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                         double c1 = accum_vdj(m, J.j, v, div, dij, mid, midlen, base * m.p_nd1, dm, local);
                         local.n_d[1] += c1;
                         total += c1;
-                        if (m.dd && m.p_nd2 > 0.0) {  // n_D=2 tandem, weighted by P(n_D=2)
+                        if (m.dd && m.p_nd2 > 0.0 && allow_dd) {  // n_D=2 tandem, weighted by P(n_D=2)
                             double c2 = accum_dd(m, J.j, v, div, dij, mid, midlen, base * m.p_nd2, dm, local);
                             local.n_d[2] += c2;
                             total += c2;
@@ -1046,9 +1046,11 @@ double estep_range(const PackedModel& m,
                    const std::vector<std::vector<int>>& vmasks,
                    const std::vector<std::vector<int>>& jmasks,
                    const std::vector<std::vector<int>>& dmasks,
+                   const std::vector<int>& dd_allowed,
                    size_t lo, size_t hi, Counts& acc) {
     Counts local = make_counts(m);
     bool have_masks = !vmasks.empty();
+    bool have_dd_gate = !dd_allowed.empty();
     std::vector<int> empty;
     double ll = 0.0;
     for (size_t i = lo; i < hi; ++i) {
@@ -1056,7 +1058,8 @@ double estep_range(const PackedModel& m,
         const std::vector<int>& vm = have_masks ? vmasks[i] : empty;
         const std::vector<int>& jm = have_masks ? jmasks[i] : empty;
         const std::vector<int>& dm = (have_masks && !dmasks.empty()) ? dmasks[i] : empty;
-        double total = estep_one(m, seqs[i], vm, jm, dm, local);
+        bool allow_dd = have_dd_gate ? dd_allowed[i] != 0 : true;
+        double total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd);
         if (total > 0.0) {
             ll += std::log(total);
             add_scaled(acc, local, 1.0 / total);
@@ -1073,14 +1076,15 @@ double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int>>& jmasks,
                    const std::vector<std::vector<int>>& dmasks,
                    Counts& counts,
-                   int nthreads) {
+                   int nthreads,
+                   const std::vector<int>& dd_allowed) {
     size_t n = seqs.size();
     int T = nthreads;
     if (T <= 0) {
         unsigned hw = std::thread::hardware_concurrency();
         T = hw > 3 ? static_cast<int>(hw) - 2 : 1;
     }
-    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, 0, n, counts);
+    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, 0, n, counts);
     if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
 
     std::vector<Counts> acc(T);
@@ -1092,7 +1096,7 @@ double estep_batch(const PackedModel& m,
         size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
         if (lo >= hi) break;
         pool.emplace_back([&, t, lo, hi] {
-            lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, lo, hi, acc[t]);
+            lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, lo, hi, acc[t]);
         });
     }
     for (auto& th : pool) th.join();

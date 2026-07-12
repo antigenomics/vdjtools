@@ -85,12 +85,15 @@ Counts make_counts(const PackedModel& m);
 // in a fixed order); 0 = auto (hardware_concurrency - 2). Small batches run single-threaded so their
 // result stays bitwise-identical. The soft counts are exact regardless of thread count (up to the
 // float summation order, which the fixed reduction keeps deterministic per ``nthreads``).
+// ``dd_allowed`` optionally gates the tandem (n_D=2) E-step per read (1 = may be tandem, 0 = single-D
+// only); empty = every read may be tandem. Used to anchor D-D learning to arda's tandem calls.
 double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int8_t>>& seqs,
                    const std::vector<std::vector<int>>& vmasks,
                    const std::vector<std::vector<int>>& jmasks,
                    const std::vector<std::vector<int>>& dmasks,
                    Counts& counts,
-                   int nthreads = 0);
+                   int nthreads = 0,
+                   const std::vector<int>& dd_allowed = {});
 
 }  // namespace vdjtools

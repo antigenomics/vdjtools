@@ -33,7 +33,11 @@ def build(locus: str, name: str) -> dict:
     jset = set(base.genomic["genes_j"]["j_allele"])
     dset = set(base.genomic["genes_d"]["d_allele"].to_list()) if base.chain_type == "VDJ" else set()
 
-    uniq = data.prepare("human", locus, "nonfunctional", out_dir=str(WORK))
+    airr = WORK / f"human_{locus}_nonfunctional.airr.tsv"  # reuse arda's output if already mapped
+    if airr.exists():
+        uniq = data.unique_clonotypes(pl.read_csv(airr, separator="\t", infer_schema_length=20000))
+    else:
+        uniq = data.prepare("human", locus, "nonfunctional", out_dir=str(WORK))
     uniq = uniq.filter(
         pl.col("v_call").is_in(list(vset)) & pl.col("j_call").is_in(list(jset))
         & pl.col("junction").str.to_uppercase().str.contains(r"^[ACGT]+$"))
@@ -46,15 +50,18 @@ def build(locus: str, name: str) -> dict:
         masks = [(mk[0], mk[1], [r["d_call"]] if r.get("d_call") in dset else [])
                  for mk, r in zip(masks, uniq.iter_rows(named=True))]
 
-    # Ship SINGLE-D learned models: the real-data gene-usage / trim / insertion marginals are
-    # well-identified and clearly improve on OLGA's synthetic model. Unregularized D-D EM on real
-    # data over-attributes tandems (tandem-vs-long-insertion identifiability — TRB drifted to
-    # P(n_D=2)=0.28, implausible), so learning P(n_D=2) needs an arda-anchored per-read n_D gate
-    # (a separate task). The D-D *capability* is validated closed-loop; single_d keeps the shipped
-    # models honest.
-    single_d = os.environ.get("EM_DD") != "1"
+    # Learn tandem-D anchored to arda: on the D-bearing loci a read may be n_D=2 only where arda
+    # called a second D (d2_call). This counters the tandem-vs-long-insertion identifiability that
+    # inflates unregularized D-D EM (TRB drifts to P(n_D=2)~0.28). EM_SINGLE_D=1 forces strict
+    # single-D; ND_PRIOR adds a Dirichlet single-D pseudocount on top.
+    single_d = os.environ.get("EM_SINGLE_D") == "1"
+    nd_prior = float(os.environ.get("ND_PRIOR", "0"))
+    dd_allowed = None
+    if base.chain_type == "VDJ" and not single_d:
+        dd_allowed = [r.get("d2_call") is not None for r in uniq.iter_rows(named=True)]
     t = time.perf_counter()
-    model, rep = infer_native(base, seqs, masks=masks, max_iter=ITERS, tol=0.0, single_d=single_d)
+    model, rep = infer_native(base, seqs, masks=masks, max_iter=ITERS, tol=0.0,
+                              single_d=single_d, dd_allowed=dd_allowed, nd_prior=nd_prior)
     dt = time.perf_counter() - t
     out = DEST / locus
     model.save(out)
@@ -65,8 +72,10 @@ def build(locus: str, name: str) -> dict:
 
 def main():
     DEST.mkdir(parents=True, exist_ok=True)
+    want = os.environ.get("LOCI")
+    loci = {k: LOCI[k] for k in want.split(",")} if want else LOCI
     rows = []
-    for locus, name in LOCI.items():
+    for locus, name in loci.items():
         print(f"[{locus}] building learned model ...", flush=True)
         try:
             r = build(locus, name)
