@@ -38,6 +38,20 @@ the committed `aging_manifest.json` (`{filename: md5}`): a file already present
 with the right md5 is skipped with no network call, so a second run downloads
 nothing. The cache directory is never committed.
 
+## `preprocess.py` — the repertoire preprocessing pipeline
+
+A [marimo](https://marimo.io) notebook walking real Britanova samples (three sequencing
+batches) through `vdjtools.preprocess`: `filter_functional` (drop non-coding),
+`correct` (collapse PCR/sequencing-error variants), `downsample` (equalise depth),
+`filter_frequency`/`filter_segment`, `decontaminate` (cross-sample bleed),
+`pool_samples`/`join_samples`, and `correct_vj_usage` (VJ-usage batch-effect correction
+— a before/after PCA where the batch separation collapses). Pure polars:
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/preprocess.py
+```
+
 ## `overlap_similarity.py` — exact / fuzzy / similarity-aware overlap
 
 A [marimo](https://marimo.io) notebook contrasting three notions of repertoire
