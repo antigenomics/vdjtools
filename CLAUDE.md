@@ -182,6 +182,17 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   all 7 loci: **r(log10 Pgen)=1.00000 everywhere**, max-rel ~1e-14–1e-16 (aa==Σnt confirmed). The two
   larger outliers (TRG nt 1.6e-2, TRD nt 5.7e-4) are deep-tail sequences (Pgen ~1e-28) where FP
   summation order dominates — absolute agreement ~1e-30; `test_pgen_nt` proves exactness on all 7 loci.
+- **DONE bundled models + loader** `model/bundled.py` (`load_bundled(locus, source)`, `list_bundled`) —
+  ship all 7 loci × {`olga`, `learned`} in the wheel (`model/_bundled/`, ~1 MB; scikit-build-core packs
+  them automatically). `learned` = native EM on real HF out-of-frame reads (`appendix/build_bundled_models.py`,
+  2k clonotypes/locus, held-out LL improves on every locus).
+- **DONE arda-anchored D-D learning** — unregularized D-D EM over-attributes tandems on real data
+  (identifiability; TRB→0.28). Two regularizers, both native==Python exact: **`dd_allowed`** per-read gate
+  (a read may be n_D=2 only where arda called a `d2_call`) and **`nd_prior`** Dirichlet single-D pseudocount.
+  `infer/infer_native(..., dd_allowed=, nd_prior=)`; native `estep_batch(..., dd_allowed)`. Anchored learned
+  D-loci: TRB **0.000**, TRD **0.006**, IGH **0.009** (plausible; arda hard-call ~4%). `test_dd_anchor_and_prior…`.
+- **DONE marimo explorer** `notebooks/model_explorer.py` — reactive Bayes-net/entropy/MI/marginal explorer
+  over any bundled model (OLGA vs learned); `[examples]` extra. README/docs/SOURCES updated.
 - **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual).
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
