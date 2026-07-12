@@ -159,10 +159,12 @@ AIRR **junction** — so this is a correctness alignment, not just cosmetics.
 1. **Full Sphinx API docs** — only `docs/index.rst` + `docs/api.rst` exist and just `model` has an
    `automodule` ref. Write per-subpackage API pages for `io, stats, features, overlap, preprocess,
    biomarker, sc, cli` (and `model`). Zero-warning `sphinx-build -W` gate (`sphinx-docs` rules).
-2. **Legacy input-format converters** — readers exist only for `vdjtools` / `airr` / `parquet`.
-   Add MiXcr, MiGec (output table; distinct from the Phase 9 processor), ImmunoSeq v1/v2,
-   ImgtHighVQuest, Vidjil, RTCR → AIRR. Fixtures live on `legacy-1.x`
-   (`src/test/resources/samples/`).
+2. **Legacy input-format converters** — **DONE**: `vdjtools.io.convert` reimplements the legacy
+   Groovy parsers for MiXcr (v1/2 + v3/4 header dialects), MiGec, ImmunoSeq v1/v2, ImgtHighVQuest,
+   Vidjil (JSON), RTCR → the canonical junction frame; `sniff_format`/`io.read(fmt="auto")` detect
+   and dispatch them. Fixtures copied to `tests/python/fixtures/legacy/`; conformance oracles in
+   `test_convert.py` (migmap is already read by `read_vdjtools`). Adaptive→IMGT gene conversion +
+   bidirectional `translate()` ported verbatim from `CommonUtil`.
 3. **Paired α/β Pgen** (Phase 7 residual) — single-cell paired-chain generation probability via
    `vdjmatch.evalue.paired`, wired into `vdjtools.sc`.
 

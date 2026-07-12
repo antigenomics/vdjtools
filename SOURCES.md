@@ -72,7 +72,7 @@ loaded with `vdjtools.model.load_bundled(locus, source)`. ~0.4 MB total (30–15
 |---|---|---|
 | IGoR model files (human/mouse, all loci) | `IGoR-models/` (local) | model-loader + Pgen oracle fixtures; canonical `model_parms`/`model_marginals`/anchors format |
 | OLGA `default_models/` | OLGA pip package | Pgen oracle (`pip install olga`), as seqtree CI does |
-| Legacy input-format samples | legacy vdjtools `src/test/resources/samples/*.txt.gz` (on the `legacy-1.x` branch) | format-conversion conformance (MiXcr, MiGec, ImmunoSeq v1/v2, ImgtHighVQuest, Vidjil, RTCR, …) |
+| Legacy input-format samples | `tests/python/fixtures/legacy/*.txt.gz` — copied from legacy vdjtools `src/test/resources/samples/` (on the `legacy-1.x` branch; re-fetch with `git show legacy-1.x:src/test/resources/samples/<f>.txt.gz`) | format-conversion conformance for `vdjtools.io.convert` (MiXcr v1/2+v3, MiGec, ImmunoSeq v1/v2, ImgtHighVQuest, Vidjil, RTCR). Oracles (input row → canonical values) derived from the legacy Groovy parsers; see `tests/python/test_convert.py` |
 
 ## Carried-over resource data (from legacy vdjtools, `legacy-1.x` branch)
 

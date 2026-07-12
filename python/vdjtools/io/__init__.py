@@ -5,6 +5,14 @@ Readers return the canonical clonotype frame defined in :mod:`vdjtools.io.schema
 from . import schema
 from .batch import iter_samples, read, read_metadata, read_samples, sniff_format
 from .cohort import ingest_cohort, scan_cohort
+from .convert import (
+    read_imgt,
+    read_immunoseq,
+    read_migec,
+    read_mixcr,
+    read_rtcr,
+    read_vidjil,
+)
 from .read import read_airr, read_parquet, read_vdjtools
 from .schema import (
     C_CALL,
@@ -30,6 +38,12 @@ __all__ = [
     "read_airr",
     "read_vdjtools",
     "read_parquet",
+    "read_mixcr",
+    "read_migec",
+    "read_immunoseq",
+    "read_imgt",
+    "read_vidjil",
+    "read_rtcr",
     "read_metadata",
     "read_samples",
     "iter_samples",
