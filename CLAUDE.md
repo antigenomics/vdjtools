@@ -93,7 +93,9 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   + `python/vdjtools/model/native.py` (`pack`, `pgen_nt`, `pgen_aa`) and `infer.py::infer_native`.
   `pack` reconstructs the polars model into dense C++ arrays; the hot loops are ported behind the
   pybind11 `_core` module. Verified exact (`tests/python/test_native.py`): native **nt Pgen** ==
-  Python/OLGA (machine-eps), **89x** faster for VDJ (210→2.4 ms/seq); native **EM E-step** soft counts
+  Python/OLGA (machine-eps) — VDJ nt was originally a per-scenario D enumeration (~28 ms/seq TRB, i.e.
+  ~6× *slower* than OLGA; a docs figure once wrongly claimed 2.4 ms/89×) and is now routed through the
+  aa transfer matrix — see the nt-TM bullet below; native **EM E-step** soft counts
   == Python (4e-16), **~100x** faster (TRA 13→0.1 s/it), VDJ **masked** EM now practical (~12 ms/seq).
   **arda-masked E-step**: `gene_masks`/`arda_masks` + `infer(masks=)`/`infer_native(masks=)` restrict
   enumeration to aligned genes (15x in Python; combines with native).
@@ -109,6 +111,15 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   sums the Hamming-1 ball via OLGA's inclusion-exclusion identity `Σ_k Pgen(a_{k→*}) − (L−1)Pgen(a)`
   but each term is one fast TM pass. Matches `compute_hamming_dist_1_pgen` to ~1e-15; **8.7x** faster on
   TRB, **2.5x** on TRA (`test_native_aa_hamming1_matches_olga`). Documented in `murugan_model.tex` §M.6.
+- **DONE 1i (native nt Pgen via the aa transfer matrix)** `src/pgen.cpp::pgen_nt` — an in-frame nt
+  CDR3 (length always ×3, Cys→Phe/Trp) is exactly an aa query with a **singleton allowed-codon mask**
+  per position, so the same `pgen_aa_masked` Pi_L·Pi_R DP gives the identical value far faster than the
+  per-`(V,J,delV,delJ)` D enumeration it used before. Single-D VDJ nt now **0.53 ms/seq TRB** (was ~28 ms
+  → **53×**, and **9×** faster than OLGA's 4.8 ms); exact vs OLGA to machine precision on all 7 loci
+  (`test_native.py::test_native_matches_python` rtol 1e-9; slow exhaustive + `appendix/concordance.py`
+  nt r(log10)=1.0). Gated on `!(dd && p_nd2>0)`: the **D-D nt path (`dd_middle`) and VJ path are kept
+  intact** (VJ was already fast; D-D nt stays on the exact enumeration). No new tests (existing native
+  guard already covers it). NB: the earlier "89× / 2.4 ms" nt figure was never real — see the 1f note.
 - **TODO native perf gaps**: (a) **VJ / Hamming-1 codon-boundary sweep** — the 1-mm ball does L+1 TM
   passes; a forward/backward codon-boundary sweep would collapse them to ~1 pass for VJ loci (VDJ's
   D-placement sum couples positions, so L+1 is retained there). (b) native **generation sampler** (Python

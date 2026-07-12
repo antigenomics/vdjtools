@@ -182,11 +182,31 @@ double vdj_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
     return t;
 }
 
+// Fast nt Pgen via the aa transfer matrix (defined below): an in-frame nt CDR3 is exactly an
+// amino-acid query with a singleton allowed-codon mask per position, so the Pi_L*Pi_R split-DP
+// gives the identical result far faster than the per-(V,J,delV,delJ) D enumeration in `pgen_nt`.
+double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int v_idx, int j_idx);
+
 }  // namespace
 
 double pgen_nt(const PackedModel& m, const std::vector<int8_t>& cdr3, int v_idx, int j_idx) {
     int N = cdr3.size();
     const int8_t* s = cdr3.data();
+
+    // Fast path: in-frame VDJ nt CDR3 with no active tandem contribution reduces to an aa query
+    // with singleton codon masks (exact, ~10x faster than the enumeration below). VJ loci are
+    // already fast via the direct insertion product; the D-D nt path (dd_middle) is kept intact.
+    if (m.vdj && N % 3 == 0 && !(m.dd && m.p_nd2 > 0.0)) {
+        int Lc = N / 3;
+        std::vector<uint64_t> allowed(Lc);
+        for (int c = 0; c < Lc; ++c) {
+            int a = s[3 * c], b = s[3 * c + 1], cc = s[3 * c + 2];
+            allowed[c] = (a >= 0 && a < 4 && b >= 0 && b < 4 && cc >= 0 && cc < 4)
+                             ? (1ULL << (a * 16 + b * 4 + cc))
+                             : 0ULL;  // non-ACGT codon: unsatisfiable, contributes 0 (matches enum)
+        }
+        return pgen_aa_masked(m, allowed.data(), Lc, v_idx, j_idx);
+    }
 
     std::vector<int> vmask = (v_idx >= 0) ? std::vector<int>{v_idx} : m.func_v;
     std::vector<int> jmask = (j_idx >= 0) ? std::vector<int>{j_idx} : m.func_j;
