@@ -5,11 +5,12 @@ is computed, then averaged (weighted by reads/frequency, or unweighted) within a
 group (e.g. per V-J pairing, or per locus).
 
 Region definitions (over ``junction_aa``, length ``L``):
-    ``all``     — the entire CDR3.
-    ``trimmed`` — ``junction_aa[3:-3]`` (conserved-anchor-trimmed core); clonotypes with
-        ``L <= 6`` have an empty core and are skipped for this region.
-    ``center``  — the middle five residues ``junction_aa[L//2-2 : L//2+3]``; clonotypes
-        with ``L < 5`` are skipped for this region.
+
+* ``all`` — the entire CDR3.
+* ``trimmed`` — ``junction_aa[3:-3]`` (conserved-anchor-trimmed core); clonotypes with
+  ``L <= 6`` have an empty core and are skipped for this region.
+* ``center`` — the middle five residues ``junction_aa[L//2-2 : L//2+3]``; clonotypes
+  with ``L < 5`` are skipped for this region.
 """
 from __future__ import annotations
 

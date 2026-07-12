@@ -22,6 +22,7 @@ from .pair import (
     pair_chains,
     resolve_chains,
 )
+from .pgen import paired_pgen
 from .anndata import to_anndata
 from .read import read_10x, read_airr_cell, write_airr_cell
 
@@ -30,6 +31,8 @@ __all__ = [
     "read_10x", "read_airr_cell", "write_airr_cell",
     # pairing / QC
     "resolve_chains", "pair_chains", "chain_multiplicity", "flag_mispairing",
+    # paired-chain generation probability
+    "paired_pgen",
     # cluster evaluation
     "cluster_eval", "purity", "normalized_purity", "inverse_purity",
     "normalized_inverse_purity", "homogeneity", "parsimony", "q_measure",
