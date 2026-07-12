@@ -7,6 +7,7 @@ job to make it fast).
 """
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import polars as pl
@@ -18,6 +19,9 @@ from vdjtools.model.dd import to_dd
 from vdjtools.model.pgen import _dd_middle
 
 OLGA = Path("/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models")
+# from_olga needs the olga package (the [oracle] extra), not just the model files on disk; CI runs
+# [test] only, so guard on the package too — these skip, they don't error (cf. commit 833e237).
+_OLGA_OK = OLGA.exists() and importlib.util.find_spec("olga") is not None
 
 
 def _tiny_dd_model(*, p_nd2: float = 0.5, pdel_full_only: bool = True, dd_ins1: float = 0.0) -> Model:
@@ -316,7 +320,7 @@ def test_native_aa_dd_hamming1_and_agnostic():
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")
+@pytest.mark.skipif(not _OLGA_OK, reason="olga models/package (the [oracle] extra) not available")
 def test_dd_backward_compatible_on_trd():
     """to_dd(p_nd2=0) reproduces the single-D TRD Pgen exactly (no n_D=2 enumeration).
 
@@ -371,7 +375,7 @@ def test_to_dd_rejects_bad_inputs():
     with pytest.raises(ValueError, match="already"):
         to_dd(m)
     # a fresh single-D VDJ model for the p_nd2-bound checks
-    if OLGA.exists():
+    if _OLGA_OK:
         sd = from_olga(OLGA / "human_T_delta", locus="TRD")
         for bad in (1.0, -0.1):
             with pytest.raises(ValueError):
@@ -380,7 +384,7 @@ def test_to_dd_rejects_bad_inputs():
             to_dd(from_olga(OLGA / "human_T_alpha", locus="TRA"))  # VJ locus
 
 
-@pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")
+@pytest.mark.skipif(not _OLGA_OK, reason="olga models/package (the [oracle] extra) not available")
 def test_to_dd_tables_wellformed():
     m2 = to_dd(from_olga(OLGA / "human_T_delta", locus="TRD"), p_nd2=0.05)
     m2.validate()  # columns + normalization
@@ -390,7 +394,7 @@ def test_to_dd_tables_wellformed():
     assert nd[2] == pytest.approx(0.05) and nd[1] == pytest.approx(0.95)
 
 
-@pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")
+@pytest.mark.skipif(not _OLGA_OK, reason="olga models/package (the [oracle] extra) not available")
 def test_dd_full_native_support_and_single_d_untouched():
     """The whole pipeline supports tandem-D natively (nothing raises); single-D stays byte-identical."""
     from vdjtools.model import generate, infer, native
@@ -412,7 +416,7 @@ def test_dd_full_native_support_and_single_d_untouched():
     assert native.pgen_aa(m_dd0, "CAAAF") == pytest.approx(native.pgen_aa(m, "CAAAF"), rel=1e-12)
 
 
-@pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")
+@pytest.mark.skipif(not _OLGA_OK, reason="olga models/package (the [oracle] extra) not available")
 def test_dd_default_for_d_loci():
     """EM defaults to a tandem-D model on the D-bearing loci (IGH/TRD/TRB); single_d opts out; VJ
     loci are unaffected."""
@@ -452,7 +456,7 @@ def test_native_dd_matches_python_reference():
             assert native.pgen_nt(m, s) == pytest.approx(pgen.pgen_nt(prep, s), rel=1e-12, abs=1e-18)
 
 
-@pytest.mark.skipif(not OLGA.exists(), reason="OLGA models not available")
+@pytest.mark.skipif(not _OLGA_OK, reason="olga models/package (the [oracle] extra) not available")
 def test_dd_diagnostics_render():
     """A D-D model exposes the n_d / d2_gene / dd_* nodes to the diagnostics."""
     from vdjtools.model import analyze
