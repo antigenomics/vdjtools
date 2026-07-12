@@ -37,6 +37,25 @@ models, their own IMGT-vintage germline is kept for exact-Pgen fidelity — see 
 |---|---|---|---|---|
 | Emerson HIP cohort (786 subjects) | HF dataset [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip) — redistributed from Adaptive immuneACCESS **Emerson-2017-NatGen** | per-subject VDJtools tables `corr/HIP#####.txt.gz` (`count freq cdr3nt cdr3aa v d j VEnd…`); `metadata.txt` (TAB-sep: `file_name sample_id age race sex cmv hla`) | `examples/emerson_cmv_hla.py` → `huggingface_hub.snapshot_download(repo_type="dataset", allow_patterns=["corr/{sample}.txt.gz"])`; ingest with `io.ingest_cohort(fmt="vdjtools")` | **experimental** TCRβ repertoires + phenotypes (Emerson et al., *Nat Genet* 2017, doi:10.1038/ng.3822). `cmv` ∈ {`+`,`-`,`NA`}; `hla` = 2-digit HLA-A/B only (`HLA-A*02`); ⚠ `race` contains commas — split on TAB. No discovery/validation split column |
 | VDJdb (CMV validation target) | local checkout `/Users/mikesh/vcs/code/vdjdb-db/database/vdjdb.slim.txt` (canonical `antigenomics/vdjdb-db`, 2024-06 release; 2-digit HLA matches airr_hip) | TSV, 16 cols: `gene cdr3 species antigen.epitope antigen.gene antigen.species … v.segm j.segm … mhc.a mhc.b mhc.class … vdjdb.score` | read with polars; filter `gene==TRB & species==HomoSapiens & antigen.species~CMV` | **curated** TCR↔epitope database; newer 4-digit dump at `/Users/mikesh/vcs/code/vdjdb-iedb-concordance/vdjdb_dump_2026/vdjdb.slim.txt`. Canonical fetch: `antigenomics/vdjdb-db` GitHub releases |
+## Phase 10 — BCR SHM & lineage (test data, planned; not yet fetched)
+
+Verified via PubMed (2026-07); all four are owner (Shugay)-co-authored BCR datasets. Data paths are
+**TBD** — fill the `How to obtain` details when each dataset is actually sourced; do not fabricate a
+path before then. All are **experimental** repertoire data.
+
+| Dataset | Reference (verified) | DOI | Relevance |
+|---|---|---|---|
+| Longitudinal memory-B / ASC BCR repertoires | Mikelov et al., *eLife* 2022;11:e79254 | [10.7554/eLife.79254](https://doi.org/10.7554/eLife.79254) | UMI-tagged BCR-seq + clonal-lineage/phylogeny — primary Phase-9 (MiGEC) + Phase-10 (lineage) target |
+| TCGA tumor repertoires from RNA-seq | Bolotin et al., *Nat. Biotechnol.* 2017;35(10):908–911 | [10.1038/nbt.3979](https://doi.org/10.1038/nbt.3979) | RNA-seq-derived TCR/BCR (MiXCR method); TCGA IGH |
+| CD27-dull/bright memory-B VH repertoires | Grimsholm et al., *Cell Rep.* 2020;30(9):2963–2977.e6 | [10.1016/j.celrep.2020.02.022](https://doi.org/10.1016/j.celrep.2020.02.022) | memory-B subsets, VH usage + SHM frequency (owner wrote "CD20-dull"; the paper is **CD27**-dull) |
+| CVID peripheral B-cell selection | Grimsholm et al., *Cell Rep.* 2023;42(5):112446 | [10.1016/j.celrep.2023.112446](https://doi.org/10.1016/j.celrep.2023.112446) | CVID Ig-seq, peripheral B-cell selection |
+
+**Flag (unresolved):** the owner's "Mikelov *allergy* paper" literally matches Mikelov et al.,
+*Nat. Immunol.* 2025;26(12):2328–2342 ([10.1038/s41590-025-02323-3](https://doi.org/10.1038/s41590-025-02323-3),
+peanut oral-immunotherapy) — but that study is **TCR / single-cell** and does **not** list Shugay
+as an author, so the Shugay-co-authored **eLife 2022 BCR** paper is recorded above instead. Confirm
+which Mikelov dataset is intended before use. (References verified via PubMed; DOIs copied verbatim.)
+
 ## Bundled precomputed models (shipped in the wheel)
 
 Ship under `python/vdjtools/model/_bundled/<source>/<LOCUS>/` (parquet marginals + `manifest.json`);

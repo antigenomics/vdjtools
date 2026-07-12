@@ -1,26 +1,182 @@
 # ROADMAP
 
-vdjtools 2.0.0 — phased rewrite. Gitflow: `master` (tagged releases) ← `dev` (integration)
-← `feature/*` (one per phase). Merge a feature to `dev` when its tests are green; cut alpha
-tags off `master` as phases land; `v2.0.0` at Phase 8.
+vdjtools 2.x — phased Python + C++ rewrite. Gitflow: `master` (tagged releases) ← `dev`
+(integration) ← `feature/*` (one per phase). Merge a feature to `dev` when its tests are
+green; cut tags off `master` as phases land.
 
-Legacy v1.x is preserved on the `legacy-1.x` branch and under all existing tags.
+Legacy v1.x is preserved on the `legacy-1.x` branch and under all existing tags
+(`v0.0.1`…`1.2.1`). The v2 history is an orphan root.
+
+**Current release: `v2.1.0`** (2026-07) — model engine + analytics Phases 1–8, native Pgen
+speedups, typer CLI, example notebooks. Published to PyPI.
+
+The full approved v2.0 design lives in `~/.claude/plans/i-want-to-complenely-gleaming-snail.md`;
+the Phase 6 biomarker sub-plan in `~/.claude/plans/biomarker-fisher-emerson.md`. `SOURCES.md`
+tracks all data provenance.
+
+## Shipped (v2.0.0-alpha → v2.1.0)
 
 | # | Branch | Scope | Status |
 |---|---|---|---|
-| 0 | (master root) | Git surgery, GPLv3 relicense, repo scaffold, CI/docs/publish, AIRR+polars IO layer | in progress |
-| 1 | `feature/model-engine` | Native V(D)J model: polars marginals (D-D), arda scenarios, contig stitching, EM from OLGA-synthetic bootstrap, native Pgen/generation (pybind11), validation vs OLGA | planned |
-| 2 | `feature/repertoire-stats` | Diversity (Chao1/ChaoE/Shannon/Simpson/d50/Efron–Thisted, exact+resampled+rarefaction+quantile), spectratype, V/J/VJ usage | planned |
-| 3 | `feature/cdr-features` | CDR physicochemical profiles (regions × properties), k-mer / V+k-mer summaries | planned |
-| 4 | `feature/overlap-tcrnet` | Sample overlap + TCRnet via vdjmatch/seqtree; pairwise-distance matrix, clustering/MDS, tracking | planned |
-| 5 | `feature/preprocess` | Downsampling, error-correction, decontaminate, filters, VJ-usage batch-effect correction, pool/join | planned |
-| 6 | `feature/biomarker-assoc` | Fisher incidence association vs HLA/condition/chain-pairing; metaclonotype grouping | planned |
-| 7 | `feature/singlecell-interop` | AIRR Cell / 10x paired-chain interop, single-cell metadata bridge, paired α/β Pgen | planned |
-| 8 | `feature/cli-docs` | typer CLI, full Sphinx docs, example notebooks, **v2.0.0** release | planned |
+| 0 | (master root) | Git surgery, GPLv3 relicense, repo scaffold, CI/docs/publish, AIRR+polars IO layer (vdjtools/AIRR/parquet readers) | **done** |
+| 1 | `feature/model-engine`, `feature/model-dd-native` | Native V(D)J model: polars marginals (single-D **and** tandem D-D), arda scenarios, contig stitching, EM from OLGA-synthetic + real out-of-frame bootstrap, native Pgen/generation/E-step (pybind11), aa transfer-matrix Pgen, bundled 7-locus models (OLGA + learned), model diagnostics. Exact vs OLGA on all 7 loci. | **done** |
+| 2 | `feature/repertoire-stats` | Diversity (Chao1/ChaoE/Shannon/Simpson/d50/Efron–Thisted, exact+resampled+rarefaction+quantile), spectratype, V/J/VJ usage | **done** |
+| 3 | `feature/cdr-features` | CDR physicochemical profiles (regions × properties), k-mer / V+k-mer summaries | **done** |
+| 4 | `feature/overlap-tcrnet` | Sample overlap + TCRnet via vdjmatch/seqtree; **similarity-aware** overlap (TINA / Leinster-Cobbold), pairwise-distance matrix, clustering/MDS, tracking | **done** |
+| 5 | `feature/preprocess` | Downsampling, error-correction, decontaminate, filters, VJ-usage batch-effect correction, pool/join | **done** |
+| 6 | `feature/biomarker-assoc` | Fisher incidence association (V/J-match + exact/1mm) vs HLA/condition; metaclonotype grouping; Emerson-2017 CMV/HLA benchmark validated vs VDJdb | **done** |
+| 7 | `feature/singlecell-interop` | AIRR Cell / 10x paired-chain interop, single-cell metadata bridge, QC (doublet/mispairing), cluster evaluation, AnnData bridge | **done** (paired α/β Pgen residual → Phase 12) |
+| 8 | `feature/cli-docs` | typer CLI (pgen/generate/diversity/spectratype/segment-usage/overlap/models), 6 example marimo notebooks, **v2.1.0** release | **done** (full Sphinx API docs residual → Phase 12) |
 
-**Design principles**: AIRR schema + polars everywhere, minimal OO. Python-first — native C++
-(pybind11) only for the Pgen DP, generation sampler, and EM E-step inner loop. Delegate overlap/
-TCRnet to vdjmatch and annotation/markup to arda rather than reimplementing. **arda's germline
-library is the single source of germline truth** — all V/D/J germline + CDR3 anchors resolve from
-arda by allele name (`model.reference.load_germline`), so annotation ↔ scenarios ↔ stitching ↔ Pgen
-share one coordinate frame.
+## Upcoming
+
+**Next minor release — `v2.2.0`** bundles Phases **11 → 12 → 13** (owner directive 2026-07-13):
+AIRR `junction_nt`/`junction_aa` rename → close the v2.1 residual gaps → model-engine residuals.
+
+The **BCR track — Phases 9 (MiGEC UMI correction) + 10 (BCR SHM/lineage) — is deferred** to a
+later release: it is the larger, higher-risk body of work and Phase 10 depends on Phase 9. Their
+designs are kept below so the track is ready to pick up. Phase numbers are stable (referenced
+elsewhere) and sections stay in numeric order; each heading is tagged with its release target.
+
+### Phase 9 — `feature/umi-migec` — MiGEC UMI error correction
+
+**Status: deferred** to a post-v2.2 release (BCR track, item 1 of 2).
+
+Re-implement the MiGEC UMI/molecular-barcode error-correction pipeline (originally Java;
+Shugay et al. Nat. Methods 2014) as Python-first (native C++ for the consensus hot loop only),
+emitting AIRR clonotype tables consumable by the rest of vdjtools. **Prerequisite for the BCR
+lineage work** — the UMI-tagged BCR datasets need molecular error correction before SHM/lineage
+inference, or PCR/sequencing errors masquerade as hypermutations.
+
+Stages (mirror MiGEC):
+- **Checkout** — UMI/barcode extraction + demultiplex from raw FASTQ (adapter/barcode patterns).
+- **Histogram** — UMI coverage distribution; pick the over-sequencing threshold.
+- **Assemble** — group reads by UMI into MIGs (molecular identifier groups), build per-MIG
+  consensus, drop under-covered MIGs. *(hot loop → `_core` if profiling warrants)*
+- **Correct** — collapse UMI/consensus errors (1-mismatch barcode collision, hot-spot correction).
+- Output → AIRR reads/clonotypes for arda annotation + model/lineage.
+
+Delegate downstream V(D)J markup to **arda**. Overlap with Phase 12 gap #2: that gap ships a
+read-only **MiGec output-table converter** now (v2.2.0); when this phase lands it supersedes that
+reader — this phase *is* the MiGEC processor, not just a parser of its output.
+
+### Phase 10 — `feature/bcr-lineage` — BCR SHM & lineage/tree reconstruction
+
+**Status: deferred** to a post-v2.2 release (BCR track, item 2 of 2; depends on Phase 9).
+
+Clonal-lineage and somatic-hypermutation (SHM) reconstruction for BCR/IGH. Standard TCR-style
+exact/1mm clustering fails under heavy SHM; this phase builds a Pgen- and mutation-model-aware
+lineage engine. Two hard problems the design must confront:
+
+1. **Heavy hypermutation** — clonally related variants can differ at many positions; naive
+   distance clustering breaks.
+2. **Unknown common ancestor** — parsimony on `junction_aa` is ill-posed because the naive
+   ancestor of the junction (especially the non-templated N region) is not observed, so the
+   tree cannot be rooted by assuming the ancestor.
+
+Approach (owner's design):
+
+- **(a) Pgen as SHM-load proxy / rooting signal.** Lower Pgen ⇒ more hypermutated IGH: a naive
+  (unmutated) sequence sits in the generative model's high-Pgen region, while SHM drives the
+  observed sequence away from any plausible germline rearrangement and lowers its model Pgen.
+  Pgen therefore orders lineage members by mutational load and identifies the likely near-germline
+  root (highest Pgen = closest to the naive ancestor). Uses the native IGH model in `vdjtools.model`.
+
+- **(b) Clonal-relationship via non-templated N-stretch matching.** Two clonotypes sharing a long
+  run of identical *non-templated* insertion nucleotides (e.g. a 5–7 nt consecutive random-base
+  k-mer in the N1/N2 region) almost certainly descend from the same VDJ rearrangement — random
+  insertions are a per-rearrangement fingerprint. Candidate lineage edges come from matching long
+  shared N-stretch k-mers.
+  - **Markup caution**: the match must be on the genuinely non-templated segment. Templated
+    **D-gene** nucleotides are shared germline and would spuriously inflate shared-k-mer counts,
+    merging unrelated clones. Use proper V(D)J markup — potentially an HMM / Pgen-based
+    segmentation that **excludes D** (and V/J germline) so only true non-templated insertions form
+    the fingerprint. Ties directly to the model engine's scenario markup: the same event structure
+    that yields Pgen yields the N-region boundaries.
+
+- **(c) Likelihood-ratio test for clonal relationship → edges, SHM profiles, trees.** For a
+  candidate pair compare:
+  - H0 (independent rearrangements): `P_gen(c1) · P_gen(c2)`
+  - H1 (one rearrangement + SHM):    `P_gen(c1) · P_mut(c1 → c2)`
+
+  where `P_mut` is a context-aware SHM mutation model (per-position / 5-mer context, S5F-style).
+  If H1 ≫ H0 the pair is clonally related; orient the edge from the more-ancestral (higher-Pgen)
+  member. Aggregated over a clone these give **SHM profiles** (mutation-frequency spectra, WRC/GYW
+  hot/cold-spot context) and a weighted graph from which lineage **trees** are inferred (root by
+  Pgen, edges by LRT).
+
+Deliverables (`vdjtools/lineage/` or `vdjtools/bcr/`):
+- context-aware SHM mutation model `P_mut` (learn/bootstrap; native for the hot loop),
+- N-region fingerprint extraction from D-excluded model markup,
+- clonal-relationship LRT scorer combining native Pgen + `P_mut`,
+- lineage-graph builder + tree inference (Pgen rooting, LRT edges), SHM-profile summaries.
+- Delegate germline alignment/markup to **arda**, fuzzy search to **seqtree**; Pgen/model from
+  `vdjtools.model`.
+
+**Test data** — verified via PubMed, pinned in `SOURCES.md` (§Phase 10); all owner (Shugay)-co-authored
+BCR datasets. Paths TBD (fill `SOURCES.md` when each is actually fetched — do not fabricate a path first):
+- **Mikelov et al. 2022, *eLife*** — [doi:10.7554/eLife.79254](https://doi.org/10.7554/eLife.79254) —
+  longitudinal UMI-tagged memory-B/ASC BCR repertoires with clonal-lineage/phylogenetic analysis: the
+  canonical Phase-9-MiGEC + Phase-10-lineage target. *(Owner said "Mikelov allergy paper"; the literal
+  allergy match is Mikelov et al. 2025 Nat. Immunol. peanut-OIT, doi:10.1038/s41590-025-02323-3 — but
+  that is a **TCR/scRNA** study without Shugay, so the eLife BCR paper is used here. Confirm intent.)*
+- **TCGA** repertoires via **Bolotin et al. 2017, *Nat. Biotechnol.*** —
+  [doi:10.1038/nbt.3979](https://doi.org/10.1038/nbt.3979) — RNA-seq-derived TCR/BCR (MiXCR method), TCGA IGH.
+- **Grimsholm et al. 2020, *Cell Rep.*** — [doi:10.1016/j.celrep.2020.02.022](https://doi.org/10.1016/j.celrep.2020.02.022)
+  — CD27-dull/bright memory-B VH repertoires + SHM (owner wrote "CD20-dull"; the paper is **CD27**-dull).
+- **Grimsholm et al. 2023, *Cell Rep.*** — [doi:10.1016/j.celrep.2023.112446](https://doi.org/10.1016/j.celrep.2023.112446)
+  — CVID peripheral B-cell selection, Ig-seq.
+
+Risks: SHM-model identifiability; N-fingerprint false merges under short insertions; rooting when
+no near-germline member was sampled; indel-bearing SHM (not just substitutions).
+
+### Phase 11 — `feature/airr-junction` — AIRR field-name consistency
+
+**Status: `v2.2.0` (next minor), item 1 of 3.**
+
+Rename the legacy vdjtools clonotype columns `cdr3nt` / `cdr3aa` → **`junction_nt` / `junction_aa`**
+throughout (schema, IO, model, stats, features, overlap, preprocess, biomarker, sc, cli, tests,
+docs, notebooks). vdjtools' "CDR3" is anchor-inclusive (starts Cys104, ends Phe/Trp118), i.e. the
+AIRR **junction** — so this is a correctness alignment, not just cosmetics.
+
+- **Decision to lock**: strict AIRR uses `junction` (nt) + `junction_aa`; the owner specified the
+  parallel `junction_nt` / `junction_aa`. Default to the owner's `junction_nt`/`junction_aa`; flag
+  the strict-`junction` alternative at the top of the phase. (Ref: `immunogenomics-conventions` —
+  junction includes both conserved anchors; IMGT CDR3 excludes them.)
+- Breaking change → version bump (**v2.2.0** or **v3.0.0** depending on the deprecation policy);
+  consider a compat shim reading old column names with a deprecation warning.
+
+### Phase 12 — `feature/v2.1-residuals` — close the v2.1 gaps (the "1/2/3" gaps)
+
+**Status: `v2.2.0` (next minor), item 2 of 3.**
+
+1. **Full Sphinx API docs** — only `docs/index.rst` + `docs/api.rst` exist and just `model` has an
+   `automodule` ref. Write per-subpackage API pages for `io, stats, features, overlap, preprocess,
+   biomarker, sc, cli` (and `model`). Zero-warning `sphinx-build -W` gate (`sphinx-docs` rules).
+2. **Legacy input-format converters** — readers exist only for `vdjtools` / `airr` / `parquet`.
+   Add MiXcr, MiGec (output table; distinct from the Phase 9 processor), ImmunoSeq v1/v2,
+   ImgtHighVQuest, Vidjil, RTCR → AIRR. Fixtures live on `legacy-1.x`
+   (`src/test/resources/samples/`).
+3. **Paired α/β Pgen** (Phase 7 residual) — single-cell paired-chain generation probability via
+   `vdjmatch.evalue.paired`, wired into `vdjtools.sc`.
+
+### Phase 13 — `feature/model-residuals` — model-engine residuals (the "phase-1 4/5" items)
+
+**Status: `v2.2.0` (next minor), item 3 of 3.**
+
+4. **arda full-length V/J germline helper** — arda ships only CDR3-region germline; the full-length
+   V/J germline needed for arda-native contig stitching is the outstanding **P1c** prerequisite.
+5. **Native perf** — (a) VJ / Hamming-1 codon-boundary sweep to collapse the L+1 transfer-matrix
+   passes to ~1 for VJ loci; (b) native generation sampler (low priority — Python is already fast).
+   *(`estep_batch` read-parallelization is already done.)*
+
+## Design principles
+
+AIRR schema + polars everywhere, minimal OO. Python-first — native C++ (pybind11, single `_core`
+ext) only for hot loops (Pgen DP, generation sampler, EM E-step, UMI consensus). Delegate
+overlap/TCRnet to **vdjmatch**, annotation/markup/germline to **arda**, search/e-value to
+**seqtree** rather than reimplementing. **arda's germline library is the single source of germline
+truth** — all V/D/J germline + CDR3 anchors resolve from arda by allele name
+(`model.reference.load_germline`), so annotation ↔ scenarios ↔ stitching ↔ Pgen ↔ lineage share one
+coordinate frame. Never modify the dependency libraries (`arda`, `vdjmatch`, `seqtree`); everything
+else under `~/vcs/code/` (mirpy, OLGA, IGoR, …) is read-only oracle/reference.
