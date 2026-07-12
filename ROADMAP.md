@@ -175,11 +175,19 @@ AIRR **junction** — so this is a correctness alignment, not just cosmetics.
 
 **Status: `v2.2.0` (next minor), item 3 of 3.**
 
-4. **arda full-length V/J germline helper** — arda ships only CDR3-region germline; the full-length
-   V/J germline needed for arda-native contig stitching is the outstanding **P1c** prerequisite.
-5. **Native perf** — (a) VJ / Hamming-1 codon-boundary sweep to collapse the L+1 transfer-matrix
-   passes to ~1 for VJ loci; (b) native generation sampler (low priority — Python is already fast).
-   *(`estep_batch` read-parallelization is already done.)*
+4. **arda full-length V/J germline helper** — **DONE** (P1c prerequisite closed):
+   `model.reference.load_full_vj_germline(organism)` recovers full-length V/J germline from arda
+   2.5.2's bundled V–J scaffolds (`alleles.fasta`, sliced at `v_sequence_end`/`j_sequence_start`
+   via `arda.annotate.reference.load_reference`); `arda_full_germline(locus, organism)` returns the
+   stitch-ready `{(seg, allele): (full_germline, anchor)}` with anchors derived self-consistently
+   from the CDR3-region germline (verified: `full_V[anchor:]` == CDR3-region germline for all 895
+   functional V / 132 J alleles). arda-native models can now stitch full contigs. `test_full_germline.py`.
+5. **Native perf** — *(deferred to a focused perf session; optimisation of already-exact+fast code,
+   not required for v2.2.0)*: (a) VJ / Hamming-1 codon-boundary sweep to collapse the L+1
+   transfer-matrix passes to ~1 for VJ loci — a delicate `src/pgen.cpp` rewrite that must preserve
+   the exact-Pgen invariant (best done with before/after OLGA-concordance + benchmarks, not rushed);
+   (b) native generation sampler (low priority — Python is already fast). *(`estep_batch`
+   read-parallelization is already done.)*
 
 ## Design principles
 
