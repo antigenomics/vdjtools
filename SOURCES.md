@@ -25,6 +25,16 @@ models, their own IMGT-vintage germline is kept for exact-Pgen fidelity — see 
 | Synthetic out-of-frame training seqs (~100k/chain) | OLGA generation via mirpy tooling; sample at `mirpy/tests/assets/olga_humanTRB_1000.txt.gz` | TSV (V call, J call, CDR3 nt) | generate with OLGA from the models above | **computed** (Monte-Carlo draws); **no tandem D by design** — see plan Phase 1 note |
 | Real AIRR reads (model training, all 7 loci) | HF dataset [`isalgo/airr_model_read`](https://huggingface.co/datasets/isalgo/airr_model_read) (owner, cc-by-nc-nd) | raw 5'-RACE **FASTQ** `{group}/{CHAIN}.{functional,nonfunctional}.fq.gz`; groups = `human`, `human_fetal` (TdT-low), `mouse` | `vdjtools.model.data.prepare(group, chain, label)` = fetch (lazy `huggingface_hub`) → `arda rnaseq map` (V/D/**D2**/J + junction + productivity) → `unique_clonotypes` (dedup to `(v,j,junction)`) | **experimental**; out-of-frame reads train the models (EM), functional reads are the selection test set. D-D annotated per-read via `d2_call`. `yields.tsv` records per-bucket read counts |
 
+## Bundled precomputed models (shipped in the wheel)
+
+Ship under `python/vdjtools/model/_bundled/<source>/<LOCUS>/` (parquet marginals + `manifest.json`);
+loaded with `vdjtools.model.load_bundled(locus, source)`. ~0.4 MB total (30–150 KB/model).
+
+| Model set | Origin | How to rebuild | Provenance |
+|---|---|---|---|
+| `olga` (7 loci) | `from_olga` on the OLGA default models above | `python appendix/build_bundled_models.py` (the OLGA part is inline in the precompute) | **derived** — OLGA generative parameters converted to the polars schema (keeps OLGA germline; exact-Pgen bootstrap, single-D) |
+| `learned` (7 loci) | native EM (`infer_native`) on real out-of-frame HF reads (2 000 unique clonotypes/locus, 12 fixed iters, arda V/J[/D]-masked) seeded from the `olga` model | `python appendix/build_bundled_models.py` | **computed from experimental data** — real-repertoire gene-usage/trim/insertion marginals. **Shipped single-D** (`single_d=True`): unregularized D-D EM over-attributes tandems on real data (tandem-vs-long-insertion identifiability; TRB drifted to P(n_D=2)≈0.28), so learning `P(n_D=2)` needs an arda-anchored per-read n_D gate (pending). The D-D capability itself is validated closed-loop. |
+
 ## Golden fixtures (tests)
 
 | Dataset | Origin | Use |

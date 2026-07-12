@@ -6,6 +6,7 @@ OLGA's format with :func:`from_olga`; native models round-trip through :func:`sa
 :func:`load_model` with no OLGA dependency.
 """
 from . import analyze
+from .bundled import list_bundled, load_bundled
 from .events import Event, EventKind
 from .io import from_olga, load_model, save_model
 from .model import Model
@@ -22,6 +23,8 @@ __all__ = [
     "from_olga",
     "load_model",
     "save_model",
+    "load_bundled",
+    "list_bundled",
     "load_germline",
     "cut_segment",
     "reconcile_olga",
