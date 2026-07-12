@@ -124,10 +124,17 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   nt r(log10)=1.0) and vs the D-D enumeration/`_dd_middle` reference (real TRD max-rel 3.8e-15;
   `test_dd.py::test_aa_dd_equals_nt_sum` now pins native D-D nt per synonymous codon incl. tandem-only
   `CHHF`). NB: the earlier "89× / 2.4 ms" nt figure was never real — see the 1f note.
-- **TODO native perf gaps**: (a) **VJ / Hamming-1 codon-boundary sweep** — the 1-mm ball does L+1 TM
-  passes; a forward/backward codon-boundary sweep would collapse them to ~1 pass for VJ loci (VDJ's
-  D-placement sum couples positions, so L+1 is retained there). (b) native **generation sampler** (Python
-  is already fast — low priority). (c) parallelize `estep_batch` over reads (GIL released) for Nx on multicore.
+- **DONE native pgen batch-parallelization** `src/pgen.cpp::pgen_aa_batch` + `native.pgen_aa_batch(model,
+  seqs, v=, j=, mismatches=, threads=)` — Pgen / 1-mm ball over many CDR3s, partitioned across worker
+  threads (GIL released, disjoint writes → **bitwise-identical** to per-sequence, thread-count-invariant).
+  **11.3× exact / 11.6× 1-mm on 16 cores**. GIL also released on the single `pgen_aa`/`pgen_aa_hamming1`
+  bindings. This is the exact real-workload speedup (Pgen over many clonotypes). `test_native_pgen_batch.py`.
+- **TODO native perf gaps**: (a) **VJ / Hamming-1 codon-boundary sweep** (collapse the 1-mm L+1 TM
+  passes to ~1) — **set aside**: `pgen_aa_vj`'s V/J combine boundary migrates with the delJ sum, so a
+  wildcarded codon has no clean O(1)-per-codon leave-one-out; a forced rewrite risks the exact-Pgen
+  invariant for a non-bottleneck. Batch parallelization (above) is the exact win instead. (b) native
+  **generation sampler** (Python is already fast — low priority). (c) `estep_batch` read-parallelization
+  is done.
 - **DONE model diagnostics** `model/analyze.py` — Bayes-net→graphviz DOT (nodes=marginal entropy H,
   edges=mutual information I; bnlearn-style, rendered via the `dot` CLI — no python-graphviz dep),
   `entropy_table`/`mutual_information`/`compare_entropy`, works on any Model. Cross-locus H table +
