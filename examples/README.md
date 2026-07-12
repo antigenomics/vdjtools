@@ -38,6 +38,19 @@ the committed `aging_manifest.json` (`{filename: md5}`): a file already present
 with the right md5 is skipped with no network call, so a second run downloads
 nothing. The cache directory is never committed.
 
+## `cdr_features.py` — CDR3 physicochemistry & k-mer features
+
+A [marimo](https://marimo.io) notebook computing CDR3 amino-acid features with
+`vdjtools.features` on the aging cohort: `physchem_profile` (hydropathy, charge,
+volume, the 10 Kidera factors) per sample, correlated with donor age (the strongest is
+CDR3 **hydropathy**, Spearman r ≈ −0.45), and `kmer_profile` 3-mer spectra embedded by
+PCA and coloured by age. Pure polars:
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/cdr_features.py
+```
+
 ## `preprocess.py` — the repertoire preprocessing pipeline
 
 A [marimo](https://marimo.io) notebook walking real Britanova samples (three sequencing
