@@ -38,6 +38,23 @@ the committed `aging_manifest.json` (`{filename: md5}`): a file already present
 with the right md5 is skipped with no network call, so a second run downloads
 nothing. The cache directory is never committed.
 
+## `overlap_similarity.py` — exact / fuzzy / similarity-aware overlap
+
+A [marimo](https://marimo.io) notebook contrasting three notions of repertoire
+overlap with `vdjtools.overlap`, on a slice of the Britanova aging cohort: **exact**
+(`Z = I`), **fuzzy** (`Z = 1[≤1 substitution]`), and **similarity-weighted** (the
+TINA / Leinster-Cobbold form `pᵀZq` with a BLOSUM62 kernel `Z = exp(−P/τ)`) — the
+continuous kernel that neither legacy vdjtools nor mirpy has. It builds all-pairs
+distance matrices (`pairwise_distances`), embeds the cohort (`cluster_samples`, metric
+MDS), shows where the similarity kernel finds graded overlap between repertoires that
+share **no identical clonotype**, and runs a convergence test (`tcrnet`). Needs the
+`[overlap]` extra (`vdjmatch`, `seqtree`, `scikit-learn`):
+
+```bash
+pip install -e ".[examples,overlap]"
+marimo edit examples/overlap_similarity.py
+```
+
 ## `emerson_biomarker.py` — CMV / HLA biomarker discovery (interactive)
 
 A [marimo](https://marimo.io) notebook reproducing the core of Emerson et al.
