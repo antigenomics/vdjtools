@@ -38,6 +38,20 @@ the committed `aging_manifest.json` (`{filename: md5}`): a file already present
 with the right md5 is skipped with no network call, so a second run downloads
 nothing. The cache directory is never committed.
 
+## `single_cell.py` — paired-chain single-cell TCR (10x dCODE)
+
+A [marimo](https://marimo.io) notebook running the `vdjtools.sc` single-cell path on the
+public **dCODE donor 4** dataset: `read_10x` (ingest 10x contigs), `chain_multiplicity`
+(TRA/TRB presence-quadrant QC), `resolve_chains`/`pair_chains` (α/β receptors with
+doublet handling), then an unsupervised **1-substitution β-CDR3 clustering** graded
+against the dextramer antigen labels with `cluster_eval` (high purity/q-measure; a
+shuffled labelling collapses the scores). Needs the `[sc]` + `[overlap]` extras:
+
+```bash
+pip install -e ".[examples,sc,overlap]"
+marimo edit examples/single_cell.py
+```
+
 ## `cdr_features.py` — CDR3 physicochemistry & k-mer features
 
 A [marimo](https://marimo.io) notebook computing CDR3 amino-acid features with
