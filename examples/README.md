@@ -37,3 +37,29 @@ The notebook's first cell auto-downloads its inputs from the HuggingFace dataset
 the committed `aging_manifest.json` (`{filename: md5}`): a file already present
 with the right md5 is skipped with no network call, so a second run downloads
 nothing. The cache directory is never committed.
+
+## `emerson_biomarker.py` — CMV / HLA biomarker discovery (interactive)
+
+A [marimo](https://marimo.io) notebook reproducing the core of Emerson et al.
+(*Nat Genet* 2017) on the Emerson **HIP** cohort: an incidence-based **Fisher's
+exact** screen (`vdjtools.biomarker.fisher_association`) for public TCRβ chains
+associated with **CMV serostatus** or **HLA-A\*02**, validated live against a local
+**VDJdb** dump by CMV epitope + HLA allele. The two options of the method are
+interactive dropdowns — the **V/J-match requirement** (CDR3 / +V / +V+J) and
+**exact vs 1-mismatch** CDR3 matching (metaclonotypes) — plus phenotype,
+min-incidence, and the significance threshold. It rediscovers known CMV clones
+(e.g. `CASSLAPGATNEKLFF` ↔ pp65 `NLVPMVATV` / HLA-A\*02:01) from raw repertoires.
+
+```bash
+pip install -e ".[examples,overlap]"          # overlap = vdjmatch, for the 1-mismatch option
+marimo edit examples/emerson_biomarker.py
+```
+
+Data: a **balanced 400-subject subset** of [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip)
+(the Emerson HIP cohort) auto-downloads into the gitignored
+`examples/.data/emerson_nb/` cache (HuggingFace verifies integrity; a re-run
+fetches nothing). VDJdb validation needs a local `vdjdb-db` slim dump and is
+skipped gracefully if absent. The **full 786-subject, non-interactive** version is
+[`emerson_cmv_hla.py`](emerson_cmv_hla.py) — run it with
+`python examples/emerson_cmv_hla.py` (writes volcano plots + a vdjdb-validated hit
+list; peak ~22 GB RAM at full scale).
