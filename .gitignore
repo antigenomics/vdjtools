@@ -34,6 +34,9 @@ docs/_build/
 *.iml
 .DS_Store
 
+# Claude Code local state (session config + nested agent worktrees — never commit)
+.claude/
+
 # scratch
 tmp/
 

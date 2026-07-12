@@ -93,8 +93,10 @@ PYBIND11_MODULE(_core, m) {
     m.def("make_counts", &vdjtools::make_counts, py::arg("model"));
     m.def("estep_batch", &vdjtools::estep_batch, py::arg("model"), py::arg("seqs"),
           py::arg("vmasks"), py::arg("jmasks"), py::arg("dmasks"), py::arg("counts"),
-          py::arg("threads") = 0, py::call_guard<py::gil_scoped_release>(),
-          "One EM E-step: accumulate soft counts, return summed log-Pgen. threads=0 -> auto.");
+          py::arg("threads") = 0, py::arg("dd_allowed") = std::vector<int>{},
+          py::call_guard<py::gil_scoped_release>(),
+          "One EM E-step: accumulate soft counts, return summed log-Pgen. threads=0 -> auto; "
+          "dd_allowed (per-read 0/1, empty=all) gates the n_D=2 tandem E-step.");
 
     // --- iNEXT size-based diversity kernel (Phase 2) ---
     py::class_<vdjtools::InextCurve>(m, "InextCurve")
