@@ -23,13 +23,13 @@ import math
 import numpy as np
 import polars as pl
 
-from ..io.schema import CDR3_AA, J_CALL, V_CALL
+from ..io.schema import JUNCTION_AA, J_CALL, V_CALL
 from .fuzzy import fuzzy_overlap_metrics
 from .metrics import overlap_pair
 from .similarity import similarity_overlap
 
 #: Default clonotype match key (CDR3 aa + V + J), matching the exact-overlap default.
-DEFAULT_KEY = (CDR3_AA, V_CALL, J_CALL)
+DEFAULT_KEY = (JUNCTION_AA, V_CALL, J_CALL)
 
 _SKLEARN_HINT = (
     "scikit-learn is required for cluster_samples(method='mds'); install the extra "

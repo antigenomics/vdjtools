@@ -14,7 +14,7 @@ from vdjtools.io import schema as S
 def _canon():
     df = pl.DataFrame({
         S.V_CALL: ["TRBV5-1", "TRBV7-9"], S.J_CALL: ["TRBJ2-1", "TRBJ2-7"],
-        S.CDR3_AA: ["CASSL", "CASST"], S.CDR3_NT: ["TGTGCC", "TGTAGC"],
+        S.JUNCTION_AA: ["CASSL", "CASST"], S.JUNCTION_NT: ["TGTGCC", "TGTAGC"],
         S.COUNT: [10, 5],
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
@@ -51,7 +51,7 @@ def test_parquet_maps_airr_names(tmp_path):
         "duplicate_count": [7],
     }).write_parquet(p)
     df = vio.read_parquet(p)
-    assert df[S.CDR3_AA][0] == "CASSL"             # junction preferred over cdr3_aa
+    assert df[S.JUNCTION_AA][0] == "CASSL"             # junction preferred over cdr3_aa
     assert df[S.COUNT][0] == 7
 
 

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import polars as pl
 
-from ..io.schema import CDR3_AA, COUNT, J_CALL, V_CALL
+from ..io.schema import JUNCTION_AA, COUNT, J_CALL, V_CALL
 
 #: Default clonotype match key (CDR3 aa + V + J).
-DEFAULT_KEY = (CDR3_AA, V_CALL, J_CALL)
+DEFAULT_KEY = (JUNCTION_AA, V_CALL, J_CALL)
 
 
 def _freq_by_key(df: pl.DataFrame, key: list[str], col: str) -> pl.DataFrame:

@@ -9,8 +9,8 @@ from __future__ import annotations
 import polars as pl
 
 from ..io.schema import (
-    CDR3_AA,
-    CDR3_NT,
+    JUNCTION_AA,
+    JUNCTION_NT,
     J_CALL,
     LOCUS,
     V_CALL,
@@ -19,7 +19,7 @@ from ..io.schema import (
     weight_expr,
 )
 
-_KIND_COL = {"aa": CDR3_AA, "nt": CDR3_NT}
+_KIND_COL = {"aa": JUNCTION_AA, "nt": JUNCTION_NT}
 
 
 def _length_frame(df: pl.DataFrame, kind: str, weight: str) -> pl.DataFrame:
@@ -41,7 +41,7 @@ def spectratype(df: pl.DataFrame, kind: str = "aa", weight: str = "reads",
 
     Args:
         df: A clonotype frame.
-        kind: ``"aa"`` (length of ``cdr3_aa``) or ``"nt"`` (length of ``cdr3_nt``).
+        kind: ``"aa"`` (length of ``junction_aa``) or ``"nt"`` (length of ``junction_nt``).
         weight: ``"reads"``, ``"unique"``, or ``"freq"``.
         by_locus: If ``True``, break the distribution down per locus.
 

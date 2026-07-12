@@ -20,7 +20,7 @@ def _write_native(path, rows, gzipped=True):
 
 
 def test_schema_normalize_adds_missing_and_types():
-    df = pl.DataFrame({S.V_CALL: ["TRBV1"], S.CDR3_AA: ["CASSL"], S.COUNT: ["7"]})
+    df = pl.DataFrame({S.V_CALL: ["TRBV1"], S.JUNCTION_AA: ["CASSL"], S.COUNT: ["7"]})
     out = S.normalize(df, recompute_freq=True)
     assert set(S.COLUMNS) <= set(out.columns)
     assert out[S.COUNT].dtype == pl.Int64
@@ -63,7 +63,7 @@ def test_read_vdjtools_commented_header(tmp_path):
     df = vio.read_vdjtools(p)
     assert df.height == 1
     assert df[S.COUNT].to_list() == [5]
-    assert df[S.CDR3_AA].to_list() == ["CASTV"]
+    assert df[S.JUNCTION_AA].to_list() == ["CASTV"]
     assert df[S.LOCUS].to_list() == ["TRB"]
 
 
@@ -77,10 +77,10 @@ def test_read_airr_collapses_per_read(tmp_path):
     )
     df = vio.read_airr(p)
     assert df.height == 2                                  # two identical rows collapsed
-    row = df.filter(pl.col(S.CDR3_AA) == "CCASSLF").row(0, named=True)
+    row = df.filter(pl.col(S.JUNCTION_AA) == "CCASSLF").row(0, named=True)
     assert row[S.COUNT] == 2
     assert abs(row[S.FREQ] - 2 / 3) < 1e-9
-    assert df.filter(pl.col(S.CDR3_AA) == "CCASSFF")[S.C_CALL].to_list() == [None]
+    assert df.filter(pl.col(S.JUNCTION_AA) == "CCASSFF")[S.C_CALL].to_list() == [None]
 
 
 def test_read_airr_prefers_junction_over_imgt_cdr3(tmp_path):
@@ -92,9 +92,9 @@ def test_read_airr_prefers_junction_over_imgt_cdr3(tmp_path):
         "TRBV12-3\tTRBJ1-1\tASSLR\tCASSLRF\tGCTAGT\tTGTGCTAGTTTT\n"
     )
     df = vio.read_airr(p)
-    assert df[S.CDR3_AA].to_list() == ["CASSLRF"]          # junction, not IMGT ASSLR
-    assert df[S.CDR3_AA].str.len_chars().to_list() == [7]  # 2 longer than ASSLR
-    assert df[S.CDR3_NT].to_list() == ["TGTGCTAGTTTT"]     # junction nt, not cdr3 nt
+    assert df[S.JUNCTION_AA].to_list() == ["CASSLRF"]          # junction, not IMGT ASSLR
+    assert df[S.JUNCTION_AA].str.len_chars().to_list() == [7]  # 2 longer than ASSLR
+    assert df[S.JUNCTION_NT].to_list() == ["TGTGCTAGTTTT"]     # junction nt, not cdr3 nt
 
 
 def test_read_airr_collapse_key_ignores_d_call(tmp_path):

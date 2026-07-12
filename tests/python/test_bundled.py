@@ -54,7 +54,7 @@ def test_learned_models_load_and_score(locus):
         p2 = dict(zip(m.tables["n_d"]["n_d"].to_list(), m.tables["n_d"]["p"].to_list())).get(2, 0.0)
         assert 0.0 <= p2 < 0.1  # anchored -> plausible (not the ~0.28 of unregularized EM)
     df = __import__("vdjtools.model.generate", fromlist=["generate"]).generate(m, 5, seed=0)
-    assert native.pgen_nt(m, df["cdr3_nt"][0].upper(), df["v_call"][0], df["j_call"][0]) >= 0.0
+    assert native.pgen_nt(m, df["junction_nt"][0].upper(), df["v_call"][0], df["j_call"][0]) >= 0.0
 
 
 def test_sources_constant():

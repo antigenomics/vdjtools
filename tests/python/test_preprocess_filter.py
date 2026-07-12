@@ -11,7 +11,7 @@ def _sample(cdr3, counts, v=None, j=None, d=None):
     n = len(cdr3)
     df = pl.DataFrame({
         S.V_CALL: v or ["TRBV1"] * n, S.D_CALL: d or ["TRBD1"] * n,
-        S.J_CALL: j or ["TRBJ1"] * n, S.CDR3_AA: cdr3, S.COUNT: counts,
+        S.J_CALL: j or ["TRBJ1"] * n, S.JUNCTION_AA: cdr3, S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
@@ -21,16 +21,16 @@ def test_filter_functional_drops_stop_and_oof():
     # marker [atgc#~_?]); CASSL is clean coding.
     a = _sample(["CASSL", "CA*SF", "CASaL"], [10, 20, 30])
     coding = pp.filter_functional(a, keep="coding")
-    assert coding[S.CDR3_AA].to_list() == ["CASSL"]
+    assert coding[S.JUNCTION_AA].to_list() == ["CASSL"]
     assert math.isclose(coding[S.FREQ].sum(), 1.0, rel_tol=1e-12)
     noncoding = pp.filter_functional(a, keep="noncoding")
-    assert set(noncoding[S.CDR3_AA].to_list()) == {"CA*SF", "CASaL"}
+    assert set(noncoding[S.JUNCTION_AA].to_list()) == {"CA*SF", "CASaL"}
 
 
 def test_filter_frequency_min_freq():
     a = _sample(["A", "B", "C"], [1, 9, 90])                 # freqs .01 .09 .90
     out = pp.filter_frequency(a, min_freq=0.05)
-    assert set(out[S.CDR3_AA].to_list()) == {"B", "C"}       # drops the .01 clone
+    assert set(out[S.JUNCTION_AA].to_list()) == {"B", "C"}       # drops the .01 clone
 
 
 def test_filter_frequency_top_quantile():
@@ -40,9 +40,9 @@ def test_filter_frequency_top_quantile():
     # cumulative <= q; here 0.6 > 0.25 so nothing passes). Use q=0.65 -> keep top only.
     a = _sample(["T", "M", "S"], [60, 30, 10])
     q = pp.filter_frequency(a, top_quantile=0.65)
-    assert q[S.CDR3_AA].to_list() == ["T"]                   # cum .6<=.65, +.3 -> .9>.65
+    assert q[S.JUNCTION_AA].to_list() == ["T"]                   # cum .6<=.65, +.3 -> .9>.65
     q2 = pp.filter_frequency(a, top_quantile=0.95)
-    assert q2[S.CDR3_AA].to_list() == ["T", "M"]             # .6,.9<=.95 ; +.1 excluded
+    assert q2[S.JUNCTION_AA].to_list() == ["T", "M"]             # .6,.9<=.95 ; +.1 excluded
 
 
 def test_filter_segment_keep_and_remove():
@@ -64,13 +64,13 @@ def test_filter_by_sample_keep_and_remove():
     a = _sample(["CASSL", "CASSF", "CASSX"], [1, 2, 3])
     other = _sample(["CASSL", "CASSF"], [5, 5])
     keep = pp.filter_by_sample(a, other, keep=True)
-    assert set(keep[S.CDR3_AA].to_list()) == {"CASSL", "CASSF"}
+    assert set(keep[S.JUNCTION_AA].to_list()) == {"CASSL", "CASSF"}
     remove = pp.filter_by_sample(a, other, keep=False)
-    assert remove[S.CDR3_AA].to_list() == ["CASSX"]
+    assert remove[S.JUNCTION_AA].to_list() == ["CASSX"]
 
 
 def test_filter_by_sample_key_includes_vj():
     a = _sample(["CASSL"], [1], v=["TRBV1"], j=["TRBJ1"])
     other = _sample(["CASSL"], [1], v=["TRBV9"], j=["TRBJ1"])   # same aa, different V
     assert pp.filter_by_sample(a, other, keep=True).height == 0  # default key has V/J
-    assert pp.filter_by_sample(a, other, keep=True, key=(S.CDR3_AA,)).height == 1
+    assert pp.filter_by_sample(a, other, keep=True, key=(S.JUNCTION_AA,)).height == 1

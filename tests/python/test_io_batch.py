@@ -25,7 +25,7 @@ def test_sniff_and_read_dispatch(tmp_path):
     assert vio.sniff_format(native) == "vdjtools"
     assert vio.sniff_format(airr) == "airr"
     assert vio.read(native).height == 1                   # auto dispatch
-    assert vio.read(airr)[S.CDR3_AA].to_list() == ["CASSLF"]
+    assert vio.read(airr)[S.JUNCTION_AA].to_list() == ["CASSLF"]
 
 
 def test_read_metadata_nan_to_null(tmp_path):

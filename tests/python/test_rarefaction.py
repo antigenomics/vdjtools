@@ -19,7 +19,7 @@ def _frame(counts):
     n = len(counts)
     df = pl.DataFrame({
         S.V_CALL: ["TRBV1"] * n, S.J_CALL: ["TRBJ1"] * n,
-        S.CDR3_AA: [f"CASS{i}" for i in range(n)], S.COUNT: counts,
+        S.JUNCTION_AA: [f"CASS{i}" for i in range(n)], S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 

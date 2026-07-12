@@ -19,11 +19,11 @@ def _paired():
         "pair_id": ["c1_1", "c2_1", "c2_2"],        # unique per receptor pair
         "alpha_v_call": ["TRAV1", "TRAV2", "TRAV3"],
         "alpha_j_call": ["TRAJ1", "TRAJ2", "TRAJ3"],
-        "alpha_cdr3_aa": ["CAAF", "CABF", "CACF"],
+        "alpha_junction_aa": ["CAAF", "CABF", "CACF"],
         "alpha_umi_count": [10, 8, 3], "alpha_duplicate_count": [50, 40, 12],
         "beta_v_call": ["TRBV1", "TRBV2", "TRBV2"],
         "beta_j_call": ["TRBJ1", "TRBJ2", "TRBJ2"],
-        "beta_cdr3_aa": ["CASSF", "CASTF", "CASTF"],
+        "beta_junction_aa": ["CASSF", "CASTF", "CASTF"],
         "beta_umi_count": [20, 15, 15], "beta_duplicate_count": [80, 60, 60],
     })
 
@@ -34,7 +34,7 @@ def test_to_anndata_obs_shape_and_index():
     assert list(ad_obj.obs_names) == ["c1_1", "c2_1", "c2_2"]
     # cell_id preserved (the dual-pair cell c2 appears twice) for GEX alignment.
     assert ad_obj.obs["cell_id"].tolist() == ["c1", "c2", "c2"]
-    assert ad_obj.obs["beta_cdr3_aa"].tolist() == ["CASSF", "CASTF", "CASTF"]
+    assert ad_obj.obs["beta_junction_aa"].tolist() == ["CASSF", "CASTF", "CASTF"]
 
 
 def test_to_anndata_attaches_expression_matrix():

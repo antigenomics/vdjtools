@@ -179,7 +179,7 @@ def _d_seg(prep: _GenPrep, d: str, rng, deld: dict, deld_pairs: dict, *, min1: b
 
 
 def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
-    """One recombination draw -> (cdr3_nt, v, d, j, d2). ``d2`` is the second D for a tandem, else ""."""
+    """One recombination draw -> (junction_nt, v, d, j, d2). ``d2`` is the second D for a tandem, else ""."""
     vdj = prep.chain_type == "VDJ"
     v = _pick(rng, prep.v)
     d, d2 = "", ""
@@ -228,12 +228,12 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
         productive_only: If True, reject out-of-frame / stop-codon draws and keep sampling.
 
     Returns:
-        DataFrame with ``cdr3_nt, cdr3_aa, v_call, d_call, d2_call, j_call, productive``. ``d2_call``
+        DataFrame with ``junction_nt, junction_aa, v_call, d_call, d2_call, j_call, productive``. ``d2_call``
         is the second D of a tandem (``n_D=2``) draw, else null; for a single-D model it is all-null.
     """
     prep = prepare_generation(model)
     rng = np.random.default_rng(seed)
-    cols = ("cdr3_nt", "cdr3_aa", "v_call", "d_call", "d2_call", "j_call", "productive")
+    cols = ("junction_nt", "junction_aa", "v_call", "d_call", "d2_call", "j_call", "productive")
     rows = {k: [] for k in cols}
     got = 0
     guard = 0
@@ -247,8 +247,8 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
         productive = len(cdr3) % 3 == 0 and "*" not in aa and len(cdr3) > 0
         if productive_only and not productive:
             continue
-        rows["cdr3_nt"].append(cdr3)
-        rows["cdr3_aa"].append(aa)
+        rows["junction_nt"].append(cdr3)
+        rows["junction_aa"].append(aa)
         rows["v_call"].append(v)
         rows["d_call"].append(d if d else None)
         rows["d2_call"].append(d2 if d2 else None)

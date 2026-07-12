@@ -10,7 +10,7 @@ def _frame():
         S.V_CALL: ["TRBV1*01", "TRBV1*01"],
         S.J_CALL: ["TRBJ1", "TRBJ1"],
         S.C_CALL: ["IGHM", None],
-        S.CDR3_AA: ["CASSL", "CAS"],
+        S.JUNCTION_AA: ["CASSL", "CAS"],
         S.COUNT: [3, 2],
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
@@ -26,7 +26,7 @@ def test_kmer_profile_reads():
 def test_kmer_profile_unique_short_cdr3_skipped():
     df = pl.DataFrame({
         S.V_CALL: ["TRBV1"], S.J_CALL: ["TRBJ1"], S.C_CALL: [None],
-        S.CDR3_AA: ["AC"], S.COUNT: [1],
+        S.JUNCTION_AA: ["AC"], S.COUNT: [1],
     })
     df = S.add_locus(S.normalize(df, recompute_freq=True))
     prof = F.kmer_profile(df, k=3, weight="unique")     # len 2 < k -> no kmers

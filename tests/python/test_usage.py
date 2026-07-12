@@ -11,7 +11,7 @@ def _frame():
         S.D_CALL: [None, None, "TRBD1", None],
         S.J_CALL: ["TRBJ1-1*01", "TRBJ2-1*01", "TRBJ1-1*01", "TRBJ2-1*01"],
         S.C_CALL: [None, None, None, None],
-        S.CDR3_AA: ["CASSA", "CASSB", "CASSC", "CASSD"],
+        S.JUNCTION_AA: ["CASSA", "CASSB", "CASSC", "CASSD"],
         S.COUNT: [10, 20, 30, 40],
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))

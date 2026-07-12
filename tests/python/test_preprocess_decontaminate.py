@@ -9,7 +9,7 @@ def _sample(cdr3, counts, nt, v=None, j=None):
     n = len(cdr3)
     df = pl.DataFrame({
         S.V_CALL: v or ["TRBV1"] * n, S.J_CALL: j or ["TRBJ1"] * n,
-        S.CDR3_AA: cdr3, S.CDR3_NT: nt, S.COUNT: counts,
+        S.JUNCTION_AA: cdr3, S.JUNCTION_NT: nt, S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
@@ -18,7 +18,7 @@ def test_decontaminate_reads_removes_dominated_clone():
     main = _sample(["CASSF", "CASSK"], [5, 100], ["AAACCC", "GGGTTT"])
     other = _sample(["CASSF"], [500], ["AAACCC"])            # 500 >= 5*20 -> remove CASSF
     out = pp.decontaminate(main, [other], ratio=20.0, by="reads")
-    assert out[S.CDR3_NT].to_list() == ["GGGTTT"]            # only the un-dominated clone
+    assert out[S.JUNCTION_NT].to_list() == ["GGGTTT"]            # only the un-dominated clone
 
 
 def test_decontaminate_reads_keeps_below_ratio():
@@ -38,7 +38,7 @@ def test_decontaminate_freq_mode():
     main = _sample(["CASSF", "CASSK"], [5, 100], ["AAACCC", "GGGTTT"])
     other = _sample(["CASSF"], [500], ["AAACCC"])
     out = pp.decontaminate(main, [other], ratio=20.0, by="freq")
-    assert out[S.CDR3_NT].to_list() == ["GGGTTT"]
+    assert out[S.JUNCTION_NT].to_list() == ["GGGTTT"]
 
 
 def test_decontaminate_key_includes_vj():

@@ -40,13 +40,13 @@ def test_deterministic():
 def test_productive_only():
     df = generate(_tra(), 200, seed=4, productive_only=True)
     assert df["productive"].all()
-    for nt, aa in zip(df["cdr3_nt"], df["cdr3_aa"]):
+    for nt, aa in zip(df["junction_nt"], df["junction_aa"]):
         assert len(nt) % 3 == 0 and "*" not in aa
 
 
 def test_columns_and_calls():
     df = generate(_tra(), 20, seed=0)
-    assert df.columns == ["cdr3_nt", "cdr3_aa", "v_call", "d_call", "d2_call", "j_call", "productive"]
+    assert df.columns == ["junction_nt", "junction_aa", "v_call", "d_call", "d2_call", "j_call", "productive"]
     assert df["d_call"].is_null().all() and df["d2_call"].is_null().all()  # VJ locus has no D
     assert df["v_call"].str.starts_with("TRAV").all()
 
@@ -56,7 +56,7 @@ def test_generated_are_scoreable():
     m = _tra()
     prep = prepare(m)
     df = generate(m, 150, seed=5)
-    pg = np.array([pgen_nt(prep, r["cdr3_nt"], r["v_call"], r["j_call"]) for r in df.to_dicts()])
+    pg = np.array([pgen_nt(prep, r["junction_nt"], r["v_call"], r["j_call"]) for r in df.to_dicts()])
     assert (pg > 0).all(), f"{(pg == 0).sum()} generated sequences had Pgen 0"
 
 
@@ -90,6 +90,6 @@ def test_length_distribution_matches_olga():
     olga_len = [len(sg.gen_rnd_prod_CDR3()[0]) for _ in range(3000)]
 
     mine = generate(from_olga(d, locus="TRB"), 3000, seed=0, productive_only=True)
-    mine_len = mine["cdr3_nt"].str.len_chars().to_list()
+    mine_len = mine["junction_nt"].str.len_chars().to_list()
     # Kolmogorov–Smirnov: distributions should be statistically indistinguishable.
     assert stats.ks_2samp(olga_len, mine_len).pvalue > 0.01

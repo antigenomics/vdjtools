@@ -35,14 +35,14 @@ import warnings
 
 import polars as pl
 
-from ..io.schema import CDR3_AA, COUNT, J_CALL, LOCUS, V_CALL, add_locus
+from ..io.schema import JUNCTION_AA, COUNT, J_CALL, LOCUS, V_CALL, add_locus
 
 _VDJMATCH_HINT = (
     "vdjmatch is required for vdjtools.overlap.tcrnet; install the extra with "
     "`pip install 'vdjtools[overlap]'` (or `pip install vdjmatch>=0.0.1`)."
 )
 
-_COLS = [CDR3_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_control", "E", "p_enrichment", "p_any", LOCUS]
+_COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_control", "E", "p_enrichment", "p_any", LOCUS]
 
 
 def _require_vdjmatch():
@@ -58,19 +58,19 @@ def _require_vdjmatch():
 def _collapse(sample: pl.DataFrame) -> pl.DataFrame:
     """Collapse to unique CDR3s, carrying the most-abundant V/J and the summed count."""
     return (sample.sort(COUNT, descending=True)
-                  .group_by(CDR3_AA, maintain_order=True)
+                  .group_by(JUNCTION_AA, maintain_order=True)
                   .agg(pl.col(V_CALL).first(), pl.col(J_CALL).first(),
                        pl.col(COUNT).sum().alias(COUNT)))
 
 
 def _score(agg, control, params, exclude_exact, threads, evalue, seqtree, locus):
     """Score one already-collapsed (single-locus) frame against ``control``."""
-    cdr3s = agg[CDR3_AA].to_list()
+    cdr3s = agg[JUNCTION_AA].to_list()
     target = seqtree.Index.build(cdr3s, alphabet="aa")
     ev = evalue.query_evalues(target, control, cdr3s, params,
                               threads=threads, exclude_exact=exclude_exact)
-    ev = ev.rename({"query_cdr3": CDR3_AA, "n_target": "n_neighbors"})
-    return (agg.join(ev, on=CDR3_AA, how="left")
+    ev = ev.rename({"query_cdr3": JUNCTION_AA, "n_target": "n_neighbors"})
+    return (agg.join(ev, on=JUNCTION_AA, how="left")
                .with_columns(pl.lit(locus, dtype=pl.Utf8).alias(LOCUS)))
 
 
@@ -101,7 +101,7 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
         threads: Worker threads for the native search (``0`` = all cores).
 
     Returns:
-        One row per unique clonotype (per locus) with columns ``cdr3_aa, v_call,
+        One row per unique clonotype (per locus) with columns ``junction_aa, v_call,
         j_call, duplicate_count, n_neighbors`` (within-sample degree), ``n_control``
         (background degree), ``E`` (expected neighbours), ``p_enrichment`` (Poisson
         tail), ``p_any``, and ``locus`` — sorted by ascending ``p_enrichment``.

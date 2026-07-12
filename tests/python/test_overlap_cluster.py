@@ -23,7 +23,7 @@ _AGING_DIR = Path("examples/.data/aging")
 def _sample(cdr3, counts):
     n = len(cdr3)
     df = pl.DataFrame({S.V_CALL: ["TRBV1"] * n, S.J_CALL: ["TRBJ1"] * n,
-                       S.CDR3_AA: cdr3, S.COUNT: counts})
+                       S.JUNCTION_AA: cdr3, S.COUNT: counts})
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
 
@@ -129,7 +129,7 @@ def _load_aging(n_samples=20, depth_cap=50000, seed=0):
     idx = np.linspace(0, meta.height - 1, n_samples).round().astype(int)
     sel = meta[idx.tolist()]
 
-    key = (S.CDR3_AA, S.V_CALL, S.J_CALL)
+    key = (S.JUNCTION_AA, S.V_CALL, S.J_CALL)
     rng = np.random.default_rng(seed)
     agg, reads = {}, {}
     for sid in sel["sample_id"].to_list():
@@ -161,7 +161,7 @@ def test_aging_divergence_correlates_with_age():
     if ds is None:
         pytest.skip("insufficient cached aging samples")
 
-    key = (S.CDR3_AA, S.V_CALL, S.J_CALL)
+    key = (S.JUNCTION_AA, S.V_CALL, S.J_CALL)
     dm = O.pairwise_distances(ds, metric="F", key=key)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

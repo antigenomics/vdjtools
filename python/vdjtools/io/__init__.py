@@ -8,8 +8,8 @@ from .cohort import ingest_cohort, scan_cohort
 from .read import read_airr, read_parquet, read_vdjtools
 from .schema import (
     C_CALL,
-    CDR3_AA,
-    CDR3_NT,
+    JUNCTION_AA,
+    JUNCTION_NT,
     COLUMNS,
     COUNT,
     D_CALL,
@@ -46,8 +46,8 @@ __all__ = [
     "D_CALL",
     "J_CALL",
     "C_CALL",
-    "CDR3_AA",
-    "CDR3_NT",
+    "JUNCTION_AA",
+    "JUNCTION_NT",
     "COUNT",
     "FREQ",
     "LOCUS",

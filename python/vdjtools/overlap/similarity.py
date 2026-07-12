@@ -45,7 +45,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from ..io.schema import CDR3_AA, COUNT
+from ..io.schema import JUNCTION_AA, COUNT
 
 _SEQTREE_HINT = (
     "seqtree is required for vdjtools.overlap.similarity; install the extra with "
@@ -102,11 +102,11 @@ class SimilarityMatrices:
 def _aggregate(df: pl.DataFrame, key: list[str]) -> pl.DataFrame:
     """Collapse to unique clonotype keys (summing counts), drop non-standard-AA CDR3s,
     recompute within-sample frequency, and attach a 0-based row index."""
-    if CDR3_AA not in key:
-        raise ValueError(f"key must contain {CDR3_AA!r} (the similarity match unit); "
+    if JUNCTION_AA not in key:
+        raise ValueError(f"key must contain {JUNCTION_AA!r} (the similarity match unit); "
                          f"got {tuple(key)!r}")
     agg = df.group_by(key, maintain_order=True).agg(pl.col(COUNT).sum().alias("_count"))
-    agg = agg.filter(pl.col(CDR3_AA).str.contains(_STANDARD_AA))
+    agg = agg.filter(pl.col(JUNCTION_AA).str.contains(_STANDARD_AA))
     total = agg["_count"].sum() or 1
     return agg.with_columns(
         (pl.col("_count") / total).alias("_freq"),
@@ -130,7 +130,7 @@ def _block_labels(keys_a: list, keys_b: list, key: list[str]):
     """
     if len(key) <= 1:
         return None, None
-    cut = key.index(CDR3_AA)
+    cut = key.index(JUNCTION_AA)
     idx: dict = {}
 
     def label(k):
@@ -257,7 +257,7 @@ def _sparse_kernel_block(seqtree, qs, rs, matrix, gap_open, gap_prior, kernel, t
 
 
 def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
-                      key: "tuple[str, ...]" = (CDR3_AA,), kernel: str = "exp",
+                      key: "tuple[str, ...]" = (JUNCTION_AA,), kernel: str = "exp",
                       tau: float | None = None, matrix=None, max_penalty: int | None = None,
                       gap_prior="central",
                       gap_open: int | None = None, dense: bool | None = None,
@@ -267,8 +267,8 @@ def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
     Args:
         a: First clonotype frame (canonical schema).
         b: Second clonotype frame.
-        key: Columns forming the clonotype identity; **must include** ``cdr3_aa`` (the
-            similarity match unit). Default ``("cdr3_aa",)``.
+        key: Columns forming the clonotype identity; **must include** ``junction_aa`` (the
+            similarity match unit). Default ``("junction_aa",)``.
         kernel: ``"exp"`` (``exp(−P/τ)``), ``"step"`` (``1[P ≤ max_penalty]``), or
             ``"identity"`` (``Z = I`` on the key — exact overlap, no seqtree).
         tau: Kernel bandwidth for ``"exp"``; defaults to the matrix scale
@@ -294,7 +294,7 @@ def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
 
     Raises:
         ImportError: If seqtree (or, for the sparse path, scipy) is missing.
-        ValueError: On an unknown ``kernel``/``gap_prior`` or a ``key`` without ``cdr3_aa``.
+        ValueError: On an unknown ``kernel``/``gap_prior`` or a ``key`` without ``junction_aa``.
     """
     key = list(key)
     a_agg = _aggregate(a, key)
@@ -333,8 +333,8 @@ def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
     prior = _gap_prior(seqtree, gap_prior, sub_matrix)
 
     use_dense = dense if dense is not None else max(n_a, n_b) <= _DENSE_MAX_N
-    cdr3_a = a_agg[CDR3_AA].to_list()
-    cdr3_b = b_agg[CDR3_AA].to_list()
+    cdr3_a = a_agg[JUNCTION_AA].to_list()
+    cdr3_b = b_agg[JUNCTION_AA].to_list()
 
     if use_dense:
         p_ab = _dense_penalty(seqtree, cdr3_a, cdr3_b, sub_matrix, gap_open, prior, threads)
@@ -385,7 +385,7 @@ def _quad(x: np.ndarray, Z, y: np.ndarray) -> float:
 
 
 def similarity_overlap(a: pl.DataFrame, b: pl.DataFrame, *,
-                       key: "tuple[str, ...]" = (CDR3_AA,), metric: str = "cosine",
+                       key: "tuple[str, ...]" = (JUNCTION_AA,), metric: str = "cosine",
                        weight: str = "freq", kernel: str = "exp",
                        tau: float | None = None, matrix=None,
                        max_penalty: int | None = None, dense: bool | None = None,
@@ -398,7 +398,7 @@ def similarity_overlap(a: pl.DataFrame, b: pl.DataFrame, *,
     Args:
         a: First clonotype frame.
         b: Second clonotype frame.
-        key: Clonotype identity key (must include ``cdr3_aa``).
+        key: Clonotype identity key (must include ``junction_aa``).
         metric: ``"cosine"`` (``pᵀZq / sqrt(pᵀZp·qᵀZq)``) or ``"morisita"``
             (``2·pᵀZq / (pᵀZp + qᵀZq)``).
         weight: ``"freq"`` (relative abundance) or ``"presence"`` (uniform per clonotype,

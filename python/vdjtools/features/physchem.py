@@ -4,11 +4,11 @@ For each clonotype the mean of a property over the residues of a chosen CDR3 reg
 is computed, then averaged (weighted by reads/frequency, or unweighted) within a
 group (e.g. per V-J pairing, or per locus).
 
-Region definitions (over ``cdr3_aa``, length ``L``):
+Region definitions (over ``junction_aa``, length ``L``):
     ``all``     — the entire CDR3.
-    ``trimmed`` — ``cdr3_aa[3:-3]`` (conserved-anchor-trimmed core); clonotypes with
+    ``trimmed`` — ``junction_aa[3:-3]`` (conserved-anchor-trimmed core); clonotypes with
         ``L <= 6`` have an empty core and are skipped for this region.
-    ``center``  — the middle five residues ``cdr3_aa[L//2-2 : L//2+3]``; clonotypes
+    ``center``  — the middle five residues ``junction_aa[L//2-2 : L//2+3]``; clonotypes
         with ``L < 5`` are skipped for this region.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from importlib import resources
 
 import polars as pl
 
-from ..io.schema import CDR3_AA, LOCUS, add_locus, weight_expr
+from ..io.schema import JUNCTION_AA, LOCUS, add_locus, weight_expr
 
 #: Default property subset: Kidera-factor-free physicochemistry + the 10 Kidera factors.
 DEFAULT_PROPERTIES = (
@@ -49,16 +49,16 @@ def load_property_table() -> pl.DataFrame:
 
 def _region_expr(region: str) -> pl.Expr:
     """Return the CDR3-region substring expression (null where the region is empty)."""
-    length = pl.col(CDR3_AA).str.len_chars()
+    length = pl.col(JUNCTION_AA).str.len_chars()
     if region == "all":
-        return pl.col(CDR3_AA)
+        return pl.col(JUNCTION_AA)
     if region == "trimmed":
         return (pl.when(length > 6)
-                  .then(pl.col(CDR3_AA).str.slice(3, length - 6))
+                  .then(pl.col(JUNCTION_AA).str.slice(3, length - 6))
                   .otherwise(None))
     if region == "center":
         return (pl.when(length >= 5)
-                  .then(pl.col(CDR3_AA).str.slice(length // 2 - 2, 5))
+                  .then(pl.col(JUNCTION_AA).str.slice(length // 2 - 2, 5))
                   .otherwise(None))
     raise ValueError(f"region must be 'all', 'trimmed' or 'center'; got {region!r}")
 

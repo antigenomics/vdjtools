@@ -1,6 +1,6 @@
 """Frequency-based sequencing-error correction (polars; neighbour search via seqtree).
 
-Reimplements the legacy vdjtools ``Corrector``. Clonotypes whose ``cdr3_nt`` sit
+Reimplements the legacy vdjtools ``Corrector``. Clonotypes whose ``junction_nt`` sit
 within a few substitutions of a much more abundant clonotype are treated as PCR /
 sequencing errors of that parent and merged into it.
 
@@ -17,7 +17,7 @@ import numpy as np
 import polars as pl
 
 from ..io.schema import (
-    CDR3_NT,
+    JUNCTION_NT,
     COUNT,
     J_CALL,
     V_CALL,
@@ -84,7 +84,7 @@ def _neighbours(seqs: "list[str]", max_mismatches: int):
 def _correct_block(block: pl.DataFrame, max_mismatches: int,
                    log_ratio_threshold: float) -> pl.DataFrame:
     """Correct one block (all rows share V/J when ``same_vj``); returns kept rows."""
-    seqs = [s.upper() for s in block[CDR3_NT].to_list()]
+    seqs = [s.upper() for s in block[JUNCTION_NT].to_list()]
     neighbours = _neighbours(seqs, max_mismatches)
     counts = block[COUNT].to_numpy()
     corrected = _corrected_counts(counts, neighbours, log_ratio_threshold)
@@ -96,14 +96,14 @@ def correct(df: pl.DataFrame, max_mismatches: int = 2, ratio: float = 0.05,
             same_vj: bool = False) -> pl.DataFrame:
     """Merge low-frequency sequencing-error clonotypes into their parents.
 
-    Reimplements ``Corrector``. Clonotype pairs whose ``cdr3_nt`` are within
+    Reimplements ``Corrector``. Clonotype pairs whose ``junction_nt`` are within
     ``max_mismatches`` substitutions are compared by abundance: a smaller clonotype
     is merged into a larger one when its count is below ``ratio ** m`` times the
     larger's (``m`` = number of substitutions). All decisions use the *original*
     counts (a single, order-independent pass, as in the legacy parallel stream).
 
     Args:
-        df: A clonotype frame with ``cdr3_nt`` and ``duplicate_count`` columns.
+        df: A clonotype frame with ``junction_nt`` and ``duplicate_count`` columns.
         max_mismatches: Maximum substitutions for two clonotypes to be neighbours
             (legacy default 2); insertions/deletions are not considered.
         ratio: Per-mismatch parent/child count ratio (legacy default 0.05). A child
@@ -117,7 +117,7 @@ def correct(df: pl.DataFrame, max_mismatches: int = 2, ratio: float = 0.05,
     Returns:
         The corrected frame (errors dropped, parents' counts increased), sorted by
         descending ``duplicate_count`` with ``frequency`` recomputed. Rows with a
-        null ``cdr3_nt`` pass through uncorrected.
+        null ``junction_nt`` pass through uncorrected.
 
     Raises:
         ImportError: If seqtree is not installed (see the ``preprocess`` extra).
@@ -131,7 +131,7 @@ def correct(df: pl.DataFrame, max_mismatches: int = 2, ratio: float = 0.05,
     d = normalize(df)
 
     # Only ACGT nucleotide junctions can be searched; the rest pass through.
-    valid = pl.col(CDR3_NT).is_not_null() & pl.col(CDR3_NT).str.to_uppercase().str.contains(
+    valid = pl.col(JUNCTION_NT).is_not_null() & pl.col(JUNCTION_NT).str.to_uppercase().str.contains(
         r"^[ACGT]+$"
     )
     passthrough = d.filter(~valid)

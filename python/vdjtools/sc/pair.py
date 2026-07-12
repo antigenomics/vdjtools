@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from ..io.schema import CDR3_AA, J_CALL, LOCUS, V_CALL
+from ..io.schema import JUNCTION_AA, J_CALL, LOCUS, V_CALL
 from .read import CELL_ID, COUNT, SEQUENCE_ID, UMI_COUNT
 
 HEAVY_LOCI: tuple[str, ...] = ("TRB", "TRD", "IGH")
@@ -146,7 +146,7 @@ def pair_chains(
 
     Returns:
         One row per paired receptor with ``cell_id, pair_id, alpha_v_call,
-        alpha_j_call, alpha_cdr3_aa, alpha_umi_count, alpha_duplicate_count`` and the
+        alpha_j_call, alpha_junction_aa, alpha_umi_count, alpha_duplicate_count`` and the
         matching ``beta_*`` columns.
 
     Raises:
@@ -176,18 +176,18 @@ def pair_chains(
                 "cell_id": str(cid),
                 "pair_id": f"{cid}_{idx}" if multi else str(cid),
                 "alpha_v_call": a.get(V_CALL), "alpha_j_call": a.get(J_CALL),
-                "alpha_cdr3_aa": a.get(CDR3_AA),
+                "alpha_junction_aa": a.get(JUNCTION_AA),
                 "alpha_umi_count": a.get(UMI_COUNT), "alpha_duplicate_count": a.get(COUNT),
                 "beta_v_call": b.get(V_CALL), "beta_j_call": b.get(J_CALL),
-                "beta_cdr3_aa": b.get(CDR3_AA),
+                "beta_junction_aa": b.get(JUNCTION_AA),
                 "beta_umi_count": b.get(UMI_COUNT), "beta_duplicate_count": b.get(COUNT),
             })
 
     schema = {
         "cell_id": pl.Utf8, "pair_id": pl.Utf8,
-        "alpha_v_call": pl.Utf8, "alpha_j_call": pl.Utf8, "alpha_cdr3_aa": pl.Utf8,
+        "alpha_v_call": pl.Utf8, "alpha_j_call": pl.Utf8, "alpha_junction_aa": pl.Utf8,
         "alpha_umi_count": pl.Int64, "alpha_duplicate_count": pl.Int64,
-        "beta_v_call": pl.Utf8, "beta_j_call": pl.Utf8, "beta_cdr3_aa": pl.Utf8,
+        "beta_v_call": pl.Utf8, "beta_j_call": pl.Utf8, "beta_junction_aa": pl.Utf8,
         "beta_umi_count": pl.Int64, "beta_duplicate_count": pl.Int64,
     }
     if not rows:
@@ -245,7 +245,7 @@ def flag_mispairing(
     across the dataset, the master itself is flagged as **ambient** (a β smeared across
     too many barcodes).
 
-    Chains are keyed on ``(v_call, j_call, cdr3_aa)`` per side, so identical clonotypes
+    Chains are keyed on ``(v_call, j_call, junction_aa)`` per side, so identical clonotypes
     across cells are recognised as the same master / slave.
 
     Args:
@@ -271,9 +271,9 @@ def flag_mispairing(
         )
         return out.drop("mispairing_flag", "mispairing_reason") if drop else out
 
-    beta_key = pl.concat_str("beta_v_call", "beta_j_call", "beta_cdr3_aa",
+    beta_key = pl.concat_str("beta_v_call", "beta_j_call", "beta_junction_aa",
                              separator="|", ignore_nulls=False)
-    alpha_key = pl.concat_str("alpha_v_call", "alpha_j_call", "alpha_cdr3_aa",
+    alpha_key = pl.concat_str("alpha_v_call", "alpha_j_call", "alpha_junction_aa",
                               separator="|", ignore_nulls=False)
     work = paired.with_columns(
         beta_key.alias("_mkey"),
