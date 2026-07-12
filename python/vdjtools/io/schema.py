@@ -6,19 +6,20 @@ and every analysis function consumes it. Kept deliberately minimal (free functio
 no classes) to mirror the vdjmatch / arda convention.
 
 Columns:
-    ``v_call, d_call, j_call, c_call`` (Utf8, nullable) — IMGT segment calls;
-        ``c_call`` is frequently absent in native vdjtools data.
-    ``junction_aa`` (Utf8) — the junction amino-acid sequence (conserved anchors
-        Cys104 … Phe/Trp118 **INCLUDED**), per the AIRR ``junction_aa`` convention
-        (equivalently the legacy vdjtools ``cdr3aa``). This is two residues longer
-        than the IMGT ``cdr3_aa`` (anchors excluded); readers prefer the junction form.
-    ``junction_nt`` (Utf8, nullable) — the junction nucleotide sequence (anchors
-        included), matching ``junction_aa`` above. AIRR spells the nucleotide junction
-        ``junction`` (no ``_nt`` suffix); readers accept that (and legacy ``cdr3_nt``)
-        as input aliases.
-    ``duplicate_count`` (Int64) — read/UMI count for the clonotype.
-    ``frequency`` (Float64) — ``duplicate_count`` normalised within the sample.
-    ``locus`` (Utf8, derived) — first three characters of ``v_call`` (``TRB``, ``IGH`` …).
+
+* ``v_call, d_call, j_call, c_call`` (Utf8, nullable) — IMGT segment calls;
+  ``c_call`` is frequently absent in native vdjtools data.
+* ``junction_aa`` (Utf8) — the junction amino-acid sequence (conserved anchors
+  Cys104 … Phe/Trp118 **INCLUDED**), per the AIRR ``junction_aa`` convention
+  (equivalently the legacy vdjtools ``cdr3aa``). This is two residues longer
+  than the IMGT ``cdr3_aa`` (anchors excluded); readers prefer the junction form.
+* ``junction_nt`` (Utf8, nullable) — the junction nucleotide sequence (anchors
+  included), matching ``junction_aa`` above. AIRR spells the nucleotide junction
+  ``junction`` (no ``_nt`` suffix); readers accept that (and legacy ``cdr3_nt``)
+  as input aliases.
+* ``duplicate_count`` (Int64) — read/UMI count for the clonotype.
+* ``frequency`` (Float64) — ``duplicate_count`` normalised within the sample.
+* ``locus`` (Utf8, derived) — first three characters of ``v_call`` (``TRB``, ``IGH`` …).
 """
 from __future__ import annotations
 
