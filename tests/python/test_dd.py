@@ -268,7 +268,10 @@ def _tiny_aligned_dd_model(p_nd2=0.6) -> Model:
 def test_aa_dd_equals_nt_sum():
     """aa D-D Pgen (Python and native) == Σ nt-Pgen over synonymous codons, on a codon-aligned model.
 
-    ``CHHF`` is tandem-only (single D can't tile it); ``CHIF`` requires a real DD insertion.
+    Also pins native nt D-D Pgen: ``native.pgen_nt`` routes an in-frame CDR3 through the aa transfer
+    matrix (singleton codon masks, incl. the ``p_nd2`` tandem term) and must equal the Python
+    ``_dd_middle`` enumeration per nt. ``CHHF`` is tandem-only (single D can't tile it); ``CHIF``
+    requires a real DD insertion.
     """
     import itertools
     from collections import defaultdict
@@ -283,7 +286,12 @@ def test_aa_dd_equals_nt_sum():
         syn[a].append(cod)
     tandem_seen = False
     for aa in ("CHF", "CHHF", "CHIF"):
-        brute = sum(pgen.pgen_nt(prep, "".join(c), "V", "J") for c in itertools.product(*[syn[a] for a in aa]))
+        brute = 0.0
+        for c in itertools.product(*[syn[a] for a in aa]):
+            nt = "".join(c)
+            p_ref = pgen.pgen_nt(prep, nt, "V", "J")  # Python enumeration (single-D + _dd_middle)
+            assert native.pgen_nt(m, nt, "V", "J") == pytest.approx(p_ref, rel=1e-9, abs=1e-300)
+            brute += p_ref
         assert pgen.pgen_aa(prep, aa, "V", "J") == pytest.approx(brute, rel=1e-9, abs=1e-300)
         assert native.pgen_aa(m, aa, "V", "J") == pytest.approx(brute, rel=1e-8, abs=1e-300)
         if aa == "CHHF":

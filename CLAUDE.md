@@ -111,15 +111,19 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   sums the Hamming-1 ball via OLGA's inclusion-exclusion identity `Σ_k Pgen(a_{k→*}) − (L−1)Pgen(a)`
   but each term is one fast TM pass. Matches `compute_hamming_dist_1_pgen` to ~1e-15; **8.7x** faster on
   TRB, **2.5x** on TRA (`test_native_aa_hamming1_matches_olga`). Documented in `murugan_model.tex` §M.6.
-- **DONE 1i (native nt Pgen via the aa transfer matrix)** `src/pgen.cpp::pgen_nt` — an in-frame nt
-  CDR3 (length always ×3, Cys→Phe/Trp) is exactly an aa query with a **singleton allowed-codon mask**
-  per position, so the same `pgen_aa_masked` Pi_L·Pi_R DP gives the identical value far faster than the
-  per-`(V,J,delV,delJ)` D enumeration it used before. Single-D VDJ nt now **0.53 ms/seq TRB** (was ~28 ms
-  → **53×**, and **9×** faster than OLGA's 4.8 ms); exact vs OLGA to machine precision on all 7 loci
+- **DONE 1i (native nt Pgen via the aa transfer matrix — single-D *and* D-D)** `src/pgen.cpp::pgen_nt`
+  — an in-frame nt CDR3 (length always ×3, Cys→Phe/Trp) is exactly an aa query with a **singleton
+  allowed-codon mask** per position, so the same `pgen_aa_masked` Pi_L·Pi_R DP gives the identical value
+  far faster than the per-`(V,J,delV,delJ)` D enumeration it used before. `pgen_aa_masked` mixes the
+  D-count prior itself (`p_nd1`·single-D + `p_nd2`·`pgen_aa_vdj_dd`), so **both single-D and D-D nt route
+  through the TM**. Gated only on `m.vdj && N%3==0`; the enumeration (`pgen_nt` outer loop → `d_middle`/
+  `dd_middle`) is retained solely for non-in-frame nt (`N%3≠0`, never a real CDR3) and as the oracle.
+  Speed: single-D VDJ nt **0.53 ms/seq TRB** (was ~28 ms → **53×**, **9×** faster than OLGA's 4.8 ms);
+  D-D nt **~15 ms/seq TRD** (was ~350 ms via `dd_middle` → **24×**). Exact vs OLGA on all 7 loci
   (`test_native.py::test_native_matches_python` rtol 1e-9; slow exhaustive + `appendix/concordance.py`
-  nt r(log10)=1.0). Gated on `!(dd && p_nd2>0)`: the **D-D nt path (`dd_middle`) and VJ path are kept
-  intact** (VJ was already fast; D-D nt stays on the exact enumeration). No new tests (existing native
-  guard already covers it). NB: the earlier "89× / 2.4 ms" nt figure was never real — see the 1f note.
+  nt r(log10)=1.0) and vs the D-D enumeration/`_dd_middle` reference (real TRD max-rel 3.8e-15;
+  `test_dd.py::test_aa_dd_equals_nt_sum` now pins native D-D nt per synonymous codon incl. tandem-only
+  `CHHF`). NB: the earlier "89× / 2.4 ms" nt figure was never real — see the 1f note.
 - **TODO native perf gaps**: (a) **VJ / Hamming-1 codon-boundary sweep** — the 1-mm ball does L+1 TM
   passes; a forward/backward codon-boundary sweep would collapse them to ~1 pass for VJ loci (VDJ's
   D-placement sum couples positions, so L+1 is retained there). (b) native **generation sampler** (Python
@@ -148,6 +152,8 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   DD-insertion sweep (O(nD²L²N + nD·N²), not naive O(nD²L⁴N²)). Exact vs Python reference on the tiny
   model; ~255 ms/seq on real TRD (naive was seconds/seq → timed out). `native.pgen_nt` supports tandems
   (`pack` no longer guards); OLGA cannot compute D-D Pgen at all. `test_native_dd_matches_python_reference`.
+  **Superseded for in-frame nt by the aa transfer matrix (1i, ~15 ms/seq, 24×)** — `dd_middle` now runs
+  only for non-in-frame nt and as the correctness oracle; it stays exact and is the reference the TM checks against.
 - **DONE real-data EM comparison** `appendix/bench_em.py` — `infer_native` on real nonfunc TRB+TRD reads
   (single-D, arda-masked) vs legacy OLGA via `analyze`. Finding: **real repertoires have broader
   trim/insertion entropy than OLGA's synthetic model** (TRB d_del 6.4→7.6 bit, vd_ins 3.8→4.5); within-D

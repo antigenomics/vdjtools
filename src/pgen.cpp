@@ -193,10 +193,12 @@ double pgen_nt(const PackedModel& m, const std::vector<int8_t>& cdr3, int v_idx,
     int N = cdr3.size();
     const int8_t* s = cdr3.data();
 
-    // Fast path: in-frame VDJ nt CDR3 with no active tandem contribution reduces to an aa query
-    // with singleton codon masks (exact, ~10x faster than the enumeration below). VJ loci are
-    // already fast via the direct insertion product; the D-D nt path (dd_middle) is kept intact.
-    if (m.vdj && N % 3 == 0 && !(m.dd && m.p_nd2 > 0.0)) {
+    // Fast path: an in-frame VDJ nt CDR3 reduces to an aa query with singleton codon masks, so the
+    // Pi_L*Pi_R transfer matrix gives the identical value ~50x faster than the enumeration below.
+    // `pgen_aa_masked` mixes the D-count prior itself (p_nd1*single-D + p_nd2*tandem), so this covers
+    // single-D *and* D-D. The enumeration below only runs for non-in-frame nt (N%3!=0) and VJ loci
+    // (the latter are already fast via the direct insertion product).
+    if (m.vdj && N % 3 == 0) {
         int Lc = N / 3;
         std::vector<uint64_t> allowed(Lc);
         for (int c = 0; c < Lc; ++c) {
