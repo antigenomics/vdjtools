@@ -18,7 +18,7 @@ from vdjtools.model import pgen
 from vdjtools.model.dd import to_dd
 from vdjtools.model.pgen import _dd_middle
 
-OLGA = Path("/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models")
+OLGA = Path(str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"))
 # from_olga needs the olga package (the [oracle] extra), not just the model files on disk; CI runs
 # [test] only, so guard on the package too — these skip, they don't error (cf. commit 833e237).
 _OLGA_OK = OLGA.exists() and importlib.util.find_spec("olga") is not None

@@ -23,7 +23,7 @@ from vdjtools.model.infer import infer
 OLGA_MODELS = Path(
     os.environ.get(
         "VDJTOOLS_OLGA_MODELS",
-        "/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models",
+        str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"),
     )
 )
 pytest.importorskip("olga.load_model", reason="olga (the [oracle] extra) not installed")
