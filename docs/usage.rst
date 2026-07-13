@@ -37,9 +37,9 @@ Loading data
 ------------
 
 :mod:`vdjtools.io` reads native vdjtools, AIRR Rearrangement TSV, and Parquet, and
-auto-detects and converts the common third-party formats (MiXcr v1–4, MiGec, Adaptive
-immunoSEQ v1/v2, IMGT/HighV-QUEST, Vidjil, RTCR). Every reader returns the same canonical
-frame:
+auto-detects and converts the common third-party formats (MiXcr v1–4 incl. the C-gene / BCR
+isotype, MiGec, Adaptive immunoSEQ v1/v2, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, and arda's
+AIRR annotation output). Every reader returns the same canonical frame:
 
 .. code-block:: python
 

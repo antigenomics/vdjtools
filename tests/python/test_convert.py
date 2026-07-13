@@ -17,7 +17,7 @@ FIX = Path(__file__).parent / "fixtures" / "legacy"
 # Each expected row is a verified worked example (input row -> canonical values).
 CASES = {
     "mixcr": (convert.read_mixcr, "mixcr.txt.gz", [
-        dict(v="TRBV13", j="TRBJ2-4", aa="CASSLGENIQYF",
+        dict(v="TRBV13", j="TRBJ2-4", c="TRBC1", aa="CASSLGENIQYF",
              nt="TGTGCCAGCAGCTTAGGGGAAAACATTCAGTACTTC", count=16988),
     ]),
     "mixcr3": (convert.read_mixcr, "mixcr.3.txt.gz", None),
@@ -44,6 +44,12 @@ CASES = {
     "vidjil": (convert.read_vidjil, "vidjil.txt.gz", [
         dict(v="IGHV3-9", j="IGHJ6", aa="CAPGGMDVW", nt="TGTGCACCCGGAGGTATGGACGTCTGG"),
     ]),
+    # TRUST4 report: CDR3 = junction (anchors included); C is the constant/isotype hit.
+    "trust4": (convert.read_trust4, "trust4.txt.gz", [
+        dict(v="TRBV13", j="TRBJ2-4", c="TRBC2", aa="CASSLGENIQYF",
+             nt="TGTGCCAGCAGCTTAGGGGAAAACATTCAGTACTTC", count=152),
+        dict(v="TRBV19", j="TRBJ2-7", c="TRBC1", aa="CARMGQLSYEQYF", count=88),
+    ]),
 }
 
 
@@ -51,6 +57,7 @@ _SNIFF = {
     "mixcr.txt.gz": "mixcr", "mixcr.3.txt.gz": "mixcr", "migec.txt.gz": "migec",
     "rtcr.txt.gz": "rtcr", "imgthighvquest.txt.gz": "imgt", "vidjil.txt.gz": "vidjil",
     "immunoseq.txt.gz": "immunoseq", "immunoseqv2.txt.gz": "immunoseq",
+    "trust4.txt.gz": "trust4",
 }
 
 
@@ -85,6 +92,8 @@ def test_converter_conformance(name):
         assert row["j_call"] == want["j"], f"{name} j_call: {row['j_call']} != {want['j']}"
         if "d" in want:
             assert row["d_call"] == want["d"], f"{name} d_call: {row['d_call']} != {want['d']}"
+        if "c" in want:
+            assert row["c_call"] == want["c"], f"{name} c_call: {row['c_call']} != {want['c']}"
         if "nt" in want:
             assert row["junction_nt"] == want["nt"], f"{name} junction_nt mismatch"
         if "count" in want:
@@ -118,6 +127,40 @@ def test_convert_helper_edges():
     assert convert.to_unified_cdr3aa(None) is None
     assert convert._to_int("null", "x") == 0          # nothing numeric → 0
     assert convert._to_int("0", "50") == 50           # skip non-positive → fallback
+
+
+def test_mixcr_reads_c_gene_and_bcr_isotype():
+    """MiXcr C-hit column → ``c_call``: TCR constant (v1/2) and BCR isotype (v3/4)."""
+    tcr = convert.read_mixcr(FIX / "mixcr.txt.gz")
+    assert tcr["c_call"].drop_nulls().is_in(["TRBC1", "TRBC2"]).all()
+    bcr = convert.read_mixcr(FIX / "mixcr.3.txt.gz")            # allCHitsWithScore = isotype
+    assert bcr.filter(pl.col("junction_aa") == "CARKKLEGRFDYW")["c_call"][0] == "IGHG4"
+    assert bcr["c_call"].drop_nulls().str.starts_with("IGH").all()
+
+
+def test_trust4_skips_partial_and_missing_segment_clones():
+    """TRUST4 ``partial`` / non-ACGT CDR3s and gene-less (``*``) clones are dropped."""
+    df = convert.read_trust4(FIX / "trust4.txt.gz")
+    assert df.height == 2                                        # 2 of 4 rows survive
+    assert set(df["c_call"]) == {"TRBC1", "TRBC2"}
+    assert df["junction_nt"].str.contains(r"^[ACGT]+$").all()
+
+
+def test_read_arda_maps_airr_and_nulls_empty_calls(tmp_path):
+    """arda's AIRR output reads via read_arda; its literal ``\"\"`` empty gene call → null."""
+    p = tmp_path / "x.airr.tsv"
+    p.write_text(
+        "sequence_id\tlocus\tv_call\td_call\td2_call\tj_call\tc_call\tjunction\tjunction_aa\tduplicate_count\n"
+        'r1\tIGK\tIGKV1-33*01\t""\t\tIGKJ2*02\tIGKC\tTGTCAACAGTATGACAATCTCCCGTACACTTTT\tCQQYDNLPYTF\t40\n'
+    )
+    from vdjtools import io as vio
+    assert vio.sniff_format(p) == "arda"                        # d2_call routes to read_arda
+    df = vio.read(p)                                            # auto-detect + dispatch
+    assert df.columns == [*COLUMNS, LOCUS]
+    r = df.row(0, named=True)
+    assert r["d_call"] is None                                  # arda's ``""`` empty-D nulled
+    assert (r["c_call"], r["junction_aa"], r["duplicate_count"], r["locus"]) == \
+        ("IGKC", "CQQYDNLPYTF", 40, "IGK")
 
 
 def test_immunoseq_count_falls_back_when_templates_zero(tmp_path):

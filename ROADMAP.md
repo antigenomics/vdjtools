@@ -30,7 +30,12 @@ tracks all data provenance.
 
 ## Upcoming
 
-**Next minor release — `v2.2.0`** bundles Phases **11 → 12 → 13** (owner directive 2026-07-13):
+**Released — `v2.2.1`** (patch, 2026-07-13): docs user guide with runnable per-module examples +
+version in the navbar; MiXcr converter now reads the **C-gene / BCR isotype** hit; new **TRUST4**
+(`read_trust4`) and **arda** (`read_arda`, delegates to `read_airr`) converters; plus the two
+post-2.2.0 audit bug fixes (metadata-column collision, immunoSEQ count fallback).
+
+**Released — `v2.2.0`** bundled Phases **11 → 12 → 13** (owner directive 2026-07-13):
 AIRR `junction_nt`/`junction_aa` rename → close the v2.1 residual gaps → model-engine residuals.
 
 The **BCR track — Phases 9 (MiGEC UMI correction) + 10 (BCR SHM/lineage) — is deferred** to a

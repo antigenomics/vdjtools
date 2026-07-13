@@ -29,7 +29,7 @@ Built on the antigenomics ecosystem:
 
 > **Status: `v2.2.0`** — the native V(D)J model engine plus the full analytics suite (diversity,
 > overlap/TCRnet, preprocessing, biomarkers, single-cell), CDR features, and legacy-format ingestion
-> (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR). Clonotype columns follow the AIRR
+> (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype columns follow the AIRR
 > **junction** convention (`junction_nt` / `junction_aa`). The legacy v1.x tool lives on the
 > [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch and its releases
 > remain available under the repository tags (`v0.0.1` … `1.2.1`).
@@ -177,7 +177,8 @@ suites (`RUN_BENCHMARK=1`).
 
 - **IO** — canonical clonotype frame on AIRR **junction** columns (`junction_nt` / `junction_aa`);
   readers for native vdjtools, AIRR Rearrangement TSV, and Parquet, plus format-detecting converters
-  for MiXcr (v1/2 + v3/4), MiGec, Adaptive immunoSEQ (v1/v2), IMGT/HighV-QUEST, Vidjil, and RTCR
+  for MiXcr (v1/2 + v3/4, incl. C-gene / BCR isotype), MiGec, Adaptive immunoSEQ (v1/v2),
+  IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, and arda AIRR output
   ([`vdjtools.io.convert`](python/vdjtools/io/convert.py)); metadata-driven batch + hive-partitioned cohorts.
 - **Model** — native V(D)J recombination model: generation probability (Pgen — nt, aa,
   1-mismatch, V/J-agnostic, **thread-parallel batch**), sequence generation, and EM inference, all in a

@@ -5,12 +5,14 @@ gene-name normalisation and CDR3 handling were lifted verbatim from the Groovy
 ``com.antigenomics.vdjtools.io.parser`` classes) so third-party tool output can be read
 straight into the canonical AIRR-junction frame of :mod:`vdjtools.io.schema`:
 
-* **MiXcr** (v1/2 *and* v3/4 header dialects) — :func:`read_mixcr`
+* **MiXcr** (v1/2 *and* v3/4 header dialects, incl. the C-gene / isotype hit) — :func:`read_mixcr`
 * **MiGec** — :func:`read_migec`
 * **Adaptive immunoSEQ** v1 and v2 — :func:`read_immunoseq`
 * **IMGT/HighV-QUEST** — :func:`read_imgt`
 * **Vidjil** (``.vidjil`` JSON) — :func:`read_vidjil`
 * **RTCR** — :func:`read_rtcr`
+* **TRUST4** (``*_report.tsv``) — :func:`read_trust4`
+* **arda** (AIRR annotation output) — :func:`read_arda`
 
 Every reader returns the canonical frame: V/D/J IMGT calls, ``junction_nt`` / ``junction_aa``
 (the AIRR junction — conserved Cys104 … Phe/Trp118 anchors **included**, matching the legacy
@@ -28,7 +30,7 @@ from pathlib import Path
 import polars as pl
 
 from . import schema
-from .read import _read_tsv
+from .read import _read_tsv, read_airr
 from .schema import (
     C_CALL,
     COUNT,
@@ -208,6 +210,7 @@ def read_mixcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
     v_c = _pick(lo, "all v hits", "allvhitswithscore")
     d_c = _pick(lo, "all d hits", "alldhitswithscore")
     j_c = _pick(lo, "all j hits", "alljhitswithscore")
+    c_c = _pick(lo, "all c hits", "allchitswithscore")  # C gene / BCR isotype (v1/2 & v3/4)
     nt_c = _pick(lo, "n. seq. cdr3", "nseqcdr3", "nseqimputedcdr3")
     aa_c = _pick(lo, "aa. seq. cdr3", "aaseqcdr3", "aaseqimputedcdr3")
     if not (count_c and v_c and j_c and nt_c and aa_c):
@@ -217,7 +220,7 @@ def read_mixcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
         cnt = r[count_c]
         rows.append({
             V_CALL: extract_vdj(r[v_c]), D_CALL: extract_vdj(r[d_c]) if d_c else None,
-            J_CALL: extract_vdj(r[j_c]),
+            J_CALL: extract_vdj(r[j_c]), C_CALL: extract_vdj(r[c_c]) if c_c else None,
             JUNCTION_NT: (r[nt_c] or "").upper() or None,
             JUNCTION_AA: r[aa_c],  # MiXcr aa is milib-based — kept verbatim (no unify)
             COUNT: _to_int(cnt),
@@ -392,3 +395,53 @@ def read_vidjil(path: str | os.PathLike, sample_id: int = 0) -> pl.DataFrame:
             COUNT: _to_int(cnt),
         })
     return _finalize(rows)
+
+
+def read_trust4(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
+    """Read a TRUST4 clonotype report (``*_report.tsv``).
+
+    The TRUST4 report header is
+    ``#count  frequency  CDR3nt  CDR3aa  V  D  J  C  cid  cid_full_length``. TRUST4's CDR3
+    spans the conserved Cys104 … Phe/Trp118 anchors (anchors **included**), i.e. it is the
+    AIRR junction, so ``CDR3nt``/``CDR3aa`` map straight to ``junction_nt``/``junction_aa``
+    (the ``_`` stop / ``?`` ambiguous-N markers are collapsed by :func:`to_unified_cdr3aa`).
+    ``V``/``D``/``J``/``C`` keep the first allele's gene (``*`` → missing); the C column is
+    the BCR isotype (or the TCR constant gene) when the constant region was captured. Rows
+    whose CDR3 nt is not clean ``ACGT`` (TRUST4 ``partial`` / ``out_of_frame`` / N-containing)
+    are dropped.
+    """
+    raw = _read_tsv(path, n_rows=n_rows)
+    lo = {c.lower().lstrip("#"): c for c in raw.columns}  # first column is ``#count``
+    count_c = _pick(lo, "count")
+    nt_c, aa_c = _pick(lo, "cdr3nt"), _pick(lo, "cdr3aa")
+    v_c, d_c, j_c, c_c = _pick(lo, "v"), _pick(lo, "d"), _pick(lo, "j"), _pick(lo, "c")
+    if not (count_c and nt_c and aa_c and v_c and j_c):
+        raise ValueError(f"not a TRUST4 report (need count / CDR3nt+aa / V,J); have {raw.columns}")
+    rows = []
+    for r in raw.iter_rows(named=True):
+        nt = (r[nt_c] or "").upper()
+        if not _ATGC_ONLY.match(nt):  # skip TRUST4 partial / out-of-frame / N-containing CDR3s
+            continue
+        rows.append({
+            V_CALL: extract_vdj(r[v_c]), D_CALL: extract_vdj(r[d_c]) if d_c else None,
+            J_CALL: extract_vdj(r[j_c]), C_CALL: extract_vdj(r[c_c]) if c_c else None,
+            JUNCTION_NT: nt, JUNCTION_AA: to_unified_cdr3aa(r[aa_c]),
+            COUNT: _to_int(r[count_c]),
+        })
+    return _finalize(rows)
+
+
+def read_arda(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
+    """Read arda's AIRR annotation output (per-sequence ``*.airr.tsv`` or ``clones.tsv``).
+
+    arda (AIRR annotation + markup repair) writes standard AIRR Rearrangement column names,
+    so this delegates to :func:`~vdjtools.io.read.read_airr` — which maps
+    ``v_call``/``d_call``/``j_call``/``c_call`` and ``junction``/``junction_aa`` and collapses
+    reads to clonotypes — then nulls the literal ``""`` arda emits for an empty gene call.
+    arda's extra columns (``d2_call``, ``c_class``, ``mmseqs2_*``) are ignored.
+    """
+    df = read_airr(path, n_rows=n_rows)
+    return df.with_columns(
+        pl.when(pl.col(c).str.strip_chars('"') == "").then(None).otherwise(pl.col(c)).alias(c)
+        for c in (D_CALL, C_CALL) if c in df.columns
+    )

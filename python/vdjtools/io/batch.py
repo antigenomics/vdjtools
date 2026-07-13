@@ -21,6 +21,7 @@ _CONVERTERS = {
     "mixcr": convert.read_mixcr, "migec": convert.read_migec,
     "immunoseq": convert.read_immunoseq, "imgt": convert.read_imgt,
     "vidjil": convert.read_vidjil, "rtcr": convert.read_rtcr,
+    "trust4": convert.read_trust4, "arda": convert.read_arda,
 }
 
 
@@ -48,10 +49,11 @@ def sniff_format(path: str | os.PathLike) -> str:
     Returns:
         The detected format string, one of: ``"parquet"`` (``.parquet`` / ``.pq``
         extension), ``"vidjil"`` (``.vidjil`` / ``.json`` or a leading ``{``),
-        ``"imgt"``, ``"migec"``, ``"rtcr"``, ``"mixcr"``, ``"immunoseq"`` (each by
-        its signature header columns), ``"vdjtools"`` (native table / MigMap —
-        ``cdr3aa`` / ``count`` + ``cdr3nt``), or ``"airr"`` (AIRR Rearrangement —
-        ``v_call`` / ``junction_aa`` / ``junction_nt`` / ``cdr3_aa``).
+        ``"imgt"``, ``"migec"``, ``"rtcr"``, ``"mixcr"``, ``"immunoseq"``, ``"trust4"``
+        (each by its signature header columns), ``"arda"`` (AIRR + arda's ``d2_call``),
+        ``"vdjtools"`` (native table / MigMap — ``cdr3aa`` / ``count`` + ``cdr3nt``), or
+        ``"airr"`` (AIRR Rearrangement — ``v_call`` / ``junction_aa`` / ``junction_nt`` /
+        ``cdr3_aa``).
 
     Raises:
         ValueError: If no known format signature is recognised.
@@ -74,6 +76,12 @@ def sniff_format(path: str | os.PathLike) -> str:
     if "count (templates/reads)" in cols or ({"rearrangement", "amino_acid"} <= cols
                                              and "v_gene" in cols):
         return "immunoseq"
+    if "cid_full_length" in cols and "cdr3nt" in cols:
+        return "trust4"  # TRUST4 *_report.tsv (its own cid_full_length column)
+    # arda AIRR output — standard AIRR names plus arda's tandem-D ``d2_call`` column;
+    # match before plain AIRR so it routes to read_arda (nulls arda's ``""`` empty calls).
+    if "d2_call" in cols and cols & {"v_call", "junction_aa", "junction", "cdr3_aa"}:
+        return "arda"
     # Native vdjtools / migmap (cdr3nt/cdr3aa headers) and AIRR Rearrangement.
     if "cdr3aa" in cols or {"count", "cdr3nt"} <= cols:
         return "vdjtools"
@@ -89,10 +97,12 @@ def read(path: str | os.PathLike, fmt: str = "auto",
     Args:
         path: Path to a native vdjtools, AIRR Rearrangement, or Parquet table, or a
             third-party tool export (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil,
-            RTCR) — see :mod:`vdjtools.io.convert` (``.gz`` ok for the text formats).
+            RTCR, TRUST4, arda) — see :mod:`vdjtools.io.convert` (``.gz`` ok for the
+            text formats).
         fmt: ``"auto"`` (sniff the header / extension), ``"vdjtools"``, ``"airr"``,
             ``"parquet"``, or a legacy format string (``"mixcr"``, ``"migec"``,
-            ``"immunoseq"``, ``"imgt"``, ``"vidjil"``, ``"rtcr"``).
+            ``"immunoseq"``, ``"imgt"``, ``"vidjil"``, ``"rtcr"``, ``"trust4"``,
+            ``"arda"``).
         n_rows: If given, read at most this many data rows (preview huge files).
 
     Returns:
