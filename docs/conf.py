@@ -30,8 +30,10 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 
 html_theme = "pydata_sphinx_theme"
-html_title = "vdjtools"
+html_title = f"vdjtools {release}"
 html_theme_options = {
+    # Version shown in the navbar brand on every page (no image logo → text brand).
+    "logo": {"text": f"vdjtools {release}"},
     "github_url": "https://github.com/antigenomics/vdjtools",
     "navigation_with_keys": True,
 }

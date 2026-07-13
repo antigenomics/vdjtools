@@ -16,6 +16,9 @@ built on the antigenomics ecosystem (`seqtree <https://github.com/antigenomics/s
    convention (``junction_nt`` / ``junction_aa``). The legacy Groovy/Java vdjtools (v1.x) lives on the
    ``legacy-1.x`` branch and its releases remain available under the repository's tags.
 
+New here? The :doc:`User guide <usage>` has runnable examples for every module — loading
+data, diversity, overlap/TCRnet, preprocessing, biomarkers, single-cell, and the model engine.
+
 Quickstart — recombination model engine
 ----------------------------------------
 
@@ -91,4 +94,5 @@ Capabilities (see the :doc:`API reference <api>` and the project ROADMAP):
    :hidden:
 
    self
+   usage
    api

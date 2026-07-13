@@ -108,6 +108,48 @@ vdjtools spectratype    *.tsv -o spectra.tsv
 Native vdjtools and AIRR Rearrangement inputs are auto-detected; every command writes TSV to `-o`
 (or stdout, so it pipes). Run `vdjtools <command> --help` for options.
 
+## Analytics (Python API)
+
+Every reader returns one canonical `polars` clonotype frame (AIRR **junction** columns), and every
+analysis function takes and returns such frames — so results chain together and drop straight into
+plotting. A tour of the analysis modules (full runnable walkthrough in the
+[**User guide**](https://docs.isalgo.dev/vdjtools/usage.html)):
+
+```python
+from vdjtools import io as vio, stats, features, overlap, preprocess
+
+# load (auto-detects MiXcr / immunoSEQ / AIRR / native / … and converts), or a whole cohort:
+sample = vio.read("clones.tsv")
+cohort = vio.read_samples(vio.read_metadata("metadata.txt"), base_dir="samples/")
+
+# diversity, rarefaction, segment usage, spectratype
+stats.diversity_stats(sample)                 # observed, Chao1, Shannon, inverse-Simpson, d50, …
+stats.inext(sample, q=(0, 1, 2))              # Hill-number rarefaction/extrapolation + bootstrap CIs
+stats.segment_usage(sample, "v")              # V (or "j") usage;  stats.spectratype(sample)
+
+# CDR3 physicochemistry & k-mers
+features.physchem_profile(sample, region="all")
+
+# repertoire overlap & TCRnet (fuzzy/similarity/TCRnet via the [overlap] engine)
+overlap.overlap_metrics(sampleA, sampleB)     # F / D / Jaccard / Morisita-Horn …
+overlap.tcrnet(sample)                         # per-clonotype neighbourhood enrichment
+
+# preprocessing: downsample to a common depth, error-correct, filter, pool
+preprocess.downsample(sample, 100_000)
+preprocess.correct(preprocess.filter_functional(sample))
+```
+
+Incidence-based biomarkers (Fisher association, Emerson-2017 design) and single-cell paired-chain
+Pgen are one call each:
+
+```python
+from vdjtools.biomarker import fisher_association
+from vdjtools import sc
+
+fisher_association(cohort, phenotype, pheno_col="cmv")   # enriched/depleted clonotypes + p-values
+sc.paired_pgen(sc.pair_chains(sc.read_10x("filtered_contig_annotations.csv")))  # pgen_alpha·pgen_beta
+```
+
 ## Performance
 
 The Pgen / generation / EM / diversity hot paths are a native C++ (pybind11) core; everything else is
@@ -131,7 +173,7 @@ stays light — **~63 MB** resident for `import vdjtools` plus one loaded model,
 seven bundled models resident. Reproduce with `appendix/bench_pgen.py` and the `test_*_benchmark.py`
 suites (`RUN_BENCHMARK=1`).
 
-## Capabilities (see [ROADMAP.md](ROADMAP.md) and the [API reference](https://docs.isalgo.dev/vdjtools/))
+## Capabilities (see the [User guide](https://docs.isalgo.dev/vdjtools/usage.html), the [API reference](https://docs.isalgo.dev/vdjtools/), and [ROADMAP.md](ROADMAP.md))
 
 - **IO** — canonical clonotype frame on AIRR **junction** columns (`junction_nt` / `junction_aa`);
   readers for native vdjtools, AIRR Rearrangement TSV, and Parquet, plus format-detecting converters
