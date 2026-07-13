@@ -28,9 +28,11 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
 
 ### `vdjtools.io` — IO, schema, format converters
 - **Readers**: `read(path, fmt="auto")` (sniffs + dispatches), `read_airr`, `read_vdjtools`,
-  `read_parquet`; **legacy converters** `read_mixcr` (v1/2+v3/4), `read_migec`, `read_immunoseq`
-  (Adaptive v1/v2), `read_imgt` (IMGT/HighV-QUEST), `read_vidjil` (JSON), `read_rtcr`
-  (`vdjtools.io.convert`; ported from the legacy Groovy parsers, incl. Adaptive→IMGT gene conversion).
+  `read_parquet`; **converters** `read_mixcr` (v1/2+v3/4, incl. C-gene/BCR isotype), `read_migec`,
+  `read_immunoseq` (Adaptive v1/v2), `read_imgt` (IMGT/HighV-QUEST), `read_vidjil` (JSON),
+  `read_rtcr`, `read_trust4` (`*_report.tsv`), `read_arda` (arda AIRR output, delegates to
+  `read_airr`) (`vdjtools.io.convert`; ported from the legacy Groovy parsers + tool docs, incl.
+  Adaptive→IMGT gene conversion).
 - **Cohorts**: `read_metadata`, `read_samples`, `iter_samples` (streaming), `sniff_format`;
   `ingest_cohort` / `scan_cohort` (hive-partitioned Parquet, lazy).
 - **Schema**: `SCHEMA, COLUMNS`, constants `V_CALL D_CALL J_CALL C_CALL JUNCTION_AA JUNCTION_NT COUNT

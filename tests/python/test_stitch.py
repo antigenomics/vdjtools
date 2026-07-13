@@ -71,3 +71,13 @@ def test_arda_roundtrip():
     assert j_recovered / n > 0.9, f"junction recovered for only {j_recovered}/{n}"
     assert v_gene_ok / n > 0.85, f"V gene recovered for only {v_gene_ok}/{n}"
     assert j_gene_ok / n > 0.85, f"J gene recovered for only {j_gene_ok}/{n}"
+
+
+def test_stitch_contig_bad_anchor_returns_none():
+    """stitch_contig returns None when the resolved gene has a bad (negative) anchor."""
+    m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
+    v = m.genomic["genes_v"]["v_allele"][0]
+    j = m.genomic["genes_j"]["j_allele"][0]
+    m.genomic["genes_v"] = m.genomic["genes_v"].with_columns(
+        pl.when(pl.col("v_allele") == v).then(-1).otherwise(pl.col("anchor")).alias("anchor"))
+    assert stitch_contig(m, v, j, "TGTGCC") is None

@@ -12,9 +12,12 @@ built on the antigenomics ecosystem (`seqtree <https://github.com/antigenomics/s
 
    **v2.2.0** — the native V(D)J model engine plus the full analytics suite (diversity, overlap/TCRnet,
    preprocessing, biomarkers, single-cell), CDR features, and legacy-format ingestion (MiXcr, MiGec,
-   immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR). Clonotype columns follow the AIRR **junction**
+   immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype columns follow the AIRR **junction**
    convention (``junction_nt`` / ``junction_aa``). The legacy Groovy/Java vdjtools (v1.x) lives on the
    ``legacy-1.x`` branch and its releases remain available under the repository's tags.
+
+New here? The :doc:`User guide <usage>` has runnable examples for every module — loading
+data, diversity, overlap/TCRnet, preprocessing, biomarkers, single-cell, and the model engine.
 
 Quickstart — recombination model engine
 ----------------------------------------
@@ -75,8 +78,9 @@ diversity / rarefaction run on a native iNEXT kernel (bootstrap + parallel batch
 Capabilities (see the :doc:`API reference <api>` and the project ROADMAP):
 
 - **IO** — canonical AIRR **junction** clonotype frame (``junction_nt`` / ``junction_aa``); readers
-  for native vdjtools, AIRR TSV, Parquet, and converters for MiXcr, MiGec, immunoSEQ (v1/v2),
-  IMGT/HighV-QUEST, Vidjil, and RTCR (:mod:`vdjtools.io.convert`); metadata-driven batch + cohorts.
+  for native vdjtools, AIRR TSV, Parquet, and converters for MiXcr (incl. C-gene / isotype),
+  MiGec, immunoSEQ (v1/v2), IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, and arda AIRR output
+  (:mod:`vdjtools.io.convert`); metadata-driven batch + cohorts.
 - **Model** — native V(D)J recombination model: Pgen (nt / aa / 1-mismatch / V/J-agnostic /
   thread-parallel batch), sequence generation, EM inference, and tandem-D (D-D) support — a native
   pybind11 core that supersedes OLGA and IGoR. Concordant with OLGA on all 7 loci; bundled models.
@@ -91,4 +95,5 @@ Capabilities (see the :doc:`API reference <api>` and the project ROADMAP):
    :hidden:
 
    self
+   usage
    api

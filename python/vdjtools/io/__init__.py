@@ -6,11 +6,13 @@ from . import schema
 from .batch import iter_samples, read, read_metadata, read_samples, sniff_format
 from .cohort import ingest_cohort, scan_cohort
 from .convert import (
+    read_arda,
     read_imgt,
     read_immunoseq,
     read_migec,
     read_mixcr,
     read_rtcr,
+    read_trust4,
     read_vidjil,
 )
 from .read import read_airr, read_parquet, read_vdjtools
@@ -44,6 +46,8 @@ __all__ = [
     "read_imgt",
     "read_vidjil",
     "read_rtcr",
+    "read_trust4",
+    "read_arda",
     "read_metadata",
     "read_samples",
     "iter_samples",

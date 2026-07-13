@@ -3,7 +3,7 @@
 project = "vdjtools"
 author = "ISALGO laboratory"
 copyright = "2026, ISALGO laboratory"
-version = release = "2.2.0"
+version = release = "2.2.1"
 
 extensions = [
     "sphinx.ext.autodoc",
@@ -30,8 +30,10 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build", "**.ipynb_checkpoints"]
 
 html_theme = "pydata_sphinx_theme"
-html_title = "vdjtools"
+html_title = f"vdjtools {release}"
 html_theme_options = {
+    # Version shown in the navbar brand on every page (no image logo → text brand).
+    "logo": {"text": f"vdjtools {release}"},
     "github_url": "https://github.com/antigenomics/vdjtools",
     "navigation_with_keys": True,
 }

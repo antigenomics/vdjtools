@@ -64,6 +64,11 @@ Import, germline reference and stitching
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: vdjtools.model.data
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Generation probability, sampling and inference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -145,6 +150,17 @@ Format sniffing and metadata-driven batch / streaming reads.
 Hive-partitioned Parquet cohort writer / lazy scanner.
 
 .. automodule:: vdjtools.io.cohort
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.io.convert``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Converters for third-party repertoire formats (MiXcr, MiGec, Adaptive immunoSEQ,
+IMGT/HighV-QUEST, Vidjil, RTCR) to the canonical clonotype frame.
+
+.. automodule:: vdjtools.io.convert
    :members:
    :undoc-members:
    :show-inheritance:

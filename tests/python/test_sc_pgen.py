@@ -46,3 +46,20 @@ def test_paired_pgen_missing_chain_is_null():
     r0 = out.filter(pl.col("cell_id") == "c0").row(0, named=True)
     assert r0["pgen_alpha"] is None and r0["pgen_paired"] is None
     assert r0["pgen_beta"] is not None  # β chain still present
+
+
+def test_paired_pgen_null_v_call_yields_null_chain():
+    """A chain whose V-call column is entirely null infers no locus → that chain's Pgen is null."""
+    df = _paired_frame(4).with_columns(pl.lit(None, dtype=pl.Utf8).alias("alpha_v_call"))
+    out = sc.paired_pgen(df)
+    assert out["pgen_alpha"].to_list() == [None] * 4
+    assert out["pgen_paired"].to_list() == [None] * 4
+    assert out["pgen_beta"].null_count() == 0            # β still scored
+
+
+def test_paired_pgen_unscoreable_junction_is_null():
+    """A junction the native model cannot score yields null, not a crash."""
+    df = _paired_frame(4).with_columns(pl.lit(1, dtype=pl.Int64).alias("beta_junction_aa"))
+    out = sc.paired_pgen(df)
+    assert out["pgen_beta"].to_list() == [None] * 4
+    assert out["pgen_paired"].to_list() == [None] * 4
