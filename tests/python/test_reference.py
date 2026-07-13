@@ -95,3 +95,9 @@ def test_reconcile_olga_beta():
     assert j["in_arda"].all() and j["germline_equal"].all(), "OLGA TRBJ germline must be arda-identical"
     v = used.filter(pl.col("segment") == "V")
     assert v["in_arda"].mean() >= 0.9, f"only {v['in_arda'].mean():.0%} of OLGA TRBV resolve in arda"
+
+
+def test_load_germline_unknown_locus_raises():
+    """load_germline raises a clear error on an unknown locus."""
+    with pytest.raises(ValueError, match="no arda germline"):
+        load_germline("XYZ", "human")

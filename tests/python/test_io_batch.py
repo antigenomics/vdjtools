@@ -61,3 +61,15 @@ def test_read_samples_batch(tmp_path):
 
     d = vio.read_samples(meta, tmp_path, as_dict=True)
     assert set(d) == {"S1", "S2"} and d["S2"].height == 2
+
+
+def test_read_samples_metadata_does_not_clobber_clonotype_columns(tmp_path):
+    """A metadata column named like a canonical clonotype column (``locus``/``frequency``) must
+    not overwrite the clonotype data or corrupt its dtype (regression)."""
+    _write_native(tmp_path / "S1.tsv.gz", [(4, "TGT", "CASSL", "TRBV1", ".", "TRBJ1")])
+    meta = pl.DataFrame({"sample_name": ["S1"], "locus": ["MY_TISSUE"],
+                         "frequency": ["hi"], "cohort": ["c1"]})
+    long = vio.read_samples(meta, tmp_path)
+    assert long["locus"].to_list() == ["TRB"]          # clonotype-derived locus survives
+    assert long["frequency"].dtype == pl.Float64        # numeric frequency, not the string "hi"
+    assert long["cohort"].to_list() == ["c1"]           # non-colliding metadata still attaches

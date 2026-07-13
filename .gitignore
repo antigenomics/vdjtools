@@ -45,3 +45,8 @@ examples/.data/
 
 # marimo session/run cache
 __marimo__/
+
+# coverage artifacts
+.coverage
+.coverage.*
+htmlcov/

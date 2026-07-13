@@ -39,20 +39,21 @@ from .schema import (
     V_CALL,
 )
 
-PLACEHOLDER = "."
-
 
 def _to_int(*cells) -> int:
-    """First numeric cell as int (double-then-truncate); none numeric → 0.
+    """First cell parsing to a **positive** integer count (double-then-truncate); none → 0.
 
-    Variadic to support the legacy count fallback (e.g. Adaptive v1 ``templates`` is often
-    ``"null"`` and the real count lives in ``reads``).
+    Skips non-numeric *and* non-positive cells so the legacy count fallback fires correctly —
+    e.g. Adaptive immunoSEQ v1 ``templates`` is often ``"null"`` **or** ``"0"`` and the real
+    count lives in ``reads``. A genuinely zero count is dropped downstream by :func:`_finalize`.
     """
     for x in cells:
         try:
-            return int(float(x))
+            v = int(float(x))
         except (TypeError, ValueError):
             continue
+        if v > 0:
+            return v
     return 0
 
 
@@ -323,7 +324,6 @@ def read_immunoseq(path: str | os.PathLike, n_rows: int | None = None) -> pl.Dat
         vg, vf, vt = _pick(lo, "vgenename"), _pick(lo, "vfamilyname"), _pick(lo, "vfamilyties")
         dg, df_, dt = _pick(lo, "dgenename"), _pick(lo, "dfamilyname"), _pick(lo, "dfamilyties")
         jg, jf, jt = _pick(lo, "jgenename"), _pick(lo, "jfamilyname"), _pick(lo, "jfamilyties")
-        in_frame = "in"
     else:
         count_c, count2_c = _pick(lo, "templates"), _pick(lo, "reads")  # templates often "null" → reads
         full_c, aa_c, frame_c = _pick(lo, "rearrangement"), _pick(lo, "amino_acid"), _pick(lo, "frame_type")
@@ -331,7 +331,6 @@ def read_immunoseq(path: str | os.PathLike, n_rows: int | None = None) -> pl.Dat
         vg, vf, vt = _pick(lo, "v_gene"), _pick(lo, "v_family"), _pick(lo, "v_family_ties")
         dg, df_, dt = _pick(lo, "d_gene"), _pick(lo, "d_family"), _pick(lo, "d_family_ties")
         jg, jf, jt = _pick(lo, "j_gene"), _pick(lo, "j_family"), _pick(lo, "j_family_ties")
-        in_frame = "in"
     if not (count_c and full_c and len_c and idx_c and vg and jg):
         raise ValueError(f"not an immunoSEQ table; have {raw.columns[:6]}…")
 
@@ -348,7 +347,7 @@ def read_immunoseq(path: str | os.PathLike, n_rows: int | None = None) -> pl.Dat
                 nt = full[start:start + ln].upper() or None
         status = (_cell(r, frame_c) or "").strip().lower()
         aa_src = _cell(r, aa_c)
-        if status == in_frame and aa_src:
+        if status == "in" and aa_src:
             junc_aa = to_unified_cdr3aa(aa_src)
         else:
             junc_aa = to_unified_cdr3aa(translate(nt)) if nt else None

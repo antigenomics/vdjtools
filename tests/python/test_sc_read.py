@@ -143,3 +143,19 @@ def test_read_airr_cell_prefers_junction_over_imgt_cdr3(tmp_path):
     back = sc.read_airr_cell(tsv)
     assert back["junction_aa"].to_list() == ["CASSLGQAYEQYF"]   # junction, not the IMGT 11-mer
     assert back["junction_nt"].to_list() == ["TGTGCC"]
+
+
+def test_write_airr_cell_unpaired_cell(tmp_path):
+    """A cell with no heavy/light pair lists its contig ids as receptors (no Receptor entries)."""
+    yaml = pytest.importorskip("yaml")
+    df = pl.DataFrame({
+        "cell_id": ["bc1"], "sequence_id": ["s1"], "locus": ["TRB"],
+        "v_call": ["TRBV1"], "d_call": [None], "j_call": ["TRBJ1"], "c_call": [None],
+        "junction_aa": ["CASSF"], "junction_nt": ["TGT"],
+        "duplicate_count": [5], "umi_count": [2], "clone_id": ["c1"],
+    })
+    out = tmp_path / "cells.yaml"
+    sc.write_airr_cell(df, out)
+    doc = yaml.safe_load(out.read_text())
+    assert doc["Cell"][0]["receptors"] == ["s1"]
+    assert not doc.get("Receptor")

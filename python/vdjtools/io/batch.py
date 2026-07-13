@@ -46,14 +46,15 @@ def sniff_format(path: str | os.PathLike) -> str:
         path: Path to a clonotype table.
 
     Returns:
-        ``"parquet"`` if the path ends in ``.parquet`` / ``.pq`` (detected by
-        extension, without opening the file), ``"vdjtools"`` if the header looks
-        like the native vdjtools table (``cdr3aa`` / ``count`` + ``cdr3nt``), or
-        ``"airr"`` if it looks like AIRR Rearrangement (``v_call`` /
-        ``junction_aa`` / ``cdr3_aa``).
+        The detected format string, one of: ``"parquet"`` (``.parquet`` / ``.pq``
+        extension), ``"vidjil"`` (``.vidjil`` / ``.json`` or a leading ``{``),
+        ``"imgt"``, ``"migec"``, ``"rtcr"``, ``"mixcr"``, ``"immunoseq"`` (each by
+        its signature header columns), ``"vdjtools"`` (native table / MigMap —
+        ``cdr3aa`` / ``count`` + ``cdr3nt``), or ``"airr"`` (AIRR Rearrangement —
+        ``v_call`` / ``junction_aa`` / ``junction_nt`` / ``cdr3_aa``).
 
     Raises:
-        ValueError: If neither signature is recognised.
+        ValueError: If no known format signature is recognised.
     """
     if Path(path).suffix.lower() in (".parquet", ".pq"):
         return "parquet"
@@ -86,10 +87,12 @@ def read(path: str | os.PathLike, fmt: str = "auto",
     """Read a clonotype table, auto-detecting the format by default.
 
     Args:
-        path: Path to a native vdjtools, AIRR Rearrangement, or Parquet table
-            (``.gz`` ok for the text formats).
+        path: Path to a native vdjtools, AIRR Rearrangement, or Parquet table, or a
+            third-party tool export (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil,
+            RTCR) — see :mod:`vdjtools.io.convert` (``.gz`` ok for the text formats).
         fmt: ``"auto"`` (sniff the header / extension), ``"vdjtools"``, ``"airr"``,
-            or ``"parquet"``.
+            ``"parquet"``, or a legacy format string (``"mixcr"``, ``"migec"``,
+            ``"immunoseq"``, ``"imgt"``, ``"vidjil"``, ``"rtcr"``).
         n_rows: If given, read at most this many data rows (preview huge files).
 
     Returns:
@@ -164,7 +167,9 @@ def iter_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
     """
     base = Path(base_dir)
     keep = [*COLUMNS, LOCUS]
-    reserved = {"sample_id", "file_name"}
+    # Exclude the canonical clonotype columns (and the reserved sample tags): a metadata column
+    # named e.g. ``locus`` / ``frequency`` / ``duplicate_count`` must NOT overwrite clonotype data.
+    reserved = {"sample_id", "file_name", *COLUMNS, LOCUS}
     meta_cols = [c for c in metadata.columns if c not in reserved and c != sample_col]
     for row in metadata.iter_rows(named=True):
         sample = row[sample_col]

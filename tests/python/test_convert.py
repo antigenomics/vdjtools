@@ -90,3 +90,44 @@ def test_converter_conformance(name):
         if "count" in want:
             assert row["duplicate_count"] == want["count"], \
                 f"{name} count: {row['duplicate_count']} != {want['count']}"
+
+
+def test_reader_rejects_wrong_columns(tmp_path):
+    """Each TSV reader fails loudly on a table whose columns don't match its format."""
+    p = tmp_path / "wrong.tsv"
+    p.write_text("colA\tcolB\n1\t2\n")
+    for reader in (convert.read_mixcr, convert.read_migec, convert.read_rtcr,
+                   convert.read_imgt, convert.read_immunoseq):
+        with pytest.raises(ValueError, match="not a|not an"):
+            reader(p)
+
+
+def test_read_vidjil_skips_segless_clones(tmp_path):
+    """A Vidjil clone with no ``seg`` (or no ``seg.junction``) is skipped."""
+    import json
+    p = tmp_path / "x.vidjil"
+    p.write_text(json.dumps({"clones": [{"sequence": "ACGT"}, {"seg": {}}]}))
+    assert convert.read_vidjil(p).height == 0
+
+
+def test_convert_helper_edges():
+    """Translation / normalisation / count helpers on their edge inputs."""
+    assert convert._finalize([]).columns == [*COLUMNS, LOCUS]
+    assert convert._finalize([]).height == 0
+    assert convert.translate("") == ""
+    assert convert.to_unified_cdr3aa(None) is None
+    assert convert._to_int("null", "x") == 0          # nothing numeric → 0
+    assert convert._to_int("0", "50") == 50           # skip non-positive → fallback
+
+
+def test_immunoseq_count_falls_back_when_templates_zero(tmp_path):
+    """immunoSEQ v1 count uses ``reads`` when ``templates`` is 'null' OR '0' (regression)."""
+    hdr = ("rearrangement\tamino_acid\tframe_type\tv_index\tcdr3_length\t"
+           "v_gene\tj_gene\ttemplates\treads\n")
+    nt = "TGTGCCAGCAGCTTAGGGGAAAACATTCAGTACTTC"
+    for templ in ("null", "0"):
+        p = tmp_path / f"is_{templ}.tsv"
+        p.write_text(hdr + f"{nt}\tCASSLGENIQYF\tIn\t0\t15\tTCRBV13-01\tTCRBJ02-04\t{templ}\t50\n")
+        df = convert.read_immunoseq(p)
+        assert df.height == 1, f"templates={templ!r} dropped the clonotype"
+        assert df["duplicate_count"][0] == 50
