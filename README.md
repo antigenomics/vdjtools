@@ -27,10 +27,12 @@ Built on the antigenomics ecosystem:
 [vdjmatch](https://github.com/antigenomics/vdjmatch) (overlap + TCRnet),
 [arda](https://github.com/antigenomics/arda) (AIRR annotation + markup repair).
 
-> **Status: v2.0.0 pre-release under active development** (latest: `v2.0.0-alpha.2` — the native
-> V(D)J model engine). Install a pre-release with `pip install --pre vdjtools`. The legacy v1.x tool
-> lives on the [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch and
-> its releases remain available under the repository tags (`v0.0.1` … `1.2.1`).
+> **Status: `v2.2.0`** — the native V(D)J model engine plus the full analytics suite (diversity,
+> overlap/TCRnet, preprocessing, biomarkers, single-cell), CDR features, and legacy-format ingestion
+> (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR). Clonotype columns follow the AIRR
+> **junction** convention (`junction_nt` / `junction_aa`). The legacy v1.x tool lives on the
+> [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch and its releases
+> remain available under the repository tags (`v0.0.1` … `1.2.1`).
 
 ## Install
 
@@ -70,6 +72,7 @@ model = load_bundled("TRB", source="olga")     # or source="learned" (fit to rea
 native.pgen_nt(model, "TGTGCCAGCAGC...")        # nucleotide generation probability (native C++)
 native.pgen_aa(model, "CASSLAPGATNEKLFF")       # amino-acid Pgen (codon-marginalised)
 native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # + the whole Hamming-1 ball
+native.pgen_aa_batch(model, seqs, mismatches=1, threads=0)  # Pgen over many CDR3s, thread-parallel (~11×)
 generate(model, 1000)                           # sample a repertoire -> polars DataFrame
 ```
 
@@ -120,25 +123,31 @@ several times faster, and the built-in models keep the resident set small. Singl
 | sequence generation | **~32 000 seq/s** | — |
 
 Nucleotide Pgen (via the same transfer-matrix DP as the aa path — an in-frame CDR3 is an aa query with
-one codon fixed per position) is exact vs OLGA across all loci; the EM E-step parallelises over reads (~6.7× on 8
-threads); diversity/rarefaction run on a native iNEXT kernel (bootstrap + parallel batch). Memory
+one codon fixed per position) is exact vs OLGA across all loci. Batched Pgen / 1-mismatch over many
+CDR3s parallelises over sequences (`native.pgen_aa_batch`, **~11× on 16 cores**, bitwise-identical to
+the serial result); the EM E-step parallelises over reads (~6.7× on 8 threads); diversity/rarefaction
+run on a native iNEXT kernel (bootstrap + parallel batch). Memory
 stays light — **~63 MB** resident for `import vdjtools` plus one loaded model, **~123 MB** with all
 seven bundled models resident. Reproduce with `appendix/bench_pgen.py` and the `test_*_benchmark.py`
 suites (`RUN_BENCHMARK=1`).
 
-## Capabilities (rolling out by phase — see [ROADMAP.md](ROADMAP.md))
+## Capabilities (see [ROADMAP.md](ROADMAP.md) and the [API reference](https://docs.isalgo.dev/vdjtools/))
 
+- **IO** — canonical clonotype frame on AIRR **junction** columns (`junction_nt` / `junction_aa`);
+  readers for native vdjtools, AIRR Rearrangement TSV, and Parquet, plus format-detecting converters
+  for MiXcr (v1/2 + v3/4), MiGec, Adaptive immunoSEQ (v1/v2), IMGT/HighV-QUEST, Vidjil, and RTCR
+  ([`vdjtools.io.convert`](python/vdjtools/io/convert.py)); metadata-driven batch + hive-partitioned cohorts.
 - **Model** — native V(D)J recombination model: generation probability (Pgen — nt, aa,
-  1-mismatch, V/J-agnostic), sequence generation, and EM inference, all in a native (pybind11)
-  core. Supersedes OLGA and IGoR: arda-driven scenario enumeration, polars marginal tables,
-  read-parallelised EM, and **tandem-D (D-D)** support. Concordant with OLGA across all 7 loci;
+  1-mismatch, V/J-agnostic, **thread-parallel batch**), sequence generation, and EM inference, all in a
+  native (pybind11) core. Supersedes OLGA and IGoR: arda-driven scenario enumeration, polars marginal
+  tables, read-parallelised EM, and **tandem-D (D-D)** support. Concordant with OLGA across all 7 loci;
   precomputed OLGA + real-data-learned models bundled ([`load_bundled`](python/vdjtools/model/bundled.py)).
 - **Stats** — diversity (Chao1/Shannon/Simpson/…), spectratype, V/J/VJ usage.
 - **Features** — CDR physicochemical profiles, k-mer / V+k-mer summaries.
-- **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree).
+- **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree), similarity-aware overlap, clustering.
 - **Preprocess** — downsampling, error-correction, VJ-usage batch-effect correction, pooling/joining.
 - **Biomarker** — incidence-based association (Fisher) vs HLA / condition / chain-pairing; metaclonotypes.
-- **Single-cell** — AIRR Cell / 10x interoperability.
+- **Single-cell** — AIRR Cell / 10x interoperability, chain pairing + QC, and paired α/β Pgen.
 
 ## License
 
