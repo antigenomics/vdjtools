@@ -13,8 +13,8 @@ import polars as pl
 from . import schema
 from .schema import (
     C_CALL,
-    CDR3_AA,
-    CDR3_NT,
+    JUNCTION_AA,
+    JUNCTION_NT,
     COUNT,
     D_CALL,
     J_CALL,
@@ -27,8 +27,8 @@ from .schema import (
 # integer markup columns we do not carry into the canonical frame.
 _NATIVE_MAP = {
     "count": COUNT,
-    "cdr3nt": CDR3_NT,
-    "cdr3aa": CDR3_AA,
+    "cdr3nt": JUNCTION_NT,
+    "cdr3aa": JUNCTION_AA,
     "v": V_CALL,
     "d": D_CALL,
     "j": J_CALL,
@@ -43,8 +43,8 @@ _AIRR_ALIASES: dict[str, tuple[str, ...]] = {
     # Prefer the junction (conserved anchors INCLUDED) — the canonical vdjtools /
     # AIRR ``junction_aa`` convention; fall back to the IMGT ``cdr3_aa``/``cdr3``
     # (anchors excluded) only if no junction column is present.
-    CDR3_AA: ("junction_aa", "cdr3_aa"),
-    CDR3_NT: ("junction", "cdr3"),
+    JUNCTION_AA: ("junction_aa", "cdr3_aa"),
+    JUNCTION_NT: ("junction_nt", "junction", "cdr3_nt", "cdr3"),
     # AIRR-hybrid exports (e.g. isalgo/airr_ankspond) carry a vdjtools-style `count`.
     COUNT: ("duplicate_count", "count", "reads"),
     # frequency is always recomputed from counts, never read from source.
@@ -87,7 +87,7 @@ def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None) -> pl.Data
     # leading ``#`` so the first column still maps to ``count``.
     lower = {c.lower().lstrip("#"): c for c in raw.columns}
     found = {canon: lower[src] for src, canon in _NATIVE_MAP.items() if src in lower}
-    if COUNT not in found or CDR3_AA not in found:
+    if COUNT not in found or JUNCTION_AA not in found:
         raise ValueError(
             f"not a native vdjtools table (need 'count' and 'cdr3aa'); have {raw.columns}"
         )
@@ -136,7 +136,7 @@ def read_parquet(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataF
             src = canon
         if src is not None:
             found[canon] = src
-    if CDR3_AA not in found:
+    if JUNCTION_AA not in found:
         raise ValueError(
             f"Parquet file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {df.columns}"
         )
@@ -164,7 +164,7 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     already-aggregated files pass through unchanged. ``frequency`` is always
     recomputed after collapsing.
 
-    Clonotype identity for collapsing is ``(v_call, j_call, cdr3_nt, cdr3_aa)`` —
+    Clonotype identity for collapsing is ``(v_call, j_call, junction_nt, junction_aa)`` —
     matching legacy ``Clonotype`` equality (V, J, CDR3nt); ``d_call`` and ``c_call``
     are *not* part of the identity, so a representative (first non-null) value is
     attached to each collapsed clonotype.
@@ -172,7 +172,7 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     Args:
         path: Path to a ``.tsv`` / ``.tsv.gz`` AIRR Rearrangement file.
         collapse: If ``True`` (default), sum the count over clonotypes identical on
-            ``(v_call, j_call, cdr3_nt, cdr3_aa)``.
+            ``(v_call, j_call, junction_nt, junction_aa)``.
         n_rows: If given, read at most this many data rows (preview huge files).
 
     Returns:
@@ -190,7 +190,7 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
             if s in lower:
                 found[canon] = lower[s]
                 break
-    if CDR3_AA not in found:
+    if JUNCTION_AA not in found:
         raise ValueError(
             f"AIRR file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {raw.columns}"
         )
@@ -200,10 +200,10 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     else:
         df = df.with_columns(pl.col(COUNT).cast(pl.Int64, strict=False).fill_null(1))
 
-    # Legacy clonotype identity is (V, J, CDR3nt); cdr3_aa is kept in the key so
+    # Legacy clonotype identity is (V, J, CDR3nt); junction_aa is kept in the key so
     # files with no nt column still collapse (redundant when nt is present). D and C
     # are not identity — carry a representative (first non-null) value per clonotype.
-    key = [c for c in (V_CALL, J_CALL, CDR3_NT, CDR3_AA) if c in df.columns]
+    key = [c for c in (V_CALL, J_CALL, JUNCTION_NT, JUNCTION_AA) if c in df.columns]
     if collapse:
         reps = [pl.col(c).drop_nulls().first().alias(c)
                 for c in (D_CALL, C_CALL) if c in df.columns]

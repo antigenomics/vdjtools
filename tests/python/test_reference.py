@@ -17,7 +17,7 @@ from vdjtools.model import cut_segment, from_olga, load_germline, reconcile_olga
 OLGA_MODELS = Path(
     os.environ.get(
         "VDJTOOLS_OLGA_MODELS",
-        "/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models",
+        str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"),
     )
 )
 pytest.importorskip("arda.cdr3fix", reason="arda (the [model] extra) not installed")

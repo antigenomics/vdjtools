@@ -26,7 +26,7 @@ app = typer.Typer(
     help="vdjtools — TCR/BCR repertoire analysis: Pgen, sequence generation, diversity, overlap.",
 )
 
-_SEQ_COLS = ("cdr3_aa", "junction_aa", "cdr3aa", "cdr3_nt", "cdr3nt", "cdr3", "junction")
+_SEQ_COLS = ("junction_aa", "junction_nt", "cdr3_aa", "cdr3_nt", "cdr3aa", "cdr3nt", "cdr3", "junction")
 
 
 # ---------------------------------------------------------------------------- helpers
@@ -165,7 +165,7 @@ def generate(
 ) -> None:
     """Sample recombined sequences from a model — like ``olga-generate_sequences``.
 
-    Emits ``cdr3_nt, cdr3_aa, v_call, d_call, d2_call, j_call, productive`` (``d2_call`` is the
+    Emits ``junction_nt, junction_aa, v_call, d_call, d2_call, j_call, productive`` (``d2_call`` is the
     tandem D on the learned D-bearing loci; null otherwise).
     """
     from vdjtools.model.generate import generate as _generate

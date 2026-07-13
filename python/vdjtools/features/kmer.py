@@ -1,6 +1,6 @@
 """CDR3 amino-acid k-mer profiles and joint V + k-mer + C feature summaries.
 
-K-mers are overlapping sliding windows over ``cdr3_aa``. Each k-mer occurrence
+K-mers are overlapping sliding windows over ``junction_aa``. Each k-mer occurrence
 carries its clonotype's weight (reads, unique, or frequency); weights are summed.
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ import polars as pl
 
 from ..io.schema import (
     C_CALL,
-    CDR3_AA,
+    JUNCTION_AA,
     LOCUS,
     V_CALL,
     add_locus,
@@ -19,17 +19,17 @@ from ..io.schema import (
 
 
 def _explode_kmers(df: pl.DataFrame, k: int) -> pl.DataFrame:
-    """Explode each clonotype's ``cdr3_aa`` into overlapping k-mers (column ``kmer``).
+    """Explode each clonotype's ``junction_aa`` into overlapping k-mers (column ``kmer``).
 
     Rows whose CDR3 is shorter than ``k`` (or null) contribute no k-mers.
     """
     if k < 1:
         raise ValueError(f"k must be >= 1; got {k}")
-    df = df.with_columns(pl.col(CDR3_AA).str.len_chars().alias("_len"))
+    df = df.with_columns(pl.col(JUNCTION_AA).str.len_chars().alias("_len"))
     df = df.filter(pl.col("_len") >= k)  # shorter/null CDR3s yield no k-mers
     df = df.with_columns(pl.int_ranges(0, pl.col("_len") - k + 1).alias("_pos"))
     df = df.explode("_pos", empty_as_null=True)
-    df = df.with_columns(pl.col(CDR3_AA).str.slice(pl.col("_pos"), k).alias("kmer"))
+    df = df.with_columns(pl.col(JUNCTION_AA).str.slice(pl.col("_pos"), k).alias("kmer"))
     return df.drop("_len", "_pos")
 
 

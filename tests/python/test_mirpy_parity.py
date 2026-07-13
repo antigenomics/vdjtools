@@ -21,7 +21,7 @@ from vdjtools import stats, features as F, overlap as O
 def _frame(cdr3, counts, v="TRBV12-3*01", j="TRBJ2-2*01"):
     n = len(cdr3)
     df = pl.DataFrame({
-        S.V_CALL: [v] * n, S.J_CALL: [j] * n, S.CDR3_AA: cdr3, S.COUNT: counts,
+        S.V_CALL: [v] * n, S.J_CALL: [j] * n, S.JUNCTION_AA: cdr3, S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
@@ -56,7 +56,7 @@ def test_overlap_identical_matches_mirpy():
     #   f_similarity=1.0, f2_similarity=1.0. With 3 shared clonotypes R is defined
     #   (legacy guard n>2) and equals 1.0.
     rep = _frame(["CASSF", "CASSY", "CASSW"], [1, 2, 3])
-    m = O.overlap_metrics(rep, rep, key=(S.CDR3_AA,))
+    m = O.overlap_metrics(rep, rep, key=(S.JUNCTION_AA,))
     assert m["d12"] == 3
     assert math.isclose(m["F"], 1.0, rel_tol=1e-12)
     assert math.isclose(m["F2"], 1.0, rel_tol=1e-12)
@@ -68,7 +68,7 @@ def test_overlap_partial_matches_mirpy_F_and_F2():
     #   shared = {CASSF}; mirpy F=1/3, F2=1/3.
     r1 = _frame(["CASSF", "CASSY"], [1, 2])
     r2 = _frame(["CASSF", "CASSW"], [1, 2])
-    m = O.overlap_metrics(r1, r2, key=(S.CDR3_AA,))
+    m = O.overlap_metrics(r1, r2, key=(S.JUNCTION_AA,))
     assert m["d12"] == 1
     assert math.isclose(m["F"], 1 / 3, rel_tol=1e-12)
     assert math.isclose(m["F2"], 1 / 3, rel_tol=1e-12)
@@ -85,7 +85,7 @@ def test_overlap_D_is_legacy_definition_not_mirpy():
     # (mir::test_partial_overlap asserts mirpy's 0.5). We assert OUR legacy value.
     r1 = _frame(["CASSF", "CASSY"], [1, 2])
     r2 = _frame(["CASSF", "CASSW"], [1, 2])
-    assert O.overlap_metrics(r1, r2, key=(S.CDR3_AA,))["D"] == 0.25
+    assert O.overlap_metrics(r1, r2, key=(S.JUNCTION_AA,))["D"] == 0.25
 
 
 def test_overlap_F2_and_R_on_disjoint_are_legacy_values():
@@ -93,7 +93,7 @@ def test_overlap_F2_and_R_on_disjoint_are_legacy_values():
     # asserts mirpy's NaN. ours R undefined -> None; mirpy NaN. Assert OUR values.
     r1 = _frame(["CASSF"], [1])
     r2 = _frame(["CASSY"], [1])
-    m = O.overlap_metrics(r1, r2, key=(S.CDR3_AA,))
+    m = O.overlap_metrics(r1, r2, key=(S.JUNCTION_AA,))
     assert m["d12"] == 0
     assert m["F2"] == 0.0
     assert m["R"] is None

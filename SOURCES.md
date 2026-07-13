@@ -37,6 +37,25 @@ models, their own IMGT-vintage germline is kept for exact-Pgen fidelity — see 
 |---|---|---|---|---|
 | Emerson HIP cohort (786 subjects) | HF dataset [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip) — redistributed from Adaptive immuneACCESS **Emerson-2017-NatGen** | per-subject VDJtools tables `corr/HIP#####.txt.gz` (`count freq cdr3nt cdr3aa v d j VEnd…`); `metadata.txt` (TAB-sep: `file_name sample_id age race sex cmv hla`) | `examples/emerson_cmv_hla.py` → `huggingface_hub.snapshot_download(repo_type="dataset", allow_patterns=["corr/{sample}.txt.gz"])`; ingest with `io.ingest_cohort(fmt="vdjtools")` | **experimental** TCRβ repertoires + phenotypes (Emerson et al., *Nat Genet* 2017, doi:10.1038/ng.3822). `cmv` ∈ {`+`,`-`,`NA`}; `hla` = 2-digit HLA-A/B only (`HLA-A*02`); ⚠ `race` contains commas — split on TAB. No discovery/validation split column |
 | VDJdb (CMV validation target) | local checkout `/Users/mikesh/vcs/code/vdjdb-db/database/vdjdb.slim.txt` (canonical `antigenomics/vdjdb-db`, 2024-06 release; 2-digit HLA matches airr_hip) | TSV, 16 cols: `gene cdr3 species antigen.epitope antigen.gene antigen.species … v.segm j.segm … mhc.a mhc.b mhc.class … vdjdb.score` | read with polars; filter `gene==TRB & species==HomoSapiens & antigen.species~CMV` | **curated** TCR↔epitope database; newer 4-digit dump at `/Users/mikesh/vcs/code/vdjdb-iedb-concordance/vdjdb_dump_2026/vdjdb.slim.txt`. Canonical fetch: `antigenomics/vdjdb-db` GitHub releases |
+## Phase 10 — BCR SHM & lineage (test data, planned; not yet fetched)
+
+Verified via PubMed (2026-07); all four are owner (Shugay)-co-authored BCR datasets. Data paths are
+**TBD** — fill the `How to obtain` details when each dataset is actually sourced; do not fabricate a
+path before then. All are **experimental** repertoire data.
+
+| Dataset | Reference (verified) | DOI | Relevance |
+|---|---|---|---|
+| Longitudinal memory-B / ASC BCR repertoires | Mikelov et al., *eLife* 2022;11:e79254 | [10.7554/eLife.79254](https://doi.org/10.7554/eLife.79254) | UMI-tagged BCR-seq + clonal-lineage/phylogeny — primary Phase-9 (MiGEC) + Phase-10 (lineage) target |
+| TCGA tumor repertoires from RNA-seq | Bolotin et al., *Nat. Biotechnol.* 2017;35(10):908–911 | [10.1038/nbt.3979](https://doi.org/10.1038/nbt.3979) | RNA-seq-derived TCR/BCR (MiXCR method); TCGA IGH |
+| CD27-dull/bright memory-B VH repertoires | Grimsholm et al., *Cell Rep.* 2020;30(9):2963–2977.e6 | [10.1016/j.celrep.2020.02.022](https://doi.org/10.1016/j.celrep.2020.02.022) | memory-B subsets, VH usage + SHM frequency (owner wrote "CD20-dull"; the paper is **CD27**-dull) |
+| CVID peripheral B-cell selection | Grimsholm et al., *Cell Rep.* 2023;42(5):112446 | [10.1016/j.celrep.2023.112446](https://doi.org/10.1016/j.celrep.2023.112446) | CVID Ig-seq, peripheral B-cell selection |
+
+**Flag (unresolved):** the owner's "Mikelov *allergy* paper" literally matches Mikelov et al.,
+*Nat. Immunol.* 2025;26(12):2328–2342 ([10.1038/s41590-025-02323-3](https://doi.org/10.1038/s41590-025-02323-3),
+peanut oral-immunotherapy) — but that study is **TCR / single-cell** and does **not** list Shugay
+as an author, so the Shugay-co-authored **eLife 2022 BCR** paper is recorded above instead. Confirm
+which Mikelov dataset is intended before use. (References verified via PubMed; DOIs copied verbatim.)
+
 ## Bundled precomputed models (shipped in the wheel)
 
 Ship under `python/vdjtools/model/_bundled/<source>/<LOCUS>/` (parquet marginals + `manifest.json`);
@@ -52,8 +71,8 @@ loaded with `vdjtools.model.load_bundled(locus, source)`. ~0.4 MB total (30–15
 | Dataset | Origin | Use |
 |---|---|---|
 | IGoR model files (human/mouse, all loci) | `IGoR-models/` (local) | model-loader + Pgen oracle fixtures; canonical `model_parms`/`model_marginals`/anchors format |
-| OLGA `default_models/` | OLGA pip package | Pgen oracle (`pip install olga`), as seqtree CI does |
-| Legacy input-format samples | legacy vdjtools `src/test/resources/samples/*.txt.gz` (on the `legacy-1.x` branch) | format-conversion conformance (MiXcr, MiGec, ImmunoSeq v1/v2, ImgtHighVQuest, Vidjil, RTCR, …) |
+| OLGA `default_models/` (7 human loci) | **vendored in-repo** at `tests/python/fixtures/olga/default_models/` — copied from `antigenomics/mirpy` (`main`/`legacy-v2`, `mir/resources/olga/default_models/`; byte-identical to OLGA's published models, Sethna et al.). Re-fetch: `git -C ../mirpy archive main mir/resources/olga/default_models \| tar -x`. Mouse loci not vendored (unused). | model-loader + native-vs-OLGA Pgen oracle (`from_olga`). Tests resolve them here (override with `VDJTOOLS_OLGA_MODELS`); the `olga` pip package (`[oracle]` / test extra) supplies the *runtime* Pgen comparison. Makes the suite self-contained — no external mirpy checkout needed. |
+| Legacy input-format samples | `tests/python/fixtures/legacy/*.txt.gz` — copied from legacy vdjtools `src/test/resources/samples/` (on the `legacy-1.x` branch; re-fetch with `git show legacy-1.x:src/test/resources/samples/<f>.txt.gz`) | format-conversion conformance for `vdjtools.io.convert` (MiXcr v1/2+v3, MiGec, ImmunoSeq v1/v2, ImgtHighVQuest, Vidjil, RTCR). Oracles (input row → canonical values) derived from the legacy Groovy parsers; see `tests/python/test_convert.py` |
 
 ## Carried-over resource data (from legacy vdjtools, `legacy-1.x` branch)
 

@@ -64,6 +64,13 @@ double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx
 // via the inclusion-exclusion identity over per-position wildcards. v_idx/j_idx as above.
 double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, int j_idx);
 
+// Batch aa Pgen over many sequences, parallelized across sequences (mismatches: 0 = exact,
+// 1 = Hamming-1 ball). Bitwise-identical to the per-sequence calls. Per-sequence v/j indices;
+// empty v_idxs/j_idxs → all -1 (gene-agnostic). nthreads=0 → auto (hw-2).
+std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::string>& seqs,
+                                  const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
+                                  int mismatches, int nthreads);
+
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.
 struct Counts {

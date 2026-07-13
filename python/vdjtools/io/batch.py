@@ -6,19 +6,37 @@ metadata table into one long clonotype frame (or a per-sample dict).
 """
 from __future__ import annotations
 
+import gzip
 import os
 from pathlib import Path
 
 import polars as pl
 
+from . import convert
 from .read import read_airr, read_parquet, read_vdjtools
 from .schema import COLUMNS, LOCUS
+
+# Legacy third-party formats (vdjtools.io.convert), keyed by the fmt string used below.
+_CONVERTERS = {
+    "mixcr": convert.read_mixcr, "migec": convert.read_migec,
+    "immunoseq": convert.read_immunoseq, "imgt": convert.read_imgt,
+    "vidjil": convert.read_vidjil, "rtcr": convert.read_rtcr,
+}
 
 
 def _header_columns(path: str | os.PathLike) -> list[str]:
     """Return the (lower-cased) header column names of a TSV without reading rows."""
     cols = pl.read_csv(Path(path), separator="\t", n_rows=0, infer_schema_length=0).columns
     return [c.lower() for c in cols]
+
+
+def _peek(path: str | os.PathLike, n: int = 8) -> str:
+    """Return the first ``n`` characters (gzip-transparent), for JSON detection."""
+    with open(path, "rb") as fb:
+        gz = fb.read(2) == b"\x1f\x8b"
+    opener = gzip.open if gz else open
+    with opener(path, "rt", errors="ignore") as f:
+        return f.read(n)
 
 
 def sniff_format(path: str | os.PathLike) -> str:
@@ -39,10 +57,26 @@ def sniff_format(path: str | os.PathLike) -> str:
     """
     if Path(path).suffix.lower() in (".parquet", ".pq"):
         return "parquet"
+    if Path(path).suffix.lower() in (".vidjil", ".json") or _peek(path).lstrip()[:1] == "{":
+        return "vidjil"  # Vidjil .vidjil JSON
     cols = set(_header_columns(path))
+    # Specific third-party formats first (their signature columns don't collide with each other).
+    if "v-gene and allele" in cols and "junction" in cols:
+        return "imgt"
+    if "cdr3 nucleotide sequence" in cols and "v segments" in cols:
+        return "migec"
+    if "number of reads" in cols and "junction nucleotide sequence" in cols:
+        return "rtcr"
+    if cols & {"all v hits", "allvhitswithscore"} and \
+            cols & {"n. seq. cdr3", "nseqcdr3", "nseqimputedcdr3"}:
+        return "mixcr"
+    if "count (templates/reads)" in cols or ({"rearrangement", "amino_acid"} <= cols
+                                             and "v_gene" in cols):
+        return "immunoseq"
+    # Native vdjtools / migmap (cdr3nt/cdr3aa headers) and AIRR Rearrangement.
     if "cdr3aa" in cols or {"count", "cdr3nt"} <= cols:
         return "vdjtools"
-    if cols & {"v_call", "junction_aa", "cdr3_aa"}:
+    if cols & {"v_call", "junction_aa", "junction_nt", "cdr3_aa"}:
         return "airr"
     raise ValueError(f"unrecognised clonotype format; header columns: {sorted(cols)}")
 
@@ -72,7 +106,14 @@ def read(path: str | os.PathLike, fmt: str = "auto",
         return read_airr(path, n_rows=n_rows)
     if fmt == "parquet":
         return read_parquet(path, n_rows=n_rows)
-    raise ValueError(f"fmt must be 'auto', 'vdjtools', 'airr' or 'parquet'; got {fmt!r}")
+    if fmt == "vidjil":
+        return convert.read_vidjil(path)  # whole-JSON reader (no row cap)
+    if fmt in _CONVERTERS:
+        return _CONVERTERS[fmt](path, n_rows=n_rows)
+    raise ValueError(
+        f"fmt must be 'auto', 'vdjtools', 'airr', 'parquet', or a legacy format "
+        f"({', '.join(sorted(_CONVERTERS))}); got {fmt!r}"
+    )
 
 
 def read_metadata(path: str | os.PathLike) -> pl.DataFrame:

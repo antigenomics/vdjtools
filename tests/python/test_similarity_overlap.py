@@ -21,7 +21,7 @@ def _sample(cdr3, counts, v=None, j=None):
     n = len(cdr3)
     df = pl.DataFrame({
         S.V_CALL: v or ["TRBV1"] * n, S.J_CALL: j or ["TRBJ1"] * n,
-        S.CDR3_AA: cdr3, S.COUNT: counts,
+        S.JUNCTION_AA: cdr3, S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
@@ -152,7 +152,7 @@ def test_vj_gating_blocks_cross_v_pair():
     overlap F (identity is the exact τ→0 limit of exp on the same spine). Dropping V/J
     from the key (cdr3-only) removes the gate and the same CDR3 gives similarity 1.
     """
-    key = (S.CDR3_AA, S.V_CALL, S.J_CALL)
+    key = (S.JUNCTION_AA, S.V_CALL, S.J_CALL)
     a = _sample(["CASSLGYEQYF"], [10], v=["TRBV7-9"], j=["TRBJ2-1"])
     b = _sample(["CASSLGYEQYF"], [10], v=["TRBV20-1"], j=["TRBJ2-1"])
 
@@ -167,7 +167,7 @@ def test_vj_gating_blocks_cross_v_pair():
     # step is gated the same way; and without V/J in the key the same CDR3 is a full match.
     step = O.similarity_overlap(a, b, key=key, kernel="step", max_penalty=1,
                                 metric="cosine")["similarity"]
-    ungated = O.similarity_overlap(a, b, key=(S.CDR3_AA,), kernel="exp",
+    ungated = O.similarity_overlap(a, b, key=(S.JUNCTION_AA,), kernel="exp",
                                    metric="cosine")["similarity"]
     assert step == 0.0
     assert ungated == pytest.approx(1.0, abs=1e-12)

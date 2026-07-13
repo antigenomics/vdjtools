@@ -11,8 +11,8 @@ def _frame():
     df = pl.DataFrame({
         S.V_CALL: ["TRBV1", "TRBV1", "TRBV2"],
         S.J_CALL: ["TRBJ1", "TRBJ1", "TRBJ2"],
-        S.CDR3_AA: ["CASSL", "CASSF", "CASSLGF"],       # lengths 5, 5, 7
-        S.CDR3_NT: ["A" * 15, "A" * 15, "A" * 21],
+        S.JUNCTION_AA: ["CASSL", "CASSF", "CASSLGF"],       # lengths 5, 5, 7
+        S.JUNCTION_NT: ["A" * 15, "A" * 15, "A" * 21],
         S.COUNT: [3, 7, 5],
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))

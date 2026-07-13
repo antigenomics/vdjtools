@@ -40,8 +40,8 @@ def test_read_10x_basic_mapping(tmp_path):
     assert df.height == 2
     assert set(df["locus"]) == {"TRA", "TRB"}
     assert df["cell_id"].to_list() == ["bc1", "bc1"]
-    # 10x cdr3 IS the junction (anchors incl.) → mapped straight to cdr3_aa.
-    assert set(df["cdr3_aa"]) == {"CASSABC", "CAVLDS"}
+    # 10x cdr3 IS the junction (anchors incl.) → mapped straight to junction_aa.
+    assert set(df["junction_aa"]) == {"CASSABC", "CAVLDS"}
     assert df["duplicate_count"].to_list() == [100, 80]  # reads
     assert df["umi_count"].to_list() == [10, 8]          # umis
     assert df.filter(pl.col("locus") == "TRB")["v_call"][0] == "TRBV20-1"
@@ -92,7 +92,7 @@ def test_write_airr_cell_receptor_hash(tmp_path):
             "locus": ["TRB", "TRA"],
             "v_call": ["TRBV1", "TRAV1"], "d_call": [None, None],
             "j_call": ["TRBJ1", "TRAJ1"], "c_call": [None, None],
-            "cdr3_aa": ["CASSZZZ", "CAVAAA"], "cdr3_nt": ["TGT", "TGT"],
+            "junction_aa": ["CASSZZZ", "CAVAAA"], "junction_nt": ["TGT", "TGT"],
             "duplicate_count": [100, 80], "umi_count": [10, 8],
             "clone_id": ["c1", "c1"],
         }
@@ -119,7 +119,7 @@ def test_read_airr_cell_roundtrip(tmp_path):
         {
             "cell_id": ["bc1"], "sequence_id": ["s1"], "locus": ["TRB"],
             "v_call": ["TRBV1"], "d_call": [None], "j_call": ["TRBJ1"], "c_call": [None],
-            "cdr3_aa": ["CASS"], "cdr3_nt": ["TGT"],
+            "junction_aa": ["CASS"], "junction_nt": ["TGT"],
             "duplicate_count": [5], "umi_count": [2], "clone_id": ["c1"],
         }
     )
@@ -141,5 +141,5 @@ def test_read_airr_cell_prefers_junction_over_imgt_cdr3(tmp_path):
         "junction": ["TGTGCC"], "cdr3": ["GCC"],
     }).write_csv(tsv, separator="\t")
     back = sc.read_airr_cell(tsv)
-    assert back["cdr3_aa"].to_list() == ["CASSLGQAYEQYF"]   # junction, not the IMGT 11-mer
-    assert back["cdr3_nt"].to_list() == ["TGTGCC"]
+    assert back["junction_aa"].to_list() == ["CASSLGQAYEQYF"]   # junction, not the IMGT 11-mer
+    assert back["junction_nt"].to_list() == ["TGTGCC"]

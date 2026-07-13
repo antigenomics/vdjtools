@@ -12,13 +12,13 @@ def _sample(cdr3, counts, v=None, j=None):
     n = len(cdr3)
     df = pl.DataFrame({
         S.V_CALL: v or ["TRBV1"] * n, S.J_CALL: j or ["TRBJ1"] * n,
-        S.CDR3_AA: cdr3, S.COUNT: counts,
+        S.JUNCTION_AA: cdr3, S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
 
 def _row(df, cdr3):
-    return df.filter(pl.col(S.CDR3_AA) == cdr3).to_dicts()[0]
+    return df.filter(pl.col(S.JUNCTION_AA) == cdr3).to_dicts()[0]
 
 
 def test_join_geometric_mean_and_normalized_count():
@@ -46,14 +46,14 @@ def test_join_min_samples_filters_private_clones():
     s1 = _sample(["A", "B", "P"], [10, 40, 50])              # P is private to s1
     s2 = _sample(["A", "B"], [30, 70])
     j = pp.join_samples([s1, s2], key="aa", min_samples=2)
-    assert set(j[S.CDR3_AA].to_list()) == {"A", "B"}         # P dropped (incidence 1)
+    assert set(j[S.JUNCTION_AA].to_list()) == {"A", "B"}         # P dropped (incidence 1)
 
 
 def test_join_min_samples_one_keeps_private():
     s1 = _sample(["A", "P"], [50, 50])
     s2 = _sample(["A"], [100])
     j = pp.join_samples([s1, s2], key="aa", min_samples=1)
-    assert set(j[S.CDR3_AA].to_list()) == {"A", "P"}
+    assert set(j[S.JUNCTION_AA].to_list()) == {"A", "P"}
 
 
 def test_join_min_samples_above_n_empty_result():
@@ -63,7 +63,7 @@ def test_join_min_samples_above_n_empty_result():
     s2 = _sample(["A", "B"], [40, 60])
     j = pp.join_samples([s1, s2], key="aa", min_samples=3)
     assert j.height == 0
-    assert set(j.columns) == {S.CDR3_AA, "freq_0", "freq_1", "count_0", "count_1",
+    assert set(j.columns) == {S.JUNCTION_AA, "freq_0", "freq_1", "count_0", "count_1",
                               "incidence", S.FREQ, S.COUNT}
 
 

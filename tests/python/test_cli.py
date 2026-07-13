@@ -19,8 +19,8 @@ def _airr_sample(df: pl.DataFrame, seed: int) -> pl.DataFrame:
     rng = np.random.default_rng(seed)
     return df.with_columns(
         pl.Series("duplicate_count", rng.integers(1, 20, df.height)),
-        pl.col("cdr3_aa").alias("junction_aa"),
-        pl.col("cdr3_nt").alias("junction"),
+        pl.col("junction_aa").alias("junction_aa"),
+        pl.col("junction_nt").alias("junction"),
     ).select("v_call", "d_call", "j_call", "junction_aa", "junction", "duplicate_count", "productive")
 
 
@@ -44,7 +44,7 @@ def test_generate(tmp_path):
     assert r.exit_code == 0, r.stdout
     df = pl.read_csv(out, separator="\t")
     assert df.height == 8
-    assert {"cdr3_aa", "cdr3_nt", "v_call", "j_call"} <= set(df.columns)
+    assert {"junction_aa", "junction_nt", "v_call", "j_call"} <= set(df.columns)
 
 
 def test_pgen_exact_and_hamming1(tmp_path):

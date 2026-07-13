@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from ..io.schema import CDR3_AA, J_CALL, V_CALL
+from ..io.schema import JUNCTION_AA, J_CALL, V_CALL
 
 _VDJMATCH_HINT = (
     "vdjmatch is required for vdjtools.biomarker.metaclonotype; install the extra with "
@@ -39,12 +39,12 @@ def metaclonotypes(clonotypes: pl.DataFrame, *, scope: str = "1,0,0,1",
                    threads: int = 0) -> pl.DataFrame:
     """Group unique clonotype keys into metaclonotypes by CDR3 edit-scope neighbourhood.
 
-    Two keys share a ``meta_id`` iff their ``cdr3_aa`` are within ``scope`` **and** they
+    Two keys share a ``meta_id`` iff their ``junction_aa`` are within ``scope`` **and** they
     share a V call (when ``match_v``) and a J call (when ``match_j``). Grouping is
     single-linkage (connected components of the neighbour graph).
 
     Args:
-        clonotypes: A clonotype frame; must carry ``cdr3_aa`` and, when the corresponding
+        clonotypes: A clonotype frame; must carry ``junction_aa`` and, when the corresponding
             ``match_*`` flag is set, ``v_call`` / ``j_call``.
         scope: vdjmatch edit-distance scope ``"subs,ins,dels,total"`` (default one
             substitution, length-preserving). ``"0,0,0,0"`` reduces to exact grouping.
@@ -53,7 +53,7 @@ def metaclonotypes(clonotypes: pl.DataFrame, *, scope: str = "1,0,0,1",
         threads: Worker threads for the native search (``0`` = all cores).
 
     Returns:
-        The distinct grouping keys (``cdr3_aa`` plus ``v_call``/``j_call`` as applicable)
+        The distinct grouping keys (``junction_aa`` plus ``v_call``/``j_call`` as applicable)
         with an added ``meta_id`` column (compact 0-based integer, singletons included).
 
     Raises:
@@ -67,8 +67,8 @@ def metaclonotypes(clonotypes: pl.DataFrame, *, scope: str = "1,0,0,1",
     if match_j and J_CALL in clonotypes.columns:
         group_cols.append(J_CALL)
 
-    uniq = (clonotypes.select([CDR3_AA, *group_cols])
-            .drop_nulls(CDR3_AA)
+    uniq = (clonotypes.select([JUNCTION_AA, *group_cols])
+            .drop_nulls(JUNCTION_AA)
             .unique(maintain_order=True)
             .with_row_index("_gid"))
     n = uniq.height
@@ -94,7 +94,7 @@ def metaclonotypes(clonotypes: pl.DataFrame, *, scope: str = "1,0,0,1",
     # union-find over the returned positional pairs. No partition (CDR3-only) => one pass.
     groups = uniq.group_by(group_cols, maintain_order=True) if group_cols else [((), uniq)]
     for _, sub in groups:
-        cdr3s = sub[CDR3_AA].to_list()
+        cdr3s = sub[JUNCTION_AA].to_list()
         if len(cdr3s) < 2:
             continue
         gids = sub["_gid"].to_list()

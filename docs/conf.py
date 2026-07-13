@@ -3,7 +3,7 @@
 project = "vdjtools"
 author = "ISALGO laboratory"
 copyright = "2026, ISALGO laboratory"
-version = release = "2.1.0"
+version = release = "2.2.0"
 
 extensions = [
     "sphinx.ext.autodoc",
@@ -19,6 +19,10 @@ extensions = [
 autodoc_mock_imports = ["arda", "vdjmatch", "seqtree"]
 autodoc_typehints = "description"
 autodoc_member_order = "bysource"
+
+# Render napoleon ``Attributes:`` sections as :ivar: fields (not standalone py:attribute
+# objects), so a dataclass's Attributes docstring does not duplicate its autodoc'd fields.
+napoleon_use_ivar = True
 
 intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
 

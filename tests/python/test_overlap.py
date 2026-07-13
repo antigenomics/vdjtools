@@ -11,7 +11,7 @@ def _sample(cdr3, counts, v=None, j=None):
     n = len(cdr3)
     df = pl.DataFrame({
         S.V_CALL: v or ["TRBV1"] * n, S.J_CALL: j or ["TRBJ1"] * n,
-        S.CDR3_AA: cdr3, S.COUNT: counts,
+        S.JUNCTION_AA: cdr3, S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
@@ -25,7 +25,7 @@ def test_overlap_metrics_hand_values():
     assert math.isclose(m["F"], math.sqrt(0.4 * 0.8), rel_tol=1e-12)
     assert math.isclose(m["F2"], 0.2 + math.sqrt(0.12), rel_tol=1e-12)
     assert shared.height == 2
-    assert set(shared[S.CDR3_AA].to_list()) == {"CASSL", "CASSF"}
+    assert set(shared[S.JUNCTION_AA].to_list()) == {"CASSL", "CASSF"}
 
 
 def test_overlap_no_shared():
@@ -49,7 +49,7 @@ def test_overlap_correlation_raw_freq():
     # identical vectors -> Pearson R == 1.0 (no log transform).
     a = _sample(["A", "B", "C", "D"], [1, 10, 100, 1000])
     b = _sample(["A", "B", "C", "D"], [2, 20, 200, 2000])
-    m = O.overlap_metrics(a, b, key=(S.CDR3_AA,))
+    m = O.overlap_metrics(a, b, key=(S.JUNCTION_AA,))
     assert m["d12"] == 4
     assert math.isclose(m["R"], 1.0, rel_tol=1e-12)
 
@@ -58,4 +58,4 @@ def test_overlap_cdr3_only_key():
     a = _sample(["CASSL"], [1], v=["TRBV1"], j=["TRBJ1"])
     b = _sample(["CASSL"], [1], v=["TRBV9"], j=["TRBJ9"])   # same cdr3, different V/J
     assert O.overlap_metrics(a, b)["d12"] == 0             # default key includes V/J
-    assert O.overlap_metrics(a, b, key=(S.CDR3_AA,))["d12"] == 1
+    assert O.overlap_metrics(a, b, key=(S.JUNCTION_AA,))["d12"] == 1

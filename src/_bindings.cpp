@@ -66,10 +66,18 @@ PYBIND11_MODULE(_core, m) {
           "Generation probability of an int-coded nt CDR3; v_idx/j_idx = -1 sums over all genes.");
     m.def("pgen_aa", &vdjtools::pgen_aa, py::arg("model"), py::arg("aa"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1,
+          py::call_guard<py::gil_scoped_release>(),
           "Generation probability of an amino-acid CDR3; v_idx/j_idx = -1 sums over all genes.");
     m.def("pgen_aa_hamming1", &vdjtools::pgen_aa_hamming1, py::arg("model"), py::arg("aa"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1,
+          py::call_guard<py::gil_scoped_release>(),
           "Total Pgen of the amino-acid CDR3 and all its Hamming-1 neighbours (one substitution).");
+    m.def("pgen_aa_batch", &vdjtools::pgen_aa_batch, py::arg("model"), py::arg("seqs"),
+          py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
+          py::arg("mismatches") = 0, py::arg("threads") = 0,
+          py::call_guard<py::gil_scoped_release>(),
+          "Batch aa Pgen over many CDR3s, parallelized across sequences (mismatches=1 -> Hamming-1 "
+          "ball). Bitwise-identical to per-sequence pgen_aa/pgen_aa_hamming1; threads=0 -> auto.");
 
     py::class_<Counts>(m, "Counts")
         .def_readonly("v_choice", &Counts::v_choice)

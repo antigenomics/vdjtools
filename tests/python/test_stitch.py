@@ -17,7 +17,7 @@ from vdjtools.model.generate import generate
 OLGA_MODELS = Path(
     os.environ.get(
         "VDJTOOLS_OLGA_MODELS",
-        "/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models",
+        str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"),
     )
 )
 pytest.importorskip("olga.load_model", reason="olga (the [oracle] extra) not installed")
@@ -30,7 +30,7 @@ def test_stitch_contig_none_paths():
     good_v = m.genomic["genes_v"]["v_allele"][0]
     assert stitch_contig(m, "NOSUCHV", "TRBJ1-1*01", "TGTGCC") is None
     assert stitch_contig(m, good_v, "NOSUCHJ", "TGTGCC") is None
-    frame = pl.DataFrame({"v_call": ["NOSUCHV"], "j_call": ["TRBJ1-1*01"], "cdr3_nt": ["TGTGCC"]})
+    frame = pl.DataFrame({"v_call": ["NOSUCHV"], "j_call": ["TRBJ1-1*01"], "junction_nt": ["TGTGCC"]})
     assert stitch_frame(m, frame)["contig"][0] is None
 
 
@@ -39,14 +39,14 @@ def test_stitch_contig_structure():
     m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
     gen = generate(m, 5, seed=1, productive_only=True).to_dicts()
     r = gen[0]
-    contig = stitch_contig(m, r["v_call"], r["j_call"], r["cdr3_nt"])
+    contig = stitch_contig(m, r["v_call"], r["j_call"], r["junction_nt"])
     assert contig is not None
-    assert r["cdr3_nt"] in contig
+    assert r["junction_nt"] in contig
     # CDR3 starts at the V anchor; upstream is pure V framework.
     vg = {x[0]: (x[1], x[2]) for x in m.genomic["genes_v"].select(["v_allele", "full_germline", "anchor"]).iter_rows()}
     fv, av = vg[r["v_call"]]
     assert contig.startswith(fv[:av])
-    assert contig[av:av + len(r["cdr3_nt"])] == r["cdr3_nt"]
+    assert contig[av:av + len(r["junction_nt"])] == r["junction_nt"]
 
 
 @pytest.mark.slow
@@ -63,7 +63,7 @@ def test_arda_roundtrip():
     def gene(x):
         return x.split("*")[0] if x else None
 
-    j_recovered = sum(a == b for a, b in zip(calls["junction"], stitched["cdr3_nt"]))
+    j_recovered = sum(a == b for a, b in zip(calls["junction"], stitched["junction_nt"]))
     v_gene_ok = sum(gene(a) == gene(b) for a, b in zip(calls["v_call"], stitched["v_call"]))
     j_gene_ok = sum(gene(a) == gene(b) for a, b in zip(calls["j_call"], stitched["j_call"]))
     n = stitched.height

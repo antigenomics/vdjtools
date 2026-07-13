@@ -18,7 +18,7 @@ from vdjtools.model import pgen
 from vdjtools.model.dd import to_dd
 from vdjtools.model.pgen import _dd_middle
 
-OLGA = Path("/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models")
+OLGA = Path(str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"))
 # from_olga needs the olga package (the [oracle] extra), not just the model files on disk; CI runs
 # [test] only, so guard on the package too — these skip, they don't error (cf. commit 833e237).
 _OLGA_OK = OLGA.exists() and importlib.util.find_spec("olga") is not None
@@ -140,7 +140,7 @@ def test_em_recovers_p_nd2():
     from vdjtools.model import generate
     from vdjtools.model.infer import infer
     reads = [r.upper() for r in generate.generate(_tiny_dd_model(p_nd2=0.35, pdel_full_only=False),
-                                                  1500, seed=11)["cdr3_nt"].to_list()]
+                                                  1500, seed=11)["junction_nt"].to_list()]
     fitted, _ = infer(_tiny_dd_model(p_nd2=0.15, pdel_full_only=False), reads, max_iter=25, init="template")
     nd = dict(zip(fitted.tables["n_d"]["n_d"].to_list(), fitted.tables["n_d"]["p"].to_list()))
     assert nd[2] == pytest.approx(0.35, abs=0.05)  # recovered from a deliberately wrong 0.15 start
@@ -199,7 +199,7 @@ def test_native_dd_em_recovers_p_nd2():
     from vdjtools.model.infer import infer_native
     pytest.importorskip("vdjtools._core")
     reads = [r.upper() for r in generate.generate(_tiny_dd_model(p_nd2=0.35, pdel_full_only=False),
-                                                  1500, seed=11)["cdr3_nt"].to_list()]
+                                                  1500, seed=11)["junction_nt"].to_list()]
     fitted, _ = infer_native(_tiny_dd_model(p_nd2=0.15, pdel_full_only=False), reads, max_iter=25, init="template")
     nd = dict(zip(fitted.tables["n_d"]["n_d"].to_list(), fitted.tables["n_d"]["p"].to_list()))
     assert nd[2] == pytest.approx(0.35, abs=0.05)
@@ -212,7 +212,7 @@ def test_dd_anchor_and_prior_regularize_and_match():
     from vdjtools.model.infer import infer, infer_native
     pytest.importorskip("vdjtools._core")
     reads = [r.upper() for r in generate.generate(_tiny_dd_model(p_nd2=0.35, pdel_full_only=False),
-                                                  1200, seed=11)["cdr3_nt"].to_list()]
+                                                  1200, seed=11)["junction_nt"].to_list()]
     gate = [i % 2 == 0 for i in range(len(reads))]  # allow D-D on half the reads
 
     def p2(model_and_report):
@@ -329,7 +329,7 @@ def test_dd_backward_compatible_on_trd():
     m = from_olga(OLGA / "human_T_delta", locus="TRD")
     prep0 = pgen.prepare(m)
     prep_dd0 = pgen.prepare(to_dd(m, p_nd2=0.0))
-    seqs = [s.upper() for s in generate.generate(m, 20, seed=3)["cdr3_nt"].to_list()]
+    seqs = [s.upper() for s in generate.generate(m, 20, seed=3)["junction_nt"].to_list()]
     checked = 0
     for s in seqs:
         p1 = pgen.pgen_nt(prep0, s)
@@ -400,7 +400,7 @@ def test_dd_full_native_support_and_single_d_untouched():
     from vdjtools.model import generate, infer, native
     m = from_olga(OLGA / "human_T_delta", locus="TRD")
     m_dd = to_dd(m, p_nd2=0.1)
-    s = generate.generate(m, 1, seed=1)["cdr3_nt"][0].upper()
+    s = generate.generate(m, 1, seed=1)["junction_nt"][0].upper()
     # nt Pgen, aa Pgen, Hamming-1, v/j-agnostic, generation, native EM — all native, none raise.
     # (aa D-D numerical correctness vs the Python reference / Σnt is test_aa_dd_equals_nt_sum; the
     # pure-Python aa D-D is intractable on real-length TRD, so it is not exercised here.)
@@ -426,7 +426,7 @@ def test_dd_default_for_d_loci():
     assert DD_DEFAULT_LOCI == {"TRB", "TRD", "IGH"}
     m = from_olga(OLGA / "human_T_delta", locus="TRD")
     df = generate.generate(m, 30, seed=3)
-    seqs = [s.upper() for s in df["cdr3_nt"]]
+    seqs = [s.upper() for s in df["junction_nt"]]
     mk = gene_masks(m, df["v_call"].to_list(), df["j_call"].to_list())
     dd, _ = infer_native(m, seqs, masks=mk, max_iter=1)                 # default → D-D
     sd, _ = infer_native(m, seqs, masks=mk, max_iter=1, single_d=True)  # opt out → single-D
@@ -442,7 +442,7 @@ def test_generate_dd_fraction_and_scoreable():
     df = generate.generate(m, 4000, seed=1)
     assert df["d2_call"].is_not_null().mean() == pytest.approx(0.4, abs=0.03)  # ~ P(n_D=2)
     tand = df.filter(df["d2_call"].is_not_null()).head(20)
-    assert all(native.pgen_nt(m, r["cdr3_nt"].upper(), r["v_call"], r["j_call"]) > 0
+    assert all(native.pgen_nt(m, r["junction_nt"].upper(), r["v_call"], r["j_call"]) > 0
                for r in tand.to_dicts())
 
 

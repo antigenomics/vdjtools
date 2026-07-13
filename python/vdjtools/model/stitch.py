@@ -40,7 +40,7 @@ def stitch_contig(model: Model, v: str, j: str, cdr3_nt: str) -> str | None:
     return fv[:av] + cdr3_nt + fj[aj + 3:]
 
 
-def stitch_frame(model: Model, gen: pl.DataFrame, *, cdr3_col: str = "cdr3_nt") -> pl.DataFrame:
+def stitch_frame(model: Model, gen: pl.DataFrame, *, cdr3_col: str = "junction_nt") -> pl.DataFrame:
     """Add a ``contig`` column to a generated frame (rows with no anchor drop to null)."""
     contigs = [stitch_contig(model, r["v_call"], r["j_call"], r[cdr3_col]) for r in gen.to_dicts()]
     return gen.with_columns(contig=pl.Series("contig", contigs, dtype=pl.Utf8))

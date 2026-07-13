@@ -9,7 +9,7 @@ import pytest
 
 from vdjtools.model import analyze, from_olga
 
-OLGA = Path("/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models")
+OLGA = Path(str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"))
 pytest.importorskip("olga.load_model", reason="olga (the [oracle] extra) not installed")
 pytestmark = pytest.mark.skipif(not OLGA.exists(), reason="OLGA default models not available")
 

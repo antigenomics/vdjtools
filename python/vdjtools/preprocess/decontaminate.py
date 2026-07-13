@@ -9,7 +9,7 @@ from __future__ import annotations
 import polars as pl
 
 from ..io.schema import (
-    CDR3_NT,
+    JUNCTION_NT,
     COUNT,
     FREQ,
     J_CALL,
@@ -20,7 +20,7 @@ from ..io.schema import (
 
 
 def decontaminate(df: pl.DataFrame, others: "list[pl.DataFrame]", ratio: float = 20.0,
-                  by: str = "freq", key: "tuple[str, ...]" = (CDR3_NT, V_CALL, J_CALL)
+                  by: str = "freq", key: "tuple[str, ...]" = (JUNCTION_NT, V_CALL, J_CALL)
                   ) -> pl.DataFrame:
     """Remove clonotypes dominated by an exact match in another sample.
 
@@ -43,7 +43,7 @@ def decontaminate(df: pl.DataFrame, others: "list[pl.DataFrame]", ratio: float =
         by: ``"freq"`` (default) compares within-sample frequencies; ``"reads"``
             compares raw read counts.
         key: Exact match key (legacy default is the strict key
-            ``("cdr3_nt", "v_call", "j_call")``).
+            ``("junction_nt", "v_call", "j_call")``).
 
     Returns:
         The decontaminated frame with ``frequency`` recomputed.

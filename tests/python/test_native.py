@@ -20,7 +20,7 @@ from vdjtools.model.pgen import prepare
 OLGA_MODELS = Path(
     os.environ.get(
         "VDJTOOLS_OLGA_MODELS",
-        "/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models",
+        str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"),
     )
 )
 pytest.importorskip("olga.load_model", reason="olga (the [oracle] extra) not installed")
@@ -39,10 +39,10 @@ def test_native_matches_python(sub, locus):
     prep = prepare(m)
     df = generate(m, 8, seed=3, productive_only=True)
     for r in df.to_dicts():
-        nt, v, j = r["cdr3_nt"], r["v_call"], r["j_call"]
+        nt, v, j = r["junction_nt"], r["v_call"], r["j_call"]
         assert np.isclose(native.pgen_nt(m, nt, v, j), py_pgen_nt(prep, nt, v, j), rtol=1e-9)
     # unrestricted (sum over all genes) must also agree
-    nt = df["cdr3_nt"][0]
+    nt = df["junction_nt"][0]
     assert np.isclose(native.pgen_nt(m, nt), py_pgen_nt(prep, nt), rtol=1e-9)
 
 
@@ -80,10 +80,10 @@ def test_native_aa_vdj_matches_olga():
     m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
     olga = _olga_vdj("human_T_beta")
     seqs = sorted(
-        generate(m, 40, seed=7, productive_only=True).to_dicts(), key=lambda r: len(r["cdr3_aa"])
+        generate(m, 40, seed=7, productive_only=True).to_dicts(), key=lambda r: len(r["junction_aa"])
     )
     for r in seqs[:12]:
-        aa, v, j = r["cdr3_aa"], r["v_call"], r["j_call"]
+        aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
         assert np.isclose(native.pgen_aa(m, aa), olga.compute_aa_CDR3_pgen(aa), rtol=1e-9)  # all V/J/D
         assert np.isclose(native.pgen_aa(m, aa, v, j), olga.compute_aa_CDR3_pgen(aa, v, j), rtol=1e-9)
 
@@ -98,10 +98,10 @@ def test_native_aa_hamming1_matches_olga():
     m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
     olga = _olga_vdj("human_T_beta")
     seqs = sorted(
-        generate(m, 40, seed=7, productive_only=True).to_dicts(), key=lambda r: len(r["cdr3_aa"])
+        generate(m, 40, seed=7, productive_only=True).to_dicts(), key=lambda r: len(r["junction_aa"])
     )
     for r in seqs[:8]:
-        aa, v, j = r["cdr3_aa"], r["v_call"], r["j_call"]
+        aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
         assert np.isclose(
             native.pgen_aa(m, aa, mismatches=1), olga.compute_hamming_dist_1_pgen(aa), rtol=1e-9
         )
@@ -116,7 +116,7 @@ def test_native_aa_matches_python_vj():
     m = from_olga(OLGA_MODELS / "human_T_alpha", locus="TRA")
     prep = prepare(m)
     for r in generate(m, 6, seed=3, productive_only=True).to_dicts():
-        aa, v, j = r["cdr3_aa"], r["v_call"], r["j_call"]
+        aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
         assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6)
 
 
@@ -130,7 +130,7 @@ def test_native_estep_matches_python():
 
     m = from_olga(OLGA_MODELS / "human_T_alpha", locus="TRA")
     prep = prepare(m)
-    seqs = generate(m, 8, seed=3, productive_only=True)["cdr3_nt"].to_list()
+    seqs = generate(m, 8, seed=3, productive_only=True)["junction_nt"].to_list()
     pm, vi, ji = pack(m)
     counts = make_counts(pm)
     estep_batch(pm, [_encode(s) for s in seqs], [], [], [], counts)
@@ -161,7 +161,7 @@ def test_native_em_recovers_tra():
     from vdjtools.model.infer import infer_native
 
     m = from_olga(OLGA_MODELS / "human_T_alpha", locus="TRA")
-    seqs = generate(m, 1500, seed=11)["cdr3_nt"].to_list()
+    seqs = generate(m, 1500, seed=11)["junction_nt"].to_list()
     fit, rep = infer_native(m, seqs, max_iter=10)
 
     def corr(a, b):
@@ -189,6 +189,6 @@ def test_native_aa_matches_python_vdj():
     m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
     prep = prepare(m)
     # short beta CDR3s (the VDJ aa enumeration is O(D x deletions x positions))
-    for r in sorted(generate(m, 60, seed=3, productive_only=True).to_dicts(), key=lambda r: len(r["cdr3_aa"]))[:3]:
-        aa, v, j = r["cdr3_aa"], r["v_call"], r["j_call"]
+    for r in sorted(generate(m, 60, seed=3, productive_only=True).to_dicts(), key=lambda r: len(r["junction_aa"]))[:3]:
+        aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
         assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6)

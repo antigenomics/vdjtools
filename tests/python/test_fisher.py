@@ -8,7 +8,7 @@ from scipy.stats import fisher_exact
 from vdjtools.biomarker import fisher_association
 from vdjtools.io import schema as S
 
-_COLS = ["sample_id", "v_call", "j_call", "cdr3_aa", "duplicate_count"]
+_COLS = ["sample_id", "v_call", "j_call", "junction_aa", "duplicate_count"]
 
 
 def _cohort():
@@ -32,14 +32,14 @@ def _cohort():
 def test_recovers_enriched_feature():
     df, pheno = _cohort()
     res = fisher_association(df, pheno, pheno_col="cmv")  # default: full key, one-tailed greater
-    x = res.filter(pl.col("cdr3_aa") == "CASSXF").row(0, named=True)
+    x = res.filter(pl.col("junction_aa") == "CASSXF").row(0, named=True)
     assert (x["incidence"], x["n_pos_present"], x["n_neg_present"]) == (9, 8, 1)
     assert x["direction"] == "enriched"
     assert x["log2_or"] > 0 and x["p_value"] < 0.05
     # ubiquitous background is not associated; private singleton is filtered.
-    bg = res.filter(pl.col("cdr3_aa") == "CASSBG").row(0, named=True)
+    bg = res.filter(pl.col("junction_aa") == "CASSBG").row(0, named=True)
     assert bg["p_value"] > 0.5
-    assert res.filter(pl.col("cdr3_aa") == "CASSRARE").height == 0
+    assert res.filter(pl.col("junction_aa") == "CASSRARE").height == 0
 
 
 def test_hypergeom_tail_matches_scipy_fisher_exact():
@@ -48,7 +48,7 @@ def test_hypergeom_tail_matches_scipy_fisher_exact():
     for alt in ("greater", "less"):
         res = fisher_association(df, pheno, pheno_col="cmv", alternative=alt)
         for cdr3 in ("CASSXF", "CASSZF", "CASSBG"):
-            r = res.filter(pl.col("cdr3_aa") == cdr3).row(0, named=True)
+            r = res.filter(pl.col("junction_aa") == cdr3).row(0, named=True)
             a, b = r["n_pos_present"], r["n_neg_present"]
             c, d = r["n_pos"] - a, r["n_neg"] - b
             _, p_sp = fisher_exact([[a, b], [c, d]], alternative=alt)
@@ -58,7 +58,7 @@ def test_hypergeom_tail_matches_scipy_fisher_exact():
 def test_depleted_direction_and_less_tail():
     df, pheno = _cohort()
     res = fisher_association(df, pheno, pheno_col="cmv", alternative="less")
-    z = res.filter(pl.col("cdr3_aa") == "CASSZF").row(0, named=True)
+    z = res.filter(pl.col("junction_aa") == "CASSZF").row(0, named=True)
     assert z["direction"] == "depleted" and z["log2_or"] < 0 and z["p_value"] < 0.05
 
 
@@ -66,8 +66,8 @@ def test_two_sided_is_doubled_one_tail():
     df, pheno = _cohort()
     g = fisher_association(df, pheno, pheno_col="cmv", alternative="greater")
     two = fisher_association(df, pheno, pheno_col="cmv", alternative="two-sided")
-    xg = g.filter(pl.col("cdr3_aa") == "CASSXF")["p_value"].item()
-    xt = two.filter(pl.col("cdr3_aa") == "CASSXF")["p_value"].item()
+    xg = g.filter(pl.col("junction_aa") == "CASSXF")["p_value"].item()
+    xt = two.filter(pl.col("junction_aa") == "CASSXF")["p_value"].item()
     assert xt == pytest.approx(min(1.0, 2 * xg))  # enriched: greater is the smaller tail
 
 
@@ -76,15 +76,15 @@ def test_vj_match_requirement_via_key():
     df, pheno = _cohort()
     full = fisher_association(df, pheno, pheno_col="cmv")
     assert {"v_call", "j_call"} <= set(full.columns)
-    cdr_only = fisher_association(df, pheno, pheno_col="cmv", key=(S.CDR3_AA,))
+    cdr_only = fisher_association(df, pheno, pheno_col="cmv", key=(S.JUNCTION_AA,))
     assert "v_call" not in cdr_only.columns and "j_call" not in cdr_only.columns
-    assert {"cdr3_aa", "incidence", "p_value", "q_value"} <= set(cdr_only.columns)
+    assert {"junction_aa", "incidence", "p_value", "q_value"} <= set(cdr_only.columns)
 
 
 def test_min_incidence_and_lazyframe_input():
     df, pheno = _cohort()
     res = fisher_association(df.lazy(), pheno, pheno_col="cmv", min_incidence=20)
-    assert set(res["cdr3_aa"]) == {"CASSBG"}  # only the all-subject background survives
+    assert set(res["junction_aa"]) == {"CASSBG"}  # only the all-subject background survives
 
 
 def test_unknown_phenotype_labels_excluded():

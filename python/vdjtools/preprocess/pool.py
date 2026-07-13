@@ -10,8 +10,8 @@ from __future__ import annotations
 import polars as pl
 
 from ..io.schema import (
-    CDR3_AA,
-    CDR3_NT,
+    JUNCTION_AA,
+    JUNCTION_NT,
     COUNT,
     D_CALL,
     C_CALL,
@@ -22,13 +22,13 @@ from ..io.schema import (
 
 #: Legacy ``OverlapType`` match keys -> the clonotype columns they compare on.
 KEY_SETS: dict[str, tuple[str, ...]] = {
-    "strict": (CDR3_NT, V_CALL, J_CALL),   # OverlapType.Strict
-    "nt": (CDR3_NT,),                       # Nucleotide
-    "ntV": (CDR3_NT, V_CALL),               # NucleotideV
-    "ntVJ": (CDR3_NT, V_CALL, J_CALL),      # NucleotideVJ
-    "aa": (CDR3_AA,),                       # AminoAcid
-    "aaV": (CDR3_AA, V_CALL),               # AminoAcidV
-    "aaVJ": (CDR3_AA, V_CALL, J_CALL),      # AminoAcidVJ
+    "strict": (JUNCTION_NT, V_CALL, J_CALL),   # OverlapType.Strict
+    "nt": (JUNCTION_NT,),                       # Nucleotide
+    "ntV": (JUNCTION_NT, V_CALL),               # NucleotideV
+    "ntVJ": (JUNCTION_NT, V_CALL, J_CALL),      # NucleotideVJ
+    "aa": (JUNCTION_AA,),                       # AminoAcid
+    "aaV": (JUNCTION_AA, V_CALL),               # AminoAcidV
+    "aaVJ": (JUNCTION_AA, V_CALL, J_CALL),      # AminoAcidVJ
 }
 
 
@@ -66,12 +66,12 @@ def pool_samples(samples: "list[pl.DataFrame]", key: "str | tuple[str, ...]" = "
     - ``occurrences`` — total number of clonotype rows aggregated (a clonotype can
       appear once per sample, and, for amino-acid keys, via several nucleotide
       variants within one sample).
-    - ``convergence`` — number of distinct nucleotide variants (``cdr3_nt`` +
+    - ``convergence`` — number of distinct nucleotide variants (``junction_nt`` +
       ``v_call`` + ``j_call``, the legacy strict key) collapsed into the pooled
       clonotype. This is 1 for nucleotide-level keys and counts convergent
       recombination for amino-acid-level keys.
 
-    The representative non-key fields (e.g. the ``cdr3_nt`` of an amino-acid pool)
+    The representative non-key fields (e.g. the ``junction_nt`` of an amino-acid pool)
     are taken from the most abundant contributing row (legacy
     ``MaxClonotypeAggregator``).
 
@@ -95,8 +95,8 @@ def pool_samples(samples: "list[pl.DataFrame]", key: "str | tuple[str, ...]" = "
         frames.append(normalize(s).with_columns(pl.Series("_sample", sid)))
     long = pl.concat(frames, how="vertical_relaxed")
 
-    fields = (V_CALL, D_CALL, J_CALL, C_CALL, CDR3_AA, CDR3_NT)
-    strict = [CDR3_NT, V_CALL, J_CALL]
+    fields = (V_CALL, D_CALL, J_CALL, C_CALL, JUNCTION_AA, JUNCTION_NT)
+    strict = [JUNCTION_NT, V_CALL, J_CALL]
     agg = (
         long.group_by(key, maintain_order=True)
         .agg(

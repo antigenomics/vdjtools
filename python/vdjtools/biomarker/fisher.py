@@ -15,8 +15,8 @@ doi:10.1038/ng.3822). A feature is public if it is present in ``>= min_incidence
 
 Two axes are exposed as first-class options:
 
-- **V/J match requirement** — the ``key`` tuple. ``(cdr3_aa,)`` matches on CDR3 alone;
-  ``(cdr3_aa, v_call)`` also requires the V gene; ``(cdr3_aa, v_call, j_call)`` (the
+- **V/J match requirement** — the ``key`` tuple. ``(junction_aa,)`` matches on CDR3 alone;
+  ``(junction_aa, v_call)`` also requires the V gene; ``(junction_aa, v_call, j_call)`` (the
   default, Emerson's definition) requires both.
 - **exact vs 1-mismatch CDR3 matching** — ``match``. ``"exact"`` groups on the literal
   key (pure polars, no extra deps). ``"1mm"`` first groups near-variant keys into
@@ -71,8 +71,8 @@ def fisher_association(
         phenotype: One row per subject with ``sample_id`` and the binary ``pheno_col``
             (bool / 0-1); subjects with a null label are dropped from both classes.
         pheno_col: Name of the binary phenotype column in ``phenotype``.
-        key: Feature key — a subset of ``(cdr3_aa, v_call, j_call)`` (must include
-            ``cdr3_aa``). This is the **V/J match requirement**.
+        key: Feature key — a subset of ``(junction_aa, v_call, j_call)`` (must include
+            ``junction_aa``). This is the **V/J match requirement**.
         match: ``"exact"`` (literal key) or ``"1mm"`` (group near-variants into
             metaclonotypes first; needs the ``[overlap]`` extra).
         min_incidence: Minimum number of subjects a feature must appear in to be tested.
@@ -90,7 +90,7 @@ def fisher_association(
         Hochberg) and ``direction`` (``"enriched"``/``"depleted"``), sorted by ``p_value``.
 
     Raises:
-        ValueError: If ``alternative``/``match`` is unrecognised, ``key`` omits ``cdr3_aa``,
+        ValueError: If ``alternative``/``match`` is unrecognised, ``key`` omits ``junction_aa``,
             or the phenotype has only one class after dropping unknowns.
     """
     if alternative not in _ALTERNATIVES:
@@ -98,8 +98,8 @@ def fisher_association(
     if match not in ("exact", "1mm"):
         raise ValueError(f"match must be 'exact' or '1mm'; got {match!r}")
     key = tuple(key)
-    if S.CDR3_AA not in key:
-        raise ValueError(f"key must include {S.CDR3_AA!r}; got {key}")
+    if S.JUNCTION_AA not in key:
+        raise ValueError(f"key must include {S.JUNCTION_AA!r}; got {key}")
 
     lf = cohort.lazy()
 
@@ -115,9 +115,9 @@ def fisher_association(
         raise ValueError("phenotype has only one class after dropping unknown labels")
 
     # Feature engineering: productive filter + allele stripping on the key's V/J columns.
-    lf = lf.filter(pl.col(S.CDR3_AA).is_not_null())
+    lf = lf.filter(pl.col(S.JUNCTION_AA).is_not_null())
     if productive_only:
-        lf = lf.filter(~pl.col(S.CDR3_AA).str.contains(r"[*_]"))
+        lf = lf.filter(~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
     if strip_allele:
         for c in (S.V_CALL, S.J_CALL):
             if c in key:

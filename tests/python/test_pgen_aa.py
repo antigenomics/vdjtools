@@ -20,7 +20,7 @@ from vdjtools.model.reference import _CODON_TABLE
 OLGA_MODELS = Path(
     os.environ.get(
         "VDJTOOLS_OLGA_MODELS",
-        "/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models",
+        str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"),
     )
 )
 pytest.importorskip("olga.load_model", reason="olga (the [oracle] extra) not installed")
@@ -75,8 +75,8 @@ def test_aa_equals_nt_sum():
     for cod, a in _CODON_TABLE.items():
         syn[a].append(cod)
     # a short generated CDR3 with a bounded synonymous-codon count
-    for r in sorted(generate(m, 600, seed=1, productive_only=True).to_dicts(), key=lambda r: len(r["cdr3_aa"])):
-        aa, V, J = r["cdr3_aa"], r["v_call"], r["j_call"]
+    for r in sorted(generate(m, 600, seed=1, productive_only=True).to_dicts(), key=lambda r: len(r["junction_aa"])):
+        aa, V, J = r["junction_aa"], r["v_call"], r["j_call"]
         if int(np.prod([len(syn[a]) for a in aa])) <= 40000:
             break
     brute = sum(pgen_nt(prep, "".join(c), V, J) for c in itertools.product(*[syn[a] for a in aa]))

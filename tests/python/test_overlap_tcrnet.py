@@ -24,7 +24,7 @@ _AA = "ACDEFGHIKLMNPQRSTVWY"
 def _sample_from_cdr3(cdr3, v="TRBV7-9", j="TRBJ2-1"):
     n = len(cdr3)
     df = pl.DataFrame({S.V_CALL: [v] * n, S.J_CALL: [j] * n,
-                       S.CDR3_AA: cdr3, S.COUNT: [1] * n})
+                       S.JUNCTION_AA: cdr3, S.COUNT: [1] * n})
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
 
@@ -40,10 +40,10 @@ def test_tcrnet_planted_cluster_enriched():
     sample = _sample_from_cdr3(clique + noise)
 
     res = O.tcrnet(sample, scope="1,0,0,1")
-    assert set(res.columns) >= {S.CDR3_AA, "n_neighbors", "n_control", "E",
+    assert set(res.columns) >= {S.JUNCTION_AA, "n_neighbors", "n_control", "E",
                                 "p_enrichment"}
-    clu = res.filter(pl.col(S.CDR3_AA).is_in(clique))
-    noi = res.filter(~pl.col(S.CDR3_AA).is_in(clique))
+    clu = res.filter(pl.col(S.JUNCTION_AA).is_in(clique))
+    noi = res.filter(~pl.col(S.JUNCTION_AA).is_in(clique))
 
     # Every clique member sees the other 7; the random background sees essentially none.
     assert clu["n_neighbors"].min() >= 7
@@ -52,7 +52,7 @@ def test_tcrnet_planted_cluster_enriched():
 
 
 def _neighbors(res):
-    return dict(zip(res[S.CDR3_AA].to_list(), res["n_neighbors"].to_list()))
+    return dict(zip(res[S.JUNCTION_AA].to_list(), res["n_neighbors"].to_list()))
 
 
 def test_tcrnet_explicit_locus_and_exclude_exact_toggle():

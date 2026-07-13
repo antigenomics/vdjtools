@@ -18,7 +18,7 @@ def _sample(cdr3, counts, v=None, j=None):
     n = len(cdr3)
     df = pl.DataFrame({
         S.V_CALL: v or ["TRBV1"] * n, S.J_CALL: j or ["TRBJ1"] * n,
-        S.CDR3_AA: cdr3, S.COUNT: counts,
+        S.JUNCTION_AA: cdr3, S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
@@ -29,7 +29,7 @@ def test_fuzzy_finds_pair_exact_misses():
     b = _sample(["CASSLAPGY", "CQRSTV"], [8, 3])
 
     # Exact CDR3 overlap sees nothing.
-    assert O.overlap_metrics(a, b, key=(S.CDR3_AA,))["d12"] == 0
+    assert O.overlap_metrics(a, b, key=(S.JUNCTION_AA,))["d12"] == 0
 
     # Fuzzy (1 substitution) recovers the pair.
     fo = O.fuzzy_overlap(a, b, scope="1,0,0,1")

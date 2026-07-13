@@ -18,7 +18,7 @@ def _sample(cdr3, counts, nt, v=None, j=None):
     n = len(cdr3)
     df = pl.DataFrame({
         S.V_CALL: v or ["TRBV1"] * n, S.J_CALL: j or ["TRBJ1"] * n,
-        S.CDR3_AA: cdr3, S.CDR3_NT: nt, S.COUNT: counts,
+        S.JUNCTION_AA: cdr3, S.JUNCTION_NT: nt, S.COUNT: counts,
     })
     return S.add_locus(S.normalize(df, recompute_freq=True))
 
@@ -68,7 +68,7 @@ def test_correct_end_to_end_merges_error():
     out = pp.correct(s, max_mismatches=2, ratio=0.05, same_vj=True)
     assert out.height == 1
     assert out[S.COUNT].to_list() == [1010]
-    assert out[S.CDR3_NT].to_list() == ["ACGTACGT"]           # parent survives
+    assert out[S.JUNCTION_NT].to_list() == ["ACGTACGT"]           # parent survives
     assert math.isclose(out[S.FREQ].to_list()[0], 1.0, rel_tol=1e-12)
 
 
@@ -90,4 +90,4 @@ def test_correct_default_is_segment_agnostic():
     out = pp.correct(s)                                       # no same_vj -> default False
     assert out.height == 1
     assert out[S.COUNT].to_list() == [1010]
-    assert out[S.CDR3_NT].to_list() == ["ACGTACGT"]           # parent survives
+    assert out[S.JUNCTION_NT].to_list() == ["ACGTACGT"]           # parent survives

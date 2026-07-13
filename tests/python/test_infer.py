@@ -23,7 +23,7 @@ from vdjtools.model.infer import infer
 OLGA_MODELS = Path(
     os.environ.get(
         "VDJTOOLS_OLGA_MODELS",
-        "/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models",
+        str(Path(__file__).resolve().parent / "fixtures" / "olga" / "default_models"),
     )
 )
 pytest.importorskip("olga.load_model", reason="olga (the [oracle] extra) not installed")
@@ -68,7 +68,7 @@ def _grouped_vusage(model, group):
 def test_infer_plumbing():
     """EM runs, returns a valid model, and populates the report."""
     m = from_olga(TRA, locus="TRA")
-    seqs = generate(m, 120, seed=0)["cdr3_nt"].to_list()
+    seqs = generate(m, 120, seed=0)["junction_nt"].to_list()
     fit, rep = infer(m, seqs, max_iter=2)
     fit.validate()
     assert rep.n_iter == 2
@@ -104,7 +104,7 @@ def test_vdj_estep_accumulates():
 
     m = from_olga(TRB, locus="TRB")
     prep = prepare(m)
-    seq = min(generate(m, 60, seed=1, productive_only=True)["cdr3_nt"].to_list(), key=len)
+    seq = min(generate(m, 60, seed=1, productive_only=True)["junction_nt"].to_list(), key=len)
     counts = {name: defaultdict(float) for name in m.tables if name != "n_d"}
     pg = _estep_seq(prep, seq, counts)
     assert pg > 0
@@ -115,7 +115,7 @@ def test_vdj_estep_accumulates():
 @pytest.mark.slow
 def test_recovers_tra_marginals():
     m = from_olga(TRA, locus="TRA")
-    seqs = generate(m, 1500, seed=11)["cdr3_nt"].to_list()
+    seqs = generate(m, 1500, seed=11)["junction_nt"].to_list()
     fit, rep = infer(m, seqs, max_iter=8)
 
     # EM behaves: log-likelihood climbs after the first update; gene usage stabilizes.

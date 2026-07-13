@@ -6,17 +6,20 @@ and every analysis function consumes it. Kept deliberately minimal (free functio
 no classes) to mirror the vdjmatch / arda convention.
 
 Columns:
-    ``v_call, d_call, j_call, c_call`` (Utf8, nullable) — IMGT segment calls;
-        ``c_call`` is frequently absent in native vdjtools data.
-    ``cdr3_aa`` (Utf8) — the junction amino-acid sequence (conserved anchors
-        Cys104 … Phe/Trp118 **INCLUDED**), per the legacy vdjtools ``cdr3aa`` and
-        AIRR ``junction_aa`` convention. This is two residues longer than the IMGT
-        ``cdr3_aa`` (anchors excluded); readers prefer the junction form.
-    ``cdr3_nt`` (Utf8, nullable) — the junction nucleotide sequence (anchors
-        included), matching ``cdr3_aa`` above.
-    ``duplicate_count`` (Int64) — read/UMI count for the clonotype.
-    ``frequency`` (Float64) — ``duplicate_count`` normalised within the sample.
-    ``locus`` (Utf8, derived) — first three characters of ``v_call`` (``TRB``, ``IGH`` …).
+
+* ``v_call, d_call, j_call, c_call`` (Utf8, nullable) — IMGT segment calls;
+  ``c_call`` is frequently absent in native vdjtools data.
+* ``junction_aa`` (Utf8) — the junction amino-acid sequence (conserved anchors
+  Cys104 … Phe/Trp118 **INCLUDED**), per the AIRR ``junction_aa`` convention
+  (equivalently the legacy vdjtools ``cdr3aa``). This is two residues longer
+  than the IMGT ``cdr3_aa`` (anchors excluded); readers prefer the junction form.
+* ``junction_nt`` (Utf8, nullable) — the junction nucleotide sequence (anchors
+  included), matching ``junction_aa`` above. AIRR spells the nucleotide junction
+  ``junction`` (no ``_nt`` suffix); readers accept that (and legacy ``cdr3_nt``)
+  as input aliases.
+* ``duplicate_count`` (Int64) — read/UMI count for the clonotype.
+* ``frequency`` (Float64) — ``duplicate_count`` normalised within the sample.
+* ``locus`` (Utf8, derived) — first three characters of ``v_call`` (``TRB``, ``IGH`` …).
 """
 from __future__ import annotations
 
@@ -26,8 +29,8 @@ V_CALL = "v_call"
 D_CALL = "d_call"
 J_CALL = "j_call"
 C_CALL = "c_call"
-CDR3_AA = "cdr3_aa"
-CDR3_NT = "cdr3_nt"
+JUNCTION_AA = "junction_aa"
+JUNCTION_NT = "junction_nt"
 COUNT = "duplicate_count"
 FREQ = "frequency"
 LOCUS = "locus"
@@ -38,8 +41,8 @@ SCHEMA: dict[str, pl.DataType] = {
     D_CALL: pl.Utf8,
     J_CALL: pl.Utf8,
     C_CALL: pl.Utf8,
-    CDR3_AA: pl.Utf8,
-    CDR3_NT: pl.Utf8,
+    JUNCTION_AA: pl.Utf8,
+    JUNCTION_NT: pl.Utf8,
     COUNT: pl.Int64,
     FREQ: pl.Float64,
 }
