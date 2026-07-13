@@ -1,0 +1,46 @@
+{
+  "locus": "TRG",
+  "organism": "human",
+  "chain_type": "VJ",
+  "model_version": "2.0.0",
+  "source": "arda:TRG",
+  "error_rate": null,
+  "palindrome_max": {
+    "v_3": 4,
+    "d_5": 4,
+    "d_3": 4,
+    "j_5": 4
+  },
+  "events": {
+    "v_choice": {
+      "kind": "gene_choice",
+      "given": []
+    },
+    "j_choice": {
+      "kind": "gene_choice",
+      "given": [
+        "v_choice"
+      ]
+    },
+    "v_3_del": {
+      "kind": "deletion",
+      "given": [
+        "v_choice"
+      ]
+    },
+    "j_5_del": {
+      "kind": "deletion",
+      "given": [
+        "j_choice"
+      ]
+    },
+    "vj_ins": {
+      "kind": "ins_length",
+      "given": []
+    },
+    "vj_dinucl": {
+      "kind": "dinucleotide",
+      "given": []
+    }
+  }
+}

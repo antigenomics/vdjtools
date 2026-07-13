@@ -202,8 +202,9 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
         return v_contrib + ins_vj + j_contrib, v, d, j, d2
 
     n_d = int(_pick(rng, prep.p_nd)) if prep.p_nd is not None else 1
-    if n_d == 2 and prep.d2_given_d1:
-        d2 = _pick(rng, prep.d2_given_d1[d])  # P(D2 | D1)
+    d2_dist = prep.d2_given_d1.get(d) if (n_d == 2 and prep.d2_given_d1) else None
+    if d2_dist is not None and len(d2_dist[0]):  # tandem D, and D1 has >=1 possible D2 partner
+        d2 = _pick(rng, d2_dist)  # P(D2 | D1)
         d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs, min1=True)
         d2c = _d_seg(prep, d2, rng, prep.deld2, prep.deld2_pairs, min1=True)
         ins_vd = _insert(rng, int(_pick(rng, prep.ins["vd"])), prep.R["vd"], prep.bias["vd"], from_right=False)

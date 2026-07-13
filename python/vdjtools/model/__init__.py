@@ -8,7 +8,7 @@ OLGA's format with :func:`from_olga`; native models round-trip through :func:`sa
 from . import analyze
 from .bundled import list_bundled, load_bundled
 from .events import Event, EventKind
-from .io import from_olga, load_model, save_model
+from .io import from_arda, from_olga, load_model, save_model
 from .model import Model
 from .reference import cut_segment, load_germline, reconcile_olga, reverse_complement, translate
 from .schema import Manifest
@@ -21,6 +21,7 @@ __all__ = [
     "Manifest",
     "Model",
     "from_olga",
+    "from_arda",
     "load_model",
     "save_model",
     "load_bundled",
