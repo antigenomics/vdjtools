@@ -106,6 +106,13 @@ def pairwise_distances(samples, metric: str = "F", key=DEFAULT_KEY,
     names = [n for n, _ in named]
     n = len(named)
     dist = np.zeros((n, n), dtype=float)
+    # TODO(perf): O(n²) pairs each call `_similarity` → `overlap_pair`, which re-hashes/re-joins BOTH
+    # frames from scratch — so every sample is re-indexed (n-1) times. For a cohort (n≈80 deep repertoires)
+    # this dominates runtime. Hoist per-sample preprocessing out of the inner loop: for the exact metrics
+    # (F/F2/D/jaccard/R) build each sample's key→freq index ONCE, then pairwise = a dict/set intersection
+    # over shared keys (Σ√(f_a·f_b) for F). Optionally a single grouped occurrence table (clonotype×sample)
+    # for a fully-vectorized all-pairs pass, guarded by a memory cap since that table can be large at depth.
+    # (mirpy benchmark_repertoire_agediverge currently caps to top-50k/donor to bound this — remove once fixed.)
     for i in range(n):
         for j in range(i + 1, n):
             sim = _similarity(named[i][1], named[j][1], metric, key, scope)
