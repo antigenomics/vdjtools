@@ -94,10 +94,11 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
         ``sequence`` is the full D germline, ``cdr3_anchor = -1``.
 
     Raises:
-        ImportError: If arda (the ``[model]`` extra) is not installed.
+        ImportError: If arda is not importable (it is a base dependency; a plain
+            ``pip install vdjtools`` ships it).
         ValueError: If no germline is found for ``locus`` / ``organism``.
     """
-    from arda.cdr3fix import load_anchors  # optional dep (the [model] extra)
+    from arda.cdr3fix import load_anchors  # base dep; imported lazily to keep `import vdjtools` light
     from arda.paths import vdj_dir
     from arda.refbuild.imgt import read_fasta
 
@@ -159,7 +160,8 @@ def load_full_vj_germline(organism: str = "human") -> dict[tuple[str, str], str]
         arda markup are present; pseudogenes (in the CDR3 anchors) may be missing.
 
     Raises:
-        ImportError: If arda (the ``[model]`` extra) is not installed.
+        ImportError: If arda is not importable (it is a base dependency; a plain
+            ``pip install vdjtools`` ships it).
     """
     from arda.annotate.reference import load_reference
     from arda.refbuild.imgt import read_fasta

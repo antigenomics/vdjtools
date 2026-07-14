@@ -472,7 +472,7 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
     """Annotate nt contigs with arda and build ``(junctions, masks)`` for masked :func:`infer`.
 
     The production path for real reads: ``junctions, masks = arda_masks(contigs, template);
-    infer_native(template, junctions, masks=masks)``. arda is the ``[model]`` extra.
+    infer_native(template, junctions, masks=masks)``. arda is a base dependency (ships with vdjtools).
     """
     from .stitch import annotate
 

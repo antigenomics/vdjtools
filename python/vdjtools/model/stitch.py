@@ -57,7 +57,7 @@ def annotate(contigs: list[str], *, organism: str = "human") -> pl.DataFrame:
     """Annotate nt contigs with arda → a polars frame of the calls the scenario/EM path needs.
 
     Returns columns ``v_call, d_call, j_call, junction, junction_aa, productive`` (arda's best
-    alignment). arda is the ``[model]`` extra.
+    alignment). arda is a base dependency (ships with vdjtools).
     """
     import arda
 

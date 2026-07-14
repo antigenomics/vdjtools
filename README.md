@@ -41,12 +41,21 @@ pip install vdjtools
 ```
 
 Prebuilt wheels ship for CPython 3.10–3.13 on Linux, macOS (Apple Silicon), and Windows; the
-native `_core` C++ extension is bundled (the source distribution compiles it on install). The
-pure-analytics paths (diversity / spectratype / usage / overlap) work out of the box; the model
-and annotation paths additionally pull in [arda](https://github.com/antigenomics/arda) (MMseqs2):
+native `_core` C++ extension is bundled (the source distribution compiles it on install).
+
+That one command gives you **the whole model engine and the germline reference**: the bundled
+per-locus V(D)J models, Pgen / generation / EM, and the V/D/J germline + CDR3 anchors — because
+[arda](https://github.com/antigenomics/arda), the single source of germline truth, is a **base
+dependency** (it is imported lazily, so `import vdjtools` stays light). arda fetches its IMGT
+reference once, on first use. Downstream libraries can therefore depend on plain `vdjtools` and
+rely on `vdjtools.model.reference.load_germline(...)` being there.
+
+MMseqs2 is needed **only** for arda's alignment/annotation path (`model.stitch.annotate`), never
+for germline lookup, Pgen, generation or the analytics — install it via conda/brew if you need it.
+Repertoire overlap / TCRnet pull in the seqtree engine:
 
 ```bash
-pip install "vdjtools[model]"
+pip install "vdjtools[overlap]"
 ```
 
 ### Development

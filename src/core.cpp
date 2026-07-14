@@ -11,6 +11,6 @@ int hamming(const std::string& a, const std::string& b) {
     return d;
 }
 
-const char* version() { return "2.3.1"; }
+const char* version() { return "2.4.0"; }
 
 }  // namespace vdjtools

@@ -380,7 +380,8 @@ def from_arda(locus: str, organism: str = "human", *,
         A validated :class:`Model` (VDJ if arda has D germline for the locus, else VJ).
 
     Raises:
-        ImportError: If arda (the ``[model]`` extra) is not installed.
+        ImportError: If arda is not importable (it is a base dependency; a plain
+            ``pip install vdjtools`` ships it).
         ValueError: If arda has no germline for ``locus`` / ``organism``.
     """
     from . import reference as ref
