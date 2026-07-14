@@ -614,6 +614,10 @@ def pgen_nt(prep: _Prepared, cdr3_nt: str, v: str | None = None, j: str | None =
     v_cands = _v_candidates(prep, s, [v] if v else prep.functional_v)
     j_cands = _j_candidates(prep, s, [j] if j else prep.functional_j)
     total = 0.0
+    # The D-gene/trim/insertion middle sum depends only on (J, middle) — not V — but the V outer loop
+    # re-derives the same (J, middle) pairs, so memoize it across V. Exact: _vdj_middle is deterministic
+    # in (prep, J, middle) and prep is fixed for the call; loop order and summands are unchanged.
+    mid_cache: dict = {}
     for V, pv, v_opts in v_cands:
         for J, j_opts in j_cands:
             pj = prep.p_j.get(J if vdj else (V, J), 0.0)
@@ -625,7 +629,10 @@ def pgen_nt(prep: _Prepared, cdr3_nt: str, v: str | None = None, j: str | None =
                         continue
                     middle = s[len_v:len(s) - len_j]
                     if vdj:
-                        inner = _vdj_middle(prep, J, middle)
+                        ckey = (J, middle)
+                        inner = mid_cache.get(ckey)
+                        if inner is None:
+                            inner = mid_cache[ckey] = _vdj_middle(prep, J, middle)
                     else:
                         inner = _p_insert(middle, prep.p_ins["vj"], prep.R["vj"], prep.bias["vj"], from_right=False)
                     total += pv * pj * p_dv * p_dj * inner

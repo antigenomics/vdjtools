@@ -25,7 +25,7 @@ import polars as pl
 
 from ..io.schema import JUNCTION_AA, J_CALL, V_CALL
 from .fuzzy import fuzzy_overlap_metrics
-from .metrics import overlap_pair
+from .metrics import _aggregate, _overlap_from_agg
 from .similarity import similarity_overlap
 
 #: Default clonotype match key (CDR3 aa + V + J), matching the exact-overlap default.
@@ -57,26 +57,31 @@ def _named(samples) -> "list[tuple[str, pl.DataFrame]]":
     return [(str(i), df) for i, df in enumerate(samples)]
 
 
-def _similarity(a: pl.DataFrame, b: pl.DataFrame, metric: str,
-                key, scope) -> float:
-    """Raw overlap *similarity* between two samples for the requested metric."""
-    if scope is not None:
-        # Fuzzy path: only the frequency-weighted fuzzy-F is defined here.
-        if metric != "F":
-            raise ValueError("fuzzy distances (scope=) support metric='F' only")
-        return fuzzy_overlap_metrics(a, b, scope=scope)["fuzzy_F"]
-    if metric in ("similarity_cosine", "similarity_morisita"):
-        sub = "cosine" if metric == "similarity_cosine" else "morisita"
-        return similarity_overlap(a, b, key=key, metric=sub)["similarity"]
-    _, m = overlap_pair(a, b, key=key)
+#: Metrics computed exactly from a shared-clonotype join (as opposed to the
+#: engine-delegated fuzzy / sequence-similarity paths).
+_EXACT = frozenset({"F", "F2", "D", "R", "jaccard"})
+
+
+def _exact_similarity(m: dict, metric: str) -> float:
+    """Overlap *similarity* for an exact metric, from an ``overlap_pair`` metrics dict."""
     if metric == "jaccard":
         denom = m["d1"] + m["d2"] - m["d12"]
         return m["d12"] / denom if denom else 0.0
     if metric == "R":
         return m["R"] if m["R"] is not None else 0.0  # legacy coerces undefined R -> 0
-    if metric in ("F", "F2", "D"):
-        return m[metric]
-    raise ValueError(f"unknown metric {metric!r}; expected one of {sorted(_TRANSFORM)}")
+    return m[metric]  # F, F2, D
+
+
+def _delegated_similarity(a: pl.DataFrame, b: pl.DataFrame, metric: str,
+                          key, scope) -> float:
+    """Similarity for the engine-delegated paths: fuzzy (``scope=``) and TINA cosine/morisita."""
+    if scope is not None:
+        # Fuzzy path: only the frequency-weighted fuzzy-F is defined here.
+        if metric != "F":
+            raise ValueError("fuzzy distances (scope=) support metric='F' only")
+        return fuzzy_overlap_metrics(a, b, scope=scope)["fuzzy_F"]
+    sub = "cosine" if metric == "similarity_cosine" else "morisita"
+    return similarity_overlap(a, b, key=key, metric=sub)["similarity"]
 
 
 def pairwise_distances(samples, metric: str = "F", key=DEFAULT_KEY,
@@ -102,15 +107,31 @@ def pairwise_distances(samples, metric: str = "F", key=DEFAULT_KEY,
     Returns:
         A symmetric distance matrix with a zero diagonal, in the requested ``form``.
     """
+    if metric not in _TRANSFORM:
+        raise ValueError(f"unknown metric {metric!r}; expected one of {sorted(_TRANSFORM)}")
     named = _named(samples)
     names = [n for n, _ in named]
     n = len(named)
     dist = np.zeros((n, n), dtype=float)
-    for i in range(n):
-        for j in range(i + 1, n):
-            sim = _similarity(named[i][1], named[j][1], metric, key, scope)
-            d = _TRANSFORM[metric](sim)
-            dist[i, j] = dist[j, i] = d
+    # Aggregate each sample's clonotype key->freq ONCE, then every O(n²) pair is a join over the
+    # pre-aggregated frames. Previously each pair called `overlap_pair`, which re-aggregated (re-hashed)
+    # BOTH frames from scratch, so each sample was collapsed (n-1) times — the dominant cost for a deep
+    # cohort (n≈80). Distances are bitwise-identical (same join + numpy). The fuzzy (scope=) and
+    # similarity_* metrics still delegate to the vdjmatch/seqtree engine per pair.
+    if scope is None and metric in _EXACT:
+        klist = list(key)
+        aggs = [_aggregate(df, klist) for _, df in named]
+        for i in range(n):
+            for j in range(i + 1, n):
+                _, m = _overlap_from_agg(aggs[i], aggs[j], klist)
+                d = _TRANSFORM[metric](_exact_similarity(m, metric))
+                dist[i, j] = dist[j, i] = d
+    else:
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = _delegated_similarity(named[i][1], named[j][1], metric, key, scope)
+                d = _TRANSFORM[metric](sim)
+                dist[i, j] = dist[j, i] = d
 
     if form == "long":
         rows = [(names[i], names[j], float(dist[i, j]))

@@ -18,6 +18,17 @@ def _germline_lookup(model: Model, seg: str) -> dict[str, tuple[str, int]]:
     return {r[0]: (r[1], r[2]) for r in g.select([f"{seg}_allele", "full_germline", "anchor"]).iter_rows()}
 
 
+def _stitch(vg: dict, jg: dict, v: str, j: str, cdr3_nt: str) -> str | None:
+    """Core stitch from **prebuilt** V/J germline lookups (so a batch caller builds them once)."""
+    if v not in vg or j not in jg:
+        return None
+    fv, av = vg[v]
+    fj, aj = jg[j]
+    if av < 0 or aj < 0 or not fv or not fj:
+        return None
+    return fv[:av] + cdr3_nt + fj[aj + 3:]
+
+
 def stitch_contig(model: Model, v: str, j: str, cdr3_nt: str) -> str | None:
     """Rebuild a full nt contig: V framework 5' of Cys104 + CDR3 + J framework 3' of [FW]118.
 
@@ -29,20 +40,16 @@ def stitch_contig(model: Model, v: str, j: str, cdr3_nt: str) -> str | None:
     Returns:
         The contig, or ``None`` if either gene lacks a usable anchor / full germline.
     """
-    vg = _germline_lookup(model, "v")
-    jg = _germline_lookup(model, "j")
-    if v not in vg or j not in jg:
-        return None
-    fv, av = vg[v]
-    fj, aj = jg[j]
-    if av < 0 or aj < 0 or not fv or not fj:
-        return None
-    return fv[:av] + cdr3_nt + fj[aj + 3:]
+    return _stitch(_germline_lookup(model, "v"), _germline_lookup(model, "j"), v, j, cdr3_nt)
 
 
 def stitch_frame(model: Model, gen: pl.DataFrame, *, cdr3_col: str = "junction_nt") -> pl.DataFrame:
     """Add a ``contig`` column to a generated frame (rows with no anchor drop to null)."""
-    contigs = [stitch_contig(model, r["v_call"], r["j_call"], r[cdr3_col]) for r in gen.to_dicts()]
+    # Build the V/J germline lookups ONCE (loop-invariant); the old per-row stitch_contig
+    # rebuilt both dicts from the genes tables on every row (O(n·|germline|)).
+    vg = _germline_lookup(model, "v")
+    jg = _germline_lookup(model, "j")
+    contigs = [_stitch(vg, jg, r["v_call"], r["j_call"], r[cdr3_col]) for r in gen.to_dicts()]
     return gen.with_columns(contig=pl.Series("contig", contigs, dtype=pl.Utf8))
 
 

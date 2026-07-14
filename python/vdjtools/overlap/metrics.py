@@ -23,6 +23,39 @@ def _aggregate(df: pl.DataFrame, key: list[str]) -> pl.DataFrame:
     return agg.with_columns((pl.col("_count") / total).alias("_freq"))
 
 
+def _overlap_from_agg(a_agg: pl.DataFrame, b_agg: pl.DataFrame,
+                      key: list[str]) -> "tuple[pl.DataFrame, dict]":
+    """Shared-clonotype table + metrics from two **already-aggregated** samples.
+
+    ``a_agg`` / ``b_agg`` are the output of :func:`_aggregate` (unique ``key`` rows plus
+    ``_count`` / ``_freq``). Factored out of :func:`overlap_pair` so an all-pairs caller
+    can aggregate each sample once and reuse it across every pair instead of
+    re-aggregating per pair (see :func:`vdjtools.overlap.cluster.pairwise_distances`).
+    Bitwise-identical to the inline body it replaced.
+    """
+    d1, d2 = a_agg.height, b_agg.height
+    shared = a_agg.join(b_agg, on=key, how="inner", suffix="_b").rename({
+        "_count": "count_a", "_freq": "freq_a", "_count_b": "count_b", "_freq_b": "freq_b",
+    })
+    d12 = shared.height
+
+    fa = shared["freq_a"].to_numpy()
+    fb = shared["freq_b"].to_numpy()
+    div = float(d12) / (d1 * d2) if d1 and d2 else 0.0
+    freq = float(np.sqrt(fa.sum() * fb.sum())) if d12 else 0.0
+    freq2 = float(np.sum(np.sqrt(fa * fb))) if d12 else 0.0
+    if d12 > 2:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            r = float(np.corrcoef(fa, fb)[0, 1])
+        if np.isnan(r):
+            r = None
+    else:
+        r = None
+
+    metrics = {"D": div, "F": freq, "F2": freq2, "R": r, "d1": d1, "d2": d2, "d12": d12}
+    return shared.select([*key, "count_a", "count_b", "freq_a", "freq_b"]), metrics
+
+
 def overlap_pair(a: pl.DataFrame, b: pl.DataFrame,
                  key: "tuple[str, ...]" = DEFAULT_KEY) -> "tuple[pl.DataFrame, dict]":
     """Compute the shared-clonotype table and overlap metrics for two samples.
@@ -55,30 +88,7 @@ def overlap_pair(a: pl.DataFrame, b: pl.DataFrame,
         (``R`` is ``None`` when undefined; see above).
     """
     key = list(key)
-    a_agg = _aggregate(a, key)
-    b_agg = _aggregate(b, key)
-    d1, d2 = a_agg.height, b_agg.height
-
-    shared = a_agg.join(b_agg, on=key, how="inner", suffix="_b").rename({
-        "_count": "count_a", "_freq": "freq_a", "_count_b": "count_b", "_freq_b": "freq_b",
-    })
-    d12 = shared.height
-
-    fa = shared["freq_a"].to_numpy()
-    fb = shared["freq_b"].to_numpy()
-    div = float(d12) / (d1 * d2) if d1 and d2 else 0.0
-    freq = float(np.sqrt(fa.sum() * fb.sum())) if d12 else 0.0
-    freq2 = float(np.sum(np.sqrt(fa * fb))) if d12 else 0.0
-    if d12 > 2:
-        with np.errstate(invalid="ignore", divide="ignore"):
-            r = float(np.corrcoef(fa, fb)[0, 1])
-        if np.isnan(r):
-            r = None
-    else:
-        r = None
-
-    metrics = {"D": div, "F": freq, "F2": freq2, "R": r, "d1": d1, "d2": d2, "d12": d12}
-    return shared.select([*key, "count_a", "count_b", "freq_a", "freq_b"]), metrics
+    return _overlap_from_agg(_aggregate(a, key), _aggregate(b, key), key)
 
 
 def overlap_metrics(a: pl.DataFrame, b: pl.DataFrame,
