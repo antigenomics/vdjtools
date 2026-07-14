@@ -3,7 +3,7 @@
 project = "vdjtools"
 author = "ISALGO laboratory"
 copyright = "2026, ISALGO laboratory"
-version = release = "2.4.0"
+version = release = "2.5.0"
 
 extensions = [
     "sphinx.ext.autodoc",

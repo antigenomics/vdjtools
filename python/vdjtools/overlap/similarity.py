@@ -27,7 +27,7 @@ special cases (exact / fuzzy overlap) of the continuous ``exp`` form. The CDR3 k
 clonotypes that differ outside the CDR3, so identity is the exact ``τ→0`` limit of exp on
 the same key.
 
-The penalty is built with **seqtree** (the ``overlap`` extra): the **dense** path scores
+The penalty is built with **seqtree** (a base dependency): the **dense** path scores
 every clonotype pair via :func:`seqtree.score_matrix` (``O(N²)``, for small ``N`` and the
 tests); the **sparse** path uses :func:`seqtree.pairwise_batch` only to *find* near
 candidates, then **re-scores each with the same gap-block model**
@@ -49,7 +49,7 @@ from ..io.schema import JUNCTION_AA, COUNT
 
 _SEQTREE_HINT = (
     "seqtree is required for vdjtools.overlap.similarity; install the extra with "
-    "`pip install 'vdjtools[overlap]'` (it ships the seqtree engine via vdjmatch)."
+    "seqtree is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
 )
 
 #: Standard 20 amino acids; CDR3s with any other symbol (``*``, ``X``, digits) are dropped

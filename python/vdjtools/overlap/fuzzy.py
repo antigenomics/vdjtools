@@ -23,7 +23,7 @@ from ..io.schema import JUNCTION_AA, COUNT
 
 _VDJMATCH_HINT = (
     "vdjmatch is required for vdjtools.overlap.fuzzy; install the extra with "
-    "`pip install 'vdjtools[overlap]'` (or `pip install vdjmatch>=0.0.1`)."
+    "vdjmatch is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
 )
 
 
@@ -69,7 +69,7 @@ def fuzzy_overlap(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
         when nothing matches.
 
     Raises:
-        ImportError: If vdjmatch is not installed (see the ``overlap`` extra).
+        ImportError: If vdjmatch is not importable (it is a base dependency).
     """
     cluster = _require_vdjmatch()
     a_agg = _aggregate(a)
@@ -117,7 +117,7 @@ def fuzzy_overlap_metrics(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,
         Dict with keys ``pairs, frac_a_matched, frac_b_matched, fuzzy_F``.
 
     Raises:
-        ImportError: If vdjmatch is not installed (see the ``overlap`` extra).
+        ImportError: If vdjmatch is not importable (it is a base dependency).
     """
     n_a = a.select(pl.col(JUNCTION_AA).n_unique()).item()
     n_b = b.select(pl.col(JUNCTION_AA).n_unique()).item()

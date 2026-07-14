@@ -1,13 +1,19 @@
 # Dedicated conda environment for vdjtools.
-# Provides Python, a C++ toolchain (to build the _core pybind11 extension), and the
-# MMseqs2 binary that arda (the VDJ-model / markup-repair backend) needs at runtime.
+# Provides Python, a C++ toolchain (to build the _core pybind11 extension), and MMseqs2.
 #
 #   conda env create -f environment.yml
 #   conda activate vdjtools
 #   pip install -e ".[dev,test]"
 #
-# Pure-analytics use (diversity / spectratype / usage) does not need MMseqs2, but the
-# model-learning and annotation paths do, so it is provided here for a reproducible install.
+# NB: this conda env is a convenience for DEVELOPMENT, not a requirement. arda (the germline
+# reference + VDJ-model backend) is a plain pip base dependency, so `pip install vdjtools`
+# alone already ships the model engine, Pgen/generation/EM and the V/D/J germline + anchors.
+#
+# MMseqs2 is arda's *aligner*: it is needed only for the annotation / alignment path
+# (`model.stitch.annotate`, arda's markup + rnaseq map, and the arda-masked EM / stitch
+# round-trip exercised by the slow tests). It is NOT needed for germline lookup, Pgen,
+# generation, plain EM, or any of the analytics. It is provided here so the full test suite
+# (including the slow arda round-trips) runs out of the box.
 name: vdjtools
 channels:
   - conda-forge
