@@ -36,19 +36,24 @@ dependencies = [
     # its only runtime deps are polars + typer (already ours) + requests. It is imported
     # lazily inside the functions that need it, so `import vdjtools` stays light. mmseqs2 is
     # needed only for arda's alignment/annotate path, never for germline lookup or Pgen.
-    "arda-mapper>=2.5.3",
+    "arda-mapper>=2.5.5",
     # seqtree = the fuzzy-search / e-value engine, vdjmatch = overlap + TCRnet on top of it.
     # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
     # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or
     # metaclonotypes -- all advertised capabilities, and none has a fallback. Cheap: seqtree
     # itself has ZERO runtime deps and the same wheel matrix as vdjtools; vdjmatch is a
     # pure-python wheel needing only polars (ours) + seqtree. Both are imported lazily.
-    # `[control]` (= huggingface_hub) is required, not optional: tcrnet()'s DEFAULT path
-    # (control=None) scores each locus against a matched background repertoire that seqtree
-    # fetches from HF on demand -- same on-demand-reference pattern as arda's IMGT fetch.
-    # Without it the advertised default TCRnet call raises ModuleNotFoundError.
-    "seqtree[control]>=0.3",
+    "seqtree>=0.3",
     "vdjmatch>=0.0.1",
+    # We declare huggingface_hub OURSELVES rather than borrowing seqtree's `[control]` extra:
+    # it is genuinely OUR dependency (model/data.py imports hf_hub_download directly), and
+    # tcrnet()'s DEFAULT path (control=None) scores each locus against a matched background
+    # repertoire that seqtree.control fetches from HF on demand -- an unconditional, lazy
+    # `from huggingface_hub import hf_hub_download`, satisfied by HF being present in the env
+    # however it got there. Depending on another package's extra to obtain a dep we import
+    # ourselves would couple our install to seqtree's packaging choices; this states the real
+    # requirement. (Same on-demand-reference pattern as arda's IMGT fetch.)
+    "huggingface_hub",
 ]
 
 [project.scripts]
@@ -58,11 +63,11 @@ vdjtools = "vdjtools.cli:app"
 model = []                             # DEPRECATED no-op alias: arda-mapper is a BASE dep since v2.4.0 (the model engine + germline reference ship with a plain `pip install vdjtools`). Kept so existing `vdjtools[model]` pins (e.g. mirpy's) keep resolving.
 overlap = ["scikit-learn"]             # vdjmatch/seqtree are BASE deps since v2.5.0; sklearn is still an extra -- it is only needed by cluster_samples(method="mds") (method="hclust" uses scipy, a base dep) and sc.cluster_eval, and both raise a clear install hint.
 preprocess = []                        # DEPRECATED no-op alias: seqtree (freq-based error correction) is a BASE dep since v2.5.0.
-sc = ["scikit-learn", "pyyaml", "anndata", "huggingface_hub"]  # Phase 7: single-cell — sklearn for cluster_eval contingency, pyyaml for AIRR Cell export, anndata for the scverse bridge (to_anndata), HF for the dCODE benchmark fetch (tests only)
-examples = ["marimo", "huggingface_hub", "matplotlib", "scikit-learn"]  # example notebooks (scipy is a base dep)
+sc = ["scikit-learn", "pyyaml", "anndata"]  # Phase 7: single-cell — sklearn for cluster_eval contingency, pyyaml for AIRR Cell export, anndata for the scverse bridge (to_anndata). huggingface_hub is a BASE dep now.
+examples = ["marimo", "matplotlib", "scikit-learn"]  # example notebooks (scipy + huggingface_hub are base deps)
 oracle = ["olga"]                      # Pgen cross-check oracle (tests only)
 test = ["pytest>=7.4", "pytest-cov"]
-bench = ["huggingface_hub"]  # test-only: real-data fetch; never a runtime dep
+bench = []  # DEPRECATED no-op alias: huggingface_hub (real-data fetch) is a BASE dep.
 docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx"]
 dev = ["ruff", "pytest>=7.4", "pybind11>=2.12"]
 all = ["scikit-learn"]                 # the antigenomics engines (arda-mapper, seqtree, vdjmatch) are base deps, not extras
