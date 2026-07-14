@@ -61,10 +61,13 @@ pip install "vdjtools[overlap]"
 ### Development
 
 ```bash
-conda env create -f environment.yml   # python + mmseqs2 (arda backend) + C++ toolchain
+conda env create -f environment.yml   # python + C++ toolchain + mmseqs2 (arda's aligner)
 conda activate vdjtools
 pip install -e ".[dev,test]"          # builds the _core C++ extension
 ```
+
+The conda env is a convenience, not a requirement — `pip install -e ".[dev,test]"` in any venv
+works. It supplies MMseqs2 so the slow arda annotation round-trips in the test suite run too.
 
 Or run the bootstrap script: `bash setup.sh --dev-parents --tests`.
 
