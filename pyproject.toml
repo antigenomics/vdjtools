@@ -41,9 +41,13 @@ dependencies = [
     # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
     # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or
     # metaclonotypes -- all advertised capabilities, and none has a fallback. Cheap: seqtree
-    # has ZERO runtime deps and the same wheel matrix as vdjtools; vdjmatch is a pure-python
-    # wheel needing only polars (ours) + seqtree. Both are imported lazily.
-    "seqtree>=0.3",
+    # itself has ZERO runtime deps and the same wheel matrix as vdjtools; vdjmatch is a
+    # pure-python wheel needing only polars (ours) + seqtree. Both are imported lazily.
+    # `[control]` (= huggingface_hub) is required, not optional: tcrnet()'s DEFAULT path
+    # (control=None) scores each locus against a matched background repertoire that seqtree
+    # fetches from HF on demand -- same on-demand-reference pattern as arda's IMGT fetch.
+    # Without it the advertised default TCRnet call raises ModuleNotFoundError.
+    "seqtree[control]>=0.3",
     "vdjmatch>=0.0.1",
 ]
 

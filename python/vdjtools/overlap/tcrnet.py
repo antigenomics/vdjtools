@@ -39,7 +39,7 @@ from ..io.schema import JUNCTION_AA, COUNT, J_CALL, LOCUS, V_CALL, add_locus
 
 _VDJMATCH_HINT = (
     "vdjmatch is required for vdjtools.overlap.tcrnet; install the extra with "
-    "`pip install 'vdjtools[overlap]'` (or `pip install vdjmatch>=0.0.1`)."
+    "vdjmatch is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
 )
 
 _COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_control", "E", "p_enrichment", "p_any", LOCUS]
@@ -107,7 +107,7 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
         tail), ``p_any``, and ``locus`` — sorted by ascending ``p_enrichment``.
 
     Raises:
-        ImportError: If vdjmatch is not installed (see the ``overlap`` extra).
+        ImportError: If vdjmatch is not importable (it is a base dependency).
         ValueError: If ``control`` and ``locus`` are ``None`` and no clonotype has a
             resolvable locus.
     """

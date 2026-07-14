@@ -21,7 +21,7 @@ from ..io.schema import JUNCTION_AA, J_CALL, V_CALL
 
 _VDJMATCH_HINT = (
     "vdjmatch is required for vdjtools.biomarker.metaclonotype; install the extra with "
-    "`pip install 'vdjtools[overlap]'` (or `pip install vdjmatch>=0.0.1`)."
+    "vdjmatch is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
 )
 
 
@@ -57,7 +57,7 @@ def metaclonotypes(clonotypes: pl.DataFrame, *, scope: str = "1,0,0,1",
         with an added ``meta_id`` column (compact 0-based integer, singletons included).
 
     Raises:
-        ImportError: If vdjmatch is not installed (see the ``overlap`` extra).
+        ImportError: If vdjmatch is not importable (it is a base dependency).
     """
     cluster = _require_vdjmatch()
 

@@ -27,7 +27,7 @@ from ..io.schema import (
 
 _SEQTREE_HINT = (
     "seqtree is required for vdjtools.preprocess.correct; install the extra with "
-    "`pip install 'vdjtools[preprocess]'` (or `pip install seqtree>=0.3`)."
+    "seqtree is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
 )
 
 
@@ -120,7 +120,7 @@ def correct(df: pl.DataFrame, max_mismatches: int = 2, ratio: float = 0.05,
         null ``junction_nt`` pass through uncorrected.
 
     Raises:
-        ImportError: If seqtree is not installed (see the ``preprocess`` extra).
+        ImportError: If seqtree is not importable (it is a base dependency).
     """
     try:
         import seqtree  # noqa: F401
