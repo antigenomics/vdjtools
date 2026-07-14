@@ -24,8 +24,12 @@ sphinx-build -W --keep-going -b html docs docs/_build/html        # docs gate (z
 ```
 Co-developed parents are early-alpha: `bash setup.sh --dev-parents` editable-installs
 `../seqtree ../arda ../vdjmatch` if present (else PyPI: `seqtree`, `arda-mapper`, `vdjmatch`).
-Deps trace to real imports — `arda-mapper`/`vdjmatch` live in the `[model]`/`[overlap]` extras
-until the phase that imports them promotes them to base deps.
+Deps trace to real imports — a phase's parent is promoted from an extra to a base dep once it
+lands. **`arda-mapper` is a BASE dep** (since v2.4.0): a plain `pip install vdjtools` must ship
+the model engine *and* the germline reference, because downstream libs (mirpy) depend on vdjtools
+*for* that reference. It's imported lazily, so `import vdjtools` stays light; mmseqs2 is needed
+only for arda's annotate path. `vdjmatch`/`seqtree` remain the `[overlap]` extra. `[model]` is a
+kept-but-empty alias so existing `vdjtools[model]` pins still resolve.
 
 ## Git model
 `master` = v2 (tagged releases) ← `dev` (integration) ← `feature/*` (one per phase).
@@ -71,8 +75,8 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   organism)` from arda (`cdr3fix.load_anchors` + `d_germlines.fasta`), `cut_segment` palindrome
   derivation (reproduces OLGA's cut segs), `reconcile_olga` audit. Shared frame verified vs OLGA
   (`tests/python/test_reference.py`). `from_olga` deliberately keeps OLGA germline (exact-Pgen
-  invariant); arda is canonical for arda-native models + scenarios + stitching. arda is the `[model]`
-  extra (`pip install -e ../arda` for dev). Gap: arda ships no full-length V/J germline (needs a
+  invariant); arda is canonical for arda-native models + scenarios + stitching. arda is a **base
+  dep** (`pip install -e ../arda` for dev). Gap: arda ships no full-length V/J germline (needs a
   helper) — a **P1c/stitching prerequisite**.
 - **DONE aa Pgen** `model/pgen.py::pgen_aa` — codon-marginalizing left-to-right DP. VJ is fast;
   VDJ enumerates D placements + a multi-block DP handling the DJ insertion 3'→5' (reference impl:

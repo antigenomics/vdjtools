@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "2.3.0"
+version = "2.4.0"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,13 +27,23 @@ dependencies = [
     "numpy",
     "scipy",
     "typer>=0.12",  # the `vdjtools` CLI (Phase 8) is a core entry point
+    # arda = the single source of germline truth (see model/reference.py): V/D/J germline +
+    # CDR3 anchors for every locus, contig stitching/annotation, and the arda-native model
+    # builder. Phase 1 landed, so it is promoted to a base dep: a plain `pip install vdjtools`
+    # must ship the model engine AND the germline reference, because downstream libraries
+    # (mirpy) depend on vdjtools *for* that reference and cannot be expected to opt into an
+    # extra. Cheap to require: same wheel matrix as vdjtools (cp310-313 x mac/linux/win) and
+    # its only runtime deps are polars + typer (already ours) + requests. It is imported
+    # lazily inside the functions that need it, so `import vdjtools` stays light. mmseqs2 is
+    # needed only for arda's alignment/annotate path, never for germline lookup or Pgen.
+    "arda-mapper>=2.5.3",
 ]
 
 [project.scripts]
 vdjtools = "vdjtools.cli:app"
 
 [project.optional-dependencies]
-model = ["arda-mapper>=2.5"]           # Phase 1: scenario enumeration + markup repair (brings mmseqs2)
+model = []                             # DEPRECATED no-op alias: arda-mapper is a BASE dep since v2.4.0 (the model engine + germline reference ship with a plain `pip install vdjtools`). Kept so existing `vdjtools[model]` pins (e.g. mirpy's) keep resolving.
 overlap = ["vdjmatch>=0.0.1", "seqtree>=0.3", "scikit-learn"]  # Phase 4: overlap + TCRnet (brings the seqtree engine); sklearn for MDS clustering; seqtree for similarity-weighted (TINA) overlap
 preprocess = ["seqtree>=0.3"]          # Phase 5: freq-based error correction (near-neighbour search)
 sc = ["scikit-learn", "pyyaml", "anndata", "huggingface_hub"]  # Phase 7: single-cell — sklearn for cluster_eval contingency, pyyaml for AIRR Cell export, anndata for the scverse bridge (to_anndata), HF for the dCODE benchmark fetch (tests only)
@@ -43,7 +53,7 @@ test = ["pytest>=7.4", "pytest-cov"]
 bench = ["huggingface_hub"]  # test-only: real-data fetch; never a runtime dep
 docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx"]
 dev = ["ruff", "pytest>=7.4", "pybind11>=2.12"]
-all = ["arda-mapper>=2.5", "vdjmatch>=0.0.1"]
+all = ["vdjmatch>=0.0.1", "seqtree>=0.3", "scikit-learn"]  # arda-mapper is a base dep (not an extra)
 
 [project.urls]
 Homepage = "https://github.com/antigenomics/vdjtools"
