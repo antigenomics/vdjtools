@@ -134,11 +134,12 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   wildcarded codon has no clean O(1)-per-codon leave-one-out; a forced rewrite risks the exact-Pgen
   invariant for a non-bottleneck. Batch parallelization (above) is the exact win instead. (b) native
   **generation sampler** (Python is already fast — low priority). (c) `estep_batch` read-parallelization
-  is done. (d) **`overlap.pairwise_distances` is O(n²) re-hashing** (`overlap/cluster.py`): each pair calls
-  `overlap_pair`, re-indexing both frames from scratch, so every sample is re-hashed (n-1)× — dominates
-  runtime for a deep cohort (n≈80). Fix: index each sample's key→freq ONCE, pairwise = dict/set
-  intersection (Σ√(f_a·f_b) for F); optional single grouped occurrence table (memory-guarded). See the
-  `TODO(perf)` at the loop; mirpy `benchmark_repertoire_agediverge` caps top-50k/donor as a stopgap.
+  is done. (d) **DONE `overlap.pairwise_distances` O(n²) re-hashing** (`overlap/cluster.py`): the exact
+  metrics (F/F2/D/R/jaccard) now aggregate each sample's clonotype key→freq ONCE (`metrics._overlap_from_agg`
+  factored out of `overlap_pair`), then every pair is a join over the pre-aggregated frames — previously each
+  pair re-aggregated both frames, so each sample was collapsed (n-1)×. Distances **bitwise-identical** (same
+  join + numpy; `array_equal` across all 5 metrics), **3.2× on n=40×4k** (grows with cohort depth/raw rows).
+  Fuzzy (`scope=`) / `similarity_*` still delegate to vdjmatch/seqtree per pair (engine-indexed, out of scope).
 - **DONE model diagnostics** `model/analyze.py` — Bayes-net→graphviz DOT (nodes=marginal entropy H,
   edges=mutual information I; bnlearn-style, rendered via the `dot` CLI — no python-graphviz dep),
   `entropy_table`/`mutual_information`/`compare_entropy`, works on any Model. Cross-locus H table +
