@@ -105,10 +105,12 @@ def test_vdj_estep_accumulates():
     m = from_olga(TRB, locus="TRB")
     prep = prepare(m)
     seq = min(generate(m, 60, seed=1, productive_only=True)["junction_nt"].to_list(), key=len)
-    counts = {name: defaultdict(float) for name in m.tables if name != "n_d"}
+    # Every VDJ scenario also harvests the D-count event, so ``n_d`` must have a bucket too
+    # (the E-step emits ``("n_d", (1,))`` per single-D scenario).
+    counts = {name: defaultdict(float) for name in m.tables}
     pg = _estep_seq(prep, seq, counts)
     assert pg > 0
-    for ev in ("d_gene", "d_del", "vd_ins", "dj_ins", "vd_dinucl", "dj_dinucl"):
+    for ev in ("d_gene", "d_del", "vd_ins", "dj_ins", "vd_dinucl", "dj_dinucl", "n_d"):
         assert counts[ev], f"{ev} soft counts were not accumulated"
 
 
