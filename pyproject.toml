@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "2.5.0"
+version = "2.5.1"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,8 +43,8 @@ dependencies = [
     # metaclonotypes -- all advertised capabilities, and none has a fallback. Cheap: seqtree
     # itself has ZERO runtime deps and the same wheel matrix as vdjtools; vdjmatch is a
     # pure-python wheel needing only polars (ours) + seqtree. Both are imported lazily.
-    "seqtree>=0.3",
-    "vdjmatch>=0.0.1",
+    "seqtree>=0.4.0",
+    "vdjmatch>=0.1.0",
     # We declare huggingface_hub OURSELVES rather than borrowing seqtree's `[control]` extra:
     # it is genuinely OUR dependency (model/data.py imports hf_hub_download directly), and
     # tcrnet()'s DEFAULT path (control=None) scores each locus against a matched background
