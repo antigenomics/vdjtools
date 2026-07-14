@@ -13,5 +13,5 @@ vdjmatch/seqtree) until a feature that needs them is used.
 """
 from ._core import hamming
 
-__version__ = "2.5.0"
+__version__ = "2.5.1"
 __all__ = ["hamming", "__version__"]
