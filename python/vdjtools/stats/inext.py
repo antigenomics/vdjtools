@@ -307,6 +307,12 @@ def _bootstrap_se(x: np.ndarray, ms, qs, nboot: int, seed: int) -> np.ndarray:
     for r in range(nboot):
         xb = reps[r].astype(np.float64)
         xb = xb[xb > 0]
+        # ponytail: xb's spectrum (_spectrum/np.unique + counts f1,f2,n) is loop-invariant across the
+        # q×m cells but _diversity_at→_rtd/_asymptotic recompute it per cell (O(nboot·|q|·|m|) np.unique
+        # of only nboot distinct spectra). Exact hoist = compute (cs,fs,n,f1,f2) once per rep and thread
+        # them through _diversity_at/_rtd/_asymptotic. Deferred: this Python path is the non-default
+        # fallback (inext() uses the native _core kernel); only inext_coverage/estimate_d hit it, and the
+        # threading is exactness-critical across the q=0/1/2 × integer/non-integer-m branches.
         for i, q in enumerate(qs):
             for j, m in enumerate(ms):
                 vals[r, i, j] = _diversity_at(xb, float(m), q)

@@ -104,15 +104,16 @@ def pool_samples(samples: "list[pl.DataFrame]", key: "str | tuple[str, ...]" = "
             pl.col("_sample").n_unique().alias("incidence"),
             pl.len().alias("occurrences"),
             pl.struct(strict).n_unique().alias("convergence"),
-            # representative: fields of the single most-abundant contributing row
-            *[pl.col(c).sort_by(COUNT, descending=True).first().alias(f"_rep_{c}")
-              for c in fields],
+            # representative: the single most-abundant contributing row. One struct sort by COUNT
+            # replaces the previous per-field sort_by (6 argsorts of the same COUNT -> 1);
+            # bitwise-identical, since every field is taken from the same top-COUNT row.
+            pl.struct(fields).sort_by(COUNT, descending=True).first().alias("_rep"),
         )
     )
     # Fill each canonical field from the representative where it is not the key.
     agg = agg.with_columns(
-        [(pl.col(c) if c in key else pl.col(f"_rep_{c}")).alias(c) for c in fields]
-    )
+        [(pl.col(c) if c in key else pl.col("_rep").struct.field(c)).alias(c) for c in fields]
+    ).drop("_rep")
 
     out = normalize(agg, recompute_freq=True)
     out = out.with_columns(agg["incidence"], agg["occurrences"], agg["convergence"])

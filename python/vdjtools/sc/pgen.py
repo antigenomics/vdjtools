@@ -76,9 +76,23 @@ def paired_pgen(
     pa: list[float | None] = []
     pb: list[float | None] = []
     pp: list[float | None] = []
+    # Memoize each chain's Pgen over its distinct clonotype key — cells sharing a clonotype
+    # (expanded clones) otherwise recompute the identical native Pgen. Exact: native Pgen is
+    # deterministic in (junction, v, j), so a cached value equals the per-row call.
+    ca: dict = {}
+    cb: dict = {}
+
+    def _memo(cache, model, aa, v, j):
+        if model is None or not aa:
+            return None
+        k = (aa, v, j) if condition_vj else (aa,)
+        if k not in cache:
+            cache[k] = _chain_pgen(model, aa, v, j, condition_vj)
+        return cache[k]
+
     for r in paired.iter_rows(named=True):
-        a = _chain_pgen(ma, r.get(ALPHA_AA), r.get(ALPHA_V), r.get(ALPHA_J), condition_vj) if ma else None
-        b = _chain_pgen(mb, r.get(BETA_AA), r.get(BETA_V), r.get(BETA_J), condition_vj) if mb else None
+        a = _memo(ca, ma, r.get(ALPHA_AA), r.get(ALPHA_V), r.get(ALPHA_J))
+        b = _memo(cb, mb, r.get(BETA_AA), r.get(BETA_V), r.get(BETA_J))
         pa.append(a)
         pb.append(b)
         pp.append(a * b if (a is not None and b is not None) else None)
