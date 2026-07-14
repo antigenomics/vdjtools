@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "2.4.0"
+version = "2.5.0"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,6 +37,14 @@ dependencies = [
     # lazily inside the functions that need it, so `import vdjtools` stays light. mmseqs2 is
     # needed only for arda's alignment/annotate path, never for germline lookup or Pgen.
     "arda-mapper>=2.5.3",
+    # seqtree = the fuzzy-search / e-value engine, vdjmatch = overlap + TCRnet on top of it.
+    # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
+    # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or
+    # metaclonotypes -- all advertised capabilities, and none has a fallback. Cheap: seqtree
+    # has ZERO runtime deps and the same wheel matrix as vdjtools; vdjmatch is a pure-python
+    # wheel needing only polars (ours) + seqtree. Both are imported lazily.
+    "seqtree>=0.3",
+    "vdjmatch>=0.0.1",
 ]
 
 [project.scripts]
@@ -44,8 +52,8 @@ vdjtools = "vdjtools.cli:app"
 
 [project.optional-dependencies]
 model = []                             # DEPRECATED no-op alias: arda-mapper is a BASE dep since v2.4.0 (the model engine + germline reference ship with a plain `pip install vdjtools`). Kept so existing `vdjtools[model]` pins (e.g. mirpy's) keep resolving.
-overlap = ["vdjmatch>=0.0.1", "seqtree>=0.3", "scikit-learn"]  # Phase 4: overlap + TCRnet (brings the seqtree engine); sklearn for MDS clustering; seqtree for similarity-weighted (TINA) overlap
-preprocess = ["seqtree>=0.3"]          # Phase 5: freq-based error correction (near-neighbour search)
+overlap = ["scikit-learn"]             # vdjmatch/seqtree are BASE deps since v2.5.0; sklearn is still an extra -- it is only needed by cluster_samples(method="mds") (method="hclust" uses scipy, a base dep) and sc.cluster_eval, and both raise a clear install hint.
+preprocess = []                        # DEPRECATED no-op alias: seqtree (freq-based error correction) is a BASE dep since v2.5.0.
 sc = ["scikit-learn", "pyyaml", "anndata", "huggingface_hub"]  # Phase 7: single-cell — sklearn for cluster_eval contingency, pyyaml for AIRR Cell export, anndata for the scverse bridge (to_anndata), HF for the dCODE benchmark fetch (tests only)
 examples = ["marimo", "huggingface_hub", "matplotlib", "scikit-learn"]  # example notebooks (scipy is a base dep)
 oracle = ["olga"]                      # Pgen cross-check oracle (tests only)
@@ -53,7 +61,7 @@ test = ["pytest>=7.4", "pytest-cov"]
 bench = ["huggingface_hub"]  # test-only: real-data fetch; never a runtime dep
 docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx"]
 dev = ["ruff", "pytest>=7.4", "pybind11>=2.12"]
-all = ["vdjmatch>=0.0.1", "seqtree>=0.3", "scikit-learn"]  # arda-mapper is a base dep (not an extra)
+all = ["scikit-learn"]                 # the antigenomics engines (arda-mapper, seqtree, vdjmatch) are base deps, not extras
 
 [project.urls]
 Homepage = "https://github.com/antigenomics/vdjtools"

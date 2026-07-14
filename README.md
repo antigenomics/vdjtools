@@ -43,20 +43,31 @@ pip install vdjtools
 Prebuilt wheels ship for CPython 3.10–3.13 on Linux, macOS (Apple Silicon), and Windows; the
 native `_core` C++ extension is bundled (the source distribution compiles it on install).
 
-That one command gives you **the whole model engine and the germline reference**: the bundled
-per-locus V(D)J models, Pgen / generation / EM, and the V/D/J germline + CDR3 anchors — because
-[arda](https://github.com/antigenomics/arda), the single source of germline truth, is a **base
-dependency** (it is imported lazily, so `import vdjtools` stays light). arda fetches its IMGT
-reference once, on first use. Downstream libraries can therefore depend on plain `vdjtools` and
-rely on `vdjtools.model.reference.load_germline(...)` being there.
+That one command gives you **everything vdjtools advertises** — no extras to opt into. The three
+antigenomics engines it delegates to are **base dependencies**:
 
-MMseqs2 is needed **only** for arda's alignment/annotation path (`model.stitch.annotate`), never
-for germline lookup, Pgen, generation or the analytics — install it via conda/brew if you need it.
-Repertoire overlap / TCRnet pull in the seqtree engine:
+| Engine | Powers |
+|---|---|
+| [arda](https://github.com/antigenomics/arda) | the germline reference (V/D/J + CDR3 anchors), model engine, annotation |
+| [seqtree](https://github.com/antigenomics/seqtree) | fuzzy search / e-values → error correction, similarity overlap, TCRnet |
+| [vdjmatch](https://github.com/antigenomics/vdjmatch) | sample overlap, TCRnet, metaclonotypes |
+
+So `preprocess.correct()`, `overlap.tcrnet()`, `biomarker.metaclonotypes()` and
+`model.reference.load_germline()` all just work from a plain install — and downstream libraries
+can depend on plain `vdjtools` and rely on them being there. All three are imported **lazily**, so
+`import vdjtools` stays light; between them they add only `requests` on top of what vdjtools
+already needs. arda fetches its IMGT reference once, on first use.
+
+Two things are still optional, because each has a working alternative or is a side integration:
 
 ```bash
-pip install "vdjtools[overlap]"
+pip install "vdjtools[overlap]"   # scikit-learn — only for cluster_samples(method="mds");
+                                  # method="hclust" works out of the box (scipy)
+pip install "vdjtools[sc]"        # single-cell extras: anndata (scverse bridge), pyyaml
 ```
+
+MMseqs2 is needed **only** for arda's alignment/annotation path (`model.stitch.annotate`) — never
+for germline lookup, Pgen, generation, or the analytics. Install it via conda/brew if you need it.
 
 ### Development
 

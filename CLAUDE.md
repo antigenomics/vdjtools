@@ -25,11 +25,15 @@ sphinx-build -W --keep-going -b html docs docs/_build/html        # docs gate (z
 Co-developed parents are early-alpha: `bash setup.sh --dev-parents` editable-installs
 `../seqtree ../arda ../vdjmatch` if present (else PyPI: `seqtree`, `arda-mapper`, `vdjmatch`).
 Deps trace to real imports — a phase's parent is promoted from an extra to a base dep once it
-lands. **`arda-mapper` is a BASE dep** (since v2.4.0): a plain `pip install vdjtools` must ship
-the model engine *and* the germline reference, because downstream libs (mirpy) depend on vdjtools
-*for* that reference. It's imported lazily, so `import vdjtools` stays light; mmseqs2 is needed
-only for arda's annotate path. `vdjmatch`/`seqtree` remain the `[overlap]` extra. `[model]` is a
-kept-but-empty alias so existing `vdjtools[model]` pins still resolve.
+lands. **All three antigenomics engines are BASE deps**: `arda-mapper` (v2.4.0), `seqtree` +
+`vdjmatch` (v2.5.0). Rule: *if the README advertises it, a plain `pip install vdjtools` must
+deliver it.* Every advertised capability delegates to one of the three and none has a fallback —
+arda → germline reference + model engine (mirpy depends on vdjtools *for* the germline); seqtree →
+fuzzy search/e-values (`preprocess.correct`, similarity overlap, TCRnet); vdjmatch → overlap,
+TCRnet, metaclonotypes. All are imported lazily, so `import vdjtools` stays light; between them
+they add only `requests`. mmseqs2 is needed only for arda's annotate path. `[model]`/`[preprocess]`
+are kept-but-empty aliases so existing pins still resolve; `[overlap]` now carries only
+scikit-learn (MDS; `hclust` works without it). `test_smoke.py` pins this contract.
 
 ## Git model
 `master` = v2 (tagged releases) ← `dev` (integration) ← `feature/*` (one per phase).
