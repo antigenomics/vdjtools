@@ -56,11 +56,11 @@ def test_batch_preserves_within_batch_variation():
 
 def test_batch_corrected_value_pins_grand_mean():
     # Value pin that guards the `+ mu_grand` restore term (step 4). With the term,
-    # s1/TRBJ1 corrects to 0.524768; dropping `+ mu_grand` shifts it to 0.553693,
-    # so this assertion fails if the grand-mean restore is ever removed.
+    # s1/TRBJ1 corrects to 0.524859 (plain-mean default); dropping `+ mu_grand` shifts
+    # it, so this assertion fails if the grand-mean restore is ever removed.
     res = pp.correct_vj_usage(_long(), batch_col="batch")
     row = res.filter((pl.col("sample_id") == "s1") & (pl.col("j_call") == "TRBJ1"))
-    assert math.isclose(row["p_corrected"][0], 0.524768, rel_tol=1e-5)
+    assert math.isclose(row["p_corrected"][0], 0.524859, rel_tol=1e-5)
 
 
 def test_batch_accepts_list_of_frames():
@@ -112,11 +112,25 @@ def test_sigmoid_removes_divergence_and_preserves_grand_mean():
 
 
 def test_sigmoid_value_pin():
-    # Guards the 2*P_avg/(1+exp(-Z)) formula; s1/TRBJ1 -> 0.666926 (differs from the
-    # location path's 0.524768, so this fails if the sigmoid map is ever altered).
+    # Guards the 2*P_avg/(1+exp(-Z)) formula with the plain-mean/σ default; s1/TRBJ1 ->
+    # 0.658608 (differs from the location path's 0.524859, so this fails if the sigmoid
+    # map is ever altered).
     res = pp.correct_vj_usage(_long(), batch_col="batch", transform="sigmoid")
     row = res.filter((pl.col("sample_id") == "s1") & (pl.col("j_call") == "TRBJ1"))
-    assert math.isclose(row["p_corrected"][0], 0.666926, rel_tol=1e-5)
+    assert math.isclose(row["p_corrected"][0], 0.658608, rel_tol=1e-5)
+
+
+def test_winsor_q_knob_matches_legacy_winsorized_values():
+    # winsor_q=0.025 restores the legacy winsorized mean/σ (the noisy-features regime);
+    # the default winsor_q=None is the paper's plain mean/σ. Guards both code paths.
+    loc = pp.correct_vj_usage(_long(), batch_col="batch", winsor_q=0.025)
+    sig = pp.correct_vj_usage(_long(), batch_col="batch", transform="sigmoid", winsor_q=0.025)
+
+    def s1j1(res):
+        return res.filter((pl.col("sample_id") == "s1") & (pl.col("j_call") == "TRBJ1"))["p_corrected"][0]
+
+    assert math.isclose(s1j1(loc), 0.524768, rel_tol=1e-5)
+    assert math.isclose(s1j1(sig), 0.666926, rel_tol=1e-5)
 
 
 def _sample_frame(long, sid):

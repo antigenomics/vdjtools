@@ -11,20 +11,22 @@ Two stages
 
    - ``transform="location"`` (default) — the classic **location adjustment** (the
      location term of ComBat; Johnson, Li & Rabinovic, *Biostatistics* 2007) on
-     gene-usage log-probabilities. Per ``(locus, gene, batch)`` the winsorized batch
-     mean ``mu_batch`` of ``log p`` is replaced by the winsorized grand mean
-     ``mu_grand``: ``log_corrected = log_p - mu_batch + mu_grand``, then ``exp`` and
-     renormalise. Location only — no scale term.
+     gene-usage log-probabilities. Per ``(locus, gene, batch)`` the batch mean ``mu_batch``
+     of ``log p`` is replaced by the grand mean ``mu_grand``: ``log_corrected = log_p -
+     mu_batch + mu_grand``, then ``exp`` and renormalise. Location only — no scale term.
    - ``transform="sigmoid"`` — the **σ-standardised, grand-mean-preserving** correction
      of Vlasova, Nekrasova, Komkov, … Britanova, Shugay, *Genome Medicine* 2026;18:20
-     (DOI 10.1186/s13073-025-01589-4). Per ``(locus, gene, batch)`` compute a winsorized
+     (DOI 10.1186/s13073-025-01589-4). Per ``(locus, gene, batch)`` compute a
      **z-score** ``Z = (log p - mu_batch) / sigma_batch`` (capped at ``±z_cap``), then map
      it back to a probability with a sigmoid that preserves the pooled grand-mean usage
      ``P_avg(gene)``: ``P_final = 2 * P_avg / (1 + exp(-Z))`` (``Z=0`` → ``P_avg``),
-     renormalised per ``(sample, locus)``. Reference: legacy mirpy v2
-     ``mir.basic.gene_usage.compute_batch_corrected_gene_usage`` (winsorized ``mu``/``sigma``,
-     z-cap, pooled ``P_avg``) — note that legacy's own ``pfinal`` uses ``p*exp(Z)``; the
-     ``2*P_avg*sigmoid(Z)`` map here is the paper's Methods formula.
+     renormalised per ``(sample, locus)``. The paper uses the **plain** mean/σ of the
+     log-normal (Shapiro–Wilk-validated), i.e. ``winsor_q=None`` (default). Winsorization
+     (``winsor_q=0.025``) is an optional robustness knob for the noisy usage-as-features
+     regime (many shallow / RNA-seq repertoires), *not* for deep-repertoire correction;
+     legacy mirpy v2 ``mir.basic.gene_usage.compute_batch_corrected_gene_usage`` winsorized
+     by default (and used ``p*exp(Z)`` for its own map — the ``2*P_avg*sigmoid(Z)`` map
+     here is the paper's Methods formula).
 
 2. :func:`apply_vj_correction` — apply a sample's corrected usage back to its clonotype
    table: reweight each clonotype by ``P_final(G) / P(G)`` for its gene, then (by default)
@@ -42,30 +44,30 @@ import polars as pl
 from ..io.schema import COUNT, J_CALL, V_CALL, recompute_frequency, strip_allele
 
 
-def _winsorized_mean(value: str, group: "list[str]",
-                     lower_q: float = 0.025, upper_q: float = 0.975) -> pl.Expr:
-    """Windowed winsorized mean of ``value`` over ``group`` (linear quantiles)."""
-    lo = pl.col(value).quantile(lower_q, interpolation="linear").over(group)
-    hi = pl.col(value).quantile(upper_q, interpolation="linear").over(group)
-    return pl.col(value).clip(lo, hi).mean().over(group)
+def _winsor(value: str, group: "list[str]", winsor_q: "float | None") -> pl.Expr:
+    """``value`` optionally winsorized to ``[winsor_q, 1-winsor_q]`` within ``group``."""
+    col = pl.col(value)
+    if winsor_q is None:
+        return col
+    lo = col.quantile(winsor_q, interpolation="linear").over(group)
+    hi = col.quantile(1.0 - winsor_q, interpolation="linear").over(group)
+    return col.clip(lo, hi)
 
 
-def _winsorized_std(value: str, group: "list[str]",
-                    lower_q: float = 0.025, upper_q: float = 0.975) -> pl.Expr:
-    """Windowed winsorized sample SD (ddof=1) of ``value`` over ``group``; null → 0.
+def _batch_mean(value: str, group: "list[str]", winsor_q: "float | None") -> pl.Expr:
+    """Windowed mean of ``value`` over ``group`` (winsorized iff ``winsor_q`` set)."""
+    return _winsor(value, group, winsor_q).mean().over(group)
 
-    Matches legacy ``_winsorized_mean_std`` (``np.std(ddof=1)``, ``0.0`` for a
-    single-element group).
-    """
-    lo = pl.col(value).quantile(lower_q, interpolation="linear").over(group)
-    hi = pl.col(value).quantile(upper_q, interpolation="linear").over(group)
-    return pl.col(value).clip(lo, hi).std(ddof=1).over(group).fill_null(0.0)
+
+def _batch_std(value: str, group: "list[str]", winsor_q: "float | None") -> pl.Expr:
+    """Windowed sample SD (ddof=1) of ``value`` over ``group``; null → 0."""
+    return _winsor(value, group, winsor_q).std(ddof=1).over(group).fill_null(0.0)
 
 
 def correct_vj_usage(samples_or_df: "pl.DataFrame | list[pl.DataFrame]", batch_col: str,
                      sample_col: str = "sample_id", weighted: bool = True,
                      pseudocount: float = 1.0, transform: str = "location",
-                     z_cap: float = 6.0) -> pl.DataFrame:
+                     z_cap: float = 6.0, winsor_q: "float | None" = None) -> pl.DataFrame:
     """Batch-correct per-sample V-J gene usage.
 
     Args:
@@ -82,6 +84,12 @@ def correct_vj_usage(samples_or_df: "pl.DataFrame | list[pl.DataFrame]", batch_c
             (Vlasova et al. 2026). See the module docstring.
         z_cap: For ``transform="sigmoid"``, clip the z-score to ``±z_cap`` (default
             ``6.0``); ignored for ``"location"``.
+        winsor_q: If set (e.g. ``0.025``), winsorize each ``(gene, batch)`` group's
+            ``log p`` to ``[winsor_q, 1-winsor_q]`` before taking the batch mean/σ. The
+            default ``None`` uses the plain mean/σ of the log-normal — the paper's method
+            (Vlasova et al. 2026, Shapiro–Wilk-validated). Winsorization is a robustness
+            knob for the **noisy usage-as-features regime** (many shallow / RNA-seq
+            repertoires used for UMAP etc.), not for deep-repertoire correction.
 
     Returns:
         A long frame with one row per ``(sample, locus, v_call, j_call)`` over the
@@ -132,16 +140,16 @@ def correct_vj_usage(samples_or_df: "pl.DataFrame | list[pl.DataFrame]", batch_c
 
     if transform == "location":
         full = full.with_columns(
-            _winsorized_mean("log_p", ["locus", V_CALL, J_CALL, batch_col]).alias("mu_batch"),
-            _winsorized_mean("log_p", ["locus", V_CALL, J_CALL]).alias("mu_grand"),
+            _batch_mean("log_p", ["locus", V_CALL, J_CALL, batch_col], winsor_q).alias("mu_batch"),
+            _batch_mean("log_p", ["locus", V_CALL, J_CALL], winsor_q).alias("mu_grand"),
         )
         full = full.with_columns(
             (pl.col("log_p") - pl.col("mu_batch") + pl.col("mu_grand")).exp().alias("_pc_raw")
         )
     else:  # sigmoid: z-score (with sigma) + grand-mean-preserving sigmoid map
         full = full.with_columns(
-            _winsorized_mean("log_p", ["locus", V_CALL, J_CALL, batch_col]).alias("mu_batch"),
-            _winsorized_std("log_p", ["locus", V_CALL, J_CALL, batch_col]).alias("sigma_batch"),
+            _batch_mean("log_p", ["locus", V_CALL, J_CALL, batch_col], winsor_q).alias("mu_batch"),
+            _batch_std("log_p", ["locus", V_CALL, J_CALL, batch_col], winsor_q).alias("sigma_batch"),
             # P_avg(gene) = pooled usage across all samples (raw counts, no pseudocount).
             (pl.col("count").sum().over(["locus", V_CALL, J_CALL])
              / pl.col("count").sum().over(["locus"])).alias("p_avg"),

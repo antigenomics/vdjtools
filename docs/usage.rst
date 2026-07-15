@@ -158,9 +158,14 @@ back onto each sample's clonotype table:
    fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")   # resampled table
 
 ``transform="location"`` (default) is a ComBat location adjustment; ``transform="sigmoid"`` is the
-σ-standardised, grand-mean-preserving correction of Vlasova et al. 2026. ``apply_vj_correction``
-roulette-wheel resamples the clonotype table to the corrected usage (``resample=False`` for
-deterministic expected counts).
+σ-standardised, grand-mean-preserving correction of Vlasova et al. 2026 (*Genome Medicine* 18:20).
+``apply_vj_correction`` roulette-wheel resamples the clonotype table to the corrected usage
+(``resample=False`` for deterministic expected counts). The batch mean/σ use the plain log-normal
+statistics by default (paper-faithful); pass ``winsor_q=0.025`` only for the noisy
+usage-as-features regime (many shallow / RNA-seq repertoires, e.g. as UMAP features). Validated on
+the paper's own FMBA covid TCRβ cohort (deep repertoires, ~3.3M reads/sample): V-usage variance
+explained by batch drops from η²≈0.11 to ≈0.002 while the grand-mean usage and per-sample read
+depth are preserved.
 
 Biomarker association
 ---------------------
