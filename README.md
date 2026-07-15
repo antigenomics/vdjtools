@@ -160,6 +160,10 @@ overlap.tcrnet(sample)                         # per-clonotype neighbourhood enr
 # preprocessing: downsample to a common depth, error-correct, filter, pool
 preprocess.downsample(sample, 100_000)
 preprocess.correct(preprocess.filter_functional(sample))
+
+# cross-batch V/J-usage bias: batch-correct usage, then resample the clonotype table
+usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")  # Vlasova 2026
+fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")
 ```
 
 Incidence-based biomarkers (Fisher association, Emerson-2017 design) and single-cell paired-chain

@@ -35,12 +35,28 @@ they add only `requests`. mmseqs2 is needed only for arda's annotate path. `[mod
 are kept-but-empty aliases so existing pins still resolve; `[overlap]` now carries only
 scikit-learn (MDS; `hclust` works without it). `test_smoke.py` pins this contract.
 
+**Heavy tests run on Aldan-3, not the Mac.** Unit tests stay local + fast; anything heavy —
+benchmarks (`RUN_BENCHMARK=1`), full-locus EM/concordance, large-data (100k+ read) runs — goes to
+the Aldan-3 HPC cluster via the `aldan3` CLI (repo `../aldan3-client`) instead of the 32 GB laptop.
+Submit + monitor deterministically (every subcommand takes `--json`):
+`aldan3 slurm submit <script.sh> [-- ARGS…] [--env <e>] [--cpus/--mem/--time/--gpus …]`,
+then `aldan3 slurm queue` · `log <id>` · `hist <id>` (sacct usage) · `cancel <id>`;
+`aldan3 slurm template cpu|gpu|array -o job.sbatch` scaffolds a starter script. Keep the runnable
+`scripts/*.sh` in this repo; `aldan3` is just the external driver.
+
 ## Git model
 `master` = v2 (tagged releases) ← `dev` (integration) ← `feature/*` (one per phase).
 **Legacy v1.x is on the `legacy-1.x` branch and under tags `v0.0.1`..`1.2.1`** — do not disturb.
 The v2 history is an orphan root (no shared ancestry with legacy). Carried-over legacy resource
 files (`aa_property_table.txt`, `cdr3contact.txt`, `vj_families.txt`) and format-conversion test
 fixtures live on `legacy-1.x` (`src/test/resources/samples/`), pull them over when a phase needs them.
+
+**Worktrees convention**: develop each phase/feature in its own git worktree, not in the main
+checkout — `git worktree add .claude/worktrees/<name> -b feature/<name>` (one worktree ↔ one
+`feature/*` branch). This isolates parallel agents from `master` and from each other; never run
+two features in one worktree. `.claude/` (including `.claude/worktrees/`) is gitignored — never
+commit it. Consolidate a finished phase by merging its `feature/*` branch into `dev`, then
+`git worktree remove .claude/worktrees/<name>`.
 
 ## Conventions
 - AIRR Rearrangement/Cell + polars `pl.DataFrame` in and out; minimal OO (thin index classes only).

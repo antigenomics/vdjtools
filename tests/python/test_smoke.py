@@ -4,8 +4,8 @@ from vdjtools import _core
 
 
 def test_version():
-    assert vdjtools.__version__ == "2.5.1"
-    assert _core.version() == "2.5.1"
+    assert vdjtools.__version__ == "2.6.0"
+    assert _core.version() == "2.6.0"
 
 
 def test_hamming():

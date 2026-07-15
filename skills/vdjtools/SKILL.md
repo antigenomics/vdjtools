@@ -76,7 +76,9 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
 ### `vdjtools.preprocess`
 `downsample`, `select_top`; `filter_functional`, `filter_frequency`, `filter_segment`,
 `filter_by_sample`; `correct` (freq error-correction), `decontaminate`; `pool_samples`,
-`join_samples`, `resolve_key`; `correct_vj_usage` (batch-effect).
+`join_samples`, `resolve_key`; `correct_vj_usage` (VJ batch-effect: `transform="location"` ComBat
+default or `"sigmoid"` = Vlasova 2026 z-score + grand-mean-preserving sigmoid), `apply_vj_correction`
+(rescale + roulette-wheel resample the clonotype table to the corrected usage).
 
 ### `vdjtools.biomarker`
 `fisher_association` (incidence Fisher vs phenotype; V/J-match, exact/1mm), `metaclonotypes`.
