@@ -42,6 +42,13 @@ The v2 history is an orphan root (no shared ancestry with legacy). Carried-over 
 files (`aa_property_table.txt`, `cdr3contact.txt`, `vj_families.txt`) and format-conversion test
 fixtures live on `legacy-1.x` (`src/test/resources/samples/`), pull them over when a phase needs them.
 
+**Worktrees convention**: develop each phase/feature in its own git worktree, not in the main
+checkout — `git worktree add .claude/worktrees/<name> -b feature/<name>` (one worktree ↔ one
+`feature/*` branch). This isolates parallel agents from `master` and from each other; never run
+two features in one worktree. `.claude/` (including `.claude/worktrees/`) is gitignored — never
+commit it. Consolidate a finished phase by merging its `feature/*` branch into `dev`, then
+`git worktree remove .claude/worktrees/<name>`.
+
 ## Conventions
 - AIRR Rearrangement/Cell + polars `pl.DataFrame` in and out; minimal OO (thin index classes only).
 - **arda germline = single source of truth**: all V/D/J germline + CDR3 anchors resolve from arda
