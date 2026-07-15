@@ -2,7 +2,7 @@
 
 Free functions over the canonical clonotype frame (see :mod:`vdjtools.io.schema`).
 """
-from .batch import correct_vj_usage
+from .batch import apply_vj_correction, correct_vj_usage
 from .correct import correct
 from .decontaminate import decontaminate
 from .downsample import downsample, select_top
@@ -28,4 +28,5 @@ __all__ = [
     "join_samples",
     "resolve_key",
     "correct_vj_usage",
+    "apply_vj_correction",
 ]

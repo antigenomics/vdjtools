@@ -148,7 +148,19 @@ depth, error-correction, filtering, and pooling/joining:
    preprocess.pool_samples([a, b, c])
    preprocess.join_samples([a, b, c], min_samples=2)   # clonotypes seen in >=2 samples
 
-``correct_vj_usage`` applies a VJ-usage batch-effect correction across a cohort.
+Cross-batch V/J-usage bias is corrected in two steps — batch-correct the usage, then push it
+back onto each sample's clonotype table:
+
+.. code-block:: python
+
+   # cohort = one long frame with sample_id + batch columns (see io.read_samples)
+   usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")
+   fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")   # resampled table
+
+``transform="location"`` (default) is a ComBat location adjustment; ``transform="sigmoid"`` is the
+σ-standardised, grand-mean-preserving correction of Vlasova et al. 2026. ``apply_vj_correction``
+roulette-wheel resamples the clonotype table to the corrected usage (``resample=False`` for
+deterministic expected counts).
 
 Biomarker association
 ---------------------
