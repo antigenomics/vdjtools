@@ -19,6 +19,7 @@ nulls, same as the COVID arms. Key = V + CDR3aa±1mm. 2026-07-16.
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -47,6 +48,51 @@ def enrich(sig, rest, truth):
     c = len(rest & truth); d = len(rest) - c
     orr, p = fisher_exact([[a, b], [c, d]], alternative="greater")
     return a, orr, p
+
+
+def _keys_of(path: str):
+    """Pass 1 worker: unique (CDR3aa, V) in ONE repertoire. Dedup is per-donor -- a key counts
+    once per donor, which is exactly what an incidence pool needs."""
+    df = (vio.read(path, fmt="vdjtools")
+          .filter(pl.col(S.JUNCTION_AA).is_not_null()
+                  & ~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
+          .with_columns(pl.col(S.V_CALL).str.split("*").list.first().alias("v_gene"))
+          .select(S.JUNCTION_AA, "v_gene").unique())
+    return list(zip(df[S.JUNCTION_AA].to_list(), df["v_gene"].to_list()))
+
+
+def _rows_of(args):
+    """Pass 2 worker: ONE repertoire, candidate keys only."""
+    path, sid, keep = args
+    df = (vio.read(path, fmt="vdjtools")
+          .filter(pl.col(S.JUNCTION_AA).is_not_null()
+                  & ~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
+          .with_columns(pl.col(S.V_CALL).str.split("*").list.first().alias("v_gene"))
+          .group_by([S.JUNCTION_AA, "v_gene"])
+          .agg(pl.col(S.JUNCTION_NT).n_unique().alias("n_rearr"))
+          .join(keep, on=[S.JUNCTION_AA, "v_gene"], how="semi"))
+    return df.with_columns(pl.lit(sid).alias("sample_id")) if df.height else None
+
+
+def pool_incidence(paths, threads):
+    """Pass 1 -- POOLING: key -> #donors carrying it. Streamed per file, parallel.
+
+    Memory is O(unique keys), NOT O(total rows). hip is 144.8M (CDR3aa,V,donor) rows over 761
+    immunoSEQ repertoires (~190k clonotypes/donor). Concatenating them and THEN calling
+    group_by blows 370G and stalls before vdjmatch is ever reached (measured: jobs 1417286 OOM,
+    1417291 stalled 41min). Only the pooled counter stays resident: each file is read, deduped
+    within the donor, folded in, and dropped.
+    """
+    from collections import Counter
+    from concurrent.futures import ProcessPoolExecutor
+    total = Counter()
+    with ProcessPoolExecutor(max_workers=threads) as ex:
+        for i, keys in enumerate(ex.map(_keys_of, paths, chunksize=4), 1):
+            total.update(keys)
+            if i % 100 == 0:
+                print(f"    pooled {i}/{len(paths)} donors; {len(total):,} unique keys",
+                      flush=True)
+    return total
 
 
 def run_contrast(rows, nb, label, cov, cmv_ep=None):
@@ -109,6 +155,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", default="status", choices=["status", "hla"])
     ap.add_argument("--top", type=int, default=5)
+    ap.add_argument("--min-donors", type=int, default=2,
+                    help="pool cutoff: a key must be seen in >=N donors")
     ap.add_argument("--scope", default="1mm", choices=["exact", "1mm"],
                     help="1mm is the default. `exact` additionally reproduces Emerson faithfully "
                          "-- his 164 TCRb came from exact V+CDR3aa incidence; 1mm is Vlasova's "
@@ -128,34 +176,36 @@ def main():
           f"({int(design['_pos'].sum())}+ / {design.height-int(design['_pos'].sum())}-)",
           flush=True)
 
-    t0 = time.perf_counter()
-    frames = []
-    for r in design.iter_rows(named=True):
-        f = ROOT / r["file_name"]
-        if f.exists():
-            frames.append(vio.read(str(f), fmt="vdjtools")
-                          .with_columns(pl.lit(str(r["sample_id"])).alias("sample_id")))
-    cohort = pl.concat(frames, how="vertical_relaxed")
-    rows = (cohort.lazy()
-            .filter(pl.col(S.JUNCTION_AA).is_not_null()
-                    & ~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
-            .with_columns(pl.col(S.V_CALL).str.split("*").list.first().alias("v_gene"))
-            .group_by([S.JUNCTION_AA, "v_gene", "sample_id"])
-            .agg(pl.col(S.JUNCTION_NT).n_unique().alias("n_rearr"))
-            .join(design.select("sample_id", "_pos").lazy(), on="sample_id", how="inner")
-            .collect(engine="streaming"))
-    print(f"[ingest {time.perf_counter()-t0:.0f}s] rows {rows.height:,}", flush=True)
+    files = [(str(ROOT / r["file_name"]), str(r["sample_id"]))
+             for r in design.iter_rows(named=True) if (ROOT / r["file_name"]).exists()]
+    nthreads = os.cpu_count() or 8
 
-    # hip is immunoSEQ-deep (~190k rows/donor vs covid's ~14k): an all-vs-all 1mm search over
-    # every CDR3aa OOMs at 370G. Restrict to CDR3aa seen in >=2 donors -- the paper's own
-    # candidate rule. APPROXIMATION, stated not hidden: a private neighbour (1 donor) can no
-    # longer contribute its donor to a candidate's fuzzy incidence, so incidence is a slight
-    # undercount. It cannot manufacture an association: the loss applies to both arms.
-    pub = (rows.group_by(S.JUNCTION_AA).agg(pl.col("sample_id").n_unique().alias("d"))
-           .filter(pl.col("d") >= 2))
-    rows = rows.join(pub.select(S.JUNCTION_AA), on=S.JUNCTION_AA, how="semi")
-    print(f"  public prefilter (>=2 donors): {pub.height:,} CDR3aa; rows -> {rows.height:,}",
-          flush=True)
+    # PASS 1 -- pool incidence per key, streamed. Never materialize the cohort.
+    t0 = time.perf_counter()
+    total = pool_incidence([p for p, _ in files], nthreads)
+    keep = pl.DataFrame(
+        {S.JUNCTION_AA: [k[0] for k, n in total.items() if n >= args.min_donors],
+         "v_gene": [k[1] for k, n in total.items() if n >= args.min_donors]})
+    print(f"[pass1 pool {time.perf_counter()-t0:.0f}s] {len(total):,} unique keys -> "
+          f"{keep.height:,} public (>={args.min_donors} donors)", flush=True)
+    del total
+
+    # PASS 2 -- per-donor rows, candidates only (a small fraction of the cohort).
+    t0 = time.perf_counter()
+    from concurrent.futures import ProcessPoolExecutor
+    parts = []
+    with ProcessPoolExecutor(max_workers=nthreads) as ex:
+        for d in ex.map(_rows_of, [(p, s, keep) for p, s in files], chunksize=4):
+            if d is not None:
+                parts.append(d)
+    rows = (pl.concat(parts, how="vertical_relaxed")
+            .join(design.select("sample_id", "_pos"), on="sample_id", how="inner"))
+    del parts
+    print(f"[pass2 rows {time.perf_counter()-t0:.0f}s] rows {rows.height:,}", flush=True)
+    # NOTE the >=min_donors pool is the paper's own candidate rule, but it is also an
+    # APPROXIMATION of fuzzy incidence, stated not hidden: a PRIVATE neighbour (1 donor) can no
+    # longer contribute its donor to a candidate's ball. It cannot manufacture an association --
+    # the loss applies to both arms -- but it does slightly under-count incidence.
 
     import vdjmatch.cluster as vc
     universe = rows[S.JUNCTION_AA].unique().sort().to_list()
