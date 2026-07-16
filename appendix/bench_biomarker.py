@@ -56,10 +56,19 @@ def load_cohort(pairs: "list[tuple[str, str]]", fmt: str = "vdjtools") -> pl.Laz
     """Read (sample_id, path) tables into one long frame tagged by sample_id.
 
     A list (not a dict) so a subject's TRA **and** TRB tables both load under the same
-    ``sample_id`` — required for α-β co-occurrence.
+    ``sample_id`` — required for α-β co-occurrence. Unreadable/malformed tables (a few
+    near-empty vaccine repertoires are ragged) are skipped and counted, never silently.
     """
-    frames = [vio.read(path, fmt=fmt).with_columns(pl.lit(sid).alias("sample_id"))
-              for sid, path in pairs]
+    frames, skipped = [], 0
+    for sid, path in pairs:
+        try:
+            frames.append(vio.read(path, fmt=fmt).with_columns(pl.lit(sid).alias("sample_id")))
+        except Exception as e:                         # noqa: BLE001 — report and skip bad tables
+            skipped += 1
+            if skipped <= 5:
+                print(f"  skip unreadable {Path(path).name}: {type(e).__name__}")
+    if skipped:
+        print(f"  skipped {skipped} unreadable tables (of {len(pairs)})")
     return pl.concat(frames, how="vertical_relaxed").lazy()
 
 
