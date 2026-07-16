@@ -194,6 +194,9 @@ def run_covid(args):
         sig = cc.filter(pl.col("q_value") < 0.05)
         print(f"  candidate pairs: {cc.height}   significant α-β pairs (q<0.05): {sig.height}")
         print(sig.select("a_junction_aa", "b_junction_aa", "theta", "q_value", "e_value").head(10))
+        if args.vdjdb and cc.height:
+            # Do the in-silico pairs recover VDJdb's true (single-cell) α-β pairs?
+            validate_pairs(cc, _vdjdb_pairs(Path(args.vdjdb), "SARS-CoV-2"), "VDJdb-SARS-CoV-2 α-β pairs")
 
 
 def _glob_tables(data: Path, meta: pl.DataFrame, sample_col: str) -> "list[tuple[str, str]]":
@@ -222,6 +225,45 @@ def _vdjdb_antigen(path: Path, pattern: str, gene: "str | None" = None) -> set:
 
 def _vdjdb_cmv(path: Path) -> set:
     return _vdjdb_antigen(path, "CMV", gene="TRB")
+
+
+def _vdjdb_pairs(path: Path, pattern: str) -> set:
+    """Known ``(cdr3_alpha, cdr3_beta)`` pairs from VDJdb complexes for an antigen species.
+
+    A ``complex.id`` groups the TRA and TRB of one single-cell-resolved clonotype, so these are
+    *true* α-β pairs — the oracle for the in-silico pairing (3,031 SARS-CoV-2 complexes).
+    """
+    db = pl.read_csv(path, separator="\t", infer_schema_length=0)
+    d = db.filter((pl.col("species") == "HomoSapiens")
+                  & pl.col("antigen.species").str.contains(pattern)
+                  & (pl.col("complex.id") != "0"))
+    a = d.filter(pl.col("gene") == "TRA").select("complex.id", pl.col("cdr3").alias("a"))
+    b = d.filter(pl.col("gene") == "TRB").select("complex.id", pl.col("cdr3").alias("b"))
+    j = a.join(b, on="complex.id", how="inner").unique(subset=["a", "b"])
+    return set(zip(j["a"].to_list(), j["b"].to_list()))
+
+
+def validate_pairs(cc: pl.DataFrame, ref_pairs: set, name: str) -> None:
+    """Enrichment of known VDJdb α-β pairs among the significant co-occurring pairs.
+
+    2×2 over the *tested* pairs: significant × known. An honest zero is reported as such —
+    the tested set is capped by ``max_features`` and skewed to high-incidence public clones,
+    which need not be the single-cell-characterised ones in VDJdb.
+    """
+    from scipy.stats import fisher_exact
+
+    tested = set(zip(cc["a_junction_aa"].to_list(), cc["b_junction_aa"].to_list()))
+    sig_df = cc.filter(pl.col("q_value") < 0.05)
+    sig = set(zip(sig_df["a_junction_aa"].to_list(), sig_df["b_junction_aa"].to_list()))
+    a = len(sig & ref_pairs)
+    b = len(sig) - a
+    c = len((tested - sig) & ref_pairs)
+    d = len(tested - sig) - c
+    orr, p = (fisher_exact([[a, b], [c, d]], alternative="greater")
+              if (a + c) and (b + d) else (float("nan"), 1.0))
+    print(f"  vs {name}: {a}/{len(sig)} significant α-β pairs are known VDJdb pairs; "
+          f"{a + c} of {len(tested)} tested pairs are known; enrichment OR={orr:.2f} p={p:.1e} "
+          f"({len(ref_pairs)} ref pairs)")
 
 
 #: Per-dataset covid phenotype defaults (positive / negative metadata values).
