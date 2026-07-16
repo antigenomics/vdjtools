@@ -52,10 +52,14 @@ class Timer:
 
 
 # ── loaders ──────────────────────────────────────────────────────────────────────────
-def load_cohort(files: "dict[str, str]", fmt: str = "vdjtools") -> pl.LazyFrame:
-    """Read a {sample_id: path} map of clonotype tables into one long frame, tagged by sample_id."""
+def load_cohort(pairs: "list[tuple[str, str]]", fmt: str = "vdjtools") -> pl.LazyFrame:
+    """Read (sample_id, path) tables into one long frame tagged by sample_id.
+
+    A list (not a dict) so a subject's TRA **and** TRB tables both load under the same
+    ``sample_id`` — required for α-β co-occurrence.
+    """
     frames = [vio.read(path, fmt=fmt).with_columns(pl.lit(sid).alias("sample_id"))
-              for sid, path in files.items()]
+              for sid, path in pairs]
     return pl.concat(frames, how="vertical_relaxed").lazy()
 
 
@@ -65,12 +69,22 @@ def hip_metadata(meta_txt: Path) -> pl.DataFrame:
 
 
 # ── benchmark bodies ─────────────────────────────────────────────────────────────────
-def run_association_suite(cohort, meta, pheno_col, *, key=None, min_incidence=8, label=""):
+def _binary_design(meta, sample_col, col, pos, neg):
+    """Design frame with ``_pos``: True if ``col`` ∈ ``pos``, False if ∈ ``neg``, else dropped."""
+    e = pl.col(col).cast(pl.String).str.strip_chars()
+    return (meta.select(pl.col(sample_col).cast(pl.String).alias("sample_id"),
+                        pl.when(e.is_in(pos)).then(True).when(e.is_in(neg)).then(False)
+                          .otherwise(None).alias("_pos"))
+            .drop_nulls("_pos").unique(subset="sample_id"))
+
+
+def run_association_suite(cohort, design, *, key=None, min_incidence=8, label=""):
     key = key or (S.JUNCTION_AA, S.V_CALL, S.J_CALL)
-    print(f"\n[{label}] association: {len(TESTS)} tests on '{pheno_col}' "
+    npos = int(design["_pos"].sum())
+    print(f"\n[{label}] association: {len(TESTS)} tests, {npos} pos / {design.height - npos} neg "
           f"(key={key}, min_incidence={min_incidence})")
     with Timer("association"):
-        res = association(cohort, condition.binary(meta, pheno_col), test=TESTS, key=key,
+        res = association(cohort, design, test=TESTS, key=key,
                           min_incidence=min_incidence, alternative="greater")
     fis = res.filter(pl.col("test") == "fisher").sort("q_value")
     print(f"  features tested: {fis.height}   significant (q<0.05, fisher): "
@@ -95,43 +109,54 @@ def validate_vs_reference(hits: pl.DataFrame, ref_cdr3: set, name: str, top: int
     return ov
 
 
+def _corr_path(root: Path, sid: str) -> "str | None":
+    for ext in (".txt.gz", ".txt"):                    # HF hip is gzipped; the cluster copy is not
+        p = root / "corr" / f"{sid}{ext}"
+        if p.exists():
+            return str(p)
+    return None
+
+
 def run_hip(args):
-    from huggingface_hub import snapshot_download
-    cache = Path(args.data_dir or "appendix/.data/hip")
-    root = Path(snapshot_download("isalgo/airr_hip", repo_type="dataset", local_dir=cache,
-                                  allow_patterns=["metadata.txt", "corr/*.txt.gz"]))
+    root = (Path(args.data_dir) if args.data_dir and (Path(args.data_dir) / "metadata.txt").exists()
+            else None)
+    if root is None:
+        from huggingface_hub import snapshot_download
+        root = Path(snapshot_download("isalgo/airr_hip", repo_type="dataset",
+                                      local_dir=args.data_dir or "appendix/.data/hip",
+                                      allow_patterns=["metadata.txt", "corr/*.txt.gz"]))
     meta = hip_metadata(root / "metadata.txt").filter(pl.col("cmv").is_in(["+", "-"]))
     if args.max_samples:
         meta = meta.head(args.max_samples)
-    files = {r["sample_id"]: str(root / "corr" / f"{r['sample_id']}.txt.gz")
-             for r in meta.iter_rows(named=True)}
-    print(f"hip: {len(files)} subjects")
+    pairs = [(r["sample_id"], _corr_path(root, r["sample_id"])) for r in meta.iter_rows(named=True)]
+    pairs = [(s, p) for s, p in pairs if p]
+    print(f"hip: {len(pairs)} subjects")
     with Timer("ingest"):
-        cohort = load_cohort(files).collect().lazy()
-    cmv_hits = run_association_suite(cohort, meta, "cmv", min_incidence=args.min_incidence, label="CMV")
-    # per-HLA-allele + CMH conditioned on HLA-A*02
-    hla = meta.with_columns(pl.col("hla").str.contains(r"HLA-A\*02").alias("a02"))
+        cohort = load_cohort(pairs).collect().lazy()
+    cmv = _binary_design(meta, "sample_id", "cmv", ["+"], ["-"])
+    cmv_hits = run_association_suite(cohort, cmv, min_incidence=args.min_incidence, label="CMV")
+    # CMH: CMV association stratified by HLA-A*02 carriage
+    hla = meta.with_columns(pl.col("hla").fill_null("").str.contains(r"HLA-A\*02").alias("a02"))
     with Timer("CMH (CMV | HLA-A*02)"):
-        cmh = association(cohort, condition.stratified(
-            hla.with_columns(pl.col("cmv"), pl.col("a02").cast(pl.Utf8)), "cmv", "a02"),
-            stratum_col="_stratum", min_incidence=args.min_incidence)
+        cmh = association(cohort, condition.stratified(hla, "cmv", "a02"),
+                          stratum_col="_stratum", min_incidence=args.min_incidence)
     print(f"  CMH: {cmh.filter(pl.col('q_value') < 0.05).height} significant (q<0.05)")
     if args.vdjdb:
-        ref = _vdjdb_cmv(Path(args.vdjdb))
-        validate_vs_reference(cmv_hits, ref, "VDJdb-CMV")
+        validate_vs_reference(cmv_hits, _vdjdb_cmv(Path(args.vdjdb)), "VDJdb-CMV")
 
 
-def run_covid(args, pheno_col):
+def run_covid(args):
     data = Path(args.data_dir)
     meta = pl.read_csv(args.metadata, separator="\t", infer_schema_length=0)
-    files = _glob_tables(data, meta, args.sample_col)
-    print(f"{args.dataset}: {len(files)} subjects (TRA+TRB)")
+    pairs = _glob_tables(data, meta, args.sample_col)
+    print(f"{args.dataset}: {len({s for s, _ in pairs})} subjects, {len(pairs)} tables (TRA+TRB)")
     with Timer("ingest"):
-        cohort = load_cohort(files).collect().lazy()
-    hits = run_association_suite(cohort, meta, pheno_col, min_incidence=args.min_incidence,
-                                 label=pheno_col)
+        cohort = load_cohort(pairs).collect().lazy()
+    design = _binary_design(meta, args.sample_col, args.pheno_col,
+                            args.pos_values.split(","), args.neg_values.split(","))
+    hits = run_association_suite(cohort, design, min_incidence=args.min_incidence, label=args.pheno_col)
     if args.oracle:
-        ref = set(pl.read_csv(args.oracle)["cdr3"].to_list())
+        ref = set(pl.read_csv(args.oracle, infer_schema_length=0)["cdr3"].to_list())
         validate_vs_reference(hits, ref, Path(args.oracle).name)
     if args.dataset == "covid19":
         print("\n[α-β co-occurrence]")
@@ -143,14 +168,15 @@ def run_covid(args, pheno_col):
         print(sig.select("a_junction_aa", "b_junction_aa", "theta", "q_value", "e_value").head(10))
 
 
-def _glob_tables(data: Path, meta: pl.DataFrame, sample_col: str) -> "dict[str, str]":
-    ids = set(meta[sample_col].to_list())
-    files = {}
+def _glob_tables(data: Path, meta: pl.DataFrame, sample_col: str) -> "list[tuple[str, str]]":
+    """All clonotype tables (both chains) whose id prefix is in the metadata, as (sid, path)."""
+    ids = {str(x) for x in meta[sample_col].to_list()}
+    pairs = []
     for p in sorted(data.glob("*.txt*")) + sorted(data.glob("*.tsv*")):
         sid = p.name.split("_")[0].split(".")[0]
-        if sid in ids and sid not in files:
-            files[sid] = str(p)
-    return files
+        if sid in ids:
+            pairs.append((sid, str(p)))
+    return pairs
 
 
 def _vdjdb_cmv(path: Path) -> set:
@@ -160,12 +186,22 @@ def _vdjdb_cmv(path: Path) -> set:
     return set(cmv["cdr3"].to_list())
 
 
+#: Per-dataset covid phenotype defaults (positive / negative metadata values).
+_COVID_DEFAULTS = {
+    "covid19": ("sample.COVID_status", "current,past", "healthy"),
+    "covid19_vacc": ("timepoint", "20d_after_vaccination", "before_vaccination"),
+}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset", required=True, choices=["hip", "covid19", "covid19_vacc"])
     ap.add_argument("--data-dir")
     ap.add_argument("--metadata")
     ap.add_argument("--sample-col", default="sample_id")
+    ap.add_argument("--pheno-col", help="metadata phenotype column (covid; per-dataset default)")
+    ap.add_argument("--pos-values", help="comma list of positive phenotype values (covid)")
+    ap.add_argument("--neg-values", help="comma list of negative phenotype values (covid)")
     ap.add_argument("--oracle", help="reference clonotype CSV with a 'cdr3' column")
     ap.add_argument("--vdjdb", help="VDJdb slim TSV (hip CMV validation)")
     ap.add_argument("--min-incidence", type=int, default=8)
@@ -175,10 +211,12 @@ def main():
     t0 = time.perf_counter()
     if args.dataset == "hip":
         run_hip(args)
-    elif args.dataset == "covid19":
-        run_covid(args, pheno_col="COVID_status")
     else:
-        run_covid(args, pheno_col="timepoint")
+        pc, pos, neg = _COVID_DEFAULTS[args.dataset]
+        args.pheno_col = args.pheno_col or pc
+        args.pos_values = args.pos_values or pos
+        args.neg_values = args.neg_values or neg
+        run_covid(args)
     print(f"\ntotal {time.perf_counter() - t0:.1f}s  peakRSS {_rss_gb():.1f} GB")
 
 
