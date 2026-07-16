@@ -220,6 +220,10 @@ chains — in-silico α-β pairing (Howie 2015, Vlasova 2026) and same-chain co-
 
    biomarker.metaclonotypes(cohort)       # group near-identical CDR3s (1-mismatch + V/J) -> meta_id
 
+Explore the whole screen interactively — condition (CMV / HLA-allele / CMH), test, match
+scope, a live VDJdb overlay, and a co-occurrence panel — with
+``marimo edit notebooks/biomarker_explorer.py`` (Emerson HIP via HuggingFace).
+
 Single-cell
 -----------
 
