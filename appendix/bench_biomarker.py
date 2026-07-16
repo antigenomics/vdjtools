@@ -210,14 +210,37 @@ def run_covid(args):
             validate_pairs(cc, _vdjdb_pairs(Path(args.vdjdb)), "VDJdb α-β pairs (any antigen)")
 
 
-def _glob_tables(data: Path, meta: pl.DataFrame, sample_col: str) -> "list[tuple[str, str]]":
-    """All clonotype tables (both chains) whose id prefix is in the metadata, as (sid, path)."""
-    ids = {str(x) for x in meta[sample_col].to_list()}
-    pairs = []
-    for p in sorted(data.glob("*.txt*")) + sorted(data.glob("*.tsv*")):
-        sid = p.name.split("_")[0].split(".")[0]
-        if sid in ids:
-            pairs.append((sid, str(p)))
+def _tables_from_metadata(data: Path, meta: pl.DataFrame, *, file_col: str = "file_name",
+                          sample_col: str = "sample_id",
+                          locus_col: "str | None" = "locus",
+                          chains: "tuple[str, ...] | None" = None) -> "list[tuple[str, str]]":
+    """(sample_id, path) driven by the metadata's own ``file_name -> sample_id`` map.
+
+    NEVER derive the sample id from the filename. The old ``p.name.split("_")[0]`` collapsed every
+    ``p17_*_DNA_*`` file to the id ``"p17"`` — merging 73 distinct donors into one pseudo-subject
+    (and 32 more into ``"p18"``), i.e. 1,157 ids instead of 1,258, with two "donors" holding 105
+    repertoires between them. It only looked correct on the all-12-digit cluster directory.
+    The HF in-repo sheet maps file->sample exactly (2,516/2,516), so use it.
+    """
+    m = meta
+    if chains and locus_col and locus_col in m.columns:
+        m = m.filter(pl.col(locus_col).is_in(list(chains)))
+    pairs, missing = [], 0
+    for r in m.iter_rows(named=True):
+        fn = str(r[file_col])
+        p = data / fn
+        if not p.exists():                       # HF gz vs the sheet's legacy .txt name
+            stem = fn.split(".")[0]
+            hits = sorted(data.glob(f"{stem}.*"))
+            if locus_col and locus_col in m.columns:
+                hits = [h for h in hits if f".{r[locus_col]}." in h.name]
+            p = hits[0] if hits else None
+        if p is None or not p.exists():
+            missing += 1
+            continue
+        pairs.append((str(r[sample_col]), str(p)))
+    if missing:
+        print(f"  {missing} metadata rows have no file on disk", flush=True)
     return pairs
 
 
@@ -261,15 +284,23 @@ def _vdjdb_pairs(path: Path, pattern: "str | None" = None, mhc: "str | None" = N
     - **Antigen-specific association** (COVID status): ``pattern="SARS-CoV-2"``.
     """
     db = pl.read_csv(path, separator="\t", infer_schema_length=0)
-    f = (pl.col("species") == "HomoSapiens") & (pl.col("complex.id") != "0")
+    f = pl.col("species") == "HomoSapiens"
     if pattern:
         f = f & pl.col("antigen.species").str.contains(pattern)
     if mhc:
         f = f & pl.col("mhc.a").str.starts_with(mhc)
-    d = db.filter(f)
-    a = d.filter(pl.col("gene") == "TRA").select("complex.id", pl.col("cdr3").alias("a"))
-    b = d.filter(pl.col("gene") == "TRB").select("complex.id", pl.col("cdr3").alias("b"))
-    j = a.join(b, on="complex.id", how="inner").unique(subset=["a", "b"])
+    # `complex.id` in the SLIM dump is a COMMA-SEPARATED LIST — slim collapses duplicate records,
+    # so one row can belong to many complexes (7,087 rows do). Joining on the raw string pairs two
+    # records only when their entire list is byte-identical, which silently drops most real pairs:
+    # measured 20,169 vs 60,798 exploded. Every earlier alpha-beta validation used the short oracle.
+    d = (db.filter(f)
+         .with_columns(pl.col("complex.id").str.split(",").alias("_cid"))
+         .explode("_cid")
+         .with_columns(pl.col("_cid").str.strip_chars())
+         .filter(pl.col("_cid") != "0"))
+    a = d.filter(pl.col("gene") == "TRA").select("_cid", pl.col("cdr3").alias("a"))
+    b = d.filter(pl.col("gene") == "TRB").select("_cid", pl.col("cdr3").alias("b"))
+    j = a.join(b, on="_cid", how="inner").unique(subset=["a", "b"])
     return set(zip(j["a"].to_list(), j["b"].to_list()))
 
 
