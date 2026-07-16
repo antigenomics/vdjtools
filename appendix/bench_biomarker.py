@@ -90,12 +90,22 @@ def _binary_design(meta, sample_col, col, pos, neg):
 def run_association_suite(cohort, design, *, key=None, min_incidence=8, label=""):
     key = key or (S.JUNCTION_AA, S.V_CALL, S.J_CALL)
     npos = int(design["_pos"].sum())
-    print(f"\n[{label}] association: {len(TESTS)} tests, {npos} pos / {design.height - npos} neg "
-          f"(key={key}, min_incidence={min_incidence})")
+    print(f"\n[{label}] association: {len(TESTS)} tests, design has {npos} pos / "
+          f"{design.height - npos} neg (key={key}, min_incidence={min_incidence})")
     with Timer("association"):
         res = association(cohort, design, test=TESTS, key=key,
                           min_incidence=min_incidence, alternative="greater")
     fis = res.filter(pl.col("test") == "fisher").sort("q_value")
+    # The DESIGN size is not the ANALYSED size: association() inner-joins the design to the
+    # cohort, so subjects with metadata but no repertoire (or vice versa) silently drop out.
+    # n_pos/n_neg on the result are the arms the test actually ran on — report those.
+    if fis.height:
+        a_pos, a_neg = int(fis["n_pos"][0]), int(fis["n_neg"][0])
+        print(f"  ANALYSED arms (design ∩ cohort): {a_pos} pos / {a_neg} neg"
+              + (f"   ⚠ imbalanced {a_pos / max(a_neg, 1):.0f}:1" if a_pos > 5 * a_neg or
+                 a_neg > 5 * a_pos else "")
+              + (f"   ⚠ only {min(a_pos, a_neg)} in the smaller arm"
+                 if min(a_pos, a_neg) < 50 else ""))
     print(f"  features tested: {fis.height}   significant (q<0.05, fisher): "
           f"{fis.filter(pl.col('q_value') < 0.05).height}")
     # cross-test agreement on the top-100 fisher hits
