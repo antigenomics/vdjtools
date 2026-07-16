@@ -189,3 +189,83 @@ def test_depth_strata_retains_a_genuine_pair_in_a_deep_cohort():
     assert hit.height == 1
     assert hit["p_value"][0] < 1e-6, f"planted pair lost by stratification (p={hit['p_value'][0]})"
     assert hit["or_mh"][0] > 1
+
+
+def _mutually_exclusive_cohort(seed=5, n=400, n_both=10):
+    """A and B strongly ANTI-correlated, on a skewed-depth cohort so CMH engages.
+
+    They must still co-occur in ``n_both`` subjects — far BELOW the ~n_a*n_b/n expected — so the
+    pair clears ``min_cooccurrence`` and actually appears in the output. (A strictly alternating
+    fixture gives n_ab=0, the pair is dropped, and the test silently asserts nothing.)
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i in range(n):
+        sid = f"S{i:03d}"
+        depth = max(int(np.exp(rng.normal(np.log(40), 0.9))), 2)
+        rows.append(_c(sid, "TRAV2", "TRAJ2", "CAVBG"))
+        rows.append(_c(sid, "TRBV2", "TRBJ2", "CASSBG"))
+        if i < n_both:                              # the few overlaps: n_ab = n_both
+            rows.append(_c(sid, "TRAV1", "TRAJ1", "CAVRF"))
+            rows.append(_c(sid, "TRBV1", "TRBJ1", "CASSPF"))
+        elif i % 2:                                 # otherwise A xor B -> n_a ~ n_b ~ n/2
+            rows.append(_c(sid, "TRAV1", "TRAJ1", "CAVRF"))
+        else:
+            rows.append(_c(sid, "TRBV1", "TRBJ1", "CASSPF"))
+        for f in range(depth):
+            rows.append(_c(sid, "TRAV9", "TRAJ9", f"CAVF{i}_{f}"))
+            rows.append(_c(sid, "TRBV9", "TRBJ9", f"CASF{i}_{f}"))
+    return pl.DataFrame(rows)
+
+
+def test_cmh_honours_alternative_and_never_ranks_anti_correlated_pairs_as_cooccurring():
+    """A mutually exclusive pair must NOT be a top co-occurrence hit under the CMH default.
+
+    stats.cmh returns a two-sided chi2 p; handing it back unmodified made `alternative` inert, so
+    an ANTI-correlated pair (or_mh -> 0) came back as the rank-1 "co-occurrence" hit at p=3e-78.
+    Callers filter on q_value alone, so direction must be honoured inside the test.
+    """
+    df = _mutually_exclusive_cohort()
+    r = cooccurrence(df, min_incidence=2, min_cooccurrence=1, depth_strata=10)
+    assert "or_mh" in r.columns, "CMH must be engaged for this fixture (skewed depth)"
+    hit = _ab(r)
+    assert hit.height == 1, "the anti-correlated pair must be present to be asserted on"
+    assert hit["theta"][0] < 0.5 and hit["or_mh"][0] < 1, "fixture should be anti-correlated"
+    assert hit["p_value"][0] > 0.5, (
+        f"anti-correlated pair significant under alternative='greater' "
+        f"(p={hit['p_value'][0]:.3g}, or_mh={hit['or_mh'][0]:.3g})")
+    # ... and it must not outrank genuine co-occurrence.
+    top = r.sort("p_value").row(0, named=True)
+    assert not (top["a_junction_aa"] == "CAVRF" and top["b_junction_aa"] == "CASSPF"), \
+        "anti-correlated pair is the rank-1 co-occurrence hit"
+
+    # 'less' finds it; 'greater' does not — the direction must actually do something.
+    rl = _ab(cooccurrence(df, min_incidence=2, min_cooccurrence=1, depth_strata=10,
+                          alternative="less"))
+    rg = _ab(cooccurrence(df, min_incidence=2, min_cooccurrence=1, depth_strata=10,
+                          alternative="greater"))
+    if rl.height and rg.height:
+        assert rl["p_value"][0] < rg["p_value"][0], "alternative= is inert under CMH"
+
+
+def test_cooccurrence_is_reproducible_across_runs():
+    """max_features cuts through an incidence tie band, so candidate order must be deterministic."""
+    rng = np.random.default_rng(2)
+    rows = []
+    for i in range(60):                              # many features sharing one incidence value
+        sid = f"S{i:02d}"
+        for f in range(40):
+            if rng.random() < 0.25:
+                rows.append(_c(sid, "TRAV1", "TRAJ1", f"CAV{f:02d}"))
+                rows.append(_c(sid, "TRBV1", "TRBJ1", f"CAS{f:02d}"))
+    df = pl.DataFrame(rows)
+    kw = dict(min_incidence=2, min_cooccurrence=2, max_features=15, depth_strata=0)
+    runs = [cooccurrence(df, **kw) for _ in range(6)]
+    assert len({r.height for r in runs}) == 1, f"tested counts vary: {[r.height for r in runs]}"
+    for r in runs[1:]:
+        assert r.equals(runs[0]), "identical inputs produced a different pair set"
+
+
+def test_alternative_is_validated():
+    with pytest.raises(ValueError, match="alternative must be"):
+        cooccurrence(_paired_cohort(), alternative="nope")

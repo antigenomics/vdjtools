@@ -94,7 +94,11 @@ def select_candidates(cohort: pl.LazyFrame | pl.DataFrame, *, key: tuple[str, ..
            .filter(pl.col("incidence") >= thr).collect(engine="streaming"))
     if rep is not None:
         inc = inc.join(rep, on="meta_id", how="left")
-    return inc.sort("incidence", descending=True)
+    # Tie-break on the feature key. `incidence` is a small integer, so a `max_features` cut almost
+    # always lands *inside* a tie band; sorting on it alone (polars sort is multithreaded and
+    # `maintain_order=False`) would pick a different subset on every call, making cooccurrence()
+    # irreproducible run-to-run.
+    return inc.sort(["incidence", *idcols], descending=[True] + [False] * len(idcols))
 
 
 def _normalize_design(phenotype: pl.DataFrame | pl.LazyFrame, pheno_col: str | None,

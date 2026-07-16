@@ -103,8 +103,12 @@ def cooccurrence(
         chain_a, chain_b: Loci to pair (e.g. ``"TRA"``/``"TRB"``). ``chain_b=None`` (or equal to
             ``chain_a``) does same-chain pairs (upper triangle, self-pairs excluded).
         key, match: Feature definition and exact/1mm scope (as in :func:`association`).
-        test: ``"fisher"`` or ``"chi2"`` for the per-pair 2×2 p-value. **Ignored when
-            ``depth_strata > 0``** (CMH is used), mirroring :func:`association`'s stratified branch.
+        test: ``"fisher"`` or ``"chi2"`` for the per-pair 2×2 p-value. **Ignored when depth
+            conditioning is active** (CMH is used), mirroring :func:`association`'s stratified
+            branch. It *is* used when the guards below make conditioning fall back to pooled.
+        alternative: ``"greater"`` (default; co-occurrence — the usual question), ``"less"``
+            (mutual exclusion) or ``"two-sided"``. Under CMH the two-sided χ² p is halved toward
+            ``or_mh``, so the direction is honoured on both branches.
         min_incidence, min_incidence_frac: Candidate-feature incidence threshold per chain.
         min_cooccurrence: Keep only pairs co-occurring in ≥ this many subjects.
         candidates_a, candidates_b: Restrict each chain's features to these keys.
@@ -115,6 +119,10 @@ def cooccurrence(
             (uncorrected; kept as the oracle and the De Witt-comparable path). Subject depth is
             the number of distinct ``key`` features that subject contributes to the analysed
             chains — derived from ``cohort``, never supplied, so it cannot disagree with the data.
+            Conditioning needs both a reason and enough data, so it **falls back to the pooled
+            test (with a warning)** when depth barely varies (``CV < 0.45``, i.e. an induced lift
+            under ~1.2) or the cohort cannot fill ≥20 subjects per stratum (<40 subjects). When
+            that happens ``or_mh``/``chi2`` are absent and ``test`` applies.
         max_features: Cap candidate features per chain (top by incidence); logs if it truncates.
 
     Returns:
@@ -129,6 +137,9 @@ def cooccurrence(
     """
     if test not in ("fisher", "chi2"):
         raise ValueError(f"test must be 'fisher' or 'chi2'; got {test!r}")
+    if alternative not in ("greater", "less", "two-sided"):
+        raise ValueError("alternative must be 'greater', 'less' or 'two-sided'; "
+                         f"got {alternative!r}")
     if depth_strata < 0:
         raise ValueError(f"depth_strata must be >= 0; got {depth_strata}")
     chain_b = chain_b or chain_a
@@ -184,7 +195,7 @@ def cooccurrence(
         mh = _cmh_by_depth(cohort, universe, si, M_a, M_b, ia, ib, depth_strata, key,
                            chain_a, chain_b, same)
     if mh is not None:
-        p = mh["p_value"]
+        p = _directional(mh["p_value"], mh["or_mh"], alternative)
     elif test == "fisher":
         p = stats.fisher_p(a, b, c, d, alternative=alternative)
     else:
@@ -205,6 +216,36 @@ def cooccurrence(
         out = out.with_columns(pl.Series("expected", expected),
                                pl.Series("e_value", poisson.sf(n_ab - 1, expected)))
     return out.sort("p_value")
+
+
+def _fallback(why: str):
+    """Warn that depth conditioning was skipped, and return None so the caller pools.
+
+    Silence here would be the worst outcome: the caller asked for the depth-corrected test and
+    would receive the pooled one — measured at a 45-49% false-positive rate on this data — with
+    a missing `or_mh` column as the only clue.
+    """
+    import warnings
+    warnings.warn(f"depth_strata: conditioning skipped — {why}. Falling back to the pooled "
+                  "`test`, which is anticonservative under depth variation; `or_mh`/`chi2` are "
+                  "absent. Pass depth_strata=0 to select the pooled test deliberately.",
+                  stacklevel=3)
+    return None
+
+
+def _directional(p_two: np.ndarray, or_mh: np.ndarray, alternative: str) -> np.ndarray:
+    """Convert the two-sided CMH χ² p to the requested one-tailed p via the MH odds ratio.
+
+    ``stats.cmh`` returns an inherently two-sided 1-df χ² p. Handing it back unmodified would make
+    ``alternative`` inert and — because co-occurrence callers filter on ``q_value`` alone — return
+    **anti**-correlated pairs (``or_mh`` ≪ 1) among the top "co-occurrence" hits.
+    """
+    if alternative == "two-sided":
+        return p_two
+    half = p_two / 2.0
+    with np.errstate(invalid="ignore"):
+        toward = or_mh > 1.0 if alternative == "greater" else or_mh < 1.0
+    return np.where(toward, half, 1.0 - half)
 
 
 def _subject_depth(cohort, key, chains: tuple) -> dict:
@@ -238,18 +279,19 @@ def _cmh_by_depth(cohort, universe, si, M_a, M_b, ia, ib, k, key, chain_a, chain
     # (b) Affordable: CMH over near-empty strata is powerless (and on a shallow cohort a single
     #     clonotype is a large share of S, so depth becomes a mediator of the very pair tested).
     #     Keep ≥MIN_PER_STRATUM subjects per stratum.
-    if Sv.mean() <= 0 or Sv.std() / Sv.mean() < _MIN_DEPTH_CV:
-        return None
+    cv = Sv.std() / Sv.mean() if Sv.mean() > 0 else 0.0
+    if cv < _MIN_DEPTH_CV:
+        return _fallback(f"depth barely varies (CV={cv:.3f} < {_MIN_DEPTH_CV}); the induced lift "
+                         f"is only ~{1 + cv**2:.2f}x, so conditioning would cost power for nothing")
     k_eff = int(min(k, max(1, len(universe) // _MIN_PER_STRATUM)))
     if k_eff < 2:
-        return None
+        return _fallback(f"only {len(universe)} subjects — cannot fill 2 strata of "
+                         f"{_MIN_PER_STRATUM}; CMH over near-empty strata is powerless")
     edges = np.unique(np.quantile(Sv, np.linspace(0, 1, k_eff + 1)[1:-1]))
-    if edges.size == 0:
-        return None                                     # depth is constant → nothing to condition on
-    strata = np.searchsorted(edges, Sv, side="right")
+    strata = np.searchsorted(edges, Sv, side="right") if edges.size else np.zeros(Sv.size, int)
     ns = int(strata.max()) + 1
     if ns < 2:
-        return None
+        return _fallback("depth is constant across subjects — nothing to condition on")
     A = np.empty((ia.size, ns), dtype=np.float64)
     B = np.empty_like(A)
     C = np.empty_like(A)
