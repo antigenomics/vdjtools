@@ -54,8 +54,40 @@ All three via `scripts/biomarker_bench.sbatch`; `key=(junction_aa,v_call,j_call)
 | covid19_vacc (timepoint) | 1,082 (541+/541−) | 5 | **1,390,129** | 269 | — | 85/100 | 0/100 | **100/100** | 3,678 s / 43.7 GB |
 
 α-β **co-occurrence** (covid19, `min_cooccurrence=3`, `min_incidence_frac=0.03`, `evalue=True`):
-481,533 candidate pairs → **2,805 significant** (q<0.05); top θ=9.19 (q=8e-26), strongest q=1.3e-31; 17 s.
+481,528 candidate pairs → **2,802 significant** (q<0.05); θ median **3.07**, p90 4.16, max **9.19**
+(q=8e-26); strongest q=1.3e-31; 17 s. Validated against **VDJdb α-β complexes (any antigen**, 20,169
+pairs — pairing is a receptor property, so the oracle is deliberately *not* antigen-restricted):
+**3/2,802 significant pairs are known VDJdb pairs vs 6/446,232 tested → enrichment OR=158.4,
+p=4.9e-06**. Honest caveat: only 6 known pairs were testable, so this rests on a small oracle overlap
+(Fisher is exact, so the p is valid).
 ⚠ candidate features capped at `max_features=2000` (warned at runtime), i.e. top-incidence pairs only.
+
+#### Co-occurrence confounding — measured, not assumed (`appendix/theta_ceiling.py`)
+
+Cross-subject co-occurrence is confounded by per-subject **repertoire depth** and **shared HLA**
+(see the caveat in `docs/usage.rst`). Both were quantified on this cohort rather than waved at:
+
+| | as shipped (no depth floor) | depth floor ≥1000 clonotypes |
+|---|---|---|
+| Subjects | 552 (min depth **1**, max 90,174, spread 90,174×) | 456 |
+| CV(N) → **θ_depth = 1+CV²** | 0.899 → **1.809** | 0.710 → **1.504** |
+| Candidate / significant pairs | 481,528 / **2,802** (0.58%) | 733,178 / **754** (0.10%) |
+| θ of significant (median / max) | 3.07 / 9.19 | 3.47 / 7.57 |
+| **Above the depth ceiling** | **2,637 / 2,802 = 94.1%** | 744 / 754 = **98.7%** |
+| Above the A\*02:01 composed ceiling (1+CV²)/f | 633 (22.6%) | 476 (63.1%) |
+
+**Reading.** (1) The signal is **not** a depth artifact — 94% of significant pairs exceed the lift
+depth alone can induce. (2) But the count is **depth-sensitive**: a ≥1000-clonotype floor removes
+96 near-empty samples (one has a *single* clonotype) and drops significance 2,802 → **754** while
+*raising* the tested set — i.e. junk samples manufacture ~73% of the hits. **Prefer the floored
+figure for any downstream claim**; the library default applies no floor (depth filtering is the
+caller's `preprocess` choice, not a co-occurrence default). (3) **HLA, not depth, is the binding
+constraint**: only 22.6% (as shipped) / 63.1% (floored) exceed the A\*02:01 ceiling, so shared
+A\*02:01 restriction stays viable for the rest *if both chains are A\*02-restricted*. Only the
+extreme tail (θ=9.19) clears every allele carried by >19.7% of the 466 typed subjects (A\*02:01,
+A\*03:01, A\*01:01, A\*24:02, B\*07:02). **None of this licenses a physical-pairing claim** — a
+cross-subject α-β pair is pairSEQ's *definition of a false positive* (Howie 2015). TODO v2.8: De
+Witt's per-subject bias factor `b_i` or a degree-preserving permutation null.
 
 **Three scale effects** (reproduced independently across cohorts — properties of genome-wide incidence
 testing, not defects): (1) BH-FDR is severe at ~10⁶ features — Emerson-2017 itself thresholds at a

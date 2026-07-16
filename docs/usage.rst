@@ -220,6 +220,33 @@ chains — in-silico α-β pairing (Howie 2015, Vlasova 2026) and same-chain co-
 
    biomarker.metaclonotypes(cohort)       # group near-identical CDR3s (1-mismatch + V/J) -> meta_id
 
+.. warning::
+
+   **Cross-subject co-occurrence is not evidence of physical chain pairing.**
+   :func:`~vdjtools.biomarker.cooccurrence` tests whether two clonotypes occur in the same
+   *subjects* more often than chance. Unlike the randomised wells of a pairSEQ experiment
+   (Howie et al., *Sci Transl Med* 2015), subjects carry HLA type, germline variation,
+   ancestry, sequencing depth and infection history — any of which makes two clonotypes
+   co-occur without ever sharing a cell. In pairSEQ's own framework a *cross-subject* α-β
+   pair is the **definition of a false positive**. Two confounders in particular survive HLA
+   stratification:
+
+   - **Repertoire depth** inflates the lift by ``≈ 1+CV²(N)`` for rare clonotypes,
+     independently of HLA, exposure or pairing (measured on the FMBA covid19 cohort:
+     CV(N)=0.899 → θ_depth=1.81; a ≥1000-clonotype floor drops it to 1.50 *and* removes
+     ~73% of the significant pairs). Filter near-empty samples before reading θ.
+   - **Shared exposure**: two co-specific but unpaired clones stay associated within every
+     stratum — indistinguishable from pairing by any cross-subject contingency table.
+
+   Shared restriction by an allele of carrier frequency *f* cannot induce a lift above
+   ``(1+CV²(N))/f`` (2.04 for HLA-A*02:01 before the depth term), so a θ far above that
+   ceiling is not explicable by *that allele* — though it remains explicable by depth,
+   ancestry, batch or exposure. De Witt et al. (*eLife* 2018) found shared HLA carriage
+   explained the **majority** of strongly co-occurring TCRβ pairs, and restricted all
+   downstream clustering to within-allele subsets. Read ``cooccurrence()`` output as
+   co-occurrence and nothing more; physical pairing is established by within-subject
+   designs (well-based subsampling or single-cell), not cross-subject tables.
+
 Explore the whole screen interactively — condition (CMV / HLA-allele / CMH), test, match
 scope, a live VDJdb overlay, and a co-occurrence panel — with
 ``marimo edit notebooks/biomarker_explorer.py`` (Emerson HIP via HuggingFace).
