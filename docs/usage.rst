@@ -202,12 +202,53 @@ permutation) and three condition types (binary, category, stratified):
    # paired: CMV association conditioned on HLA, combined by Cochran–Mantel–Haenszel
    association(cohort, condition.stratified(meta, "cmv", "hla"), stratum_col="_stratum")
 
-The **match scope** is set by ``key`` (``(junction_aa,)`` / ``+v`` / ``+v+j``) and ``match``
-(``"exact"`` or ``"1mm"``, the latter pooling single-mismatch neighbours via ``metaclonotypes``,
-needs the ``[overlap]`` engine). Candidate features are all public clonotypes
-(``min_incidence`` count or ``min_incidence_frac`` fraction) or an explicit ``candidates`` list
-(:func:`~vdjtools.biomarker.select_candidates`). ``fisher_association`` is kept as the
-Emerson-2017 Fisher shortcut with the original column schema.
+The **match scope** is set by ``key`` (``(junction_aa,)`` / ``+v`` / ``+v+j``) and ``match``:
+
+``"exact"``
+   The feature is the key itself.
+
+``"fuzzy"``
+   A single-mismatch **search**: ``incidence(c) = #subjects carrying ANY feature within `scope`
+   of c``. The candidate **keeps its identity and gains incidence** — the mismatch is an
+   incidence-*estimation* trick, so the output stays a list of individual biomarker clonotypes.
+   Non-``junction_aa`` key columns (V/J) must match exactly, so ``key=(junction_aa, v_call)``
+   pins the germline half of the contact surface while the CDR3 varies by one residue. This is
+   the Vlasova-2026 operation, and it delegates the search to ``vdjmatch.cluster.overlap``.
+
+``"1mm"``
+   **Clustering** via :func:`~vdjtools.biomarker.metaclonotypes`: candidates are *merged* into
+   groups and the group is tested. A legitimate operation, but a different one — it belongs
+   *downstream* of a biomarker list (building a Hamming graph, a classifier), not to discovery.
+   Use ``"fuzzy"`` to find biomarkers; use ``"1mm"`` to group them afterwards.
+
+Candidate features are all public clonotypes (``min_incidence`` count or ``min_incidence_frac``
+fraction) or an explicit ``candidates`` list (:func:`~vdjtools.biomarker.select_candidates`).
+Note that under ``match="fuzzy"`` ``candidates`` is the **query** set only: the search universe
+stays the whole cohort, because a candidate's neighbours are usually not candidates themselves.
+``fisher_association`` is kept as the Emerson-2017 Fisher shortcut with the original schema.
+
+.. admonition:: Choosing the unit — and, if you count rearrangements, the right null
+   :class: important
+
+   The sampling unit is the **subject**. Emerson 2017 tested template-weighted abundance
+   head-to-head against presence/absence and abundance *lost*; weighting a contingency table by
+   reads is pseudoreplication (Hurlbert 1984). ``association`` therefore tests subject incidence.
+
+   If you instead count **rearrangements** (a unique nt row in a repertoire = one recombination
+   event; a CDR3aa reached by three nt variants is three events), the counts are large (~10⁷ in a
+   1,200-donor cohort), so an exact hypergeometric is the wrong tool — use a smooth test
+   (conditional binomial / G-test), not factorials. **The null matters more than the test**: it
+   must be the *subject* ratio ``n_pos/(n_pos+n_neg)``, not the *row* ratio
+   ``N_pos/(N_pos+N_neg)``. Where sequencing depth differs between arms — in our FMBA cohort the
+   controls carry 1.4–1.5× more rearrangements per donor — the two nulls differ by ~15–20%, and
+   any clonotype whose row count does not scale with depth (a public one carried about once per
+   donor regardless) picks up a spurious enrichment of exactly that size. At large counts a 1.4×
+   bias is hyper-significant, so the wrong null does not add noise, it manufactures hits.
+
+   Depth differences also bias the subject test, in the opposite direction: a deeper repertoire
+   is more likely to carry any given clonotype. Where the design allows it — repeated samples of
+   the same donor — down-sample each pair to a common read count
+   (:func:`~vdjtools.preprocess.downsample`) before testing rather than trying to model it away.
 
 **Co-occurrence** tests feature-vs-feature incidence across the subjects profiled for both
 chains — in-silico α-β pairing (Howie 2015, Vlasova 2026) and same-chain co-specificity

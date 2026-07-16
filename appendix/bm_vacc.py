@@ -31,27 +31,41 @@ from scipy.stats import binom, binomtest
 from vdjtools import io as vio
 from vdjtools.biomarker import stats
 from vdjtools.io import schema as S
+from vdjtools.preprocess import downsample
 
 ROOT = Path("/projects/biomarkers/raw/covid19_vacc")
 RES = Path("/projects/biomarkers/results")
-MIN_READS = 10_000
 
 
-def _keys_of(path):
-    df = (vio.read(path, fmt="vdjtools")
-          .filter(pl.col(S.JUNCTION_AA).is_not_null()
-                  & ~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
-          .with_columns(pl.col(S.V_CALL).str.split("*").list.first().alias("v_gene"))
-          .select(S.JUNCTION_AA, "v_gene").unique())
+def _reads_of(path):
+    """Library size = sum(count). The vacc sheet ships no `reads` column, so QC needs this."""
+    return int(vio.read(path, fmt="vdjtools")[S.COUNT].sum())
+
+
+def _load(path, target=None, seed=0):
+    """One repertoire, optionally down-sampled to `target` READS first.
+
+    Down-sampling MUST happen before the productive filter and before any dedup: it is a
+    sampling model over the sequencing library, so it has to see the raw read counts. Delegates
+    to preprocess.downsample (multivariate hypergeometric, seeded) -- not a hand-rolled draw.
+    """
+    df = vio.read(path, fmt="vdjtools")
+    if target is not None:
+        df = downsample(df, target, by="reads", seed=seed)
+    return (df.filter(pl.col(S.JUNCTION_AA).is_not_null()
+                      & ~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
+            .with_columns(pl.col(S.V_CALL).str.split("*").list.first().alias("v_gene")))
+
+
+def _keys_of(a):
+    path, target, seed = a
+    df = _load(path, target, seed).select(S.JUNCTION_AA, "v_gene").unique()
     return list(zip(df[S.JUNCTION_AA].to_list(), df["v_gene"].to_list()))
 
 
 def _rows_of(a):
-    path, sid, keep = a
-    df = (vio.read(path, fmt="vdjtools")
-          .filter(pl.col(S.JUNCTION_AA).is_not_null()
-                  & ~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
-          .with_columns(pl.col(S.V_CALL).str.split("*").list.first().alias("v_gene"))
+    path, sid, keep, target, seed = a
+    df = (_load(path, target, seed)
           .group_by([S.JUNCTION_AA, "v_gene"])
           .agg(pl.col(S.JUNCTION_NT).n_unique().alias("n_rearr"))
           .join(keep, on=[S.JUNCTION_AA, "v_gene"], how="semi"))
@@ -80,6 +94,11 @@ def main():
     ap.add_argument("--chain", default="TRB", choices=["TRA", "TRB"])
     ap.add_argument("--arm", default="timepoint", choices=["timepoint", "vaccine"])
     ap.add_argument("--min-donors", type=int, default=2)
+    ap.add_argument("--min-reads", type=int, default=100_000,
+                    help="QC: BOTH members of a donor's pair must clear this, else the donor is "
+                         "dropped entirely -- QCing samples independently would break the pairing")
+    ap.add_argument("--no-downsample", action="store_true")
+    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     print(f"=== vacc {args.chain} {args.arm}  key=V+CDR3aa±1mm ===", flush=True)
 
@@ -95,7 +114,7 @@ def main():
 
     if args.arm == "timepoint":
         design = (m.select(pl.col("full_id").cast(pl.String).alias("sample_id"),
-                           pl.col("name").cast(pl.String).alias("donor"),
+                           pl.col("id").cast(pl.String).str.replace(r"\.0$", "").alias("donor"),
                            pl.when(pl.col("timepoint").str.contains("(?i)after")).then(True)
                              .when(pl.col("timepoint").str.contains("(?i)before")).then(False)
                              .otherwise(None).alias("_pos"))
@@ -103,7 +122,7 @@ def main():
     else:
         design = (m.filter(pl.col("timepoint").str.contains("(?i)after"))
                   .select(pl.col("full_id").cast(pl.String).alias("sample_id"),
-                          pl.col("name").cast(pl.String).alias("donor"),
+                          pl.col("id").cast(pl.String).str.replace(r"\.0$", "").alias("donor"),
                           pl.when(pl.col("vaccine") == "GamCOVIDVac").then(True)
                             .when(pl.col("vaccine") == "CoviVac").then(False)
                             .otherwise(None).alias("_pos"))
@@ -130,7 +149,71 @@ def main():
         return
 
     nthreads = os.cpu_count() or 8
-    total = pool_incidence([p for p, _ in files], nthreads)
+
+    # ---- QC + PER-PAIR DEPTH EQUALISATION -------------------------------------------------
+    # The confound this fixes: the "after" arm was 29% deeper (12,854 vs 9,936 rows/donor), so a
+    # deeper second sample gains clonotypes for free and every test -- McNemar included -- reads
+    # that as vaccine response. McNemar makes the donor its own control for HLA and prior
+    # exposure but NOT for depth, because it is the same donor's deeper sample.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=nthreads) as ex:
+        reads = dict(zip([s for _, s in files],
+                         ex.map(_reads_of, [p for p, _ in files])))
+    sid2donor = dict(zip(design["sample_id"].to_list(), design["donor"].to_list()))
+    bydonor = {}
+    for s, r in reads.items():
+        bydonor.setdefault(sid2donor[s], []).append((s, r))
+
+    # BOTH members must clear --min-reads, else drop the DONOR (not just the bad sample):
+    # keeping the survivor would silently unbalance the pairing.
+    tgt, kept_donors, dropped_qc, dropped_unpaired = {}, 0, 0, 0
+    if args.arm == "timepoint":
+        # PAIRED: both members must clear QC, and both are cut to the pair's own min so the
+        # within-donor comparison is depth-neutral by construction.
+        for d, ss in bydonor.items():
+            if len(ss) < 2:
+                dropped_unpaired += 1
+                continue
+            if min(r for _, r in ss) < args.min_reads:
+                dropped_qc += 1
+                continue
+            t = None if args.no_downsample else min(r for _, r in ss)
+            for s, _ in ss:
+                tgt[s] = t
+            kept_donors += 1
+    else:
+        # UNPAIRED (vaccine A vs B, after-samples only): there is no pair to equalise against,
+        # so QC per sample and cut everything to ONE common depth -- the cohort-wide min among
+        # survivors. Reusing the paired branch here would drop every donor as "unpaired".
+        ok = {s: r for s, r in reads.items() if r >= args.min_reads}
+        dropped_qc = len(reads) - len(ok)
+        common = min(ok.values()) if ok else 0
+        for s in ok:
+            tgt[s] = None if args.no_downsample else common
+        kept_donors = len(ok)
+    files = [(p, s) for p, s in files if s in tgt]
+    rd = [r for s, r in reads.items() if s in tgt]
+    if not rd:
+        print(f"  NOTHING survived QC/pairing (kept {kept_donors}, qc {dropped_qc}, "
+              f"unpaired {dropped_unpaired}) -- check the donor key", flush=True)
+        return
+    print(f"  QC reads>={args.min_reads:,} on BOTH pair members: kept {kept_donors} donors "
+          f"({len(files)} samples); dropped {dropped_qc} on QC, {dropped_unpaired} unpaired",
+          flush=True)
+    print(f"  reads/sample: median {int(np.median(rd)):,} min {min(rd):,} max {max(rd):,}",
+          flush=True)
+    if not args.no_downsample:
+        ts = sorted({v for v in tgt.values() if v})
+        print(f"  DOWNSAMPLE to per-pair min reads: median target {int(np.median(ts)):,} "
+              f"(min {min(ts):,} max {max(ts):,}); seed={args.seed}", flush=True)
+    design = design.filter(pl.col("sample_id").is_in(list(tgt)))
+    n_pos = int(design["_pos"].sum())
+    print(f"  design after QC: {n_pos}+ / {design.height-n_pos}-", flush=True)
+    if not (n_pos and design.height - n_pos):
+        print("  degenerate arms after QC -- stop", flush=True)
+        return
+
+    total = pool_incidence([(p, tgt.get(s), args.seed) for p, s in files], nthreads)
     keep = pl.DataFrame(
         {S.JUNCTION_AA: [k[0] for k, n in total.items() if n >= args.min_donors],
          "v_gene": [k[1] for k, n in total.items() if n >= args.min_donors]})
@@ -140,7 +223,8 @@ def main():
     from concurrent.futures import ThreadPoolExecutor
     parts = []
     with ThreadPoolExecutor(max_workers=nthreads) as ex:
-        for d in ex.map(_rows_of, [(p, s, keep) for p, s in files]):
+        for d in ex.map(_rows_of, [(p, s, keep, tgt.get(s), args.seed)
+                                   for p, s in files]):
             if d is not None:
                 parts.append(d)
     rows = pl.concat(parts, how="vertical_relaxed").join(design, on="sample_id", how="inner")
