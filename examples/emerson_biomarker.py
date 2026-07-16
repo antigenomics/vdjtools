@@ -232,8 +232,8 @@ def _(mo):
 
 @app.cell
 def _(S, a02_ph, cmv_ph, fisher_association, key, lf, match, min_inc, phenotype):
-    _KEYS = {"vj": (S.CDR3_AA, S.V_CALL, S.J_CALL),
-             "v": (S.CDR3_AA, S.V_CALL), "cdr3": (S.CDR3_AA,)}
+    _KEYS = {"vj": (S.JUNCTION_AA, S.V_CALL, S.J_CALL),
+             "v": (S.JUNCTION_AA, S.V_CALL), "cdr3": (S.JUNCTION_AA,)}
     _is_cmv = phenotype.value == "cmv"
     res = fisher_association(
         lf, cmv_ph if _is_cmv else a02_ph, pheno_col="pheno",
@@ -261,7 +261,7 @@ def _(OKABE, logp, np, phenotype, plot_df, plt, vdjdb_cmv):
     _x = plot_df["log2_or"].to_numpy()
     _y = np.clip(-np.log10(plot_df["p_value"].to_numpy()), 0, 40)
     _hit = _y >= logp.value
-    _val = (plot_df["cdr3_aa"].is_in(list(vdjdb_cmv["cdr3"])).to_numpy()
+    _val = (plot_df["junction_aa"].is_in(list(vdjdb_cmv["cdr3"])).to_numpy()
             if vdjdb_cmv is not None else np.zeros(len(_x), bool)) & _hit
 
     figv, axv = plt.subplots(figsize=(7.6, 5.2))
@@ -288,13 +288,13 @@ def _(logp, mo, pl, res, top, vdjdb_cmv):
     n_hits = res.filter(pl.col("p_value") < _thr).height          # true count over all features
     n_q = res.filter(pl.col("q_value") < 0.05).height
     disp = top.filter(pl.col("p_value") < _thr)                   # top hits (≤200) to show
-    _cols = (["cdr3_aa"] + [c for c in ("v_call", "j_call") if c in disp.columns]
+    _cols = (["junction_aa"] + [c for c in ("v_call", "j_call") if c in disp.columns]
              + ["incidence", "n_pos_present", "odds_ratio", "p_value", "q_value"])
     if vdjdb_cmv is not None:
-        table = (disp.join(vdjdb_cmv, left_on="cdr3_aa", right_on="cdr3", how="left")
+        table = (disp.join(vdjdb_cmv, left_on="junction_aa", right_on="cdr3", how="left")
                  .select(_cols + ["epitope", "mhc"]).sort("p_value"))
-        n_val = disp.join(vdjdb_cmv, left_on="cdr3_aa", right_on="cdr3",
-                          how="semi")["cdr3_aa"].n_unique()
+        n_val = disp.join(vdjdb_cmv, left_on="junction_aa", right_on="cdr3",
+                          how="semi")["junction_aa"].n_unique()
         _val_msg = f" · **{n_val} matched to VDJdb-CMV** (exact CDR3)"
     else:
         table = disp.select(_cols).sort("p_value")
@@ -331,7 +331,7 @@ def _(mo, top, vdjdb_cmv):
     else:
         try:
             import vdjmatch.cluster as _vc
-            _ours = top["cdr3_aa"].unique().to_list()
+            _ours = top["junction_aa"].unique().to_list()
             _ref = vdjdb_cmv["cdr3"].unique().to_list()
             _pairs = _vc.overlap(_ours, _ref, scope="1,0,0,1")
             _n1 = _pairs["a_idx"].n_unique() if _pairs.height else 0

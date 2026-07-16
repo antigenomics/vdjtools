@@ -67,8 +67,9 @@ def test_cmh_controls_a_confounded_association():
     # The marginal Fisher is significant; after stratifying by HLA (CMH) it vanishes.
     rows, meta = [], []
     sid = 0
-    for hla, pos_rate, carry_rate, n in [("A*02", 0.85, 0.85, 40), ("A*01", 0.15, 0.15, 40)]:
-        rng = np.random.default_rng(hash(hla) % 100)
+    for si, (hla, pos_rate, carry_rate, n) in enumerate(
+            [("A*02", 0.85, 0.85, 40), ("A*01", 0.15, 0.15, 40)]):
+        rng = np.random.default_rng(si)                 # deterministic seed (not hash())
         for _ in range(n):
             s = f"S{sid:03d}"
             sid += 1

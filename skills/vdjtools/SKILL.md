@@ -81,7 +81,16 @@ default or `"sigmoid"` = Vlasova 2026 z-score + grand-mean-preserving sigmoid), 
 (rescale + roulette-wheel resample the clonotype table to the corrected usage).
 
 ### `vdjtools.biomarker`
-`fisher_association` (incidence Fisher vs phenotype; V/J-match, exact/1mm), `metaclonotypes`.
+Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Witt 2018 / Vlasova 2026).
+- `association(cohort, design, *, test=, level_col=, stratum_col=, key=, match=, min_incidence[_frac]=,
+  candidates=, alternative=)` — feature-vs-condition; `test` ∈ {`fisher`,`chi2`,`bayes_logodds`,
+  `bayes_bf`,`permutation`} (str or list → long output w/ `test` col); category via `level_col` (one-vs-rest),
+  paired via `stratum_col` (Cochran–Mantel–Haenszel). Match scope = `key` (`(junction_aa,)`/`+v`/`+v+j`) × `match` (`exact`/`1mm`).
+- `cooccurrence(cohort, *, chain_a=, chain_b=, test=, min_incidence[_frac]=, min_cooccurrence=, evalue=)` —
+  feature-vs-feature θ=n·n_AB/(n_A·n_B) + Fisher/χ² + FDR; α-β pairing (chain_a≠chain_b) or same-chain (chain_b=None).
+- `condition` builders: `binary`, `categorical`, `hla_alleles`, `zygosity`, `stratified` → design frame (`_pos`/`_level`/`_stratum`).
+- `select_candidates` (public features over incidence count/fraction), `stats` (vectorised 2×2 kernels),
+  `fisher_association` (Emerson Fisher shortcut, legacy schema), `metaclonotypes` (1mm grouping).
 
 ### `vdjtools.sc` — single-cell (AIRR Cell / 10x)
 `read_10x`, `read_airr_cell`, `write_airr_cell`; `resolve_chains`, `pair_chains`,

@@ -166,14 +166,20 @@ usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoi
 fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")
 ```
 
-Incidence-based biomarkers (Fisher association, Emerson-2017 design) and single-cell paired-chain
-Pgen are one call each:
+Incidence-based clonotype association (Emerson 2017 / Howie 2015 / De Witt 2018 / Vlasova 2026)
+— a choice of test, condition, and co-occurrence — and single-cell paired-chain Pgen:
 
 ```python
-from vdjtools.biomarker import fisher_association
-from vdjtools import sc
+from vdjtools import biomarker, sc
+from vdjtools.biomarker import association, condition
 
-fisher_association(cohort, phenotype, pheno_col="cmv")   # enriched/depleted clonotypes + p-values
+# feature vs condition: Fisher / chi2 / Bayesian / permutation; binary, per-HLA-allele, or CMH-stratified
+association(cohort, condition.binary(meta, "cmv"), test=["fisher", "bayes_bf"])
+association(cohort, condition.stratified(meta, "cmv", "hla"), stratum_col="_stratum")  # CMV | HLA (CMH)
+
+# feature vs feature: in-silico α-β pairing / same-chain co-specificity (θ lift + Fisher + FDR)
+biomarker.cooccurrence(cohort, chain_a="TRA", chain_b="TRB", evalue=True)
+
 sc.paired_pgen(sc.pair_chains(sc.read_10x("filtered_contig_annotations.csv")))  # pgen_alpha·pgen_beta
 ```
 
@@ -216,7 +222,7 @@ suites (`RUN_BENCHMARK=1`).
 - **Features** — CDR physicochemical profiles, k-mer / V+k-mer summaries.
 - **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree), similarity-aware overlap, clustering.
 - **Preprocess** — downsampling, error-correction, VJ-usage batch-effect correction, pooling/joining.
-- **Biomarker** — incidence-based association (Fisher) vs HLA / condition / chain-pairing; metaclonotypes.
+- **Biomarker** — incidence association (Fisher / χ² / Bayesian / permutation) vs binary / HLA-allele / CMH-stratified conditions; α-β & same-chain co-occurrence pairing; metaclonotypes.
 - **Single-cell** — AIRR Cell / 10x interoperability, chain pairing + QC, and paired α/β Pgen.
 
 ## License

@@ -170,31 +170,55 @@ depth are preserved.
 Biomarker association
 ---------------------
 
-:mod:`vdjtools.biomarker` finds clonotypes whose **incidence** (presence across subjects)
-associates with a phenotype, by Fisher-exact test (the Emerson-2017 design):
+:mod:`vdjtools.biomarker` tests each clonotype **feature**'s incidence (presence across
+subjects) against a condition — the incidence-contingency framework of Emerson 2017, Howie
+2015, De Witt 2018 and Vlasova 2026. ``association`` shares one streamed subject-incidence
+table across five tests (Fisher, χ², Bayesian log-odds, Beta-Binomial Bayes factor,
+permutation) and three condition types (binary, category, stratified):
 
 .. code-block:: python
 
    import polars as pl
-   from vdjtools.biomarker import fisher_association, metaclonotypes
+   from vdjtools import biomarker
+   from vdjtools.biomarker import association, condition
 
-   # cohort: long frame with a sample_id column; phenotype: one row per subject
+   # cohort: long frame with a sample_id column; meta: one row per subject
    cohort = pl.DataFrame({
        "sample_id":   ["p0","p1","p2","n0","n1","n2"],
        "v_call":      ["TRBV1"]*6, "j_call": ["TRBJ1"]*6,
        "junction_aa": ["CASSXF","CASSXF","CASSXF","CASSXF","CASSBG","CASSBG"],
        "duplicate_count": [10]*6,
    })
-   pheno = pl.DataFrame({"sample_id": ["p0","p1","p2","n0","n1","n2"],
-                         "cmv": [True, True, True, False, False, False]})
+   meta = pl.DataFrame({"sample_id": ["p0","p1","p2","n0","n1","n2"],
+                        "cmv": ["+","+","+","-","-","-"], "hla": ["A*02"]*3 + ["A*01"]*3})
 
-   fisher_association(cohort, pheno, pheno_col="cmv")
-   # per feature: incidence, n_pos_present, n_neg_present, direction, log2_or, p_value
+   # binary condition, several tests at once (long output with a `test` column)
+   association(cohort, condition.binary(meta, "cmv"),
+               test=["fisher", "chi2", "bayes_bf"])
 
-   metaclonotypes(cohort)                 # group near-identical CDR3s (1-mismatch + V/J) -> meta_id
+   # category: one-vs-rest per HLA allele (Emerson/DeWitt); add a `level` column
+   association(cohort, condition.hla_alleles(meta, ["hla"]), level_col="_level")
 
-Use ``match="1mm"`` on ``fisher_association`` to pool single-mismatch neighbours of each
-clonotype (needs the ``[overlap]`` engine).
+   # paired: CMV association conditioned on HLA, combined by Cochran–Mantel–Haenszel
+   association(cohort, condition.stratified(meta, "cmv", "hla"), stratum_col="_stratum")
+
+The **match scope** is set by ``key`` (``(junction_aa,)`` / ``+v`` / ``+v+j``) and ``match``
+(``"exact"`` or ``"1mm"``, the latter pooling single-mismatch neighbours via ``metaclonotypes``,
+needs the ``[overlap]`` engine). Candidate features are all public clonotypes
+(``min_incidence`` count or ``min_incidence_frac`` fraction) or an explicit ``candidates`` list
+(:func:`~vdjtools.biomarker.select_candidates`). ``fisher_association`` is kept as the
+Emerson-2017 Fisher shortcut with the original column schema.
+
+**Co-occurrence** tests feature-vs-feature incidence across the subjects profiled for both
+chains — in-silico α-β pairing (Howie 2015, Vlasova 2026) and same-chain co-specificity
+(De Witt 2018) — by the lift ``θ = n·n_AB/(n_A·n_B)`` + Fisher/χ² + FDR:
+
+.. code-block:: python
+
+   biomarker.cooccurrence(cohort, chain_a="TRA", chain_b="TRB", evalue=True)   # α-β pairs
+   biomarker.cooccurrence(cohort, chain_a="TRB", chain_b=None)                  # same-chain pairs
+
+   biomarker.metaclonotypes(cohort)       # group near-identical CDR3s (1-mismatch + V/J) -> meta_id
 
 Single-cell
 -----------
