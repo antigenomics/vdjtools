@@ -87,15 +87,23 @@ Cross-subject co-occurrence is confounded by per-subject **repertoire depth** an
 (see the caveat in `docs/usage.rst`). Depth was quantified, then **fixed**; HLA remains a caveat.
 
 **Depth.** Subjects span **1 → 90,174** unique clonotypes (CV=0.899), inducing a lift
-`θ_depth = 1+CV² = 1.809` for rare clonotypes with no biology whatsoever. A simulation matched to
-this distribution (2,000 null pairs/config) measured what that does to a **pooled** test — and
-`max_features=2000` keeps the top features *by incidence*, so the tool operates in the worst column:
+`θ_depth = 1+CV² = 1.809` for rare clonotypes with no biology whatsoever. `appendix/cooccurrence_fpr.py`
+(seed 20260716; 2,000 null pairs/config; depth lognormal at the cohort's CV) measures what that does
+to a **pooled** test — and `max_features=2000` keeps the top features *by incidence*, so the tool
+operates in the worst column:
 
 | false-positive rate @ nominal p<0.05 (calibrated = 0.05) | 2% incidence | 3% | **11%** |
 |---|---|---|---|
-| pooled Fisher (the pre-2.7.0 default) | 0.045 | 0.069 | **0.492** |
-| depth-weighted / "x of X rearrangements" incidence | 0.302 | 0.461 | 0.887 |
-| **CMH over depth strata (the 2.7.0 default)** | **0.024** | **0.031** | **0.057** |
+| pooled Fisher (the pre-2.7.0 default) | 0.052 | 0.073 | **0.456** |
+| **CMH over depth strata (the 2.7.0 default)** | **0.023** | **0.022** | **0.036** |
+
+The **depth-weighted / "x of X rearrangements"** variant was evaluated and **rejected as not a
+well-defined test**, not on its rate: a hypergeometric is a statement about drawing discrete units,
+so feeding it sums of depths silently asserts ΣS≈7e6 exchangeable pseudo-observations in place of 552
+subjects. Its "FPR" is then an artifact of the variant written — the formulation in
+`cooccurrence_fpr.py` degenerates conservative (→0.000), while one rescaling the weights to keep *n*
+fixed degenerates anticonservative (→0.9). Unusable in either direction. (An earlier revision of this
+file quoted 0.302/0.461/0.887 as measured; that number is not reproducible and is withdrawn.)
 
 **⚠ Correction.** An earlier revision of this file argued the signal was *"not a depth artifact —
 94.1% of significant pairs exceed θ_depth=1.809"*. **That reasoning is invalid**: `θ_depth=1+CV²`
@@ -103,18 +111,26 @@ is the null **mean**, not a tail quantile, so ~half of *pure-null* pairs exceed 
 and conditioning on significance selects the high-θ ones. ~94% is what a null screen *should*
 produce. The claim is withdrawn; the table above measures the thing that actually matters.
 
-**Effect of the fix on the real cohort** (`appendix/accept_gate.py`, all 552 subjects):
+**Effect of the fix on the real cohort** (`appendix/accept_gate.py`, all 552 subjects; **one
+deterministic run** — both arms share the identical candidate set, so this is a controlled A/B in
+which only the conditioning differs):
 
 | covid19 α-β co-occurrence | tested | significant (q<0.05) | θ median / max | median `or_mh` | time |
 |---|---|---|---|---|---|
-| `depth_strata=0` (pooled, uncorrected) | 481,587 | **2,805** | 3.07 / 9.19 | — | 16 s |
-| **`depth_strata=10` (default)** | 481,501 | **502** | 3.52 / 9.19 | **8.97** | 11 s |
+| `depth_strata=0` (pooled, uncorrected) | 481,579 | **2,804** | 3.07 / 9.19 | — | 16 s |
+| **`depth_strata=10` (default)** | 481,579 | **641** | 3.38 / 9.19 | **8.30** | 10 s |
 | ≥1000-clonotype floor + pooled (diagnostic) | 733,178 | 754 | 3.47 / 7.57 | — | — |
 
-Depth conditioning removes **82%** of the pooled hits *without discarding a subject*, is more
-conservative than the depth floor (502 < 754), and the survivors have a higher θ and a strong
-depth-conditioned `or_mh`. **502 is the defensible figure.** The depth floor is now a diagnostic,
-not required preprocessing.
+Depth conditioning removes **77%** of the pooled hits *without discarding a subject*, and the
+survivors have a higher θ and a strong depth-conditioned `or_mh`. **641 is the defensible figure.**
+The depth floor is now a diagnostic, not required preprocessing.
+
+⚠ **Earlier revisions of this file reported 2,805 / 502 / "82%" and three different tested counts
+(481,538 / 481,501 / 481,587) for one configuration.** Those predate two fixes and are withdrawn:
+candidate selection was nondeterministic (an incidence tie-break, so `max_features` cut a different
+set every call — the arms were never comparable), and the CMH branch ignored `alternative`, making
+the "corrected" arm a *two-sided* test whose hits included anti-correlated pairs. The table above is
+a single post-fix run with a stable tested count in both arms.
 
 **HLA is the remaining binding constraint — untouched by this.** Shared restriction by an allele of
 carrier frequency *f* cannot induce a lift above `(1+CV²)/f`; only the extreme tail (θ=9.19) clears
