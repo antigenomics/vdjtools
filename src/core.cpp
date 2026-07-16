@@ -2,6 +2,6 @@
 
 namespace vdjtools {
 
-const char* version() { return "2.6.0"; }
+const char* version() { return "2.7.0"; }
 
 }  // namespace vdjtools

@@ -6,7 +6,7 @@
 
 int main() {
     using namespace vdjtools;
-    assert(std::string(version()) == "2.6.0");
+    assert(std::string(version()) == "2.7.0");
     std::puts("ok");
     return 0;
 }

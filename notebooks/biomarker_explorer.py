@@ -193,12 +193,14 @@ def _(cond, np, pl, res):
     # Choose the y-axis for whichever test produced `res` (p-based, Bayes-factor, or posterior).
     _cols = res.columns
     if "p_value" in _cols:
-        y = np.clip(-np.log10(res["p_value"].to_numpy()), 0, 40); ylab = "−log10 p"; thr_kind = "p"
+        y = np.clip(-np.log10(res["p_value"].to_numpy()), 0, 40)
+        ylab, thr_kind = "−log10 p", "p"
     elif "log_bf" in _cols:
-        y = np.clip(res["log_bf"].to_numpy(), -5, 40); ylab = "log Bayes factor"; thr_kind = "bf"
+        y = np.clip(res["log_bf"].to_numpy(), -5, 40)
+        ylab, thr_kind = "log Bayes factor", "bf"
     else:  # bayes_logodds → posterior P(OR>1)
         y = np.clip(-np.log10(1 - np.clip(res["p_or_gt1"].to_numpy(), 0, 1 - 1e-12)), 0, 40)
-        ylab = "−log10 (1 − P(OR>1))"; thr_kind = "p"
+        ylab, thr_kind = "−log10 (1 − P(OR>1))", "p"
     x = res["log2_or"].to_numpy() if "log2_or" in _cols else np.zeros(len(y))
     juncs = res["junction_aa"] if "junction_aa" in _cols else pl.Series([""] * len(y))
     is_cmv = cond.value == "cmv"
