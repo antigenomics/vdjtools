@@ -109,8 +109,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", default="status", choices=["status", "hla"])
     ap.add_argument("--top", type=int, default=5)
+    ap.add_argument("--scope", default="1mm", choices=["exact", "1mm"],
+                    help="1mm is the default. `exact` additionally reproduces Emerson faithfully "
+                         "-- his 164 TCRb came from exact V+CDR3aa incidence; 1mm is Vlasova's "
+                         "addition -- so it is worth running as its own arm, not as a fallback.")
     args = ap.parse_args()
-    print(f"=== hip CMV {args.arm}  key=V+CDR3aa±1mm ===", flush=True)
+    key = "V+CDR3aa" if args.scope == "exact" else "V+CDR3aa±1mm"
+    print(f"=== hip CMV {args.arm}  key={key} ===", flush=True)
 
     meta = pl.read_csv(ROOT / "metadata.txt", separator="\t", infer_schema_length=0)
     design = (meta.select(pl.col("sample_id").cast(pl.String),

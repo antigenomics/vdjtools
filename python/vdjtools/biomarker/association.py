@@ -32,20 +32,59 @@ from .metaclonotype import metaclonotypes
 _TESTS = ("fisher", "chi2", "bayes_logodds", "bayes_bf", "permutation")
 
 
+def _fuzzy_feature_frame(lf: pl.LazyFrame, key: tuple[str, ...], *, scope: str, threads: int,
+                         candidates: pl.DataFrame | None):
+    """Fuzzy-**search** incidence: each candidate keeps its identity and gains incidence.
+
+    ``incidence(c) = # subjects carrying ANY feature within `scope` of c`` (itself included).
+    The 1-mismatch is an incidence-*estimation* trick, not a grouping: the output is a list of
+    individual biomarker clonotypes. Contrast :func:`metaclonotypes` (``match="1mm"``), which
+    MERGES candidates into groups and tests the group — a legitimate but different operation,
+    and the one to use *downstream* of a biomarker list, not to build it.
+
+    Non-``junction_aa`` key columns (V/J) must match EXACTLY between the candidate and the
+    neighbour, so ``key=(junction_aa, v_call)`` pins the germline half of the contact surface
+    while the CDR3 is allowed to vary by one residue.
+
+    The search delegates to :func:`vdjmatch.cluster.overlap` (seqtree-backed) — never a
+    hand-rolled Hamming scan.
+    """
+    aa = S.JUNCTION_AA
+    other = [c for c in key if c != aa]
+    rows = lf.select([*key, SAMPLE_ID]).unique().collect()
+    universe = rows[aa].unique().sort().to_list()
+    cand = (candidates.select(list(key)).unique() if candidates is not None
+            else rows.select(list(key)).unique()).sort(list(key))
+    cq = cand[aa].unique().sort().to_list()
+    if not cq or not universe:
+        return rows.lazy().select([*key, SAMPLE_ID]), list(key), None
+
+    import vdjmatch.cluster as vc
+    pairs = vc.overlap(cq, universe, scope=scope, threads=threads)
+    qmap = pl.DataFrame({"a_idx": np.arange(len(cq), dtype=np.int64), "_cand": cq})
+    umap = pl.DataFrame({"b_idx": np.arange(len(universe), dtype=np.int64), aa: universe})
+    nb = (pairs.join(qmap, on="a_idx", how="inner").join(umap, on="b_idx", how="inner")
+          .select("_cand", aa))
+    feat = (nb.join(cand.rename({aa: "_cand"}), on="_cand", how="inner")
+            .join(rows, on=[aa, *other], how="inner")
+            .select([pl.col("_cand").alias(aa), *other, SAMPLE_ID]).unique())
+    return feat.lazy(), list(key), None
+
+
 def _feature_frame(cohort: pl.LazyFrame | pl.DataFrame, key: tuple[str, ...], match: str, *,
                    productive_only: bool, strip_allele: bool, scope: str, threads: int,
                    candidates: pl.DataFrame | None = None):
     """Feature-engineer the cohort and resolve the feature id columns.
 
     Returns ``(feat_lf, idcols, rep)`` where ``feat_lf`` has ``[*idcols, sample_id]``, ``idcols``
-    is ``list(key)`` (exact) or ``["meta_id"]`` (1mm), and ``rep`` is the per-metaclonotype
+    is ``list(key)`` (exact/fuzzy) or ``["meta_id"]`` (1mm), and ``rep`` is the per-metaclonotype
     representative frame (or ``None``).
     """
     key = tuple(key)
     if S.JUNCTION_AA not in key:
         raise ValueError(f"key must include {S.JUNCTION_AA!r}; got {key}")
-    if match not in ("exact", "1mm"):
-        raise ValueError(f"match must be 'exact' or '1mm'; got {match!r}")
+    if match not in ("exact", "fuzzy", "1mm"):
+        raise ValueError(f"match must be 'exact', 'fuzzy' or '1mm'; got {match!r}")
 
     lf = cohort.lazy().filter(pl.col(S.JUNCTION_AA).is_not_null())
     if productive_only:
@@ -54,12 +93,18 @@ def _feature_frame(cohort: pl.LazyFrame | pl.DataFrame, key: tuple[str, ...], ma
         for c in (S.V_CALL, S.J_CALL):
             if c in key:
                 lf = lf.with_columns(S.strip_allele(pl.col(c)).alias(c))
-    if candidates is not None:
+    if candidates is not None and match != "fuzzy":
+        # NOT for fuzzy: `candidates` is the QUERY set there, while the search universe must
+        # stay the whole cohort — a candidate's 1mm neighbours are usually not candidates
+        # themselves, and dropping them would silently under-count fuzzy incidence.
         cand = candidates.lazy().select(list(key)).unique()
         lf = lf.join(cand, on=list(key), how="semi")
 
     if match == "exact":
         return lf.select([*key, SAMPLE_ID]), list(key), None
+    if match == "fuzzy":
+        return _fuzzy_feature_frame(lf, key, scope=scope, threads=threads,
+                                    candidates=candidates)
 
     uniq_keys = lf.select(list(key)).unique().collect()
     mm = metaclonotypes(uniq_keys, scope=scope, match_v=(S.V_CALL in key),
