@@ -79,19 +79,27 @@ def pool_incidence(paths, threads):
 
     Memory is O(unique keys), NOT O(total rows). hip is 144.8M (CDR3aa,V,donor) rows over 761
     immunoSEQ repertoires (~190k clonotypes/donor). Concatenating them and THEN calling
-    group_by blows 370G and stalls before vdjmatch is ever reached (measured: jobs 1417286 OOM,
-    1417291 stalled 41min). Only the pooled counter stays resident: each file is read, deduped
-    within the donor, folded in, and dropped.
+    group_by is O(rows) resident: it OOM'd at 370G (job 1417286) and stalled 41min (1417291) --
+    both before vdjmatch was ever called. Only the pooled counter stays resident here: each file
+    is read, deduped within the donor, folded in, and dropped.
+
+    THREADS, not processes. A ProcessPoolExecutor here stalled too (job 1417297: <100/761 donors
+    in 17min) because each of the 40 forked workers span up its own polars thread pool -- ~1600
+    threads thrashing the node -- and every task had to pickle ~190k tuples back to the parent.
+    polars releases the GIL on read, so a thread pool parallelizes the I/O with no fork, no
+    pickling, and one shared polars thread pool. Counter.update stays in the main thread, which
+    is correct: it is the only shared mutable state, so no lock is needed.
     """
     from collections import Counter
-    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor
     total = Counter()
-    with ProcessPoolExecutor(max_workers=threads) as ex:
-        for i, keys in enumerate(ex.map(_keys_of, paths, chunksize=4), 1):
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=threads) as ex:
+        for i, keys in enumerate(ex.map(_keys_of, paths), 1):
             total.update(keys)
-            if i % 100 == 0:
-                print(f"    pooled {i}/{len(paths)} donors; {len(total):,} unique keys",
-                      flush=True)
+            if i % 50 == 0:
+                print(f"    pooled {i}/{len(paths)} donors; {len(total):,} unique keys "
+                      f"[{time.perf_counter()-t0:.0f}s]", flush=True)
     return total
 
 
@@ -192,10 +200,10 @@ def main():
 
     # PASS 2 -- per-donor rows, candidates only (a small fraction of the cohort).
     t0 = time.perf_counter()
-    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor
     parts = []
-    with ProcessPoolExecutor(max_workers=nthreads) as ex:
-        for d in ex.map(_rows_of, [(p, s, keep) for p, s in files], chunksize=4):
+    with ThreadPoolExecutor(max_workers=nthreads) as ex:
+        for d in ex.map(_rows_of, [(p, s, keep) for p, s in files]):
             if d is not None:
                 parts.append(d)
     rows = (pl.concat(parts, how="vertical_relaxed")
