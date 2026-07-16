@@ -38,8 +38,34 @@ models, their own IMGT-vintage germline is kept for exact-Pgen fidelity — see 
 | Emerson HIP cohort (786 subjects) | HF dataset [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip) — redistributed from Adaptive immuneACCESS **Emerson-2017-NatGen** | per-subject VDJtools tables `corr/HIP#####.txt.gz` (`count freq cdr3nt cdr3aa v d j VEnd…`); `metadata.txt` (TAB-sep: `file_name sample_id age race sex cmv hla`) | `examples/emerson_cmv_hla.py` → `huggingface_hub.snapshot_download(repo_type="dataset", allow_patterns=["corr/{sample}.txt.gz"])`; ingest with `io.ingest_cohort(fmt="vdjtools")` | **experimental** TCRβ repertoires + phenotypes (Emerson et al., *Nat Genet* 2017, doi:10.1038/ng.3822). `cmv` ∈ {`+`,`-`,`NA`}; `hla` = 2-digit HLA-A/B only (`HLA-A*02`); ⚠ `race` contains commas — split on TAB. No discovery/validation split column |
 | VDJdb (CMV validation target) | local checkout `/Users/mikesh/vcs/code/vdjdb-db/database/vdjdb.slim.txt` (canonical `antigenomics/vdjdb-db`, 2024-06 release; 2-digit HLA matches airr_hip) | TSV, 16 cols: `gene cdr3 species antigen.epitope antigen.gene antigen.species … v.segm j.segm … mhc.a mhc.b mhc.class … vdjdb.score` | read with polars; filter `gene==TRB & species==HomoSapiens & antigen.species~CMV` | **curated** TCR↔epitope database; newer 4-digit dump at `/Users/mikesh/vcs/code/vdjdb-iedb-concordance/vdjdb_dump_2026/vdjdb.slim.txt`. Canonical fetch: `antigenomics/vdjdb-db` GitHub releases |
 | FMBA covid19 (TRA+TRB) — Phase 6b benchmark | aldan3 `/projects/fmba_covid` (clonotype tables `COV_V_usage_adjustment_v3/FMBA_functional/*.clonotypes.TRB.txt` + `data/*.clonotypes.{TRA,TRB}.pool.aa.table.txt`) ↔ private HF `isalgo/airr_covid19`; phenotype = `metadata_fmba_full.txt`/`desc_fmba_not_nan_hla.csv` (`COVID_status`, 4-digit `HLA-*`), join by 12-digit `id` | legacy VDJtools tables; TAB metadata | `scripts/biomarker_bench.sbatch -- covid19` on aldan3 (reads `/projects/fmba_covid` directly) | **experimental** deep TCRα/β covid repertoires (Vlasova et al., *Genome Medicine* 2026;18:20). COVID-association + α-β co-occurrence benchmark |
-| covid19 biomarker oracle | HF `isalgo/airr_covid19` → `covid_associated_clonotypes.csv` (`cdr3,cluster,has_covid_association,chain,v,j`) | CSV | validation target for the covid19 association hits | **curated** — the study's published COVID-associated clonotype/cluster list (Vlasova 2026) |
+| covid19 biomarker oracle (**canonical**) | VDJdb SARS-CoV-2 — same slim dump as the CMV row; on aldan3 `/projects/immunestatus/vdjdb/vdjdb-2025-07-30/vdjdb.slim.txt` | TSV (as above) | filter `species==HomoSapiens & antigen.species~"SARS-CoV-2"` (**both chains**: 3,796 TRA + 5,333 TRB records → 8,842 unique CDR3s); `bench_biomarker._vdjdb_antigen(path, "SARS-CoV-2")` | **curated** antigen-specific oracle (author decision 2026-07-16: prefer VDJdb over the study's published list — assay-grounded, chain-agnostic, symmetric with the CMV validation) |
+| covid19 biomarker oracle (alternative, not used) | HF `isalgo/airr_covid19` → `covid_associated_clonotypes.csv` (`cdr3,cluster,has_covid_association,chain,v,j`) | CSV | `--oracle` flag (opt-in) | **curated** — the study's published COVID-associated clonotype/cluster list (Vlasova 2026). Superseded as the default validation target by VDJdb SARS-CoV-2 (above) |
 | FMBA covid19_vacc (TRA+TRB) — Phase 6b benchmark | aldan3 `/projects/fmba_covid/vaccine/corr_func/*.clonotypes.{TRA,TRB}.txt` ↔ private HF `isalgo/airr_covid19_vacc`; phenotype = `vaccine/processed_metadata.tsv` / `vaccine/metadata.csv` (`timepoint` ∈ before/20d-after, `vaccine` ∈ GamCOVIDVac/CoviVac), join by 12-digit `id` | legacy VDJtools tables; CSV/TSV metadata | `scripts/biomarker_bench.sbatch -- covid19_vacc` on aldan3 | **experimental** pre/post-vaccination TCRα/β repertoires (Vlasova 2026). Timepoint/vaccine association benchmark |
+
+### Phase 6b benchmark results (Aldan-3, v2.7.0, 16 cores) — **computed**, not experimental
+
+All three via `scripts/biomarker_bench.sbatch`; `key=(junction_aa,v_call,j_call)`, BH-FDR q<0.05,
+`alternative="greater"`. Concordance = how many of the top-100 Fisher hits each test also flags.
+
+| Cohort | Subjects | min_inc | Features tested | Significant | Validation | χ² | perm | BF | Time / peak RSS |
+|---|---|---|---|---|---|---|---|---|---|
+| covid19 (COVID vs healthy) | 572 (740+/472−) | 10 | 52,528 | **44,125** | **VDJdb SARS-CoV-2 OR=2.35, p=3.5e-13** (846/34,779 sig CDR3s known; 907/40,596 tested are members) | **100/100** | **100/100** | **100/100** | 203 s / 6.9 GB |
+| hip (Emerson CMV) | 761 (340+/421−) | 8 | **1,366,592** | 70 | **10/70** significant hits in VDJdb-CMV (18,651 ref CDR3s); CMH (CMV\|HLA-A\*02) → 40 significant | 39/100 | 0/100 | **100/100** | 2,536 s / 99.7 GB |
+| covid19_vacc (timepoint) | 1,082 (541+/541−) | 5 | **1,390,129** | 269 | — | 85/100 | 0/100 | **100/100** | 3,678 s / 43.7 GB |
+
+α-β **co-occurrence** (covid19, `min_cooccurrence=3`, `min_incidence_frac=0.03`, `evalue=True`):
+481,533 candidate pairs → **2,805 significant** (q<0.05); top θ=9.19 (q=8e-26), strongest q=1.3e-31; 17 s.
+⚠ candidate features capped at `max_features=2000` (warned at runtime), i.e. top-incidence pairs only.
+
+**Three scale effects** (reproduced independently across cohorts — properties of genome-wide incidence
+testing, not defects): (1) BH-FDR is severe at ~10⁶ features — Emerson-2017 itself thresholds at a
+*nominal* P<1e-4 (FDR≈0.14), so 70 CMV hits at q<0.05 is consistent with the paper; (2) **permutation has
+a 1/`n_perm` p-floor** — at `n_perm=1000` the smallest p is 1e-3, and BH over 1.37M features needs
+≈1e-3×1.37M/70≈19 ≫ 0.05, hence 0/100 on both ~1.4M-feature cohorts but 100/100 on covid19's 52k set;
+(3) Yates-corrected **χ² is asymptotic** and conservative on the sparse tables at low `min_incidence`
+(39/100 → 85/100 → 100/100 as counts grow). **Fisher and the Beta-Binomial BF are the reliable arbiters
+at genome-wide scale; χ² and permutation are scale-dependent.**
+
 ## Phase 5 — preprocess (VJ batch-correction validation)
 
 | Dataset | Origin | Format | How to obtain | Provenance |
