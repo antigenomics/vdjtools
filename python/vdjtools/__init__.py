@@ -5,13 +5,15 @@ schema and polars DataFrames with minimal object-orientation, built on the
 antigenomics ecosystem (``seqtree``, ``vdjmatch``, ``arda``).
 
 Native hot loops — the V(D)J Pgen dynamic program, the generation sampler, and the
-EM E-step — live in the compiled :mod:`vdjtools._core` extension. Everything else is
-pure polars/numpy. Subpackages (``io``, ``model``, ``stats``, ``features``, ``overlap``,
-``preprocess``, ``biomarker``, ``sc``) are imported explicitly by the caller so that
-``import vdjtools`` never pays the cost of heavy optional dependencies (arda/mmseqs2,
-vdjmatch/seqtree) until a feature that needs them is used.
+EM E-step — live in the compiled :mod:`vdjtools._core` extension, imported lazily by
+:mod:`vdjtools.model`. Everything else is pure polars/numpy, and generic sequence
+primitives (Hamming/edit distance, fuzzy search) are used straight from the
+``seqtree`` / ``vdjmatch`` / ``arda`` dependencies rather than duplicated here.
+Subpackages (``io``, ``model``, ``stats``, ``features``, ``overlap``, ``preprocess``,
+``biomarker``, ``sc``) are imported explicitly by the caller, so ``import vdjtools``
+never pays the cost of the compiled extension or heavy optional dependencies until a
+feature that needs them is used.
 """
-from ._core import hamming
 
 __version__ = "2.6.0"
-__all__ = ["hamming", "__version__"]
+__all__ = ["__version__"]

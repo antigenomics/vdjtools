@@ -1,4 +1,6 @@
 """Scaffold smoke tests: the package imports and the C++ core is wired through."""
+import pytest
+
 import vdjtools
 from vdjtools import _core
 
@@ -8,14 +10,16 @@ def test_version():
     assert _core.version() == "2.6.0"
 
 
-def test_hamming():
-    assert _core.hamming("CASSL", "CASSL") == 0
-    assert _core.hamming("CASSL", "CASSF") == 1
-    assert _core.hamming("CASS", "CASSL") == -1  # length mismatch
-    assert vdjtools.hamming("AAA", "ABA") == 1   # re-exported at top level
+def test_no_duplicated_hamming():
+    # Generic sequence primitives (Hamming/edit distance) are used from the seqtree
+    # dependency (`seqtree.distance`, ≥0.5.0), not duplicated in vdjtools — so
+    # `import vdjtools` needs no compiled ext.
+    from seqtree import distance
 
-
-import pytest
+    assert not hasattr(vdjtools, "hamming")
+    assert not hasattr(_core, "hamming")
+    assert distance.hamming("CASSL", "CASSF") == 1        # the shipped primitive vdjtools relies on
+    assert distance.levenshtein("kitten", "sitting") == 3
 
 
 @pytest.mark.parametrize("engine", ["arda-mapper", "seqtree", "vdjmatch"])
