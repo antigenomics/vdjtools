@@ -63,6 +63,11 @@ def hla_alleles(meta: pl.DataFrame, cols: "list[str]", *, resolution: int | None
     it carries. ``resolution`` trims the allele to that many colon-separated fields
     (``resolution=1`` → ``A*02``); ``None`` keeps the field as written. Alleles carried by
     fewer than ``min_level_size`` subjects are dropped.
+
+    **HLA-untyped subjects are dropped**, not counted as non-carriers — consistent with
+    :func:`binary` / :func:`zygosity`, which drop unknown phenotypes. Treating an untyped
+    subject as a non-carrier of every allele silently inflates the negative arm and biases
+    the odds ratio anticonservatively.
     """
     def norm(c: str) -> pl.Expr:
         e = pl.col(c).cast(pl.String).str.strip_chars()
@@ -78,7 +83,9 @@ def hla_alleles(meta: pl.DataFrame, cols: "list[str]", *, resolution: int | None
             .drop_nulls("_level").unique())
     levels = (long.group_by("_level").agg(pl.col(SAMPLE_ID).n_unique().alias("n"))
               .filter(pl.col("n") >= min_level_size)["_level"].to_list())
-    subjects = meta.select(pl.col(sample_col).alias(SAMPLE_ID)).unique()
+    # Typed subjects only — `long` has already dropped null/NA alleles, so a subject with no
+    # typing at all is absent here and is excluded rather than becoming a phantom non-carrier.
+    subjects = long.select(SAMPLE_ID).unique()
     carried = long.filter(pl.col("_level").is_in(levels)).with_columns(pl.lit(True).alias("_c"))
     grid = subjects.join(pl.DataFrame({"_level": levels}), how="cross")
     return (grid.join(carried, on=[SAMPLE_ID, "_level"], how="left")

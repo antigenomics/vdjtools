@@ -62,6 +62,30 @@ def test_categorical_hla_alleles_expands_per_allele():
     assert set(zyg["_pos"].to_list()) == {True}
 
 
+def test_hla_alleles_drops_untyped_subjects_rather_than_calling_them_non_carriers():
+    """An HLA-untyped subject must be excluded, not counted as a non-carrier of every allele.
+
+    Counting untyped subjects as non-carriers inflates the negative arm and biases the odds
+    ratio anticonservatively (regression: it silently added 106 phantom non-carriers per
+    allele on the 572-subject covid19 cohort).
+    """
+    _, meta = _cohort()
+    typed = set(meta.filter(pl.col("hla").is_not_null())["sample_id"].to_list())
+    untyped = meta.head(3).with_columns(
+        (pl.col("sample_id") + "_untyped").alias("sample_id"),
+        pl.lit(None, dtype=pl.String).alias("hla"))          # no typing at all
+    des = condition.hla_alleles(pl.concat([meta, untyped]), ["hla"], min_level_size=5)
+
+    got = set(des["sample_id"].unique().to_list())
+    assert got == typed, "untyped subjects must not appear in the design at any level"
+    assert not any(s.endswith("_untyped") for s in got)
+    # Empty-string / NA spellings are normalised to null and dropped the same way.
+    blank = meta.head(2).with_columns((pl.col("sample_id") + "_blank").alias("sample_id"),
+                                      pl.lit("NA").alias("hla"))
+    des2 = condition.hla_alleles(pl.concat([meta, blank]), ["hla"], min_level_size=5)
+    assert not any(s.endswith("_blank") for s in des2["sample_id"].unique().to_list())
+
+
 def test_cmh_controls_a_confounded_association():
     # HLA is a confounder: A*02+ subjects are both more often CMV+ AND carry CASSHLA more.
     # The marginal Fisher is significant; after stratifying by HLA (CMH) it vanishes.
