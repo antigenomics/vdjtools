@@ -62,32 +62,48 @@ p=4.9e-06**. Honest caveat: only 6 known pairs were testable, so this rests on a
 (Fisher is exact, so the p is valid).
 ⚠ candidate features capped at `max_features=2000` (warned at runtime), i.e. top-incidence pairs only.
 
-#### Co-occurrence confounding — measured, not assumed (`appendix/theta_ceiling.py`)
+#### Co-occurrence confounding — measured, and corrected by default (`appendix/{depth_gate,theta_ceiling,accept_gate}.py`)
 
 Cross-subject co-occurrence is confounded by per-subject **repertoire depth** and **shared HLA**
-(see the caveat in `docs/usage.rst`). Both were quantified on this cohort rather than waved at:
+(see the caveat in `docs/usage.rst`). Depth was quantified, then **fixed**; HLA remains a caveat.
 
-| | as shipped (no depth floor) | depth floor ≥1000 clonotypes |
-|---|---|---|
-| Subjects | 552 (min depth **1**, max 90,174, spread 90,174×) | 456 |
-| CV(N) → **θ_depth = 1+CV²** | 0.899 → **1.809** | 0.710 → **1.504** |
-| Candidate / significant pairs | 481,528 / **2,802** (0.58%) | 733,178 / **754** (0.10%) |
-| θ of significant (median / max) | 3.07 / 9.19 | 3.47 / 7.57 |
-| **Above the depth ceiling** | **2,637 / 2,802 = 94.1%** | 744 / 754 = **98.7%** |
-| Above the A\*02:01 composed ceiling (1+CV²)/f | 633 (22.6%) | 476 (63.1%) |
+**Depth.** Subjects span **1 → 90,174** unique clonotypes (CV=0.899), inducing a lift
+`θ_depth = 1+CV² = 1.809` for rare clonotypes with no biology whatsoever. A simulation matched to
+this distribution (2,000 null pairs/config) measured what that does to a **pooled** test — and
+`max_features=2000` keeps the top features *by incidence*, so the tool operates in the worst column:
 
-**Reading.** (1) The signal is **not** a depth artifact — 94% of significant pairs exceed the lift
-depth alone can induce. (2) But the count is **depth-sensitive**: a ≥1000-clonotype floor removes
-96 near-empty samples (one has a *single* clonotype) and drops significance 2,802 → **754** while
-*raising* the tested set — i.e. junk samples manufacture ~73% of the hits. **Prefer the floored
-figure for any downstream claim**; the library default applies no floor (depth filtering is the
-caller's `preprocess` choice, not a co-occurrence default). (3) **HLA, not depth, is the binding
-constraint**: only 22.6% (as shipped) / 63.1% (floored) exceed the A\*02:01 ceiling, so shared
-A\*02:01 restriction stays viable for the rest *if both chains are A\*02-restricted*. Only the
-extreme tail (θ=9.19) clears every allele carried by >19.7% of the 466 typed subjects (A\*02:01,
-A\*03:01, A\*01:01, A\*24:02, B\*07:02). **None of this licenses a physical-pairing claim** — a
-cross-subject α-β pair is pairSEQ's *definition of a false positive* (Howie 2015). TODO v2.8: De
-Witt's per-subject bias factor `b_i` or a degree-preserving permutation null.
+| false-positive rate @ nominal p<0.05 (calibrated = 0.05) | 2% incidence | 3% | **11%** |
+|---|---|---|---|
+| pooled Fisher (the pre-2.7.0 default) | 0.045 | 0.069 | **0.492** |
+| depth-weighted / "x of X rearrangements" incidence | 0.302 | 0.461 | 0.887 |
+| **CMH over depth strata (the 2.7.0 default)** | **0.024** | **0.031** | **0.057** |
+
+**⚠ Correction.** An earlier revision of this file argued the signal was *"not a depth artifact —
+94.1% of significant pairs exceed θ_depth=1.809"*. **That reasoning is invalid**: `θ_depth=1+CV²`
+is the null **mean**, not a tail quantile, so ~half of *pure-null* pairs exceed it by construction
+and conditioning on significance selects the high-θ ones. ~94% is what a null screen *should*
+produce. The claim is withdrawn; the table above measures the thing that actually matters.
+
+**Effect of the fix on the real cohort** (`appendix/accept_gate.py`, all 552 subjects):
+
+| covid19 α-β co-occurrence | tested | significant (q<0.05) | θ median / max | median `or_mh` | time |
+|---|---|---|---|---|---|
+| `depth_strata=0` (pooled, uncorrected) | 481,587 | **2,805** | 3.07 / 9.19 | — | 16 s |
+| **`depth_strata=10` (default)** | 481,501 | **502** | 3.52 / 9.19 | **8.97** | 11 s |
+| ≥1000-clonotype floor + pooled (diagnostic) | 733,178 | 754 | 3.47 / 7.57 | — | — |
+
+Depth conditioning removes **82%** of the pooled hits *without discarding a subject*, is more
+conservative than the depth floor (502 < 754), and the survivors have a higher θ and a strong
+depth-conditioned `or_mh`. **502 is the defensible figure.** The depth floor is now a diagnostic,
+not required preprocessing.
+
+**HLA is the remaining binding constraint — untouched by this.** Shared restriction by an allele of
+carrier frequency *f* cannot induce a lift above `(1+CV²)/f`; only the extreme tail (θ=9.19) clears
+every allele carried by >19.7% of the 466 typed subjects (A\*02:01, A\*03:01, A\*01:01, A\*24:02,
+B\*07:02). Ancestry, batch and shared exposure are likewise unfixed. **None of this licenses a
+physical-pairing claim** — a cross-subject α-β pair is pairSEQ's *definition of a false positive*
+(Howie 2015). TODO v2.8: a degree-preserving (fixed-fixed) permutation null — the truest null
+measured (lift 0.98–1.01) but ~120 core-days at 1e-6 resolution, hence not the production default.
 
 **Three scale effects** (reproduced independently across cohorts — properties of genome-wide incidence
 testing, not defects): (1) BH-FDR is severe at ~10⁶ features — Emerson-2017 itself thresholds at a
