@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #SBATCH --job-name=vdjt-biomarker
-#SBATCH --partition=short
+#SBATCH --partition=medium
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
