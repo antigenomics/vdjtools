@@ -47,19 +47,38 @@ models, their own IMGT-vintage germline is kept for exact-Pgen fidelity — see 
 All three via `scripts/biomarker_bench.sbatch`; `key=(junction_aa,v_call,j_call)`, BH-FDR q<0.05,
 `alternative="greater"`. Concordance = how many of the top-100 Fisher hits each test also flags.
 
-| Cohort | Subjects | min_inc | Features tested | Significant | Validation | χ² | perm | BF | Time / peak RSS |
-|---|---|---|---|---|---|---|---|---|---|
-| covid19 (COVID vs healthy) | 572 (740+/472−) | 10 | 52,528 | **44,125** | **VDJdb SARS-CoV-2 OR=2.35, p=3.5e-13** (846/34,779 sig CDR3s known; 907/40,596 tested are members) | **100/100** | **100/100** | **100/100** | 203 s / 6.9 GB |
-| hip (Emerson CMV) | 761 (340+/421−) | 8 | **1,366,592** | 70 | **10/70** significant hits in VDJdb-CMV (18,651 ref CDR3s); CMH (CMV\|HLA-A\*02) → 40 significant | 39/100 | 0/100 | **100/100** | 2,536 s / 99.7 GB |
-| covid19_vacc (timepoint) | 1,082 (541+/541−) | 5 | **1,390,129** | 269 | — | 85/100 | 0/100 | **100/100** | 3,678 s / 43.7 GB |
+**Arms are the ANALYSED counts** (`association()` inner-joins the design to the cohort — the design
+size is *not* the tested size; see `run_association_suite`, which now reports and warns on this).
 
-α-β **co-occurrence** (covid19, `min_cooccurrence=3`, `min_incidence_frac=0.03`, `evalue=True`):
-481,528 candidate pairs → **2,802 significant** (q<0.05); θ median **3.07**, p90 4.16, max **9.19**
-(q=8e-26); strongest q=1.3e-31; 17 s. Validated against **VDJdb α-β complexes (any antigen**, 20,169
-pairs — pairing is a receptor property, so the oracle is deliberately *not* antigen-restricted):
-**3/2,802 significant pairs are known VDJdb pairs vs 6/446,232 tested → enrichment OR=158.4,
-p=4.9e-06**. Honest caveat: only 6 known pairs were testable, so this rests on a small oracle overlap
-(Fisher is exact, so the p is valid).
+| Cohort | Analysed arms | min_inc | Features tested | Significant | Validation | χ² | perm | BF | Time / peak RSS |
+|---|---|---|---|---|---|---|---|---|---|
+| covid19 (COVID vs healthy) | **502+ / 34−** ⚠ 15:1 | 10 | 52,528 | 44,125 ⚠ | **VDJdb SARS-CoV-2 OR=2.35, p=3.5e-13** (846/34,779 sig CDR3s known; 907/40,596 tested are members) | **100/100** | **100/100** | **100/100** | 203 s / 6.9 GB |
+| hip (Emerson CMV) | 340+ / 421− | 8 | **1,366,592** | 70 | **VDJdb-CMV OR=24.5, p=5.5e-11** (10/70 sig CDR3s known; 4,551/671,879 tested are members); CMH (CMV\|HLA-A\*02) → 40 significant | 39/100 | 0/100 | **100/100** | 2,536 s / 99.7 GB |
+| covid19_vacc (timepoint) | 541+ / 541− | 5 | **1,390,129** | 269 | — | 85/100 | 0/100 | **100/100** | 3,678 s / 43.7 GB |
+
+⚠ **The covid19 association arm is 502 COVID+ vs 34 healthy** — the FMBA cohort is overwhelmingly
+COVID+, and only 34 healthy subjects have both metadata and a repertoire. Earlier revisions of this
+file reported "740+/472−", which was the *design* frame before the cohort join. **Treat the 44,125
+count as unreliable** (84% of features significant against 34 controls is not a defensible hit rate);
+the **VDJdb-SARS-CoV-2 enrichment (OR=2.35, p=3.5e-13) is the meaningful result**, since it is a
+*relative* comparison of significant vs non-significant features and is not inflated by the imbalance.
+hip (340/421) and covid19_vacc (541/541) are balanced and unaffected.
+
+Depth does **not** confound the association: repertoire size is unrelated to COVID status (medians
+14,146 vs 13,211, ratio 1.07×, Mann-Whitney **p=0.64**, `appendix/assoc_depth.py`), so no depth
+conditioning is applied there — unlike co-occurrence, where depth is the whole problem.
+
+α-β **co-occurrence** (covid19, `min_cooccurrence=3`, `min_incidence_frac=0.03`, `evalue=True`,
+**`depth_strata=10` default**): 481,538 candidate pairs → **502 significant** (q<0.05); θ median
+**3.52**, max **9.19**; median depth-conditioned `or_mh` **8.97**; 17 s. Validated against **VDJdb α-β
+complexes (any antigen**, 20,169 pairs — pairing is a receptor property, so the oracle is deliberately
+*not* antigen-restricted): **3/502 significant pairs are known VDJdb pairs vs 6/446,224 tested →
+enrichment OR=893.2, p=2.8e-08**.
+
+**The depth correction improved precision without costing recall**: it removed 82% of the pooled hits
+(2,802 → 502) while retaining **all 3** VDJdb-validated true pairs, so the enrichment rose 5.6×
+(OR 158.4 → 893.2; p 4.9e-06 → 2.8e-08). Removing artifact, not signal. Honest caveat: only 6 known
+pairs were testable, so this rests on a small oracle overlap (Fisher is exact, so the p is valid).
 ⚠ candidate features capped at `max_features=2000` (warned at runtime), i.e. top-incidence pairs only.
 
 #### Co-occurrence confounding — measured, and corrected by default (`appendix/{depth_gate,theta_ceiling,accept_gate}.py`)
