@@ -182,8 +182,12 @@ def run_hip(args):
 def run_covid(args):
     data = Path(args.data_dir)
     meta = pl.read_csv(args.metadata, separator="\t", infer_schema_length=0)
-    pairs = _glob_tables(data, meta, args.sample_col)
-    print(f"{args.dataset}: {len({s for s, _ in pairs})} subjects, {len(pairs)} tables (TRA+TRB)")
+    chains = tuple(args.chains.split(",")) if args.chains else None
+    pairs = _tables_from_metadata(data, meta, file_col=args.file_col,
+                                  sample_col=args.sample_col, locus_col=args.locus_col,
+                                  chains=chains)
+    print(f"{args.dataset}: {len({s for s, _ in pairs})} subjects, {len(pairs)} tables "
+          f"({args.chains or 'all chains'})")
     with Timer("ingest"):
         cohort = load_cohort(pairs).collect().lazy()
     design = _binary_design(meta, args.sample_col, args.pheno_col,
@@ -344,7 +348,10 @@ def main():
     ap.add_argument("--pos-values", help="comma list of positive phenotype values (covid)")
     ap.add_argument("--neg-values", help="comma list of negative phenotype values (covid)")
     ap.add_argument("--oracle", help="reference clonotype CSV with a 'cdr3' column")
-    ap.add_argument("--vdjdb", help="VDJdb slim TSV (hip CMV validation)")
+    ap.add_argument("--vdjdb", help="VDJdb slim TSV (CMV / SARS-CoV-2 validation)")
+    ap.add_argument("--file-col", default="file_name", help="metadata column holding the filename")
+    ap.add_argument("--locus-col", default="locus", help="metadata column holding the chain")
+    ap.add_argument("--chains", default=None, help="comma list, e.g. TRA or TRB or TRA,TRB")
     ap.add_argument("--min-incidence", type=int, default=8)
     ap.add_argument("--max-samples", type=int, default=0)
     args = ap.parse_args()
