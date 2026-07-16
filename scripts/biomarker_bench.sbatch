@@ -18,6 +18,7 @@ set -euo pipefail
 source /opt/conda/etc/profile.d/conda.sh 2>/dev/null || true
 conda activate "${CONDA_ENV:-vdjtools}"
 cd "${VDJT_DIR:-$HOME/vdjtools_bench}"
+export PYTHONUNBUFFERED=1                              # stream python stdout to the slurm log
 mkdir -p logs
 PY="${PYTHON_BIN:-python}"
 DATASET="${1:?usage: sbatch biomarker_bench.sbatch <hip|covid19|covid19_vacc>}"
