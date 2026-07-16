@@ -52,17 +52,19 @@ size is *not* the tested size; see `run_association_suite`, which now reports an
 
 | Cohort | Analysed arms | min_inc | Features tested | Significant | Validation | χ² | perm | BF | Time / peak RSS |
 |---|---|---|---|---|---|---|---|---|---|
-| covid19 (COVID vs healthy) | **502+ / 34−** ⚠ 15:1 | 10 | 52,528 | 44,125 ⚠ | **VDJdb SARS-CoV-2 OR=2.35, p=3.5e-13** (846/34,779 sig CDR3s known; 907/40,596 tested are members) | **100/100** | **100/100** | **100/100** | 203 s / 6.9 GB |
-| hip (Emerson CMV) | 340+ / 421− | 8 | **1,366,592** | 70 | **VDJdb-CMV OR=24.5, p=5.5e-11** (10/70 sig CDR3s known; 4,551/671,879 tested are members); CMH (CMV\|HLA-A\*02) → 40 significant | 39/100 | 0/100 | **100/100** | 2,536 s / 99.7 GB |
+| covid19 (COVID vs healthy) | **502+ / 34−** ⚠ 15:1 | 10 | 52,528 | **0** | none to validate (OR=nan) — 34 controls cannot power a genome-wide screen | — | — | — | 142 s / 6.4 GB |
+| **hip (Emerson CMV)** — *the association baseline* | 340+ / 421− | 8 | **1,366,592** | **70** | **VDJdb-CMV OR=24.5, p=5.5e-11** (10/70 sig CDR3s known; 4,551/671,879 tested are members); CMH (CMV\|HLA-A\*02) → 40 significant | 39/100 | 0/100 | **100/100** | 2,536 s / 99.7 GB |
 | covid19_vacc (timepoint) | 541+ / 541− | 5 | **1,390,129** | 269 | — | 85/100 | 0/100 | **100/100** | 3,678 s / 43.7 GB |
 
-⚠ **The covid19 association arm is 502 COVID+ vs 34 healthy** — the FMBA cohort is overwhelmingly
-COVID+, and only 34 healthy subjects have both metadata and a repertoire. Earlier revisions of this
-file reported "740+/472−", which was the *design* frame before the cohort join. **Treat the 44,125
-count as unreliable** (84% of features significant against 34 controls is not a defensible hit rate);
-the **VDJdb-SARS-CoV-2 enrichment (OR=2.35, p=3.5e-13) is the meaningful result**, since it is a
-*relative* comparison of significant vs non-significant features and is not inflated by the imbalance.
-hip (340/421) and covid19_vacc (541/541) are balanced and unaffected.
+⚠ **covid19 association is an honest negative: 0 significant on 502 COVID+ vs 34 healthy.** The FMBA
+cohort is overwhelmingly COVID+ and only 34 healthy subjects have both metadata and a repertoire — too
+few to power a genome-wide screen. **Earlier revisions of this file reported 44,125 significant with a
+VDJdb-SARS-CoV-2 enrichment of OR=2.35 (p=3.5e-13). Both are withdrawn**: they were produced by the
+phantom-negative bug (`association()` derived n_pos/n_neg from the *design* frame, so the 640 labelled
+-but-unsequenced subjects in the 1,212-row FMBA sheet voted "feature absent" for every feature — 438 of
+472 negatives were phantoms). Fixed in v2.7.0; on fixed code the count is **0**. hip (340/421) and
+covid19_vacc (541/541) never had designs that outran their cohorts and are unaffected — **hip is the
+association baseline**, covid19 is not.
 
 Depth does **not** confound the association: repertoire size is unrelated to COVID status (medians
 14,146 vs 13,211, ratio 1.07×, Mann-Whitney **p=0.64**, `appendix/assoc_depth.py`), so no depth
