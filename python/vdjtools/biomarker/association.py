@@ -214,6 +214,16 @@ def association(
                                           strip_allele=strip_allele, scope=scope,
                                           threads=threads, candidates=candidates)
     design = _normalize_design(phenotype, pheno_col, level_col, stratum_col)
+    # Restrict the design to subjects we actually OBSERVED. n_pos/n_neg below are the arms of the
+    # 2x2 (c = n_pos - a is "condition-positive subjects without the feature"), so a labelled
+    # subject with no repertoire in `cohort` would silently vote "feature absent" for every
+    # feature rather than being unobserved. On a metadata sheet that outruns the sequenced cohort
+    # this is severe and one-sided: covid19 ships 1,212 labelled subjects for 572 repertoires, so
+    # 438 of the 472 "negatives" (93%) were phantoms and nearly every feature looked enriched.
+    seen = cohort.lazy().select(pl.col(SAMPLE_ID)).unique().collect()
+    design = design.join(seen, on=SAMPLE_ID, how="semi")
+    if not design.height:
+        raise ValueError("no labelled subject appears in the cohort — check the sample_id join")
     n_labeled = design[SAMPLE_ID].n_unique()
     thr = min_incidence
     if min_incidence_frac is not None:

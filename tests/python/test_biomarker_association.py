@@ -132,3 +132,30 @@ def test_single_class_raises_and_unknown_labels_dropped():
                               .otherwise(pl.col("cmv")).alias("cmv"))
     r = association(cohort, condition.binary(meta2, "cmv"))
     assert int(r["n_pos"][0] + r["n_neg"][0]) == 39
+
+
+def test_labelled_subjects_absent_from_the_cohort_are_dropped_not_counted_as_absent():
+    """A subject with a label but NO repertoire is UNOBSERVED, not feature-negative.
+
+    n_pos/n_neg are the arms of the 2x2 (c = n_pos - a = "condition-positive without the
+    feature"), so a labelled-but-unsequenced subject would silently vote "absent" for every
+    feature. On covid19 the metadata sheet (1,212 subjects) outran the sequenced cohort (572),
+    so 438 of 472 negatives were phantoms and ~84% of features came out significant.
+    """
+    cohort, meta = _cohort()
+    n_real = meta.height
+    real_design = condition.binary(meta, "cmv")
+    # Same data, but the design also carries subjects that were never sequenced — all negative.
+    phantoms = pl.DataFrame({"sample_id": [f"GHOST{i}" for i in range(200)],
+                             "_pos": [False] * 200})
+    padded_design = pl.concat([real_design, phantoms])
+
+    real = association(cohort, real_design, test="fisher", min_incidence=2)
+    padded = association(cohort, padded_design, test="fisher", min_incidence=2)
+
+    # The phantoms must change nothing at all.
+    assert padded["n_pos"][0] + padded["n_neg"][0] == n_real, (
+        f"arms include unsequenced subjects: {padded['n_pos'][0]}+{padded['n_neg'][0]} "
+        f"!= {n_real}")
+    assert real.sort("junction_aa").equals(padded.sort("junction_aa")), \
+        "unsequenced labelled subjects changed the result"
