@@ -87,7 +87,8 @@ def hla_alleles(meta: pl.DataFrame, cols: "list[str]", *, resolution: int | None
     # typing at all is absent here and is excluded rather than becoming a phantom non-carrier.
     subjects = long.select(SAMPLE_ID).unique()
     carried = long.filter(pl.col("_level").is_in(levels)).with_columns(pl.lit(True).alias("_c"))
-    grid = subjects.join(pl.DataFrame({"_level": levels}), how="cross")
+    grid = subjects.join(pl.DataFrame({"_level": levels},
+                                      schema={"_level": pl.String}), how="cross")
     return (grid.join(carried, on=[SAMPLE_ID, "_level"], how="left")
             .with_columns(pl.col("_c").fill_null(False).alias("_pos"))
             .select(SAMPLE_ID, "_level", "_pos"))

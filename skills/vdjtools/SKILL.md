@@ -86,7 +86,10 @@ Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Wi
   candidates=, alternative=)` — feature-vs-condition; `test` ∈ {`fisher`,`chi2`,`bayes_logodds`,
   `bayes_bf`,`permutation`} (str or list → long output w/ `test` col); category via `level_col` (one-vs-rest),
   paired via `stratum_col` (Cochran–Mantel–Haenszel). Match scope = `key` (`(junction_aa,)`/`+v`/`+v+j`) × `match` (`exact`/`1mm`).
-- `cooccurrence(cohort, *, chain_a=, chain_b=, test=, min_incidence[_frac]=, min_cooccurrence=, evalue=)` —
+- `cooccurrence(cohort, *, chain_a=, chain_b=, test=, min_incidence[_frac]=, min_cooccurrence=, evalue=, depth_strata=10)` —
+  **depth-conditioned by default** (CMH over repertoire-depth strata): a deep repertoire carries more of
+  everything, so a pooled test is badly miscalibrated (measured FPR 0.46 on independent pairs at the
+  incidence regime `max_features` selects). `depth_strata=0` restores the pooled test. Adds `or_mh`/`chi2`.
   feature-vs-feature θ=n·n_AB/(n_A·n_B) + Fisher/χ² + FDR; α-β pairing (chain_a≠chain_b) or same-chain (chain_b=None).
 - `condition` builders: `binary`, `categorical`, `hla_alleles`, `zygosity`, `stratified` → design frame (`_pos`/`_level`/`_stratum`).
 - `select_candidates` (public features over incidence count/fraction), `stats` (vectorised 2×2 kernels),

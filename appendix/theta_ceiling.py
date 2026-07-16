@@ -11,7 +11,8 @@ import polars as pl
 from pathlib import Path
 sys.path.insert(0, "appendix")
 from bench_biomarker import load_cohort, _glob_tables          # noqa: E402
-from vdjtools.io.cohort import SAMPLE_ID                       # noqa: E402
+from vdjtools.io.cohort import SAMPLE_ID
+from vdjtools.overlap.metrics import DEFAULT_KEY                       # noqa: E402
 from vdjtools.biomarker import cooccurrence                    # noqa: E402
 
 FMBA = Path("/projects/fmba_covid")
@@ -19,7 +20,7 @@ meta = pl.read_csv(FMBA / "metadata_fmba_full.txt", separator="\t", infer_schema
 cohort = load_cohort(_glob_tables(FMBA / "data", meta, "id")).collect().lazy()
 
 def report(lf, label, min_depth=0):
-    d = lf.group_by(SAMPLE_ID).agg(pl.len().alias("n")).collect()
+    d = lf.group_by(SAMPLE_ID).agg(pl.struct(DEFAULT_KEY).n_unique().alias("n")).collect()
     if min_depth:
         keep = d.filter(pl.col("n") >= min_depth)[SAMPLE_ID].to_list()
         lf = lf.filter(pl.col(SAMPLE_ID).is_in(keep))

@@ -89,6 +89,7 @@ editable.rebuild = false
 sdist.exclude = [
     "/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples", "/assets",
     "/appendix", "/CLAUDE.md", "/ROADMAP.md", "/SOURCES.md", "/arda-ref.md",
+    "/notebooks", "/scripts",
 ]
 
 [tool.scikit-build.cmake.define]

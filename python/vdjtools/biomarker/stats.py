@@ -142,7 +142,11 @@ def cmh(a, b, c, d) -> dict[str, np.ndarray]:
     r1, c1 = a + b, a + c
     num_or = np.where(ok, a * d / nz, 0.0).sum(axis=1)
     den_or = np.where(ok, b * c / nz, 0.0).sum(axis=1)
-    or_mh = np.where(den_or > 0, num_or / np.where(den_or > 0, den_or, 1.0), np.inf)
+    # den_or==0 with num_or>0 is a genuinely infinite OR; den_or==0 AND num_or==0 is 0/0 —
+    # UNDEFINED, so nan. (Reachable for a near-ubiquitous pair, where b=c=d=0 in every
+    # stratum; inf there would rank degenerate pairs top under a `or_mh > x` filter.)
+    _ratio = num_or / np.where(den_or > 0, den_or, 1.0)
+    or_mh = np.where(den_or > 0, _ratio, np.where(num_or > 0, np.inf, np.nan))
     exp = np.where(ok, r1 * c1 / nz, 0.0).sum(axis=1)
     var = np.where(ok & (n > 1), r1 * (c + d) * c1 * (b + d) / (nz**2 * (nz - 1.0)), 0.0).sum(axis=1)
     obs = np.where(ok, a, 0.0).sum(axis=1)

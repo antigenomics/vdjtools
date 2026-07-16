@@ -220,6 +220,16 @@ def association(
         thr = max(thr, math.ceil(min_incidence_frac * n_labeled))
 
     joined = feat_lf.join(design.lazy(), on=SAMPLE_ID, how="inner")
+    if thr > 1:
+        # Cheap superset prefilter (carried over from the v2.6.0 fisher_association it replaced):
+        # a feature's distinct-subject incidence is <= its raw row count, so features with fewer
+        # than `thr` rows cannot be public. Dropping them with a light pl.len() count before the
+        # memory-heavier n_unique pass keeps peak RAM bounded on huge cohorts — the millions of
+        # private clonotypes never build a hash-set. Correctness-preserving: the kept set is a
+        # superset of the true public features, and the real threshold is applied below.
+        public = (joined.group_by(idcols).agg(pl.len().alias("_rows"))
+                  .filter(pl.col("_rows") >= thr).select(idcols))
+        joined = joined.join(public, on=idcols, how="semi")
     stratified = design["_stratum"].n_unique() > 1
     gcols = [*idcols, "_level", "_stratum"]
     per = (joined.group_by(gcols)

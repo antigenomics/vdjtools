@@ -11,7 +11,8 @@ import polars as pl
 sys.path.insert(0, "appendix")
 from bench_biomarker import load_cohort, _glob_tables          # noqa: E402
 from vdjtools.io import schema as S                            # noqa: E402
-from vdjtools.io.cohort import SAMPLE_ID                       # noqa: E402
+from vdjtools.io.cohort import SAMPLE_ID
+from vdjtools.overlap.metrics import DEFAULT_KEY                       # noqa: E402
 from vdjtools.biomarker.association import select_candidates   # noqa: E402
 from pathlib import Path                                       # noqa: E402
 
@@ -21,7 +22,7 @@ pairs = _glob_tables(FMBA / "data", meta, "id")
 cohort = load_cohort(pairs).collect().lazy()
 
 # 1) Depth per subject = unique clonotypes (the unit incidence is counted in).
-depth = cohort.group_by(SAMPLE_ID).agg(pl.len().alias("n")).collect()["n"].to_numpy().astype(float)
+depth = cohort.group_by(SAMPLE_ID).agg(pl.struct(DEFAULT_KEY).n_unique().alias("n")).collect()["n"].to_numpy().astype(float)
 cv = depth.std() / depth.mean()
 sd_log = np.log(depth).std()
 theta_depth_rare = 1.0 + cv**2

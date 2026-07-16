@@ -40,6 +40,7 @@ def _(mo):
 @app.cell
 def _():
     # --- imports & configuration (single cell so every name is defined once) ---
+    import os
     from pathlib import Path
 
     import marimo as mo
@@ -52,8 +53,10 @@ def _():
     from vdjtools.biomarker import association, cooccurrence, condition  # condition = the module
 
     REPO_ID = "isalgo/airr_hip"
-    # Local VDJdb slim dump (antigenomics/vdjdb-db). Validation degrades gracefully if absent.
-    VDJDB = Path("/Users/mikesh/vcs/code/vdjdb-db/database/vdjdb.slim.txt")
+    # Local VDJdb slim dump (antigenomics/vdjdb-db); point VDJDB_PATH at your checkout.
+    # Validation degrades gracefully if absent — the screen itself needs no VDJdb.
+    VDJDB = Path(os.environ.get("VDJDB_PATH",
+                                "~/vcs/code/vdjdb-db/database/vdjdb.slim.txt")).expanduser()
     N_SUBJECTS = 400        # balanced subset; the full 786-subject run is appendix/bench_biomarker.py
 
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",

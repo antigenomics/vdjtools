@@ -159,7 +159,7 @@ def cooccurrence(
         warnings.warn(f"candidate features capped at max_features={max_features}; some low-"
                       "incidence features were dropped", stacklevel=2)
     if not fa.height or not fb.height:
-        return _empty(key)
+        return _empty(ida)
 
     # Universe = subjects profiled for BOTH chains (else missing-chain confounds co-occurrence).
     sa = set(pa[SAMPLE_ID].to_list())
@@ -167,7 +167,7 @@ def cooccurrence(
     universe = sorted(sa & sb) if not same else sorted(sa)
     n = len(universe)
     if n == 0:
-        return _empty(key)
+        return _empty(ida)
     si = {s: i for i, s in enumerate(universe)}
 
     M_a = _dense(pa, si, fa.height)
@@ -181,7 +181,7 @@ def cooccurrence(
         keep = ia < ib                                          # upper triangle, drop self-pairs
         ia, ib = ia[keep], ib[keep]
     if ia.size == 0:
-        return _empty(key)
+        return _empty(ida)
     n_ab = cooc[ia, ib]
     n_a, n_b = na[ia], nb[ib]
     a = n_ab
@@ -320,8 +320,14 @@ def _dense(pairs: pl.DataFrame, si: dict, n_feat: int) -> np.ndarray:
     return m
 
 
-def _empty(key: tuple[str, ...]) -> pl.DataFrame:
-    cols = {f"{s}_{c}": pl.Series([], dtype=pl.String) for s in ("a", "b") for c in key}
+def _empty(idcols) -> pl.DataFrame:
+    """Empty frame whose schema matches a non-empty one.
+
+    ``idcols`` is ``key`` (exact) or ``["meta_id"]`` (1mm) — the caller must pass what
+    ``_feature_frame`` actually produced, else the empty and non-empty schemas disagree and
+    ``r.select("a_meta_id")`` raises only when a run happens to find nothing.
+    """
+    cols = {f"{s}_{c}": pl.Series([], dtype=pl.String) for s in ("a", "b") for c in idcols}
     cols.update(n=pl.Series([], dtype=pl.Int64), n_a=pl.Series([], dtype=pl.Int64),
                 n_b=pl.Series([], dtype=pl.Int64), n_ab=pl.Series([], dtype=pl.Int64),
                 theta=pl.Series([], dtype=pl.Float64), odds_ratio=pl.Series([], dtype=pl.Float64),
