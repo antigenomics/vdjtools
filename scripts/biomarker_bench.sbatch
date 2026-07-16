@@ -35,7 +35,7 @@ case "$DATASET" in
   covid19)   # 574 paired TRA+TRB subjects; COVID(current+past) vs healthy + α-β co-occurrence
     "$PY" appendix/bench_biomarker.py --dataset covid19 \
         --data-dir "$FMBA/data" --metadata "$FMBA/metadata_fmba_full.txt" --sample-col id \
-        --min-incidence 10 ${ORACLE:+--oracle "$ORACLE"}
+        --min-incidence 10 --vdjdb "$VDJDB" ${ORACLE:+--oracle "$ORACLE"}
     ;;
   covid19_vacc)   # pre/post vaccination; sample id = 12-digit `name`
     "$PY" appendix/bench_biomarker.py --dataset covid19_vacc \

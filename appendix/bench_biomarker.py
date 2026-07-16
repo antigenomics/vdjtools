@@ -110,12 +110,27 @@ def run_association_suite(cohort, design, *, key=None, min_incidence=8, label=""
 
 
 def validate_vs_reference(hits: pl.DataFrame, ref_cdr3: set, name: str, top: int = 200):
-    sig = hits.filter(pl.col("q_value") < 0.05)
-    ours = set(sig.head(top)[S.JUNCTION_AA].to_list()) if sig.height else set()
-    ov = ours & ref_cdr3
-    print(f"  vs {name}: {len(ov)}/{len(ours)} of the top significant hits are in the reference "
-          f"({len(ref_cdr3)} ref CDR3s)")
-    return ov
+    """Overlap **and** enrichment of significant hits with a VDJdb reference CDR3 set.
+
+    The meaningful validation is a 2×2 over the *unique tested CDR3s* — are reference
+    (antigen-specific) CDR3s enriched among the significant hits vs the rest? — plus the
+    raw overlap counts (all significant, and the top ``top`` by q).
+    """
+    from scipy.stats import fisher_exact
+
+    tested = set(hits[S.JUNCTION_AA].to_list())
+    sig_df = hits.filter(pl.col("q_value") < 0.05)
+    sig = set(sig_df[S.JUNCTION_AA].to_list())
+    top_ov = set(sig_df.sort("q_value").head(top)[S.JUNCTION_AA].to_list()) & ref_cdr3
+    a = len(sig & ref_cdr3)                       # significant & in reference
+    b = len(sig) - a                             # significant & not in reference
+    c = len((tested - sig) & ref_cdr3)           # not significant & in reference
+    d = len(tested - sig) - c                    # not significant & not in reference
+    orr, p = fisher_exact([[a, b], [c, d]], alternative="greater") if (a + c) and (b + d) else (float("nan"), 1.0)
+    print(f"  vs {name}: {a}/{len(sig)} significant CDR3s in reference ({len(top_ov)} in top {top}); "
+          f"{a + c} of {len(tested)} tested CDR3s are reference members; "
+          f"enrichment OR={orr:.2f} p={p:.1e}  ({len(ref_cdr3)} ref CDR3s)")
+    return sig & ref_cdr3
 
 
 def _corr_path(root: Path, sid: str) -> "str | None":
@@ -164,6 +179,10 @@ def run_covid(args):
     design = _binary_design(meta, args.sample_col, args.pheno_col,
                             args.pos_values.split(","), args.neg_values.split(","))
     hits = run_association_suite(cohort, design, min_incidence=args.min_incidence, label=args.pheno_col)
+    if args.vdjdb:
+        # Oracle = VDJdb SARS-CoV-2 CDR3s (both chains); is that antigen-specific set enriched
+        # among the significant COVID-associated hits? (parallels the hip VDJdb-CMV validation.)
+        validate_vs_reference(hits, _vdjdb_antigen(Path(args.vdjdb), "SARS-CoV-2"), "VDJdb-SARS-CoV-2")
     if args.oracle:
         ref = set(pl.read_csv(args.oracle, infer_schema_length=0)["cdr3"].to_list())
         validate_vs_reference(hits, ref, Path(args.oracle).name)
@@ -188,11 +207,21 @@ def _glob_tables(data: Path, meta: pl.DataFrame, sample_col: str) -> "list[tuple
     return pairs
 
 
-def _vdjdb_cmv(path: Path) -> set:
+def _vdjdb_antigen(path: Path, pattern: str, gene: "str | None" = None) -> set:
+    """Human VDJdb CDR3s whose ``antigen.species`` matches ``pattern`` (optionally one ``gene``).
+
+    ``gene=None`` keeps both chains — used for the covid TRA+TRB cohort, where a hit's
+    ``junction_aa`` may be either chain (VDJdb SARS-CoV-2: 3796 TRA + 5333 TRB human CDR3s).
+    """
     db = pl.read_csv(path, separator="\t", infer_schema_length=0)
-    cmv = db.filter((pl.col("gene") == "TRB") & (pl.col("species") == "HomoSapiens")
-                    & pl.col("antigen.species").str.contains("CMV"))
-    return set(cmv["cdr3"].to_list())
+    f = (pl.col("species") == "HomoSapiens") & pl.col("antigen.species").str.contains(pattern)
+    if gene:
+        f = f & (pl.col("gene") == gene)
+    return set(db.filter(f)["cdr3"].to_list())
+
+
+def _vdjdb_cmv(path: Path) -> set:
+    return _vdjdb_antigen(path, "CMV", gene="TRB")
 
 
 #: Per-dataset covid phenotype defaults (positive / negative metadata values).
