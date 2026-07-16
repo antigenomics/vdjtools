@@ -195,8 +195,9 @@ def run_covid(args):
         print(f"  candidate pairs: {cc.height}   significant α-β pairs (q<0.05): {sig.height}")
         print(sig.select("a_junction_aa", "b_junction_aa", "theta", "q_value", "e_value").head(10))
         if args.vdjdb and cc.height:
-            # Do the in-silico pairs recover VDJdb's true (single-cell) α-β pairs?
-            validate_pairs(cc, _vdjdb_pairs(Path(args.vdjdb), "SARS-CoV-2"), "VDJdb-SARS-CoV-2 α-β pairs")
+            # Do the in-silico pairs recover VDJdb's true (single-cell) α-β pairs? Antigen-agnostic:
+            # pairing is a receptor property, not a condition — any VDJdb complex is a valid pair.
+            validate_pairs(cc, _vdjdb_pairs(Path(args.vdjdb)), "VDJdb α-β pairs (any antigen)")
 
 
 def _glob_tables(data: Path, meta: pl.DataFrame, sample_col: str) -> "list[tuple[str, str]]":
@@ -210,16 +211,25 @@ def _glob_tables(data: Path, meta: pl.DataFrame, sample_col: str) -> "list[tuple
     return pairs
 
 
-def _vdjdb_antigen(path: Path, pattern: str, gene: "str | None" = None) -> set:
-    """Human VDJdb CDR3s whose ``antigen.species`` matches ``pattern`` (optionally one ``gene``).
+def _vdjdb_antigen(path: Path, pattern: "str | None" = None, gene: "str | None" = None,
+                   mhc: "str | None" = None) -> set:
+    """Human VDJdb CDR3s, scoped to the question being asked.
 
-    ``gene=None`` keeps both chains — used for the covid TRA+TRB cohort, where a hit's
-    ``junction_aa`` may be either chain (VDJdb SARS-CoV-2: 3796 TRA + 5333 TRB human CDR3s).
+    - **antigen-specific association** (infection status): ``pattern="SARS-CoV-2"`` / ``"CMV"``.
+    - **HLA association**: ``mhc="HLA-A*02"`` — *any* epitope restricted by that allele; the
+      screen tests HLA carriage, not a particular antigen, so the oracle must not be
+      antigen-restricted.
+    - ``gene=None`` keeps both chains — for the covid TRA+TRB cohort a hit's ``junction_aa``
+      may be either chain (VDJdb SARS-CoV-2: 3,796 TRA + 5,333 TRB human records).
     """
     db = pl.read_csv(path, separator="\t", infer_schema_length=0)
-    f = (pl.col("species") == "HomoSapiens") & pl.col("antigen.species").str.contains(pattern)
+    f = pl.col("species") == "HomoSapiens"
+    if pattern:
+        f = f & pl.col("antigen.species").str.contains(pattern)
     if gene:
         f = f & (pl.col("gene") == gene)
+    if mhc:
+        f = f & pl.col("mhc.a").str.starts_with(mhc)
     return set(db.filter(f)["cdr3"].to_list())
 
 
@@ -227,16 +237,26 @@ def _vdjdb_cmv(path: Path) -> set:
     return _vdjdb_antigen(path, "CMV", gene="TRB")
 
 
-def _vdjdb_pairs(path: Path, pattern: str) -> set:
-    """Known ``(cdr3_alpha, cdr3_beta)`` pairs from VDJdb complexes for an antigen species.
+def _vdjdb_pairs(path: Path, pattern: "str | None" = None, mhc: "str | None" = None) -> set:
+    """Known ``(cdr3_alpha, cdr3_beta)`` pairs from VDJdb complexes.
 
     A ``complex.id`` groups the TRA and TRB of one single-cell-resolved clonotype, so these are
-    *true* α-β pairs — the oracle for the in-silico pairing (3,031 SARS-CoV-2 complexes).
+    *true* α-β pairs. Scope the oracle to the question being asked:
+
+    - **α-β pairing** (co-occurrence): ``pattern=None`` — **any antigen** (21,679 human complexes).
+      Whether two chains pair is a property of the receptor, not of a condition, so requiring the
+      pair to be e.g. COVID-associated would needlessly shrink the oracle (3,031) and understate
+      the enrichment.
+    - **HLA association**: ``mhc="HLA-A*02"`` — any epitope restricted by that allele.
+    - **Antigen-specific association** (COVID status): ``pattern="SARS-CoV-2"``.
     """
     db = pl.read_csv(path, separator="\t", infer_schema_length=0)
-    d = db.filter((pl.col("species") == "HomoSapiens")
-                  & pl.col("antigen.species").str.contains(pattern)
-                  & (pl.col("complex.id") != "0"))
+    f = (pl.col("species") == "HomoSapiens") & (pl.col("complex.id") != "0")
+    if pattern:
+        f = f & pl.col("antigen.species").str.contains(pattern)
+    if mhc:
+        f = f & pl.col("mhc.a").str.starts_with(mhc)
+    d = db.filter(f)
     a = d.filter(pl.col("gene") == "TRA").select("complex.id", pl.col("cdr3").alias("a"))
     b = d.filter(pl.col("gene") == "TRB").select("complex.id", pl.col("cdr3").alias("b"))
     j = a.join(b, on="complex.id", how="inner").unique(subset=["a", "b"])
