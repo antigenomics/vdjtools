@@ -53,6 +53,7 @@ def test_universe_is_subjects_with_both_chains():
 
 def test_same_chain_upper_triangle_no_self_pairs():
     # plant two TRB clonotypes that co-occur (co-specific), plus independent background
+    rng = np.random.default_rng(11)
     rows = []
     for i in range(40):
         sid = f"S{i:02d}"
@@ -60,6 +61,11 @@ def test_same_chain_upper_triangle_no_self_pairs():
             rows.append(_c(sid, "TRBV1", "TRBJ1", "CASSA"))
             rows.append(_c(sid, "TRBV2", "TRBJ2", "CASSB"))       # co-occurs with CASSA
         rows.append(_c(sid, "TRBV9", "TRBJ9", "CASSBG"))
+        # Per-subject-unique filler sets repertoire depth INDEPENDENTLY of the planted pair, as
+        # in a real repertoire. Without it depth ≡ pair-presence, and conditioning on depth (the
+        # default) would legitimately condition the signal away.
+        for f in range(rng.integers(20, 60)):
+            rows.append(_c(sid, "TRBV8", "TRBJ8", f"CASF{i}_{f}"))
     cohort = pl.DataFrame(rows)
     r = cooccurrence(cohort, chain_a="TRB", chain_b=None, min_incidence=3, min_cooccurrence=3)
     # no self pairs
@@ -80,3 +86,106 @@ def test_empty_result_stable_schema():
 def test_bad_test_arg():
     with pytest.raises(ValueError, match="test must be"):
         cooccurrence(_paired_cohort(), test="nope")
+
+
+def _depth_confounded_cohort(seed=7, n=400):
+    """Depth as the ONLY link: A and B are drawn INDEPENDENTLY given repertoire size.
+
+    Deep subjects carry more of everything, so A and B co-occur across subjects with no pairing
+    whatsoever — the pooled test is fooled; conditioning on depth must not be. Depth is set by
+    filler clonotypes so that A/B are a negligible share of it (as in real repertoires), and the
+    detection probability is kept away from 0/1 where no lift can be induced.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i in range(n):
+        sid = f"S{i:03d}"
+        depth = max(int(np.exp(rng.normal(np.log(40), 0.9))), 2)  # skewed; CV ~ 1
+        p = 1 - np.exp(-depth / 90.0)                             # ~0.36 at median, rises with depth
+        # Background present in every subject, so the universe is the whole cohort and A/B
+        # absence is observed (a single-feature `candidates` list would collapse the universe
+        # to the subjects that HAVE the feature, making n_a == n_ab == n and theta == 1).
+        rows.append(_c(sid, "TRAV2", "TRAJ2", "CAVBG"))
+        rows.append(_c(sid, "TRBV2", "TRBJ2", "CASSBG"))
+        if rng.random() < p:
+            rows.append(_c(sid, "TRAV1", "TRAJ1", "CAVRF"))
+        if rng.random() < p:
+            rows.append(_c(sid, "TRBV1", "TRBJ1", "CASSPF"))
+        for f in range(depth):                    # per-subject-unique filler → sets depth only
+            rows.append(_c(sid, "TRAV9", "TRAJ9", f"CAVF{i}_{f}"))
+            rows.append(_c(sid, "TRBV9", "TRBJ9", f"CASF{i}_{f}"))
+    return pl.DataFrame(rows)
+
+
+def test_depth_strata_zero_reproduces_the_pooled_test_exactly():
+    """depth_strata=0 is the uncorrected pooled test — the oracle the CMH branch is checked against."""
+    df = _depth_confounded_cohort()
+    pooled = cooccurrence(df, min_cooccurrence=2, depth_strata=0)
+    assert "or_mh" not in pooled.columns and "chi2" not in pooled.columns
+    strat = cooccurrence(df, min_cooccurrence=2, depth_strata=10)
+    shared = ["a_junction_aa", "b_junction_aa", "n", "n_a", "n_b", "n_ab", "theta"]
+    # The pooled lift/counts are untouched by stratification; only the p-value changes.
+    assert pooled.sort(shared[:2]).select(shared).equals(strat.sort(shared[:2]).select(shared))
+    assert "or_mh" in strat.columns
+
+
+def _ab(df):
+    return df.filter((pl.col("a_junction_aa") == "CAVRF") & (pl.col("b_junction_aa") == "CASSPF"))
+
+
+def test_cmh_over_depth_strata_kills_a_depth_induced_false_positive():
+    """The headline: depth alone must not produce a significant pair once conditioned on.
+
+    A and B are drawn independently given depth — there is no pairing to find. The pooled test
+    is fooled (that is the 45-49% false-positive regime measured on simulated null pairs);
+    conditioning on depth must not be.
+    """
+    df = _depth_confounded_cohort()
+    kw = dict(min_incidence=2, min_cooccurrence=2)
+    pooled = _ab(cooccurrence(df, depth_strata=0, **kw))
+    strat = _ab(cooccurrence(df, depth_strata=10, **kw))
+    assert pooled.height == 1 and strat.height == 1
+
+    # Depth inflates the pooled lift above 1 even though A ⫫ B given depth ...
+    assert pooled["theta"][0] > 1.15, f"expected depth-induced lift, got {pooled['theta'][0]}"
+    assert pooled["p_value"][0] < 0.05, "pooled test should be fooled by depth here"
+    # ... and conditioning on depth removes both the significance and the lift.
+    assert strat["p_value"][0] > 0.05, (
+        f"CMH still significant (p={strat['p_value'][0]:.3g}, or_mh={strat['or_mh'][0]:.3f}) "
+        "— depth conditioning failed")
+    assert strat["or_mh"][0] < pooled["odds_ratio"][0]
+
+
+def test_depth_conditioning_is_skipped_when_depth_barely_varies():
+    """Conditioning is not free — below theta_depth ~1.2 there is nothing to correct.
+
+    Guards the shallow/uniform-depth cohort: stratifying there sheds power (and on a shallow
+    repertoire a single clonotype is a large share of depth, making it a mediator of the very
+    pair under test), so the pooled test is kept.
+    """
+    df = _paired_cohort()                                  # CV(depth) ~ 0.30 -> theta_depth ~1.09
+    strat = cooccurrence(df, min_cooccurrence=2, depth_strata=10)
+    assert "or_mh" not in strat.columns, "should have fallen back to the pooled test"
+    pooled = cooccurrence(df, min_cooccurrence=2, depth_strata=0)
+    assert strat.equals(pooled)
+
+
+def test_depth_strata_retains_a_genuine_pair_in_a_deep_cohort():
+    """Calibration must not cost the real signal: a planted pair survives depth conditioning."""
+    rng = np.random.default_rng(3)
+    rows = []
+    for i in range(400):                       # deep, skewed cohort -> conditioning is active
+        sid = f"S{i:03d}"
+        depth = max(int(np.exp(rng.normal(np.log(40), 0.9))), 2)
+        rows.append(_c(sid, "TRAV2", "TRAJ2", "CAVBG"))
+        rows.append(_c(sid, "TRBV2", "TRBJ2", "CASSBG"))
+        if i < 160:                            # a REAL pair: both chains of one clone, together
+            rows.append(_c(sid, "TRAV1", "TRAJ1", "CAVRF"))
+            rows.append(_c(sid, "TRBV1", "TRBJ1", "CASSPF"))
+        for f in range(depth):
+            rows.append(_c(sid, "TRAV9", "TRAJ9", f"CAVF{i}_{f}"))
+            rows.append(_c(sid, "TRBV9", "TRBJ9", f"CASF{i}_{f}"))
+    hit = _ab(cooccurrence(pl.DataFrame(rows), min_cooccurrence=2, depth_strata=10))
+    assert hit.height == 1
+    assert hit["p_value"][0] < 1e-6, f"planted pair lost by stratification (p={hit['p_value'][0]})"
+    assert hit["or_mh"][0] > 1
