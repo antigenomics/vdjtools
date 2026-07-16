@@ -71,7 +71,7 @@ def fetch(max_samples: int) -> tuple[Path, pl.DataFrame]:
 def phenotypes(meta: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Build the CMV (+/−) and HLA-A*02 (present/absent) per-subject phenotype tables."""
     cmv = meta.select(
-        S_ID := "sample_id",
+        "sample_id",
         pl.when(pl.col("cmv") == "+").then(True)
           .when(pl.col("cmv") == "-").then(False).otherwise(None).alias("cmv_pos"))
     a02 = meta.select(
@@ -104,22 +104,22 @@ def validate_cmv(hits: pl.DataFrame, vdjdb: pl.DataFrame, fdr: float) -> None:
         return
 
     # Exact CDR3 match (+ V-family agreement where both call a V).
-    ex = sig.join(vdjdb, left_on=S.CDR3_AA, right_on="cdr3", how="inner")
+    ex = sig.join(vdjdb, left_on=S.JUNCTION_AA, right_on="cdr3", how="inner")
     v_agree = ex.filter(pl.col(S.V_CALL) == pl.col("vdjdb_v")).height if "vdjdb_v" in ex.columns else 0
     a02 = ex.filter(pl.col("mhc").str.starts_with("HLA-A*02")).height
-    print(f"  exact CDR3 in vdjdb-CMV : {ex['cdr3_aa'].n_unique():4d} / {sig.height} "
+    print(f"  exact CDR3 in vdjdb-CMV : {ex['junction_aa'].n_unique():4d} / {sig.height} "
           f"hits   (V-family agrees on {v_agree}; HLA-A*02-restricted in vdjdb: {a02})")
     epi = (ex.group_by("epitope").len().sort("len", descending=True).head(5))
     for r in epi.iter_rows(named=True):
         print(f"      epitope {r['epitope']:<14s} {r['len']:3d} matches")
     for r in ex.sort("q_value").head(6).iter_rows(named=True):
-        print(f"      {r['cdr3_aa']:<20s} {r.get('v_call',''):<10s} "
+        print(f"      {r['junction_aa']:<20s} {r.get('v_call',''):<10s} "
               f"OR={r['odds_ratio']:6.1f} q={r['q_value']:.1e}  ↔ {r['epitope']}/{r['mhc']}")
 
     # 1-mismatch match to vdjdb (bonus; needs the [overlap] extra).
     try:
         import vdjmatch.cluster as vc
-        ours = sig[S.CDR3_AA].unique().to_list()
+        ours = sig[S.JUNCTION_AA].unique().to_list()
         ref = vdjdb["cdr3"].unique().to_list()
         pairs = vc.overlap(ours, ref, scope="1,0,0,1")
         n1 = pairs["a_idx"].n_unique() if pairs.height else 0
@@ -151,7 +151,7 @@ def volcano(hits: pl.DataFrame, vdjdb_cdr3: set[str] | None, title: str, out: Pa
         # Highlight only *significant* hits that are also in vdjdb-CMV — the meaningful
         # validation. (Circling every vdjdb member floods the plot: at low incidence many
         # features share one (OR, p) coordinate, so a vdjdb hit lands on nearly all of them.)
-        in_db = h[S.CDR3_AA].is_in(list(vdjdb_cdr3)).to_numpy()
+        in_db = h[S.JUNCTION_AA].is_in(list(vdjdb_cdr3)).to_numpy()
         val = sig & in_db
         ax.scatter(x[val], y[val], s=30, facecolors="none", edgecolors="#00798c",
                    linewidths=1.3, label="sig & in vdjdb-CMV")
@@ -203,7 +203,7 @@ def main() -> None:
     n_sig = cmv.filter(pl.col("q_value") < args.fdr).height
     print(f"[2] CMV Fisher: {cmv.height} public TCRβ tested, {n_sig} sig (q<{args.fdr})   {_t(t0)}")
     for r in cmv.head(6).iter_rows(named=True):
-        print(f"      {r['cdr3_aa']:<20s} {r['v_call']:<10s} {r['j_call']:<9s} "
+        print(f"      {r['junction_aa']:<20s} {r['v_call']:<10s} {r['j_call']:<9s} "
               f"{r['n_pos_present']:3d}+/{r['n_neg_present']:3d}−  OR={r['odds_ratio']:6.1f}  "
               f"p={r['p_value']:.1e} q={r['q_value']:.1e}")
 
@@ -221,9 +221,9 @@ def main() -> None:
         t0 = time.perf_counter()
         # 1mm over public keys only (incidence≥min) — the 89M-unique full set is intractable to
         # cluster whole; public-key restriction is the documented benchmark approximation.
-        pub = (lf.group_by([S.CDR3_AA, S.V_CALL, S.J_CALL]).agg(pl.len().alias("_n"))
-               .filter(pl.col("_n") >= args.min_incidence).select([S.CDR3_AA, S.V_CALL, S.J_CALL]))
-        cmv1 = fisher_association(lf.join(pub, on=[S.CDR3_AA, S.V_CALL, S.J_CALL], how="semi"),
+        pub = (lf.group_by([S.JUNCTION_AA, S.V_CALL, S.J_CALL]).agg(pl.len().alias("_n"))
+               .filter(pl.col("_n") >= args.min_incidence).select([S.JUNCTION_AA, S.V_CALL, S.J_CALL]))
+        cmv1 = fisher_association(lf.join(pub, on=[S.JUNCTION_AA, S.V_CALL, S.J_CALL], how="semi"),
                                   cmv_ph, pheno_col="cmv_pos", alternative="greater",
                                   min_incidence=args.min_incidence, match="1mm")
         n1 = cmv1.filter(pl.col("q_value") < args.fdr).height

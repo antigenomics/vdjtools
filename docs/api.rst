@@ -388,12 +388,52 @@ VJ-usage batch-effect correction.
 Biomarker association (``vdjtools.biomarker``)
 ----------------------------------------------
 
-Incidence-based biomarker discovery: Fisher-exact association of clonotype / feature incidence against phenotype (HLA, condition, ...) with exact or 1-mismatch matching, and metaclonotype grouping.
+Incidence-based clonotype-association testing across a cohort of repertoires (Emerson 2017, Howie 2015, De Witt 2018, Vlasova 2026): feature-vs-condition association (Fisher / χ² / Bayesian / permutation; binary, category, or Cochran–Mantel–Haenszel stratified conditions) and feature-vs-feature co-occurrence (α-β pairing, same-chain co-specificity), with exact or 1-mismatch matching and metaclonotype grouping.
+
+``vdjtools.biomarker.association``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+General incidence association and candidate selection.
+
+.. automodule:: vdjtools.biomarker.association
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.biomarker.cooccurrence``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Feature-vs-feature co-occurrence (in-silico α-β pairing, same-chain co-specificity).
+
+.. automodule:: vdjtools.biomarker.cooccurrence
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.biomarker.condition``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Phenotype-design builders (binary, categorical, HLA alleles, zygosity, CMH strata).
+
+.. automodule:: vdjtools.biomarker.condition
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.biomarker.stats``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Vectorised 2×2 test kernels (Fisher, χ², Bayesian, CMH, permutation, FDR).
+
+.. automodule:: vdjtools.biomarker.stats
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 ``vdjtools.biomarker.fisher``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Fisher-exact incidence association (V/J-match, exact / 1mm).
+Fisher-exact incidence association (V/J-match, exact / 1mm) — the Emerson-2017 shortcut.
 
 .. automodule:: vdjtools.biomarker.fisher
    :members:

@@ -12,8 +12,6 @@ PYBIND11_MODULE(_core, m) {
     m.doc() = "vdjtools native core (C++): packed V(D)J model + Pgen / EM hot loops, and the "
               "iNEXT size-based diversity kernel (curve + bootstrap + batch).";
 
-    m.def("hamming", &vdjtools::hamming, py::arg("a"), py::arg("b"),
-          "Hamming distance between two equal-length strings; -1 if lengths differ.");
     m.def("version", &vdjtools::version, "Native core version string.");
 
     // --- Packed V(D)J recombination model + Pgen / EM (Phase 1) ---
