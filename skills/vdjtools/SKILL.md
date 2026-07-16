@@ -81,7 +81,39 @@ default or `"sigmoid"` = Vlasova 2026 z-score + grand-mean-preserving sigmoid), 
 (rescale + roulette-wheel resample the clonotype table to the corrected usage).
 
 ### `vdjtools.biomarker`
-`fisher_association` (incidence Fisher vs phenotype; V/J-match, exact/1mm), `metaclonotypes`.
+Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Witt 2018 / Vlasova 2026).
+- `association(cohort, design, *, test=, level_col=, stratum_col=, key=, match=, min_incidence[_frac]=,
+  candidates=, alternative=)` — feature-vs-condition; `test` ∈ {`fisher`,`chi2`,`bayes_logodds`,
+  `bayes_bf`,`permutation`} (str or list → long output w/ `test` col); category via `level_col` (one-vs-rest),
+  paired via `stratum_col` (Cochran–Mantel–Haenszel). Match scope = `key` (`(junction_aa,)`/`+v`/`+v+j`) × `match`:
+  - `exact` — the key itself.
+  - **`fuzzy`** — 1mm **SEARCH** (Vlasova 2026): `incidence(c) = #subjects carrying ANY feature within `scope` of c`.
+    Candidate KEEPS its identity and GAINS incidence; V/J in the key must match exactly. Delegates to
+    `vdjmatch.cluster.overlap`. **This is what finds biomarkers.** `key=(junction_aa,v_call)` ≫ `junction_aa`
+    alone (real cohort: donor q<0.01 7 → 78). NB `candidates=` is the QUERY set only — the universe stays the
+    whole cohort (a candidate's neighbours usually aren't candidates).
+  - `1mm` — **CLUSTERING** via `metaclonotypes`: MERGES candidates, tests the group. Different operation;
+    belongs *downstream* of a biomarker list (Hamming graph / classifier), not to discovery.
+- **Unit + null (the two things that go wrong):** the sampling unit is the **subject** — Emerson beat
+  template-weighted abundance head-to-head; weighting a 2×2 by reads is pseudoreplication (Hurlbert 1984).
+  If you count **rearrangements** instead (unique nt row = one recombination event), counts hit ~10⁷ → use a
+  smooth test (conditional binomial / G-test), never factorials; and the null MUST be the **subject** ratio
+  `n_pos/(n_pos+n_neg)`, not the row ratio. Depth differs by arm in real cohorts (FMBA controls are 1.4–1.5×
+  deeper/donor), so the two nulls differ ~15–20% and any clonotype not scaling with depth gets exactly that
+  much spurious enrichment — hyper-significant at large counts. Depth also biases the subject test the other
+  way; for repeated samples of one donor, `preprocess.downsample` each pair to a common read count first.
+- **HLA restriction:** measure it **per motif, within cases** (Fisher: carries motif × carries allele). Do NOT
+  read it off per-stratum hit counts — the commonest allele wins on power alone (A\*02 is ~half a cohort and
+  collects hits restricted by *other* alleles; in HIP-CMV, A\*01 gives the most hits and the weakest specificity
+  because it has no dominant CMV epitope).
+- `cooccurrence(cohort, *, chain_a=, chain_b=, test=, min_incidence[_frac]=, min_cooccurrence=, evalue=, depth_strata=10)` —
+  **depth-conditioned by default** (CMH over repertoire-depth strata): a deep repertoire carries more of
+  everything, so a pooled test is badly miscalibrated (measured FPR 0.46 on independent pairs at the
+  incidence regime `max_features` selects). `depth_strata=0` restores the pooled test. Adds `or_mh`/`chi2`.
+  feature-vs-feature θ=n·n_AB/(n_A·n_B) + Fisher/χ² + FDR; α-β pairing (chain_a≠chain_b) or same-chain (chain_b=None).
+- `condition` builders: `binary`, `categorical`, `hla_alleles`, `zygosity`, `stratified` → design frame (`_pos`/`_level`/`_stratum`).
+- `select_candidates` (public features over incidence count/fraction), `stats` (vectorised 2×2 kernels),
+  `fisher_association` (Emerson Fisher shortcut, legacy schema), `metaclonotypes` (1mm grouping).
 
 ### `vdjtools.sc` — single-cell (AIRR Cell / 10x)
 `read_10x`, `read_airr_cell`, `write_airr_cell`; `resolve_chains`, `pair_chains`,

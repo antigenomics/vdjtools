@@ -25,6 +25,7 @@ tracks all data provenance.
 | 4 | `feature/overlap-tcrnet` | Sample overlap + TCRnet via vdjmatch/seqtree; **similarity-aware** overlap (TINA / Leinster-Cobbold), pairwise-distance matrix, clustering/MDS, tracking | **done** |
 | 5 | `feature/preprocess` | Downsampling, error-correction, decontaminate, filters, VJ-usage batch-effect correction, pool/join | **done** |
 | 6 | `feature/biomarker-assoc` | Fisher incidence association (V/J-match + exact/1mm) vs HLA/condition; metaclonotype grouping; Emerson-2017 CMV/HLA benchmark validated vs VDJdb | **done** |
+| 6b | `feature/biomarker-cooccurrence` | Full association framework (Fisher / χ² / Bayesian / Beta-Binomial BF / permutation; binary / per-HLA-allele / Cochran–Mantel–Haenszel stratified conditions) + feature-vs-feature **co-occurrence** (α-β pairing, same-chain co-specificity; θ-lift + Fisher + FDR + Poisson E-value, **depth-conditioned by default**); airr_hip / airr_covid19 / airr_covid19_vacc benchmarks. **v2.7.0** | **done** |
 | 7 | `feature/singlecell-interop` | AIRR Cell / 10x paired-chain interop, single-cell metadata bridge, QC (doublet/mispairing), cluster evaluation, AnnData bridge | **done** (paired α/β Pgen residual → Phase 12) |
 | 8 | `feature/cli-docs` | typer CLI (pgen/generate/diversity/spectratype/segment-usage/overlap/models), 6 example marimo notebooks, **v2.1.0** release | **done** (full Sphinx API docs residual → Phase 12) |
 

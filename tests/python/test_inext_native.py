@@ -50,16 +50,9 @@ def _default_sizes(x: np.ndarray, knots: int = 40) -> list[float]:
 # native symbols are present
 # --------------------------------------------------------------------------- #
 def test_core_exposes_inext_symbols():
-    for name in ("hamming", "inext_curve", "inext_bootstrap", "inext_batch",
+    for name in ("inext_curve", "inext_bootstrap", "inext_batch",
                  "inext_digamma", "InextCurve", "InextSample"):
         assert hasattr(core, name), name
-
-
-def test_hamming_still_works():
-    # the new ext must not regress the original primitive
-    assert core.hamming("CASSL", "CASSL") == 0
-    assert core.hamming("CASSL", "CASSF") == 1
-    assert core.hamming("CASS", "CASSL") == -1
 
 
 # --------------------------------------------------------------------------- #

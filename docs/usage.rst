@@ -170,31 +170,127 @@ depth are preserved.
 Biomarker association
 ---------------------
 
-:mod:`vdjtools.biomarker` finds clonotypes whose **incidence** (presence across subjects)
-associates with a phenotype, by Fisher-exact test (the Emerson-2017 design):
+:mod:`vdjtools.biomarker` tests each clonotype **feature**'s incidence (presence across
+subjects) against a condition — the incidence-contingency framework of Emerson 2017, Howie
+2015, De Witt 2018 and Vlasova 2026. ``association`` shares one streamed subject-incidence
+table across five tests (Fisher, χ², Bayesian log-odds, Beta-Binomial Bayes factor,
+permutation) and three condition types (binary, category, stratified):
 
 .. code-block:: python
 
    import polars as pl
-   from vdjtools.biomarker import fisher_association, metaclonotypes
+   from vdjtools import biomarker
+   from vdjtools.biomarker import association, condition
 
-   # cohort: long frame with a sample_id column; phenotype: one row per subject
+   # cohort: long frame with a sample_id column; meta: one row per subject
    cohort = pl.DataFrame({
        "sample_id":   ["p0","p1","p2","n0","n1","n2"],
        "v_call":      ["TRBV1"]*6, "j_call": ["TRBJ1"]*6,
        "junction_aa": ["CASSXF","CASSXF","CASSXF","CASSXF","CASSBG","CASSBG"],
        "duplicate_count": [10]*6,
    })
-   pheno = pl.DataFrame({"sample_id": ["p0","p1","p2","n0","n1","n2"],
-                         "cmv": [True, True, True, False, False, False]})
+   meta = pl.DataFrame({"sample_id": ["p0","p1","p2","n0","n1","n2"],
+                        "cmv": ["+","+","+","-","-","-"], "hla": ["A*02"]*3 + ["A*01"]*3})
 
-   fisher_association(cohort, pheno, pheno_col="cmv")
-   # per feature: incidence, n_pos_present, n_neg_present, direction, log2_or, p_value
+   # binary condition, several tests at once (long output with a `test` column)
+   association(cohort, condition.binary(meta, "cmv"),
+               test=["fisher", "chi2", "bayes_bf"])
 
-   metaclonotypes(cohort)                 # group near-identical CDR3s (1-mismatch + V/J) -> meta_id
+   # category: one-vs-rest per HLA allele (Emerson/DeWitt); add a `level` column
+   association(cohort, condition.hla_alleles(meta, ["hla"]), level_col="_level")
 
-Use ``match="1mm"`` on ``fisher_association`` to pool single-mismatch neighbours of each
-clonotype (needs the ``[overlap]`` engine).
+   # paired: CMV association conditioned on HLA, combined by Cochran–Mantel–Haenszel
+   association(cohort, condition.stratified(meta, "cmv", "hla"), stratum_col="_stratum")
+
+The **match scope** is set by ``key`` (``(junction_aa,)`` / ``+v`` / ``+v+j``) and ``match``:
+
+``"exact"``
+   The feature is the key itself.
+
+``"fuzzy"``
+   A single-mismatch **search**: ``incidence(c) = #subjects carrying ANY feature within `scope`
+   of c``. The candidate **keeps its identity and gains incidence** — the mismatch is an
+   incidence-*estimation* trick, so the output stays a list of individual biomarker clonotypes.
+   Non-``junction_aa`` key columns (V/J) must match exactly, so ``key=(junction_aa, v_call)``
+   pins the germline half of the contact surface while the CDR3 varies by one residue. This is
+   the Vlasova-2026 operation, and it delegates the search to ``vdjmatch.cluster.overlap``.
+
+``"1mm"``
+   **Clustering** via :func:`~vdjtools.biomarker.metaclonotypes`: candidates are *merged* into
+   groups and the group is tested. A legitimate operation, but a different one — it belongs
+   *downstream* of a biomarker list (building a Hamming graph, a classifier), not to discovery.
+   Use ``"fuzzy"`` to find biomarkers; use ``"1mm"`` to group them afterwards.
+
+Candidate features are all public clonotypes (``min_incidence`` count or ``min_incidence_frac``
+fraction) or an explicit ``candidates`` list (:func:`~vdjtools.biomarker.select_candidates`).
+Note that under ``match="fuzzy"`` ``candidates`` is the **query** set only: the search universe
+stays the whole cohort, because a candidate's neighbours are usually not candidates themselves.
+``fisher_association`` is kept as the Emerson-2017 Fisher shortcut with the original schema.
+
+.. admonition:: Choosing the unit — and, if you count rearrangements, the right null
+   :class: important
+
+   The sampling unit is the **subject**. Emerson 2017 tested template-weighted abundance
+   head-to-head against presence/absence and abundance *lost*; weighting a contingency table by
+   reads is pseudoreplication (Hurlbert 1984). ``association`` therefore tests subject incidence.
+
+   If you instead count **rearrangements** (a unique nt row in a repertoire = one recombination
+   event; a CDR3aa reached by three nt variants is three events), the counts are large (~10⁷ in a
+   1,200-donor cohort), so an exact hypergeometric is the wrong tool — use a smooth test
+   (conditional binomial / G-test), not factorials. **The null matters more than the test**: it
+   must be the *subject* ratio ``n_pos/(n_pos+n_neg)``, not the *row* ratio
+   ``N_pos/(N_pos+N_neg)``. Where sequencing depth differs between arms — in our FMBA cohort the
+   controls carry 1.4–1.5× more rearrangements per donor — the two nulls differ by ~15–20%, and
+   any clonotype whose row count does not scale with depth (a public one carried about once per
+   donor regardless) picks up a spurious enrichment of exactly that size. At large counts a 1.4×
+   bias is hyper-significant, so the wrong null does not add noise, it manufactures hits.
+
+   Depth differences also bias the subject test, in the opposite direction: a deeper repertoire
+   is more likely to carry any given clonotype. Where the design allows it — repeated samples of
+   the same donor — down-sample each pair to a common read count
+   (:func:`~vdjtools.preprocess.downsample`) before testing rather than trying to model it away.
+
+**Co-occurrence** tests feature-vs-feature incidence across the subjects profiled for both
+chains — in-silico α-β pairing (Howie 2015, Vlasova 2026) and same-chain co-specificity
+(De Witt 2018) — by the lift ``θ = n·n_AB/(n_A·n_B)`` + Fisher/χ² + FDR:
+
+.. code-block:: python
+
+   biomarker.cooccurrence(cohort, chain_a="TRA", chain_b="TRB", evalue=True)   # α-β pairs
+   biomarker.cooccurrence(cohort, chain_a="TRB", chain_b=None)                  # same-chain pairs
+
+   biomarker.metaclonotypes(cohort)       # group near-identical CDR3s (1-mismatch + V/J) -> meta_id
+
+.. warning::
+
+   **Cross-subject co-occurrence is not evidence of physical chain pairing.**
+   :func:`~vdjtools.biomarker.cooccurrence` tests whether two clonotypes occur in the same
+   *subjects* more often than chance. Unlike the randomised wells of a pairSEQ experiment
+   (Howie et al., *Sci Transl Med* 2015), subjects carry HLA type, germline variation,
+   ancestry, sequencing depth and infection history — any of which makes two clonotypes
+   co-occur without ever sharing a cell. In pairSEQ's own framework a *cross-subject* α-β
+   pair is the **definition of a false positive**. Two confounders in particular survive HLA
+   stratification:
+
+   - **Repertoire depth** inflates the lift by ``≈ 1+CV²(N)`` for rare clonotypes,
+     independently of HLA, exposure or pairing (measured on the FMBA covid19 cohort:
+     CV(N)=0.899 → θ_depth=1.81; a ≥1000-clonotype floor drops it to 1.50 *and* removes
+     ~73% of the significant pairs). Filter near-empty samples before reading θ.
+   - **Shared exposure**: two co-specific but unpaired clones stay associated within every
+     stratum — indistinguishable from pairing by any cross-subject contingency table.
+
+   Shared restriction by an allele of carrier frequency *f* cannot induce a lift above
+   ``(1+CV²(N))/f`` (2.04 for HLA-A*02:01 before the depth term), so a θ far above that
+   ceiling is not explicable by *that allele* — though it remains explicable by depth,
+   ancestry, batch or exposure. De Witt et al. (*eLife* 2018) found shared HLA carriage
+   explained the **majority** of strongly co-occurring TCRβ pairs, and restricted all
+   downstream clustering to within-allele subsets. Read ``cooccurrence()`` output as
+   co-occurrence and nothing more; physical pairing is established by within-subject
+   designs (well-based subsampling or single-cell), not cross-subject tables.
+
+Explore the whole screen interactively — condition (CMV / HLA-allele / CMH), test, match
+scope, a live VDJdb overlay, and a co-occurrence panel — with
+``marimo edit notebooks/biomarker_explorer.py`` (Emerson HIP via HuggingFace).
 
 Single-cell
 -----------

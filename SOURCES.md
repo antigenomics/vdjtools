@@ -37,6 +37,120 @@ models, their own IMGT-vintage germline is kept for exact-Pgen fidelity — see 
 |---|---|---|---|---|
 | Emerson HIP cohort (786 subjects) | HF dataset [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip) — redistributed from Adaptive immuneACCESS **Emerson-2017-NatGen** | per-subject VDJtools tables `corr/HIP#####.txt.gz` (`count freq cdr3nt cdr3aa v d j VEnd…`); `metadata.txt` (TAB-sep: `file_name sample_id age race sex cmv hla`) | `examples/emerson_cmv_hla.py` → `huggingface_hub.snapshot_download(repo_type="dataset", allow_patterns=["corr/{sample}.txt.gz"])`; ingest with `io.ingest_cohort(fmt="vdjtools")` | **experimental** TCRβ repertoires + phenotypes (Emerson et al., *Nat Genet* 2017, doi:10.1038/ng.3822). `cmv` ∈ {`+`,`-`,`NA`}; `hla` = 2-digit HLA-A/B only (`HLA-A*02`); ⚠ `race` contains commas — split on TAB. No discovery/validation split column |
 | VDJdb (CMV validation target) | local checkout `/Users/mikesh/vcs/code/vdjdb-db/database/vdjdb.slim.txt` (canonical `antigenomics/vdjdb-db`, 2024-06 release; 2-digit HLA matches airr_hip) | TSV, 16 cols: `gene cdr3 species antigen.epitope antigen.gene antigen.species … v.segm j.segm … mhc.a mhc.b mhc.class … vdjdb.score` | read with polars; filter `gene==TRB & species==HomoSapiens & antigen.species~CMV` | **curated** TCR↔epitope database; newer 4-digit dump at `/Users/mikesh/vcs/code/vdjdb-iedb-concordance/vdjdb_dump_2026/vdjdb.slim.txt`. Canonical fetch: `antigenomics/vdjdb-db` GitHub releases |
+| FMBA covid19 (TRA+TRB) — Phase 6b benchmark | aldan3 `/projects/fmba_covid` (clonotype tables `COV_V_usage_adjustment_v3/FMBA_functional/*.clonotypes.TRB.txt` + `data/*.clonotypes.{TRA,TRB}.pool.aa.table.txt`) ↔ private HF `isalgo/airr_covid19`; phenotype = `metadata_fmba_full.txt`/`desc_fmba_not_nan_hla.csv` (`COVID_status`, 4-digit `HLA-*`), join by 12-digit `id` | legacy VDJtools tables; TAB metadata | `scripts/biomarker_bench.sbatch -- covid19` on aldan3 (reads `/projects/fmba_covid` directly) | **experimental** deep TCRα/β covid repertoires (Vlasova et al., *Genome Medicine* 2026;18:20). COVID-association + α-β co-occurrence benchmark |
+| covid19 biomarker oracle (**canonical**) | VDJdb SARS-CoV-2 — same slim dump as the CMV row; on aldan3 `/projects/immunestatus/vdjdb/vdjdb-2025-07-30/vdjdb.slim.txt` | TSV (as above) | filter `species==HomoSapiens & antigen.species~"SARS-CoV-2"` (**both chains**: 3,796 TRA + 5,333 TRB records → 8,842 unique CDR3s); `bench_biomarker._vdjdb_antigen(path, "SARS-CoV-2")` | **curated** antigen-specific oracle (author decision 2026-07-16: prefer VDJdb over the study's published list — assay-grounded, chain-agnostic, symmetric with the CMV validation) |
+| covid19 biomarker oracle (alternative, not used) | HF `isalgo/airr_covid19` → `covid_associated_clonotypes.csv` (`cdr3,cluster,has_covid_association,chain,v,j`) | CSV | `--oracle` flag (opt-in) | **curated** — the study's published COVID-associated clonotype/cluster list (Vlasova 2026). Superseded as the default validation target by VDJdb SARS-CoV-2 (above) |
+| FMBA covid19_vacc (TRA+TRB) — Phase 6b benchmark | aldan3 `/projects/fmba_covid/vaccine/corr_func/*.clonotypes.{TRA,TRB}.txt` ↔ private HF `isalgo/airr_covid19_vacc`; phenotype = `vaccine/processed_metadata.tsv` / `vaccine/metadata.csv` (`timepoint` ∈ before/20d-after, `vaccine` ∈ GamCOVIDVac/CoviVac), join by 12-digit `id` | legacy VDJtools tables; CSV/TSV metadata | `scripts/biomarker_bench.sbatch -- covid19_vacc` on aldan3 | **experimental** pre/post-vaccination TCRα/β repertoires (Vlasova 2026). Timepoint/vaccine association benchmark |
+
+### Phase 6b benchmark results (Aldan-3, v2.7.0, 16 cores) — **computed**, not experimental
+
+All three via `scripts/biomarker_bench.sbatch`; `key=(junction_aa,v_call,j_call)`, BH-FDR q<0.05,
+`alternative="greater"`. Concordance = how many of the top-100 Fisher hits each test also flags.
+
+**Arms are the ANALYSED counts** (`association()` inner-joins the design to the cohort — the design
+size is *not* the tested size; see `run_association_suite`, which now reports and warns on this).
+
+| Cohort | Analysed arms | min_inc | Features tested | Significant | Validation | χ² | perm | BF | Time / peak RSS |
+|---|---|---|---|---|---|---|---|---|---|
+| covid19 (COVID vs healthy) | **502+ / 34−** ⚠ 15:1 | 10 | 52,528 | **0** | none to validate (OR=nan) — 34 controls cannot power a genome-wide screen | — | — | — | 142 s / 6.4 GB |
+| **hip (Emerson CMV)** — *the association baseline* | 340+ / 421− | 8 | **1,366,592** | **70** | **VDJdb-CMV OR=24.5, p=5.5e-11** (10/70 sig CDR3s known; 4,551/671,879 tested are members); CMH (CMV\|HLA-A\*02) → 40 significant | 39/100 | 0/100 | **100/100** | 2,536 s / 99.7 GB |
+| covid19_vacc (timepoint) | 541+ / 541− | 5 | **1,390,129** | 269 | — | 85/100 | 0/100 | **100/100** | 3,678 s / 43.7 GB |
+
+⚠ **covid19 association is an honest negative: 0 significant on 502 COVID+ vs 34 healthy.** The FMBA
+cohort is overwhelmingly COVID+ and only 34 healthy subjects have both metadata and a repertoire — too
+few to power a genome-wide screen. **Earlier revisions of this file reported 44,125 significant with a
+VDJdb-SARS-CoV-2 enrichment of OR=2.35 (p=3.5e-13). Both are withdrawn**: they were produced by the
+phantom-negative bug (`association()` derived n_pos/n_neg from the *design* frame, so the 640 labelled
+-but-unsequenced subjects in the 1,212-row FMBA sheet voted "feature absent" for every feature — 438 of
+472 negatives were phantoms). Fixed in v2.7.0; on fixed code the count is **0**. hip (340/421) and
+covid19_vacc (541/541) never had designs that outran their cohorts and are unaffected — **hip is the
+association baseline**, covid19 is not.
+
+Depth does **not** confound the association: repertoire size is unrelated to COVID status (medians
+14,146 vs 13,211, ratio 1.07×, Mann-Whitney **p=0.64**, `appendix/assoc_depth.py`), so no depth
+conditioning is applied there — unlike co-occurrence, where depth is the whole problem.
+
+α-β **co-occurrence** (covid19, `min_cooccurrence=3`, `min_incidence_frac=0.03`, `evalue=True`,
+**`depth_strata=10` default**): 481,538 candidate pairs → **502 significant** (q<0.05); θ median
+**3.52**, max **9.19**; median depth-conditioned `or_mh` **8.97**; 17 s. Validated against **VDJdb α-β
+complexes (any antigen**, 20,169 pairs — pairing is a receptor property, so the oracle is deliberately
+*not* antigen-restricted): **3/502 significant pairs are known VDJdb pairs vs 6/446,224 tested →
+enrichment OR=893.2, p=2.8e-08**.
+
+**The depth correction improved precision without costing recall**: it removed 82% of the pooled hits
+(2,802 → 502) while retaining **all 3** VDJdb-validated true pairs, so the enrichment rose 5.6×
+(OR 158.4 → 893.2; p 4.9e-06 → 2.8e-08). Removing artifact, not signal. Honest caveat: only 6 known
+pairs were testable, so this rests on a small oracle overlap (Fisher is exact, so the p is valid).
+⚠ candidate features capped at `max_features=2000` (warned at runtime), i.e. top-incidence pairs only.
+
+#### Co-occurrence confounding — measured, and corrected by default (`appendix/{depth_gate,theta_ceiling,accept_gate}.py`)
+
+Cross-subject co-occurrence is confounded by per-subject **repertoire depth** and **shared HLA**
+(see the caveat in `docs/usage.rst`). Depth was quantified, then **fixed**; HLA remains a caveat.
+
+**Depth.** Subjects span **1 → 90,174** unique clonotypes (CV=0.899), inducing a lift
+`θ_depth = 1+CV² = 1.809` for rare clonotypes with no biology whatsoever. `appendix/cooccurrence_fpr.py`
+(seed 20260716; 2,000 null pairs/config; depth lognormal at the cohort's CV) measures what that does
+to a **pooled** test — and `max_features=2000` keeps the top features *by incidence*, so the tool
+operates in the worst column:
+
+| false-positive rate @ nominal p<0.05 (calibrated = 0.05) | 2% incidence | 3% | **11%** |
+|---|---|---|---|
+| pooled Fisher (the pre-2.7.0 default) | 0.052 | 0.073 | **0.456** |
+| **CMH over depth strata (the 2.7.0 default)** | **0.023** | **0.022** | **0.036** |
+
+The **depth-weighted / "x of X rearrangements"** variant was evaluated and **rejected as not a
+well-defined test**, not on its rate: a hypergeometric is a statement about drawing discrete units,
+so feeding it sums of depths silently asserts ΣS≈7e6 exchangeable pseudo-observations in place of 552
+subjects. Its "FPR" is then an artifact of the variant written — the formulation in
+`cooccurrence_fpr.py` degenerates conservative (→0.000), while one rescaling the weights to keep *n*
+fixed degenerates anticonservative (→0.9). Unusable in either direction. (An earlier revision of this
+file quoted 0.302/0.461/0.887 as measured; that number is not reproducible and is withdrawn.)
+
+**⚠ Correction.** An earlier revision of this file argued the signal was *"not a depth artifact —
+94.1% of significant pairs exceed θ_depth=1.809"*. **That reasoning is invalid**: `θ_depth=1+CV²`
+is the null **mean**, not a tail quantile, so ~half of *pure-null* pairs exceed it by construction
+and conditioning on significance selects the high-θ ones. ~94% is what a null screen *should*
+produce. The claim is withdrawn; the table above measures the thing that actually matters.
+
+**Effect of the fix on the real cohort** (`appendix/accept_gate.py`, all 552 subjects; **one
+deterministic run** — both arms share the identical candidate set, so this is a controlled A/B in
+which only the conditioning differs):
+
+| covid19 α-β co-occurrence | tested | significant (q<0.05) | θ median / max | median `or_mh` | time |
+|---|---|---|---|---|---|
+| `depth_strata=0` (pooled, uncorrected) | 481,579 | **2,804** | 3.07 / 9.19 | — | 16 s |
+| **`depth_strata=10` (default)** | 481,579 | **641** | 3.38 / 9.19 | **8.30** | 10 s |
+| ≥1000-clonotype floor + pooled (diagnostic) | 733,178 | 754 | 3.47 / 7.57 | — | — |
+
+Depth conditioning removes **77%** of the pooled hits *without discarding a subject*, and the
+survivors have a higher θ and a strong depth-conditioned `or_mh`. **641 is the defensible figure.**
+The depth floor is now a diagnostic, not required preprocessing.
+
+⚠ **Earlier revisions of this file reported 2,805 / 502 / "82%" and three different tested counts
+(481,538 / 481,501 / 481,587) for one configuration.** Those predate two fixes and are withdrawn:
+candidate selection was nondeterministic (an incidence tie-break, so `max_features` cut a different
+set every call — the arms were never comparable), and the CMH branch ignored `alternative`, making
+the "corrected" arm a *two-sided* test whose hits included anti-correlated pairs. The table above is
+a single post-fix run with a stable tested count in both arms.
+
+**HLA is the remaining binding constraint — untouched by this.** Shared restriction by an allele of
+carrier frequency *f* cannot induce a lift above `(1+CV²)/f`; only the extreme tail (θ=9.19) clears
+every allele carried by >19.7% of the 466 typed subjects (A\*02:01, A\*03:01, A\*01:01, A\*24:02,
+B\*07:02). Ancestry, batch and shared exposure are likewise unfixed. **None of this licenses a
+physical-pairing claim** — a cross-subject α-β pair is pairSEQ's *definition of a false positive*
+(Howie 2015). TODO v2.8: a degree-preserving (fixed-fixed) permutation null — the truest null
+measured (lift 0.98–1.01) but ~120 core-days at 1e-6 resolution, hence not the production default.
+
+**Three scale effects** (reproduced independently across cohorts — properties of genome-wide incidence
+testing, not defects): (1) BH-FDR is severe at ~10⁶ features — Emerson-2017 itself thresholds at a
+*nominal* P<1e-4 (FDR≈0.14), so 70 CMV hits at q<0.05 is consistent with the paper; (2) **permutation has
+a 1/`n_perm` p-floor** — at `n_perm=1000` the smallest p is 1e-3, and BH over 1.37M features needs
+≈1e-3×1.37M/70≈19 ≫ 0.05, hence 0/100 on both ~1.4M-feature cohorts but 100/100 on covid19's 52k set;
+(3) Yates-corrected **χ² is asymptotic** and conservative on the sparse tables at low `min_incidence`
+(39/100 → 85/100 → 100/100 as counts grow). **Fisher and the Beta-Binomial BF are the reliable arbiters
+at genome-wide scale; χ² and permutation are scale-dependent.**
+
 ## Phase 5 — preprocess (VJ batch-correction validation)
 
 | Dataset | Origin | Format | How to obtain | Provenance |
