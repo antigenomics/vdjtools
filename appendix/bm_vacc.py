@@ -105,8 +105,11 @@ def main():
     meta = pl.read_csv(ROOT / "metadata.tsv", separator="\t", infer_schema_length=0)
     cols = meta.columns
     print(f"  metadata: {meta.height} rows; cols={cols[:12]}", flush=True)
-    m = meta.filter(pl.col("file_name").str.contains(args.chain)) if "file_name" in cols else meta
-    print(f"  {args.chain} rows: {m.height}", flush=True)
+    # The sheet is TRB-ONLY (every file_name is *.clonotypes.TRB.txt) even though the repo also
+    # ships TRA files. So it is a per-(donor,timepoint) sheet, not a per-(sample,chain) one:
+    # filtering it by chain yields 0 TRA rows. Resolve the chain from the FILE glob instead.
+    m = meta
+    print(f"  metadata rows (chain-agnostic; sheet is TRB-only): {m.height}", flush=True)
     print("  timepoint:", m.group_by("timepoint").len().sort("len", descending=True).to_dicts(),
           flush=True)
     print("  vaccine:", m.group_by("vaccine").len().sort("len", descending=True).to_dicts(),
