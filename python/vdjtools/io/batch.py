@@ -22,6 +22,7 @@ _CONVERTERS = {
     "immunoseq": convert.read_immunoseq, "imgt": convert.read_imgt,
     "vidjil": convert.read_vidjil, "rtcr": convert.read_rtcr,
     "trust4": convert.read_trust4, "arda": convert.read_arda,
+    "mitcr": convert.read_mitcr,
 }
 
 
@@ -49,7 +50,7 @@ def sniff_format(path: str | os.PathLike) -> str:
     Returns:
         The detected format string, one of: ``"parquet"`` (``.parquet`` / ``.pq``
         extension), ``"vidjil"`` (``.vidjil`` / ``.json`` or a leading ``{``),
-        ``"imgt"``, ``"migec"``, ``"rtcr"``, ``"mixcr"``, ``"immunoseq"``, ``"trust4"``
+        ``"imgt"``, ``"migec"``, ``"mitcr"``, ``"rtcr"``, ``"mixcr"``, ``"immunoseq"``, ``"trust4"``
         (each by its signature header columns), ``"arda"`` (AIRR + arda's ``d2_call``),
         ``"vdjtools"`` (native table / MigMap — ``cdr3aa`` / ``count`` + ``cdr3nt``), or
         ``"airr"`` (AIRR Rearrangement — ``v_call`` / ``junction_aa`` / ``junction_nt`` /
@@ -68,6 +69,10 @@ def sniff_format(path: str | os.PathLike) -> str:
         return "imgt"
     if "cdr3 nucleotide sequence" in cols and "v segments" in cols:
         return "migec"
+    # MiTCR / tcR (R package): the dot-separated dialect. Checked before `vdjtools`, whose
+    # `{count, cdr3nt}` picks don't collide, but keep it with the other third-party formats.
+    if {"read.count", "cdr3.nucleotide.sequence"} <= cols:
+        return "mitcr"
     if "number of reads" in cols and "junction nucleotide sequence" in cols:
         return "rtcr"
     if cols & {"all v hits", "allvhitswithscore"} and \
@@ -96,11 +101,11 @@ def read(path: str | os.PathLike, fmt: str = "auto",
 
     Args:
         path: Path to a native vdjtools, AIRR Rearrangement, or Parquet table, or a
-            third-party tool export (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil,
-            RTCR, TRUST4, arda) — see :mod:`vdjtools.io.convert` (``.gz`` ok for the
+            third-party tool export (MiXcr, MiGec, MiTCR/tcR, immunoSEQ, IMGT/HighV-QUEST,
+            Vidjil, RTCR, TRUST4, arda) — see :mod:`vdjtools.io.convert` (``.gz`` ok for the
             text formats).
         fmt: ``"auto"`` (sniff the header / extension), ``"vdjtools"``, ``"airr"``,
-            ``"parquet"``, or a legacy format string (``"mixcr"``, ``"migec"``,
+            ``"parquet"``, or a legacy format string (``"mixcr"``, ``"migec"``, ``"mitcr"``,
             ``"immunoseq"``, ``"imgt"``, ``"vidjil"``, ``"rtcr"``, ``"trust4"``,
             ``"arda"``).
         n_rows: If given, read at most this many data rows (preview huge files).

@@ -250,6 +250,45 @@ def read_migec(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
     return _finalize(rows)
 
 
+def read_mitcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
+    """Read a MiTCR / tcR (R package) clonotype table — the dot-separated dialect.
+
+    Header is ``Read.count Read.proportion CDR3.nucleotide.sequence CDR3.amino.acid.sequence
+    V.gene J.gene D.gene V.end J.start D5.end D3.end VD.insertions DJ.insertions
+    Total.insertions``. Distinct from MiGEC's ``CDR3 nucleotide sequence`` / ``V segments``
+    (spaces, not dots), so it needs its own picks. ``D.gene`` may carry an ambiguous call
+    (``"TRBD1, TRBD2"``); :func:`extract_vdj` keeps the first.
+
+    Args:
+        path: Path to a MiTCR/tcR table.
+        n_rows: Read only the first ``n_rows`` rows.
+
+    Returns:
+        Canonical clonotype frame.
+
+    Raises:
+        ValueError: If the signature columns are absent.
+    """
+    raw = _read_tsv(path, n_rows=n_rows)
+    lo = _lower_map(raw.columns)
+    count_c = _pick(lo, "read.count")
+    nt_c = _pick(lo, "cdr3.nucleotide.sequence")
+    aa_c = _pick(lo, "cdr3.amino.acid.sequence")
+    v_c = _pick(lo, "v.gene")
+    j_c = _pick(lo, "j.gene")
+    d_c = _pick(lo, "d.gene")
+    if not (count_c and nt_c and aa_c and v_c and j_c):
+        raise ValueError(f"not a MiTCR/tcR table; have {raw.columns}")
+    rows = [{
+        V_CALL: extract_vdj(r[v_c]), D_CALL: extract_vdj(r[d_c]) if d_c else None,
+        J_CALL: extract_vdj(r[j_c]),
+        JUNCTION_NT: (r[nt_c] or "").upper() or None,
+        JUNCTION_AA: to_unified_cdr3aa(r[aa_c]),
+        COUNT: _to_int(r[count_c]),
+    } for r in raw.iter_rows(named=True)]
+    return _finalize(rows)
+
+
 def read_rtcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
     """Read an RTCR clonotype table (junction aa is re-translated from the nt junction)."""
     raw = _read_tsv(path, n_rows=n_rows)

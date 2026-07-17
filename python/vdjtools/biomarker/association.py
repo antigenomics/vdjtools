@@ -8,7 +8,9 @@ four axes, all sharing the same streamed subject-incidence table:
 - **condition type** — binary, a category expanded one-vs-rest per level (HLA allele, zygosity),
   or a paired condition combined by Cochran–Mantel–Haenszel (built with
   :mod:`vdjtools.biomarker.condition`);
-- **match scope** — exact ``cdr3aa`` / ``+v`` / ``+v+j`` (the ``key``) or ``1mm`` metaclonotypes;
+- **match scope** — exact ``cdr3aa`` / ``+v`` / ``+v+j`` (the ``key``), a ``fuzzy`` 1-mismatch
+  *search* (each candidate keeps its identity and gains incidence), or ``1mm`` metaclonotypes
+  (candidates are *merged* into groups);
 - **candidate set** — all public features (``min_incidence`` count or ``min_incidence_frac``
   fraction of subjects), or an explicit ``candidates`` list.
 
@@ -236,7 +238,17 @@ def association(
             "permutation"}`` (long output, one row per feature×level×test). Ignored when
             ``stratum_col`` is set (CMH is used).
         key: Feature key (subset of ``(junction_aa, v_call, j_call)``) — the V/J match scope.
-        match: ``"exact"`` or ``"1mm"`` (metaclonotypes).
+        match: ``"exact"``, ``"fuzzy"`` or ``"1mm"``.
+
+            * ``"exact"`` — the ``key`` itself.
+            * ``"fuzzy"`` — a 1-mismatch **search**: a candidate's incidence counts every subject
+              carrying anything within ``scope`` of it, but the candidate keeps its own identity.
+              Non-``junction_aa`` key columns still have to match exactly, so
+              ``key=("junction_aa", "v_call")`` pins the germline half while the CDR3 varies. This
+              is the discovery mode.
+            * ``"1mm"`` — metaclonotypes: candidates within ``scope`` are **merged** and the group
+              is tested (``meta_id`` replaces the key). A downstream step, not discovery — merging
+              dilutes a strong member into its neighbourhood.
         min_incidence: Minimum subjects a feature must appear in.
         min_incidence_frac: Alternative/added fraction-of-subjects threshold (e.g. ``0.05``).
         candidates: Restrict testing to these feature keys (a frame with the ``key`` columns).

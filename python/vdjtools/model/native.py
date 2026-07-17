@@ -17,6 +17,31 @@ def _encode(seq: str) -> list[int]:
     return [_NT2NUM[c] for c in seq]
 
 
+def _gene_idx(idx_of: dict[str, int], name: str | None, kind: str) -> int:
+    """Resolve a V/J **allele** name to its model index; ``None`` marginalizes (index ``-1``).
+
+    Raises on an unknown name rather than falling back to ``-1``: ``-1`` means "marginalize over
+    every allele", so a silent fallback turns a mis-typed or gene-level call into a *different,
+    larger* Pgen with no error — e.g. ``"TRBV9"`` (gene) returned the V/J-agnostic value, 2.38x
+    the true ``"TRBV9*01"`` Pgen.
+    """
+    if not name:
+        return -1
+    idx = idx_of.get(name)
+    if idx is not None:
+        return idx
+    alleles = sorted(a for a in idx_of if a.split("*")[0] == name)
+    if alleles:
+        raise KeyError(
+            f"{kind} {name!r} is a gene name; the model is keyed by allele. Pass one of "
+            f"{alleles}, or None to marginalize over all {kind}."
+        )
+    raise KeyError(
+        f"{kind} {name!r} is not in the model ({len(idx_of)} alleles, e.g. "
+        f"{sorted(idx_of)[0]!r}). Pass a known allele, or None to marginalize over all {kind}."
+    )
+
+
 def _del_dense(pdel: dict, idx_of: dict, maxpal: int) -> tuple[list[float], int]:
     """{(allele, ndel): p} -> (flat [n_allele * nbins], nbins), index = ndel + maxpal."""
     nbins = max((n + maxpal for (_a, n) in pdel), default=0) + 1
@@ -125,7 +150,7 @@ def pgen_nt(model: Model, cdr3_nt: str, v: str | None = None, j: str | None = No
 
     pm, vi, ji = pack(model)
     return _pgen_nt(pm, _encode(cdr3_nt.upper()),
-                    vi.get(v, -1) if v else -1, ji.get(j, -1) if j else -1)
+                    _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"))
 
 
 def pgen_aa(
@@ -140,8 +165,10 @@ def pgen_aa(
     Args:
         model: A recombination :class:`Model`.
         cdr3_aa: The junction/CDR3 amino-acid sequence (Cys → Phe/Trp inclusive).
-        v: V allele to condition on, or ``None`` to marginalize over all V (V-agnostic).
-        j: J allele to condition on, or ``None`` to marginalize over all J (J-agnostic).
+        v: V **allele** to condition on (e.g. ``"TRBV9*01"``), or ``None`` to marginalize over all
+            V (V-agnostic). A gene-level name (``"TRBV9"``) or any unknown allele raises
+            :class:`KeyError` — it must not silently degrade to the V-agnostic value.
+        j: J allele to condition on (e.g. ``"TRBJ2-3*01"``), or ``None`` to marginalize (as ``v``).
         mismatches: ``0`` for the exact sequence; ``1`` to also sum the Pgen of every
             amino-acid sequence within Hamming distance 1 (one substitution) — the total
             probability mass in the 1-mismatch ball, computed natively far faster than OLGA's
@@ -154,8 +181,8 @@ def pgen_aa(
     from .._core import pgen_aa_hamming1 as _pgen_aa_h1
 
     pm, vi, ji = pack(model)
-    vidx = vi.get(v, -1) if v else -1
-    jidx = ji.get(j, -1) if j else -1
+    vidx = _gene_idx(vi, v, "V")
+    jidx = _gene_idx(ji, j, "J")
     if mismatches == 0:
         return _pgen_aa(pm, cdr3_aa.upper(), vidx, jidx)
     if mismatches == 1:
@@ -181,8 +208,9 @@ def pgen_aa_batch(
     Args:
         model: A recombination :class:`Model`.
         cdr3_aas: Junction/CDR3 amino-acid sequences.
-        v: Optional per-sequence V alleles to condition on (same length as ``cdr3_aas``); ``None``
-            marginalises over all V for every sequence. Individual entries may be ``None``.
+        v: Optional per-sequence V **alleles** to condition on (same length as ``cdr3_aas``);
+            ``None`` marginalises over all V for every sequence. Individual entries may be
+            ``None``. An unknown or gene-level name raises :class:`KeyError` (see :func:`pgen_aa`).
         j: Optional per-sequence J alleles (as ``v``).
         mismatches: ``0`` for exact Pgen, ``1`` for the Hamming-1 ball (as :func:`pgen_aa`).
         threads: Worker threads; ``0`` = auto (``hardware_concurrency - 2``). Batches under 64
@@ -197,8 +225,8 @@ def pgen_aa_batch(
 
     pm, vi, ji = pack(model)
     seqs = [s.upper() for s in cdr3_aas]
-    v_idxs = [vi.get(x, -1) if x else -1 for x in v] if v is not None else []
-    j_idxs = [ji.get(x, -1) if x else -1 for x in j] if j is not None else []
+    v_idxs = [_gene_idx(vi, x, "V") for x in v] if v is not None else []
+    j_idxs = [_gene_idx(ji, x, "J") for x in j] if j is not None else []
     if v_idxs and len(v_idxs) != len(seqs):
         raise ValueError("v must have the same length as cdr3_aas")
     if j_idxs and len(j_idxs) != len(seqs):
