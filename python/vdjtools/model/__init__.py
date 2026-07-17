@@ -7,6 +7,7 @@ OLGA's format with :func:`from_olga`; native models round-trip through :func:`sa
 """
 from . import analyze
 from .bundled import list_bundled, load_bundled
+from .collapse import collapse_alleles
 from .events import Event, EventKind
 from .io import from_arda, from_olga, load_model, save_model
 from .model import Model
@@ -27,6 +28,7 @@ __all__ = [
     "save_model",
     "load_bundled",
     "list_bundled",
+    "collapse_alleles",
     "rescale_usage",
     "load_germline",
     "cut_segment",

@@ -34,7 +34,7 @@ def test_ball_pgen_is_the_closed_hamming1_ball():
     # ALICE's lambda sums Pgen over the ball INCLUDING sigma, so the degree must include sigma
     # too. Verify the native identity against brute force rather than trusting the docstring:
     # an OPEN ball would be a systematic under-count of lambda, i.e. anti-conservative.
-    m = load_bundled("TRB", "olga")
+    m = load_bundled("TRB", "olga", collapse=False)
     seq, v, j = "CASSYVGSEQFF", "TRBV19*01", "TRBJ2-1*01"
     centre = pgen_aa(m, seq, v, j)
     nbrs = [seq[:k] + r + seq[k + 1:] for k in range(len(seq)) for r in _AA if r != seq[k]]
@@ -48,7 +48,7 @@ def test_gene_level_call_sums_its_alleles_exactly():
     # Real cohorts ship gene-level v_call; the model is keyed by allele and the native Pgen now
     # RAISES on a gene (it used to marginalise over every allele, 183x too high). Summing a
     # gene's alleles is exact, not an approximation -- pin that.
-    m = load_bundled("TRB", "olga")
+    m = load_bundled("TRB", "olga", collapse=False)
     _, vi, _ = pack(m)
     gene = "TRBV7-9"
     alleles = _alleles_for(vi, gene)
@@ -61,7 +61,7 @@ def test_gene_level_call_sums_its_alleles_exactly():
 
 
 def test_alleles_for_rejects_an_unknown_call():
-    _, vi, _ = pack(load_bundled("TRB", "olga"))
+    _, vi, _ = pack(load_bundled("TRB", "olga", collapse=False))
     assert _alleles_for(vi, "TRBV19*01") == ["TRBV19*01"]        # an allele is itself
     with pytest.raises(KeyError, match="not in the model"):
         _alleles_for(vi, "TRBV999")
@@ -73,7 +73,7 @@ def test_alice_flags_a_planted_convergent_cluster():
     # A clique of mutually-1-substitution CDR3s is what antigen-driven convergence looks like.
     # It must clear the Pgen null; sequences drawn FROM the generation model must not, because
     # they are literally the null this test is against.
-    m = load_bundled("TRB", "olga")
+    m = load_bundled("TRB", "olga", collapse=False)
     from vdjtools.model.generate import generate
 
     gen = generate(m, 4000, seed=0)

@@ -14,7 +14,7 @@ from vdjtools.model.infer import _gene_to_alleles, call_alleles, gene_masks
 
 @pytest.fixture(scope="module")
 def trb():
-    return load_bundled("TRB", "olga")
+    return load_bundled("TRB", "olga", collapse=False)
 
 
 def test_allele_call_expands_to_every_allele_of_its_gene(trb):

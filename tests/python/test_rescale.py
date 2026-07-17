@@ -52,7 +52,7 @@ def test_rescale_preserves_within_gene_allele_split():
     The sample cannot resolve alleles (mismapping on short reads), so the model's own split is
     the best available and must survive.
     """
-    m = load_bundled("TRB", "olga")
+    m = load_bundled("TRB", "olga", collapse=False)      # this test is specifically about alleles
     v = m.tables["v_choice"].with_columns(pl.col("v_allele").str.split("*").list.first().alias("g"))
     multi = [r["g"] for r in v.group_by("g").len().iter_rows(named=True) if r["len"] > 1]
     gene = next(g for g in multi if v.filter(pl.col("g") == g)["p"].sum() > 0)
