@@ -28,6 +28,7 @@ tracks all data provenance.
 | 6b | `feature/biomarker-cooccurrence` | Full association framework (Fisher / χ² / Bayesian / Beta-Binomial BF / permutation; binary / per-HLA-allele / Cochran–Mantel–Haenszel stratified conditions) + feature-vs-feature **co-occurrence** (α-β pairing, same-chain co-specificity; θ-lift + Fisher + FDR + Poisson E-value, **depth-conditioned by default**); airr_hip / airr_covid19 / airr_covid19_vacc benchmarks. **v2.7.0** | **done** |
 | 7 | `feature/singlecell-interop` | AIRR Cell / 10x paired-chain interop, single-cell metadata bridge, QC (doublet/mispairing), cluster evaluation, AnnData bridge | **done** (paired α/β Pgen residual → Phase 12) |
 | 8 | `feature/cli-docs` | typer CLI (pgen/generate/diversity/spectratype/segment-usage/overlap/models), 6 example marimo notebooks, **v2.1.0** release | **done** (full Sphinx API docs residual → Phase 12) |
+| 14 | `feature/dynamics` | Paired **within-donor** clonotype dynamics (Ayestaran 2024): per-pair `N_eff` + two-tailed Fisher → emergent/expanded/persistent/contracted/vanishing; our own TCRnet (control null) + **ALICE** (Pgen null, via native `pgen_aa_batch(mismatches=1)`); CLI for all three. Fixed two shipped bugs: `read_airr` dropped `*_gene` V/J calls and narrowed the collapse key; `tcrnet` discarded public-clone neighbours from the background (E understated ~2.1×). **v2.8.0** | **done** |
 
 ## Upcoming
 

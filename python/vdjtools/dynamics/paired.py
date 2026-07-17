@@ -37,13 +37,13 @@ distribution is flat, because only then is the bin contamination equal to the sa
 variance. Real repertoires are heavy-tailed, where the contamination is smaller and a fixed
 ``×2`` overshoots by ~25%. That is not cosmetic — it inflates the false-positive rate ~1.27×
 and **fails the thesis's own p-value-uniformity acceptance test (Fig. 2.13) in 3 of 4 regimes**,
-including precisely the oversampled ones (``N_S1 << N_seq``) the method exists to handle:
+including precisely the oversampled ones (``N_S1 << N_seq``) the method exists to handle::
 
-    regime (N_S1/N_seq)   planted    thesis ×2   gate      difference   gate
-    200k / 2M             181,818    1.25×       FAIL      1.07×        pass
-     50k / 2M              48,780    1.22×       FAIL      1.02×        pass
-    200k / 1M             166,667    1.23×       FAIL      0.99×        pass
-      1M / 300k           230,769    0.97×       pass      0.95×        pass
+    regime (N_S1/N_seq)   planted    thesis x2   gate      difference   gate
+    200k / 2M             181,818    1.25x       FAIL      1.07x        pass
+     50k / 2M              48,780    1.22x       FAIL      1.02x        pass
+    200k / 1M             166,667    1.23x       FAIL      0.99x        pass
+      1M / 300k           230,769    0.97x       pass      0.95x        pass
 
 The test itself is *not* at fault: pinned to the planted ``N_eff`` it is perfectly calibrated
 (conservative, as an exact test on discrete counts should be). The bias was entirely the
