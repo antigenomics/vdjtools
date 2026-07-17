@@ -5,7 +5,7 @@ OLGA's (Pearson r on log10 Pgen, max relative error), check aa == Σ nt over syn
 short CDR3, and (D-bearing loci) confirm the D-D-default EM does not hallucinate tandems on
 single-D OLGA data. Prints a Markdown concordance table.
 
-Reproduce (needs the [oracle] extra: `pip install olga`, and the mirpy OLGA models):
+Reproduce (needs the [oracle] extra: `pip install olga`):
 
     python appendix/concordance.py            # all 7 loci
     LOCI=TRB,TRD python appendix/concordance.py
@@ -25,7 +25,9 @@ from vdjtools.model.generate import generate
 from vdjtools.model.pgen import pgen_aa, pgen_nt, prepare
 from vdjtools.model.reference import _CODON_TABLE
 
-OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", "/Users/mikesh/vcs/code/mirpy/mir/resources/olga/default_models"))
+# pip olga ships its own default_models; the old default pointed at a mirpy checkout that no
+# longer exists on disk, so this script could not run at all. NB pip olga has no TRG/TRD.
+OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(Path(olm.__file__).parent / "default_models")))
 LOCI = {
     "TRA": ("human_T_alpha", "VJ"), "TRB": ("human_T_beta", "VDJ"),
     "TRG": ("human_T_gamma", "VJ"), "TRD": ("human_T_delta", "VDJ"),
