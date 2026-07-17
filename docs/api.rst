@@ -4,7 +4,7 @@ API reference
 Every public subpackage is documented below: the native model engine (``vdjtools.model``),
 IO/schema (``vdjtools.io``), statistics (``vdjtools.stats``), CDR3 features
 (``vdjtools.features``), overlap/TCRnet (``vdjtools.overlap``), preprocessing
-(``vdjtools.preprocess``), biomarker association (``vdjtools.biomarker``), single-cell interop
+(``vdjtools.preprocess``), biomarker association (``vdjtools.biomarker``), repertoire dynamics (``vdjtools.dynamics``), single-cell interop
 (``vdjtools.sc``), and the command-line interface (``vdjtools.cli``).
 
 vdjtools
@@ -290,6 +290,16 @@ TCRnet neighbourhood-enrichment degree statistics.
    :undoc-members:
    :show-inheritance:
 
+``vdjtools.overlap.alice``
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The same neighbourhood-enrichment test against a V(D)J *generation model* (Pgen null) rather than a control repertoire — the complement of ``tcrnet``.
+
+.. automodule:: vdjtools.overlap.alice
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 ``vdjtools.overlap.cluster``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -381,6 +391,21 @@ Join samples on shared clonotypes.
 VJ-usage batch-effect correction.
 
 .. automodule:: vdjtools.preprocess.batch
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Repertoire dynamics (``vdjtools.dynamics``)
+-------------------------------------------
+
+Paired **within-donor** clonotype testing across timepoints (Ayestaran 2024): per-pair effective sample size, deterministic downscale, two-tailed Fisher, and a five-way classification into emergent / expanded / persistent / contracted / vanishing. The sibling of ``vdjtools.biomarker`` — that tests incidence across *subjects*, this tests frequency across *timepoints* — and the complement of ``vdjtools.overlap.tcrnet`` / ``alice``, which measure breadth where this measures magnitude.
+
+``vdjtools.dynamics.paired``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Per-pair ``N_eff`` estimation and the paired clonotype test.
+
+.. automodule:: vdjtools.dynamics.paired
    :members:
    :undoc-members:
    :show-inheritance:

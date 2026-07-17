@@ -12,6 +12,8 @@ import numpy as np
 import polars as pl
 import pytest
 
+from scipy.stats import poisson
+
 from vdjtools.io import schema as S
 from vdjtools import overlap as O
 
@@ -65,6 +67,48 @@ def test_tcrnet_explicit_locus_and_exclude_exact_toggle():
     # exclude_exact drops the distance-0 self-hit; without it every clonotype gains +1.
     assert _neighbors(incl) == {"CASSLAPGELFF": 1, "CASSLAPGELFY": 1, "CASSQQTGELFF": 0}
     assert _neighbors(excl) == {"CASSLAPGELFF": 2, "CASSLAPGELFY": 2, "CASSQQTGELFF": 1}
+
+
+def test_tcrnet_counts_public_clones_in_the_background():
+    """The control-side self-hit fix, pinned.
+
+    The query is a member of its own sample's index but NOT of the control, so the two sides
+    need opposite treatment. vdjmatch's ``exclude_exact=True`` punctures distance-0 hits on
+    *both* (its own docstring: "use when queries may be members of the target/control"), which
+    silently discarded genuine public-clone neighbours from the background, understating E and
+    inflating significance — anti-conservative, and worst exactly on the public clonotypes a
+    TCRnet run is most likely to report.
+
+    Here the control CONTAINS the query verbatim. That exact match is a real background
+    neighbour: a background repertoire that carries this clonotype is evidence the clonotype is
+    unremarkable, not evidence it is enriched.
+    """
+    import seqtree
+
+    q = "CASSLAPGELFF"
+    sample = _sample_from_cdr3([q, "CASSLAPGELFY", "CASSQQTGELFF"])
+    # A background carrying the query itself plus one 1-mismatch variant of it.
+    control = seqtree.Index.build([q, "CASSLAPGELFW", "CWWWWWWWWWWF"], alphabet="aa")
+    res = O.tcrnet(sample, control=control, locus="TRB", scope="1,0,0,1")
+    row = res.filter(pl.col(S.JUNCTION_AA) == q).row(0, named=True)
+
+    # 2 background neighbours: the exact copy AND the 1-sub variant. Dropping the exact copy
+    # (the bug) would leave 1 and halve E.
+    assert row["n_control"] == 2
+    assert row["E"] == pytest.approx(2 * len(sample) / 3)
+    # ...and the p-value is computed from the self-corrected degree against that E.
+    assert row["n_neighbors"] == 1                      # CASSLAPGELFY, self excluded
+    assert row["p_enrichment"] == pytest.approx(poisson.sf(0, row["E"]))
+
+
+def test_tcrnet_returns_a_q_value():
+    """Raw Poisson tails over ~1e5 clonotypes are not a threshold anyone can apply; the
+    multiple-testing burden spans every clonotype scored in one call."""
+    sample = _sample_from_cdr3(["CASSLAPGELFF", "CASSLAPGELFY", "CASSQQTGELFF"])
+    res = O.tcrnet(sample, locus="TRB", scope="1,0,0,1")
+    assert "q_value" in res.columns
+    assert (res["q_value"].to_numpy() >= res["p_enrichment"].to_numpy() - 1e-12).all()
+    assert ((res["q_value"] >= 0) & (res["q_value"] <= 1)).all()
 
 
 def test_tcrnet_mixed_locus_scored_per_locus():

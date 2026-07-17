@@ -22,6 +22,14 @@ CASES = {
     ]),
     "mixcr3": (convert.read_mixcr, "mixcr.3.txt.gz", None),
     "migec": (convert.read_migec, "migec.txt.gz", None),
+    # MiTCR / tcR dotted dialect. `D.gene` here is the ambiguous "TRBD1, TRBD2" -> first call.
+    "mitcr": (convert.read_mitcr, "mitcr.txt.gz", [
+        dict(v="TRBV13", j="TRBJ2-4", d="TRBD1", aa="CASSLGENIQYF",
+             nt="TGTGCCAGCAGCTTAGGGGAAAACATTCAGTACTTC", count=4354),
+        dict(v="TRBV29-1", j="TRBJ2-1", d="TRBD1", aa="CSVEIWDSSYNEQFF",
+             nt="TGCAGCGTTGAAATTTGGGATAGCTCCTACAATGAGCAGTTCTTC", count=2312),
+        dict(v="TRBV7-6", j="TRBJ1-4", d="TRBD2", aa="CASSLAPGATNEKLFF", count=1435),
+    ]),
     "rtcr": (convert.read_rtcr, "rtcr.txt.gz", [
         dict(v="TRBV19", j="TRBJ2-7", aa="CARMGQLSYEQYF",
              nt="TGTGCCAGGATGGGACAACTTTCCTACGAGCAGTACTTC", count=11),
@@ -55,6 +63,7 @@ CASES = {
 
 _SNIFF = {
     "mixcr.txt.gz": "mixcr", "mixcr.3.txt.gz": "mixcr", "migec.txt.gz": "migec",
+    "mitcr.txt.gz": "mitcr",
     "rtcr.txt.gz": "rtcr", "imgthighvquest.txt.gz": "imgt", "vidjil.txt.gz": "vidjil",
     "immunoseq.txt.gz": "immunoseq", "immunoseqv2.txt.gz": "immunoseq",
     "trust4.txt.gz": "trust4",
@@ -105,10 +114,23 @@ def test_reader_rejects_wrong_columns(tmp_path):
     """Each TSV reader fails loudly on a table whose columns don't match its format."""
     p = tmp_path / "wrong.tsv"
     p.write_text("colA\tcolB\n1\t2\n")
-    for reader in (convert.read_mixcr, convert.read_migec, convert.read_rtcr,
-                   convert.read_imgt, convert.read_immunoseq):
+    for reader in (convert.read_mixcr, convert.read_migec, convert.read_mitcr,
+                   convert.read_rtcr, convert.read_imgt, convert.read_immunoseq):
         with pytest.raises(ValueError, match="not a|not an"):
             reader(p)
+
+
+def test_mitcr_not_confused_with_migec(tmp_path):
+    """MiGEC and MiTCR both carry a CDR3-nt column; the dialects differ only by dots vs spaces,
+    so each sniff must reject the other's header rather than mis-dispatch."""
+    from vdjtools import io as vio
+    migec_hdr = ("Count\tCDR3 nucleotide sequence\tCDR3 amino acid sequence\t"
+                 "V segments\tJ segments\tD segments\n1\tTGT\tC\tTRBV9\tTRBJ2-3\tTRBD1\n")
+    p = tmp_path / "m.tsv"
+    p.write_text(migec_hdr)
+    assert vio.sniff_format(p) == "migec"
+    with pytest.raises(ValueError, match="not a MiTCR"):
+        convert.read_mitcr(p)
 
 
 def test_read_vidjil_skips_segless_clones(tmp_path):

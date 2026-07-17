@@ -203,7 +203,7 @@ CDR3s parallelises over sequences (`native.pgen_aa_batch`, **~11× on 16 cores**
 the serial result); the EM E-step parallelises over reads (~6.7× on 8 threads); diversity/rarefaction
 run on a native iNEXT kernel (bootstrap + parallel batch). Memory
 stays light — **~63 MB** resident for `import vdjtools` plus one loaded model, **~123 MB** with all
-seven bundled models resident. Reproduce with `appendix/bench_pgen.py` and the `test_*_benchmark.py`
+seven bundled models resident. Reproduce with `~/vcs/projects/2026-vdjtools-benchmark/bench/bench_pgen.py` and the `test_*_benchmark.py`
 suites (`RUN_BENCHMARK=1`).
 
 ## Capabilities (see the [User guide](https://docs.isalgo.dev/vdjtools/usage.html), the [API reference](https://docs.isalgo.dev/vdjtools/), and [ROADMAP.md](ROADMAP.md))

@@ -35,11 +35,13 @@ _NATIVE_MAP = {
 }
 
 # AIRR Rearrangement source header -> canonical column, most specific first.
+# ``*_call`` is the AIRR standard and wins; ``*_gene`` is the fallback some exports use
+# (e.g. isalgo/airr_yfv19), and is usually gene-level where ``*_call`` is allele-level.
 _AIRR_ALIASES: dict[str, tuple[str, ...]] = {
-    V_CALL: ("v_call",),
-    D_CALL: ("d_call",),
-    J_CALL: ("j_call",),
-    C_CALL: ("c_call",),
+    V_CALL: ("v_call", "v_gene"),
+    D_CALL: ("d_call", "d_gene"),
+    J_CALL: ("j_call", "j_gene"),
+    C_CALL: ("c_call", "c_gene"),
     # Prefer the junction (conserved anchors INCLUDED) — the canonical vdjtools /
     # AIRR ``junction_aa`` convention; fall back to the IMGT ``cdr3_aa``/``cdr3``
     # (anchors excluded) only if no junction column is present.
@@ -193,6 +195,17 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     if JUNCTION_AA not in found:
         raise ValueError(
             f"AIRR file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {raw.columns}"
+        )
+    # V/J are clonotype identity. If we cannot name them we must NOT fall through: the
+    # collapse key below would narrow to the junction and sum counts across clonotypes
+    # that differ only by V — a wrong number with no error, and `locus` (derived from
+    # v_call) would be null everywhere. Fail loudly and name the columns we did see.
+    missing = [c for c in (V_CALL, J_CALL) if c not in found]
+    if missing:
+        raise ValueError(
+            f"AIRR file lacks {'/'.join(missing)} "
+            f"(tried {', '.join(a for c in missing for a in _AIRR_ALIASES[c])}); "
+            f"have {raw.columns}"
         )
     df = raw.select([pl.col(src).alias(canon) for canon, src in found.items()])
     if COUNT not in df.columns:
