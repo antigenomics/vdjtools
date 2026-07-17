@@ -27,6 +27,7 @@ Arms:
   confirm -- A: pre-registered 9-clonotype hypothesis. One test, no multiple-testing burden.
   pgen    -- B: Komech's probabilistic screen, exact DP instead of 2e9 MC draws.
   screen  -- C: V/J-pinned discovery -- can we find it WITHOUT being told the sequences?
+  kmer    -- C2: the V + core-kmer search (features.kmer.kmer_cohort -> association)
   oracle  -- VDJdb cross-check (Yang 2022 Nature; NB partly circular -- same group/donors).
 
 2026-07-17.
@@ -361,6 +362,73 @@ def arm_screen(clones, donors, *, min_incidence: int = 4) -> pl.DataFrame:
     return out
 
 
+def arm_kmer(clones, donors, *, k: int = 4, flank: int = 4) -> pl.DataFrame:
+    """C2: the V + core-k-mer search, via the library feature.
+
+    Arm C finds ONE clonotype (CASSVGLYSTDTQYF, rank 1). The family needs generalization, and a
+    k-mer is the cheapest kind: it asks whether some shared CORE is enriched, without being told
+    any sequence.
+
+    I expected this to lose. The germline arithmetic says it should: TRBV9 contributes `CASSV`
+    and TRBJ2-3 `STDTQYF`, so 12 of 15 residues are germline and the family differs at exactly
+    the 4 central positions -- where the members are mutually DISTINCT (VGLY/VGLF/VGVY/VATY/
+    LGLF/AGLF/PGLF/AGLY), i.e. a shared substring is precisely what they do NOT have.
+
+    It does not lose. `VGLY` lands rank 1 at 13/26 vs 0/12 (OR=25.0), a *better* single feature
+    than the best single clonotype (CASSVGLYSTDTQYF, 12/26 vs 0/12, OR=21.6) -- because one more
+    AS donor carries the core in a CDR3 outside the enumerated nine. The cores that span two
+    members (`GLYS` 17/26, `LYST` 19/26) reach further still, at the cost of picking up HD
+    donors. So the k-mer IS the generalization, and it works; it just cannot clear BH at 26-vs-12
+    either (same power ceiling as arm C -- the ranking is the result).
+
+    The germline caveat survives as a caveat: flank=4 leaves `STD` in the core (TRBJ2-3's
+    germline is 7 residues, not 4), so cores like `YSTD`/`FSTD`/`LFST` are part-germline and
+    should be read as such.
+    """
+    from vdjtools.biomarker import association
+    from vdjtools.features.kmer import kmer_cohort
+    print(f"\n=== C2: V + core-{k}mer search (flank={flank}) ===", flush=True)
+    pos = donors.filter((pl.col("disease_status") == "as") & (pl.col("b27") == "pos"))["donor"]
+    neg = donors.filter((pl.col("disease_status") == "hd") & (pl.col("b27") == "pos"))["donor"]
+    sub = (clones.filter(pl.col("donor").is_in(pos.to_list() + neg.to_list())
+                         & (pl.col("v_call") == V_GENE) & (pl.col("j_call") == J_GENE))
+           .rename({"donor": "sample_id"}))
+    with Timer(f"kmer_cohort k={k} flank={flank}"):
+        km = kmer_cohort(sub, k=k, flank=flank)
+    design = pl.DataFrame({"sample_id": pos.to_list() + neg.to_list(),
+                           "case": [1]*pos.len() + [0]*neg.len()})
+    res = association(km, design, pheno_col="case", key=("v_call", "kmer"), match="exact",
+                      min_incidence=4, alternative="greater")
+    res = res.sort(["p_value", "kmer"])
+    # which cores does the motif actually contain?
+    motif_cores = set()
+    from vdjtools.features.kmer import _explode_kmers
+    for s in MOTIF:
+        motif_cores |= set(_explode_kmers(pl.DataFrame({"junction_aa": [s]}), k, flank)["kmer"])
+    res = res.with_columns(pl.col("kmer").is_in(list(motif_cores)).alias("in_motif"))
+    print(f"  tested {res.height:,} (v_call, kmer) features; BH q<0.05: "
+          f"{res.filter(pl.col('q_value') < 0.05).height}", flush=True)
+    print(f"  {'rank':>5}  {'kmer':<6}{'AS':>4}{'HD':>4}{'OR':>8}{'p':>10}   in-motif core", flush=True)
+    for i, r in enumerate(res.head(8).iter_rows(named=True), 1):
+        print(f"  {i:>5}  {r['kmer']:<6}{r['n_pos_present']:>4}{r['n_neg_present']:>4}"
+              f"{r['odds_ratio']:>8.1f}{r['p_value']:>10.2e}   {'YES' if r['in_motif'] else ''}",
+              flush=True)
+    ranks = [i for i, r in enumerate(res.iter_rows(named=True), 1) if r["in_motif"]]
+    print(f"\n  the motif's own {k}-mer cores ({len(motif_cores)}): {sorted(motif_cores)}",
+          flush=True)
+    print(f"  their ranks among {res.height:,}: {ranks}", flush=True)
+    from scipy.stats import hypergeom
+    for topk in (10, 25):
+        obs = sum(r <= topk for r in ranks)
+        print(f"  in-motif cores in the top {topk}: {obs}/{len(motif_cores)}  "
+              f"(expected {topk*len(motif_cores)/res.height:.2f}, "
+              f"p={hypergeom.sf(obs-1, res.height, len(motif_cores), topk):.2e})", flush=True)
+    print("  => the k-mer generalizes the family without being told it, and its best core beats\n"
+          "     the best single clonotype. Same BH ceiling as arm C: the ranking is the result.",
+          flush=True)
+    return res
+
+
 def arm_oracle(screen: pl.DataFrame, vdjdb: Path) -> None:
     """VDJdb cross-check. NB this oracle is PARTLY CIRCULAR: Yang 2022 (Nature 612:771) is the
     sequel to Komech 2018 by the same group, and its TCRs came from AS patients -- plausibly these
@@ -392,7 +460,7 @@ def arm_oracle(screen: pl.DataFrame, vdjdb: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--arm", default="all",
-                    choices=["all", "cohort", "fig1", "confirm", "pgen", "screen"])
+                    choices=["all", "cohort", "fig1", "confirm", "pgen", "screen", "kmer"])
     ap.add_argument("--vdjdb", type=Path, default=Path(DEF_VDJDB))
     ap.add_argument("--ball", action="store_true",
                     help="also compute the 1-mismatch Pgen ball (~17x slower)")
@@ -422,6 +490,8 @@ def main() -> None:
         sc = arm_screen(clones, donors, min_incidence=args.min_incidence)
         sc.write_parquet(args.out / "as_b27_screen.parquet")
         arm_oracle(sc, args.vdjdb)
+    if args.arm in ("all", "kmer"):
+        arm_kmer(clones, donors).write_parquet(args.out / "as_b27_kmer.parquet")
 
     print(f"\nTotal {time.perf_counter()-t0:.0f}s   peak RSS {_rss_gb():.2f} GB", flush=True)
     print(f"-> {args.out}", flush=True)

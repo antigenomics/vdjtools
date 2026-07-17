@@ -83,14 +83,33 @@ def _feature_frame(cohort: pl.LazyFrame | pl.DataFrame, key: tuple[str, ...], ma
     representative frame (or ``None``).
     """
     key = tuple(key)
-    if S.JUNCTION_AA not in key:
-        raise ValueError(f"key must include {S.JUNCTION_AA!r}; got {key}")
     if match not in ("exact", "fuzzy", "1mm"):
         raise ValueError(f"match must be 'exact', 'fuzzy' or '1mm'; got {match!r}")
+    # `fuzzy`/`1mm` SEARCH on the CDR3, so they need it in the key. `exact` only groups by the
+    # key, so any column works there — which is what lets a derived feature (e.g. the `kmer`
+    # column from `features.kmer.kmer_cohort`) be tested by the same machinery.
+    if match in ("fuzzy", "1mm") and S.JUNCTION_AA not in key:
+        raise ValueError(f"match={match!r} searches on {S.JUNCTION_AA!r}, so it must be in key; "
+                         f"got {key}. Use match='exact' to test a non-CDR3 feature key.")
+    # ...but a key of germline calls ALONE is segment usage wearing a biomarker costume: it asks
+    # "is TRBV9 enriched in cases", which is `stats.segment_usage`, not an incidence test over
+    # clonotypes. Keep that door shut; the derived-feature door (junction_aa, or `kmer`, or any
+    # non-germline column) stays open.
+    if S.JUNCTION_AA not in key and set(key) <= {S.V_CALL, S.D_CALL, S.J_CALL, S.C_CALL}:
+        raise ValueError(
+            f"key {key} is germline calls only — that is segment usage, not a clonotype "
+            f"biomarker; use vdjtools.stats.segment_usage. Add {S.JUNCTION_AA!r} or a derived "
+            f"feature column (e.g. 'kmer' from features.kmer.kmer_cohort).")
+    have = set(cohort.lazy().collect_schema().names())
+    missing = [c for c in key if c not in have]
+    if missing:
+        raise ValueError(f"key columns absent from the cohort: {missing}")
 
-    lf = cohort.lazy().filter(pl.col(S.JUNCTION_AA).is_not_null())
-    if productive_only:
-        lf = lf.filter(~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
+    lf = cohort.lazy()
+    if S.JUNCTION_AA in have:
+        lf = lf.filter(pl.col(S.JUNCTION_AA).is_not_null())
+        if productive_only:
+            lf = lf.filter(~pl.col(S.JUNCTION_AA).str.contains(r"[*_]"))
     if strip_allele:
         for c in (S.V_CALL, S.J_CALL):
             if c in key:
