@@ -3,7 +3,7 @@
 Two model sets, seven human loci each, live under ``vdjtools/model/_bundled/``:
 
 - ``olga`` — imported from OLGA's default models (the exact-Pgen bootstrap; single-D).
-- ``learned`` — EM-inferred from real out-of-frame reads (HuggingFace), tandem-D on the D-bearing
+- ``learned`` — EM-inferred from real non-functional reads (out-of-frame + stop-codon, HuggingFace), tandem-D on the D-bearing
   loci (IGH/TRD/TRB). These carry a learned ``P(n_D=2)`` and broader trim/insertion distributions
   than the synthetic OLGA models.
 
@@ -29,7 +29,7 @@ def load_bundled(locus: str, source: str = "olga") -> Model:
     Args:
         locus: One of ``TRA TRB TRG TRD IGH IGK IGL`` (case-insensitive).
         source: ``"olga"`` (OLGA bootstrap, exact Pgen) or ``"learned"`` (EM-inferred from real
-            out-of-frame reads; tandem-D on IGH/TRD/TRB).
+            non-functional reads; tandem-D on IGH/TRD/TRB).
 
     Returns:
         The :class:`~vdjtools.model.model.Model`.
