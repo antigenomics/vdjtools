@@ -329,7 +329,8 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    native.pgen_aa_batch(model, seqs, threads=0)   # many CDR3s, thread-parallel (~11x)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
 
-Learn a model from your own out-of-frame reads with :func:`vdjtools.model.infer.infer_native`,
+Learn a model from your own **non-functional** reads — out-of-frame *or* stop-codon, since both
+escaped selection — with :func:`vdjtools.model.infer.infer_native`,
 and explore any model's recombination Bayes net interactively with
 ``marimo edit notebooks/model_explorer.py``. See the :doc:`API reference <api>` for the full
 surface.

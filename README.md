@@ -100,7 +100,8 @@ generate(model, 1000)                           # sample a repertoire -> polars 
 ```
 
 Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
-OLGA/IGoR lack. Learn a model from your own out-of-frame reads with `model.infer.infer_native`.
+OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon — both escaped
+selection, which is all a generative model needs) with `model.infer.infer_native`.
 
 Explore any model's recombination **Bayes net** interactively (entropy, mutual information, marginals):
 

@@ -55,9 +55,13 @@ BUNDLED = Path("python/vdjtools/model/_bundled")
 _REPO_OLGA = Path(__file__).resolve().parent.parent / "tests" / "python" / "fixtures" / "olga" / "default_models"
 OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(_REPO_OLGA)))
 WORK = Path(os.environ.get("EM_WORK", "/tmp/em_work"))
+# All 7 human loci. TRG/TRD are only reachable because OLGA above resolves to the repo's own
+# fixtures rather than pip olga's 5-locus set -- olga-pip itself scores with them fine, it just
+# does not ship them.
 LOCI = {"TRA": ("human_T_alpha", "VJ"), "TRB": ("human_T_beta", "VDJ"),
+        "TRG": ("human_T_gamma", "VJ"), "TRD": ("human_T_delta", "VDJ"),
         "IGH": ("human_B_heavy", "VDJ"), "IGK": ("human_B_kappa", "VJ"),
-        "IGL": ("human_B_lambda", "VJ")}          # pip olga ships no TRG/TRD
+        "IGL": ("human_B_lambda", "VJ")}
 N = int(os.environ.get("N_CMP", "300"))
 
 
