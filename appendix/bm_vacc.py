@@ -99,10 +99,21 @@ def main():
                          "dropped entirely -- QCing samples independently would break the pairing")
     ap.add_argument("--no-downsample", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--within-batch", default=None,
+                    help="restrict to one `folder` (batch). GamCOVIDVac and CoviVac are aliased "
+                         "with batch (566/610 Gam sit in batches holding zero CoviVac), so the "
+                         "pooled contrast cannot separate vaccine from batch. Batch 6 is the one "
+                         "batch carrying both (Gam 44 / CoviVac 56) -- if the signal replicates "
+                         "there it is the vaccine, not the run.")
     args = ap.parse_args()
     print(f"=== vacc {args.chain} {args.arm}  key=V+CDR3aa±1mm ===", flush=True)
 
     meta = pl.read_csv(ROOT / "metadata.tsv", separator="\t", infer_schema_length=0)
+    if args.within_batch:
+        meta = meta.filter(pl.col("folder").str.contains(args.within_batch))
+        print(f"  WITHIN-BATCH {args.within_batch}: {meta.height} rows", flush=True)
+        print("   ", meta.group_by("vaccine").len().sort("len", descending=True).to_dicts(),
+              flush=True)
     cols = meta.columns
     print(f"  metadata: {meta.height} rows; cols={cols[:12]}", flush=True)
     # The sheet is TRB-ONLY (every file_name is *.clonotypes.TRB.txt) even though the repo also
