@@ -36,22 +36,30 @@ def test_gene_prior_zero_is_byte_identical_to_mle(trb):
         assert a.tables[ev].equals(b.tables[ev]), f"{ev} differs — gene_prior=0.0 is not the default"
 
 
-def test_gene_prior_keeps_unseen_functional_alleles_reachable(trb):
-    """A functional allele absent from the training data must keep non-zero mass.
+def test_gene_prior_protects_observed_alleles_but_not_unseen_ones(trb):
+    """The prior rescues alleles the data ATTRIBUTED reads to, and only those.
 
-    Without the prior it is dead permanently; with it, the germline (not one EM run) decides what
-    exists, while the data still decides usage.
+    This is the corrected semantics: an allele the E-step gave zero soft count (never the best
+    match for any read) also has zero deletion/insertion counts, so handing it choice mass would
+    make it selectable by the generative sampler with an all-zero deletion distribution -> crash.
+    The prior protects what was seen (the absorbing-state fix); it does not invent generative mass
+    for what was not (rescale_usage covers the cross-protocol case).
     """
     draws = generate(trb, 400, seed=1)
     seqs = [s.upper() for s in draws["junction_nt"].to_list()]
-    zero, _ = infer_native(trb, seqs, max_iter=3, tol=0.0, single_d=True, gene_prior=0.0)
     prior, _ = infer_native(trb, seqs, max_iter=3, tol=0.0, single_d=True, gene_prior=1.0)
 
-    functional = _functional_support(trb, "v")
-    n_zero = sum(1 for a, p in _v_mass(zero).items() if p <= 0 and a in functional)
-    n_prior = sum(1 for a, p in _v_mass(prior).items() if p <= 0 and a in functional)
-    assert n_prior < n_zero, f"prior did not rescue anything ({n_prior} vs {n_zero} dead alleles)"
-    assert n_prior == 0, f"{n_prior} functional V alleles still at p=0 under the prior"
+    # Every allele with choice mass must have a usable (nonzero) deletion distribution -- i.e. no
+    # allele is selectable with no way to sample its trimming. This is what the sampler needs and
+    # what the old behaviour violated.
+    vc = prior.tables["v_choice"]
+    dsum = prior.tables["v_3_del"].group_by("v_allele").agg(pl.col("p").sum().alias("s"))
+    orphan = (vc.filter(pl.col("p") > 0).join(dsum, on="v_allele", how="left")
+                .filter(pl.col("s").fill_null(0.0) <= 0))
+    assert orphan.height == 0, f"{orphan.height} alleles have choice mass but zero deletion mass"
+
+    # And the model must be generatable end-to-end (the regression that caught this).
+    generate(prior, 100, seed=7)
 
 
 def test_gene_prior_gives_no_mass_to_nonfunctional_alleles(trb):

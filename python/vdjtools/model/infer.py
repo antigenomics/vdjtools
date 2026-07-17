@@ -548,6 +548,16 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         the data still decides the actual usage. Non-functional alleles (pseudogenes/ORFs) are
         deliberately NOT given mass -- the model cannot score them anyway.
 
+        The prior only protects alleles the data actually ATTRIBUTED reads to (soft count > 0),
+        NOT every functional allele: the E-step commits V-choice to one best-match allele per read,
+        so a functional secondary allele (e.g. TRDV2*03 when arda calls TRDV2*01) gets zero soft
+        count AND zero deletion/insertion counts. Handing it choice mass anyway makes it
+        selectable by the generative sampler while its deletion distribution is all-zero -> the
+        sampler draws it and then has nothing to draw a deletion from (IndexError). Guarding on
+        ``p > 0`` keeps every mass-bearing allele conditionally complete, which is what
+        `absorbing state' protection actually requires: rescue what was seen, do not invent what
+        was not (rescale_usage covers the cross-protocol `give me every gene' case separately).
+
         ``gene_prior=0.0`` (the default) is byte-identical to plain MLE normalization, so the
         exact-Pgen invariant on ``from_olga`` models is untouched.
         """
@@ -555,7 +565,8 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
             return norm(df, keys)
         ok = _functional_support(template, seg)
         return norm(df.with_columns(
-            p=pl.col("p") + pl.when(pl.col(allele_col).is_in(list(ok))).then(gene_prior).otherwise(0.0)
+            p=pl.col("p") + pl.when(pl.col(allele_col).is_in(list(ok)) & (pl.col("p") > 0))
+                              .then(gene_prior).otherwise(0.0)
         ), keys)
 
     def deletion(arr, alleles, col, nb, maxpal):
@@ -676,7 +687,13 @@ def infer_native(
         pm, _, _ = pack(model)
         counts = make_counts(pm)
         ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, 0, ddflags)
-        report.loglik.append(ll)
+        # Report the per-sequence MEAN, matching infer() (line ~431) -- estep_batch returns the
+        # summed log-likelihood, and appending it raw made infer_native's loglik differ from
+        # infer's by a factor of n (the two are documented as "same result"). Denominator is the
+        # input read count; n_scoreable is populated so the sum can be recovered if needed.
+        n = len(seqs_enc)
+        report.loglik.append(ll / n if n else float("-inf"))
+        report.n_scoreable.append(n)
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
         new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior, gene_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
