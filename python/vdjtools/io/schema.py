@@ -117,10 +117,16 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame
     """
     exprs = []
     for col, dtype in SCHEMA.items():
-        if col in df.columns:
-            exprs.append(pl.col(col).cast(dtype, strict=False).alias(col))
-        else:
+        if col not in df.columns:
             exprs.append(pl.lit(None, dtype=dtype).alias(col))
+        elif col == COUNT:
+            # Route the count through Float64: read via the all-Utf8 TSV path, a count of "5000.0"
+            # (pandas float-formats any integer column that once held a NaN) fails a direct
+            # Utf8->Int64 cast, becomes null, and recompute_frequency then reports frequency 0.0
+            # for a real clone. Float64->Int64 truncates toward zero (== io/convert.py::_to_int).
+            exprs.append(pl.col(col).cast(pl.Float64, strict=False).cast(dtype, strict=False).alias(col))
+        else:
+            exprs.append(pl.col(col).cast(dtype, strict=False).alias(col))
     df = df.with_columns(exprs)
     if recompute_freq:
         df = recompute_frequency(df)

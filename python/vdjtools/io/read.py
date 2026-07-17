@@ -211,7 +211,15 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     if COUNT not in df.columns:
         df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
     else:
-        df = df.with_columns(pl.col(COUNT).cast(pl.Int64, strict=False).fill_null(1))
+        # Cast via Float64: the TSV is read as Utf8, and a count of "5000.0" (pandas writes any
+        # integer column that ever held a NaN as float) cannot go straight to Int64 -- strict=False
+        # yields null, and fill_null(1) then silently turns a 5000-read clone into a singleton,
+        # inverting the clonal hierarchy with no error. Float64->Int64 truncates toward zero,
+        # matching io/convert.py::_to_int (int(float(x))). A genuinely unparseable cell still
+        # becomes null -> 1, which is the documented default for a missing count.
+        df = df.with_columns(
+            pl.col(COUNT).cast(pl.Float64, strict=False).cast(pl.Int64, strict=False).fill_null(1)
+        )
 
     # Legacy clonotype identity is (V, J, CDR3nt); junction_aa is kept in the key so
     # files with no nt column still collapse (redundant when nt is present). D and C
