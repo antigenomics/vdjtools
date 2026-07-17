@@ -143,8 +143,11 @@ def read_parquet(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataF
             f"Parquet file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {df.columns}"
         )
     df = df.select([pl.col(src).alias(canon) for canon, src in found.items()])
-    df = df.with_columns(_first_call(pl.col(c)) for c in (V_CALL, D_CALL, J_CALL)
-                         if c in df.columns)
+    # Do NOT collapse comma ambiguity here (unlike read_vdjtools, whose legacy single-call format
+    # takes the first token by convention). Parquet is the at-scale storage format for a canonical
+    # frame: read_airr and scan_cohort preserve a tie like "IGHV3-23*01,IGHV3-23D*01" whole, so a
+    # round-trip through write_parquet must too -- otherwise AIRR->parquet->read_parquet silently
+    # drops IGHV3-23D, exactly the ambiguity the model.infer.call_alleles fix exists to keep.
     if COUNT not in df.columns:
         df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
     df = schema.normalize(df, recompute_freq=True)
