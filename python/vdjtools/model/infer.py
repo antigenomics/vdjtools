@@ -486,7 +486,21 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
 # Native EM: the E-step runs in C++ (_core.estep_batch); the M-step re-normalizes the returned
 # dense soft-count arrays back into polars tables. Same result as pure-Python infer(), much faster.
 
-def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0) -> dict[str, pl.DataFrame]:
+def _functional_support(template: Model, seg: str) -> set[str]:
+    """The allele names the germline says are real and functional for one segment.
+
+    This is the support a ``gene_prior`` is spread over: the germline reference (arda for
+    arda-native models, OLGA's own for ``from_olga`` ones) is the authority on which alleles
+    exist, and EM should never be able to declare one of them impossible.
+    """
+    g = template.genomic.get(f"genes_{seg}")
+    if g is None:
+        return set()
+    return set(g.filter(pl.col("functional"))[f"{seg}_allele"].to_list())
+
+
+def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0,
+                  gene_prior=0.0) -> dict[str, pl.DataFrame]:
     vdj = template.chain_type == "VDJ"
     mp = template.manifest.palindrome_max
     nV, nJ, nD = len(v_alleles), len(j_alleles), len(d_alleles)
@@ -494,6 +508,29 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
     def norm(df, keys):
         tot = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
         return df.with_columns(p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
+
+    def gene_choice(df, allele_col, seg, keys):
+        """Normalize a gene-choice table, optionally with a Dirichlet prior over the germline.
+
+        ``P(V)=0`` is an ABSORBING STATE of this EM: the E-step weights every scenario by P(V),
+        so an allele that reaches zero count can never be re-attributed and is dead for good. One
+        unlucky iteration permanently deletes a real gene. Measured on human TRB: the learned
+        model kept 30 of the 57 V genes OLGA carries, having seen 54 of them in the training data.
+
+        A pseudocount over the germline's FUNCTIONAL alleles fixes it at the source: the germline
+        is the authority on what exists, so nothing real is ever assigned probability zero, while
+        the data still decides the actual usage. Non-functional alleles (pseudogenes/ORFs) are
+        deliberately NOT given mass -- the model cannot score them anyway.
+
+        ``gene_prior=0.0`` (the default) is byte-identical to plain MLE normalization, so the
+        exact-Pgen invariant on ``from_olga`` models is untouched.
+        """
+        if not gene_prior:
+            return norm(df, keys)
+        ok = _functional_support(template, seg)
+        return norm(df.with_columns(
+            p=pl.col("p") + pl.when(pl.col(allele_col).is_in(list(ok))).then(gene_prior).otherwise(0.0)
+        ), keys)
 
     def deletion(arr, alleles, col, nb, maxpal):
         a = np.repeat(alleles, nb)
@@ -506,11 +543,11 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
                                   "p": list(arr)}), ["from_nt"])
 
     t = {}
-    t["v_choice"] = norm(pl.DataFrame({"v_allele": v_alleles, "p": list(counts.v_choice)}), [])
+    t["v_choice"] = gene_choice(pl.DataFrame({"v_allele": v_alleles, "p": list(counts.v_choice)}), "v_allele", "v", [])
     t["v_3_del"] = deletion(counts.v_3_del, v_alleles, "v_allele", nbins["v"], mp["v_3"])
     t["j_5_del"] = deletion(counts.j_5_del, j_alleles, "j_allele", nbins["j"], mp["j_5"])
     if vdj:
-        t["j_choice"] = norm(pl.DataFrame({"j_allele": j_alleles, "p": list(counts.j_choice)}), [])
+        t["j_choice"] = gene_choice(pl.DataFrame({"j_allele": j_alleles, "p": list(counts.j_choice)}), "j_allele", "j", [])
         t["d_gene"] = norm(pl.DataFrame({
             "j_allele": np.repeat(j_alleles, nD), "d_allele": np.tile(d_alleles, nJ),
             "p": list(counts.d_gene)}), ["j_allele"])
@@ -563,11 +600,19 @@ def infer_native(
     p_nd2_init: float = 0.02,
     dd_allowed: list | None = None,
     nd_prior: float = 0.0,
+    gene_prior: float = 0.0,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
-    ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior``). Learns tandem-D (``n_D=2``) by
+    ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior`` / ``gene_prior``).
+
+    ``gene_prior`` is a Dirichlet pseudocount spread over the germline's **functional** V/J
+    alleles in each M-step. ``P(V)=0`` is an absorbing state of this EM — the E-step weights
+    scenarios by P(V), so a zeroed allele can never be re-attributed — and on real data that
+    silently deletes real genes for good (human TRB: 30 of 57 V genes survived unregularized).
+    The germline says which alleles exist; the prior keeps all of them reachable and lets the
+    data set the usage. ``0.0`` (default) is byte-identical to plain MLE. Learns tandem-D (``n_D=2``) by
     default on the D-bearing loci: the native E-step accumulates the second-D soft counts via a
     factorized forward/backward pass, read-parallelized across cores.
     """
@@ -607,7 +652,7 @@ def infer_native(
         ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, 0, ddflags)
         report.loglik.append(ll)
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
-        new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior)
+        new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior, gene_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
         tv = _tv(model.tables["v_choice"], new_model.tables["v_choice"], ["v_allele"])
         report.gene_tv.append(tv)
