@@ -112,6 +112,51 @@ def test_read_airr_collapse_key_ignores_d_call(tmp_path):
     assert df[S.D_CALL].to_list() == ["TRBD1"]             # representative non-null D
 
 
+def test_read_airr_reads_gene_suffixed_calls(tmp_path):
+    # isalgo/airr_yfv19 ships `v_gene`/`d_gene`/`j_gene`/`c_gene`, not the AIRR-standard
+    # `*_call`. sniff_format still routes it to "airr" (it matches on junction_aa alone),
+    # so an unrecognised V column meant v_call/j_call/locus came back 100% NULL and the
+    # collapse key silently narrowed to the junction -- summing counts across clonotypes
+    # that differ only by V. It failed plausibly: no error, just 100% turnover downstream.
+    p = tmp_path / "yfv.tsv"
+    p.write_text(
+        "sequence_id\tduplicate_count\tlocus\tjunction\tjunction_aa\tv_gene\td_gene\tj_gene\tc_gene\n"
+        "0\t7\tTRB\tTGTGCTAGT\tCASS\tTRBV7-9\tTRBD1\tTRBJ1-1\t\n"
+        "1\t3\tTRB\tTGTGCTAGT\tCASS\tTRBV20-1\tTRBD1\tTRBJ1-1\t\n"
+    )
+    df = vio.read_airr(p)
+    assert df[S.V_CALL].to_list() == ["TRBV7-9", "TRBV20-1"]   # not null
+    assert df[S.J_CALL].to_list() == ["TRBJ1-1", "TRBJ1-1"]
+    assert df[S.LOCUS].to_list() == ["TRB", "TRB"]             # derived from v_call
+    # The load-bearing assertion: same junction, different V => two clonotypes, NOT one
+    # collapsed row of count 10.
+    assert df.height == 2
+    assert sorted(df[S.COUNT].to_list()) == [3, 7]
+
+
+def test_read_airr_prefers_call_over_gene(tmp_path):
+    # If a file carries both, `v_call` is the AIRR standard and wins; `v_gene` is the
+    # fallback. Order in _AIRR_ALIASES is "most specific first".
+    p = tmp_path / "both.tsv"
+    p.write_text(
+        "v_call\tv_gene\tj_call\tj_gene\tjunction_aa\n"
+        "TRBV12-3*01\tTRBV12-3\tTRBJ1-1*01\tTRBJ1-1\tCASS\n"
+    )
+    df = vio.read_airr(p)
+    assert df[S.V_CALL].to_list() == ["TRBV12-3*01"]
+    assert df[S.J_CALL].to_list() == ["TRBJ1-1*01"]
+
+
+def test_read_airr_raises_without_a_v_or_j_call(tmp_path):
+    # Never silently narrow the collapse key. Before this raise, a file whose V column
+    # we could not name got v_call=null and its counts summed across distinct clonotypes
+    # -- a wrong number with no error. A rearrangement table without a V call is not one.
+    p = tmp_path / "nov.tsv"
+    p.write_text("junction_aa\tduplicate_count\nCASS\t5\n")
+    with pytest.raises(ValueError, match="v_call"):
+        vio.read_airr(p)
+
+
 def test_read_vdjtools_rejects_foreign_header(tmp_path):
     p = tmp_path / "bad.tsv"
     p.write_text("foo\tbar\n1\t2\n")
