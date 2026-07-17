@@ -248,6 +248,39 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   over any bundled model (OLGA vs learned); `[examples]` extra. README/docs/SOURCES updated.
 - **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual).
 
+**AS/B27 motif campaign — `feature/as-b27-motif`** (`appendix/bm_ankspond.py`, runs locally in
+~27 s; HF `isalgo/airr_ankspond`, 60 donors). Reproduces Komech 2018's TRBV9/TRBJ2-3 motif and
+fixed two real bugs on the way:
+
+- **`model/native` Pgen allele guard (was a silent wrong answer)** — `vi.get(v, -1)` mapped any
+  unrecognised V/J to `-1` = *marginalize over all V/J*. The model is keyed by **allele**, and real
+  repertoires carry **gene-level** `v_call` (`TRBV9`), so `pgen_aa(m, cdr3, "TRBV9", "TRBJ2-3")`
+  returned the V/J-agnostic value — **2.38× too high** — and raised nothing. `_gene_idx` now raises
+  and names the alleles to pass. Exact values unchanged. If you pin an older vdjtools, pass `*01`.
+- **`io.read_mitcr`** — the MiTCR/tcR dotted dialect (`Read.count`, `CDR3.nucleotide.sequence`,
+  `V.gene`). ankspond `old/` (the actual 2018 cohort, and the only part with nucleotide CDR3 +
+  V/D/J markup) previously **raised** in `sniff_format`. `_lower_map` is exact-lowercase, so
+  MiGEC's space-separated picks never match dotted headers — it needs its own reader.
+- **`features.kmer` is no longer descriptive-only**: `flank` drops the conserved anchors (verified
+  == `seqtree.seeds.core_kmers` over 840 comparisons), and `kmer_cohort` → `association(key=
+  ("v_call","kmer"), match="exact")` is the V+k-mer test. `_feature_frame` no longer requires
+  `junction_aa` for `match="exact"` (fuzzy/1mm still *search* on it and still do); a key of
+  germline calls **alone** still raises — that is `stats.segment_usage`, not a biomarker.
+  ⚠ `str.len_chars()` is **UInt32** — `len - 2*flank` underflows on short junctions; cast first.
+
+Findings worth not re-deriving: **B27 is 26/27 confounded with AS** in this cohort, so only the
+**B27-matched** contrast separates disease from carriage (AS/B27+ **16/26** vs HD/B27+ **1/12**,
+OR=17.6, p=0.0023; batch-matched 26 vs 7 → OR=9.6, p=0.035). B27 carriage among *healthy* is
+**null** (p=0.60) ⇒ disease, not carriage. **V-pinning is load-bearing** (unpinned, the healthy arm
+gains 4 wrong-V convergents). Not depth (MWU p=0.94). **38 of 40 `old/` donors reappear in `new/`**
+⇒ no independent replication exists in this dataset; never pool. At 26-vs-12 **BH cannot clear
+0.05** over 273 pinned features (min attainable Fisher p = 3.6e-3) — the covid19 lesson again; the
+*ranking* is the result (motif at ranks 1,2,5,7,13; V+4mer `VGLY` rank 1, OR=25.0, beating the best
+single clonotype). **VDJdb release matters**: the 2024-06 checkout has **zero** records for this
+motif; 2025-12-29 has 7 (Yang 2022 *Nature*, B\*27:05, self + *E. coli* epitopes) — but that oracle
+is **partly circular** (same group, plausibly these donors). Handoff plan for mirpy:
+`~/vcs/projects/2026-mirpy-analysis` branch `as-b27-embedding`.
+
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
 `(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group
 to sum to 1 **or 0** (undefined conditional for an unused gene, kept for gene-index alignment).
