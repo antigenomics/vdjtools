@@ -51,7 +51,15 @@ def build(locus: str, name: str) -> dict:
     vgenes = set(_gene_to_alleles(base, "v"))
     jgenes = set(_gene_to_alleles(base, "j"))
 
-    uniq = data.prepare("human", locus, "nonfunctional", out_dir=str(WORK))
+    # EM_DATA_DIR: read pre-annotated slim parquet (v/j/d/junction/...) instead of fetching from
+    # HuggingFace + re-annotating with arda. This is the Aldan-3 path -- the compute nodes have no
+    # mmseqs2 and no outbound HTTPS, so annotation happens once on a workstation and the columns EM
+    # needs are staged as compact parquet (~20 MB for all 7 loci vs 1.6 GB of raw arda TSV).
+    data_dir = os.environ.get("EM_DATA_DIR")
+    if data_dir:
+        uniq = data.unique_clonotypes(pl.read_parquet(Path(data_dir) / f"human_{locus}_nonfunctional.parquet"))
+    else:
+        uniq = data.prepare("human", locus, "nonfunctional", out_dir=str(WORK))
     # Filter on GENE, not allele. arda and OLGA resolve alleles differently -- arda calls
     # TRBV20-1*07, which OLGA's 89-allele index does not contain -- and an allele-level
     # `is_in(vset)` therefore deletes the WHOLE GENE before gene_masks (below) ever sees it.
