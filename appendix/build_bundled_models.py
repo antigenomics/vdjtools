@@ -76,8 +76,20 @@ def build(locus: str, name: str) -> dict:
     # rare V genes live -- the ones that collapse to P(V)=0 in the first place.
     seqs = [s.upper() for s in uniq["junction"].to_list()]
     masks = gene_masks(base, uniq["v_call"].to_list(), uniq["j_call"].to_list())
-    if base.chain_type == "VDJ":  # add the arda-aligned D to each read's mask
-        masks = [(mk[0], mk[1], [r["d_call"]] if r.get("d_call") in dset else [])
+    if base.chain_type == "VDJ":
+        # arda's D call, as a SET -- AIRR writes an aligner tie comma-separated
+        # ("IGHD2-2*01,IGHD2-2*02,IGHD2-2*03"), so the old `r["d_call"] in dset` tested the whole
+        # joined string against a set of single alleles, never matched, and fell through to an
+        # empty mask = all D enumerated. Measured on IGH: 19,451/160,324 (12.1%) of D calls are
+        # ambiguous, and 64.1% of reads ended up with an empty D mask. An empty mask is not just
+        # slow (35 D genes for IGH vs 3 for TRB), it is a WORSE model: the D marginal stops being
+        # anchored to what arda actually saw. A genuinely absent D call still yields [] -- correct,
+        # since we know nothing -- and that is 50% of IGH on its own (short D + SHM).
+        def d_mask(call: str | None) -> list[str]:
+            if not call:
+                return []
+            return [a for a in (p.strip() for p in call.split(",")) if a in dset]
+        masks = [(mk[0], mk[1], d_mask(r.get("d_call")))
                  for mk, r in zip(masks, uniq.iter_rows(named=True))]
 
     # Learn tandem-D anchored to arda: on the D-bearing loci a read may be n_D=2 only where arda
