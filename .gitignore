@@ -50,3 +50,6 @@ __marimo__/
 .coverage
 .coverage.*
 htmlcov/
+
+# campaign outputs (regenerate: python appendix/bm_ankspond.py --arm all)
+appendix/results/
