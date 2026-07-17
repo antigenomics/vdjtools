@@ -196,3 +196,16 @@ def test_immunoseq_count_falls_back_when_templates_zero(tmp_path):
         df = convert.read_immunoseq(p)
         assert df.height == 1, f"templates={templ!r} dropped the clonotype"
         assert df["duplicate_count"][0] == 50
+
+
+def test_read_vidjil_raises_on_out_of_range_sample(tmp_path):
+    """An out-of-range sample_id must raise, not silently return sample 0's counts."""
+    import json, pytest
+    from vdjtools.io.convert import read_vidjil
+    doc = {"clones": [{"seg": {"5": "TRBV19*01", "3": "TRBJ2-7*01",
+                               "junction": {"aa": "CASSF", "start": 1, "stop": 15}},
+                       "sequence": "TGTGCCAGCAGCTTT", "reads": [100, 7]}]}
+    p = tmp_path / "s.vidjil"; p.write_text(json.dumps(doc))
+    assert read_vidjil(p, sample_id=1)["duplicate_count"][0] == 7      # in range
+    with pytest.raises(IndexError, match="out of range"):
+        read_vidjil(p, sample_id=2)

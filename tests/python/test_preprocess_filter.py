@@ -74,3 +74,20 @@ def test_filter_by_sample_key_includes_vj():
     other = _sample(["CASSL"], [1], v=["TRBV9"], j=["TRBJ1"])   # same aa, different V
     assert pp.filter_by_sample(a, other, keep=True).height == 0  # default key has V/J
     assert pp.filter_by_sample(a, other, keep=True, key=(S.JUNCTION_AA,)).height == 1
+
+
+def test_filter_segment_matches_a_gene_named_only_in_a_tie():
+    """A comma-ambiguity tie must match a query for its non-first gene."""
+    from vdjtools.preprocess.filter import filter_segment
+
+    df = pl.DataFrame({
+        "v_call": ["IGHV3-23*01,IGHV3-23D*01", "IGHV1-2*02"],
+        "d_call": [None, None], "j_call": ["IGHJ4*02", "IGHJ4*02"],
+        "junction_aa": ["CASF", "CASG"], "junction_nt": ["ACG", "ACG"],
+        "duplicate_count": [1, 1], "frequency": [0.5, 0.5],
+    })
+    kept = filter_segment(df, v=["IGHV3-23D"])
+    assert kept.height == 1 and kept["v_call"][0].startswith("IGHV3-23*01,")
+    # keep=False removes it (the legacy --negative path must also see the tie)
+    dropped = filter_segment(df, v=["IGHV3-23D"], keep=False)
+    assert dropped.height == 1 and dropped["v_call"][0] == "IGHV1-2*02"
