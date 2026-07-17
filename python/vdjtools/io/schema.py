@@ -157,13 +157,24 @@ def weight_expr(weight: str) -> pl.Expr:
 
 
 def strip_allele(expr: pl.Expr) -> pl.Expr:
-    """Strip the IMGT allele suffix (``*01``) from a segment-call expression.
+    """Reduce a segment-call expression to gene resolution, ambiguity-safe.
+
+    Strips the IMGT allele suffix from **every** gene an AIRR call names, not just the first. The
+    old ``\\*.*$`` regex matched from the FIRST ``*`` to end of string, so a comma-ambiguous call
+    like ``IGHV3-23*01,IGHV3-23D*01`` collapsed to ``IGHV3-23`` -- silently dropping IGHV3-23D,
+    which then reported zero usage across a whole cohort despite being named in tens of thousands
+    of rows. Genes are de-duplicated after stripping, so an allele-level tie *within* one gene
+    (``IGHV1-2*02,IGHV1-2*04``) correctly collapses to the single unambiguous gene ``IGHV1-2``,
+    while a genuine cross-gene tie stays ``IGHV3-23,IGHV3-23D``.
 
     Args:
         expr: A polars string expression over segment calls.
 
     Returns:
-        The expression with everything from the first ``*`` onward removed
-        (``TRBV12-3*01`` → ``TRBV12-3``); nulls pass through unchanged.
+        Each call reduced to its distinct gene(s), sorted and comma-joined
+        (``TRBV12-3*01`` → ``TRBV12-3``; ``A*01,A*02`` → ``A``; ``A*01,B*01`` → ``A,B``);
+        nulls pass through unchanged.
     """
-    return expr.str.replace(r"\*.*$", "")
+    return (expr.str.split(",")
+            .list.eval(pl.element().str.strip_chars().str.replace(r"\*.*$", ""))
+            .list.unique().list.sort().list.join(","))
