@@ -1,8 +1,16 @@
-"""Build the EM-learned bundled models from real HuggingFace out-of-frame reads, all 7 loci.  2026-07-12
+"""Build the EM-learned bundled models from real HuggingFace non-functional reads, all 7 loci.  2026-07-12
 
-For each locus: fetch nonfunctional reads (HF), arda-map to unique clonotypes, and run native EM
-(D-D by default on the D-bearing loci IGH/TRD/TRB) seeded from the OLGA bootstrap model. Saves to
+For each locus: fetch the FULL non-functional read set (HF isalgo/airr_model_read), arda-map to
+unique clonotypes = (v_call, j_call, junction), and run native EM (D-D by default on the D-bearing
+loci IGH/TRD/TRB) seeded from the OLGA bootstrap model. Saves to
 python/vdjtools/model/_bundled/learned/<locus>/ (parquet marginals + manifest.json).
+
+Non-functional = out-of-frame OR stop-codon; BOTH are used. The only property the generative model
+needs is that the rearrangement escaped selection, and both halves have. Keeping only the
+out-of-frame half would condition the training set on junction length mod 3 — a bias the
+insertion-length model would then happily learn.
+
+No cap, no subsampling: every clonotype surviving the germline filter goes into EM.
 
 Fixed-iteration EM (tol=0): arda masks pin V, so the V-usage convergence check would stop after ~2
 iters before the trims/insertions/n_d converge — running a fixed budget converges them properly.
@@ -19,7 +27,13 @@ from vdjtools.model import data, from_olga
 from vdjtools.model.infer import _gene_to_alleles, gene_masks, infer_native
 
 import olga as _olga
-OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(Path(_olga.__file__).parent / "default_models")))
+# The OLGA models shipped in THIS repo, not pip olga's: pip ships only 5 human loci (no
+# TRG/TRD) plus mouse, while tests/python/fixtures/olga/default_models carries all 7 human loci.
+# The TRG/TRD marginals originate from mirpy's legacy-v2 branch (commit aeccd75) and are verified
+# byte-identical to what the bundled parquet were built from; olga-pip scores with them fine, so
+# they are a real oracle for those two loci, which pip alone cannot be.
+_REPO_OLGA = Path(__file__).resolve().parent.parent / "tests" / "python" / "fixtures" / "olga" / "default_models"
+OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(_REPO_OLGA)))
 DEST = Path("python/vdjtools/model/_bundled/learned")
 # NB the previous default pointed into ANOTHER SESSION's scratchpad and the build silently
 # reused a truncated arda cache from it -- that is how the shipped TRB model came to be
@@ -28,7 +42,6 @@ DEST = Path("python/vdjtools/model/_bundled/learned")
 WORK = Path(os.environ.get("EM_WORK", "/tmp/em_work"))
 LOCI = {"TRA": "human_T_alpha", "TRB": "human_T_beta", "TRG": "human_T_gamma", "TRD": "human_T_delta",
         "IGH": "human_B_heavy", "IGK": "human_B_kappa", "IGL": "human_B_lambda"}
-CAP = int(os.environ.get("EM_CAP", "20000"))
 ITERS = int(os.environ.get("EM_ITERS", "12"))
 
 
@@ -48,20 +61,19 @@ def build(locus: str, name: str) -> dict:
     # Gene-level keeps 32,562 vs 24,980 clonotypes and 54 vs 51 V genes.
     vg = pl.col("v_call").str.split("*").list.first()
     jg = pl.col("j_call").str.split("*").list.first()
+    # ALL non-functional reads -- out-of-frame AND stop-codon alike. Both escaped selection, which
+    # is the only property the generative model needs. Restricting to out-of-frame is itself a
+    # selection: it keeps only junctions whose length happens not to be a multiple of 3, and
+    # conditioning the training set on a junction-length property is exactly the kind of bias the
+    # insertion-length model would then learn. Using the whole bucket is both unbiased and ~5x the
+    # data (TRB: 32.6k out-of-frame vs 139.6k total unique clonotypes).
     uniq = uniq.filter(
         vg.is_in(list(vgenes)) & jg.is_in(list(jgenes))
-        & pl.col("junction").str.to_uppercase().str.contains(r"^[ACGT]+$")
-        # OUT-OF-FRAME ONLY, by junction length -- the Murugan/OLGA training convention. The HF
-        # `nonfunctional` bucket is out-of-frame + stop-codon, and the stop half is 68% of it and
-        # NOT equivalent: 56.5% of those reads carry the stop INSIDE the junction, so training on
-        # them conditions the junction's nucleotide composition on containing a stop -- exactly
-        # what the insertion/dinucleotide model learns. Length mod 3 != 0 is used rather than
-        # arda's vj_in_frame flag because the two disagree on ~16k TRB reads, and "never
-        # translated" is a property of the length, not of a flag.
-        & ((pl.col("junction").str.len_bytes() % 3) != 0))
+        & pl.col("junction").str.to_uppercase().str.contains(r"^[ACGT]+$"))
     n_all = uniq.height
-    if n_all > CAP:
-        uniq = uniq.sample(CAP, seed=1)
+    # No cap and no sampling: EM runs on every clonotype that survives the germline filter. A
+    # subsample is a silent statement that the tail does not matter, and the tail is where the
+    # rare V genes live -- the ones that collapse to P(V)=0 in the first place.
     seqs = [s.upper() for s in uniq["junction"].to_list()]
     masks = gene_masks(base, uniq["v_call"].to_list(), uniq["j_call"].to_list())
     if base.chain_type == "VDJ":  # add the arda-aligned D to each read's mask

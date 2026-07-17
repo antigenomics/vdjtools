@@ -47,7 +47,13 @@ from vdjtools.model.schema import normalization_keys
 # back, and the comparison would report the old model's numbers as the new one's. The builder
 # writes to this same relative path; keep the two in agreement.
 BUNDLED = Path("python/vdjtools/model/_bundled")
-OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(Path(_olga.__file__).parent / "default_models")))
+# The OLGA models shipped in THIS repo, not pip olga's: pip ships only 5 human loci (no
+# TRG/TRD) plus mouse, while tests/python/fixtures/olga/default_models carries all 7 human loci.
+# The TRG/TRD marginals originate from mirpy's legacy-v2 branch (commit aeccd75) and are verified
+# byte-identical to what the bundled parquet were built from; olga-pip scores with them fine, so
+# they are a real oracle for those two loci, which pip alone cannot be.
+_REPO_OLGA = Path(__file__).resolve().parent.parent / "tests" / "python" / "fixtures" / "olga" / "default_models"
+OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(_REPO_OLGA)))
 WORK = Path(os.environ.get("EM_WORK", "/tmp/em_work"))
 LOCI = {"TRA": ("human_T_alpha", "VJ"), "TRB": ("human_T_beta", "VDJ"),
         "IGH": ("human_B_heavy", "VDJ"), "IGK": ("human_B_kappa", "VJ"),

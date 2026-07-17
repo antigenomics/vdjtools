@@ -25,9 +25,14 @@ from vdjtools.model.generate import generate
 from vdjtools.model.pgen import pgen_aa, pgen_nt, prepare
 from vdjtools.model.reference import _CODON_TABLE
 
-# pip olga ships its own default_models; the old default pointed at a mirpy checkout that no
 # longer exists on disk, so this script could not run at all. NB pip olga has no TRG/TRD.
-OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(Path(olm.__file__).parent / "default_models")))
+# The OLGA models shipped in THIS repo, not pip olga's: pip ships only 5 human loci (no
+# TRG/TRD) plus mouse, while tests/python/fixtures/olga/default_models carries all 7 human loci.
+# The TRG/TRD marginals originate from mirpy's legacy-v2 branch (commit aeccd75) and are verified
+# byte-identical to what the bundled parquet were built from; olga-pip scores with them fine, so
+# they are a real oracle for those two loci, which pip alone cannot be.
+_REPO_OLGA = Path(__file__).resolve().parent.parent / "tests" / "python" / "fixtures" / "olga" / "default_models"
+OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(_REPO_OLGA)))
 LOCI = {
     "TRA": ("human_T_alpha", "VJ"), "TRB": ("human_T_beta", "VDJ"),
     "TRG": ("human_T_gamma", "VJ"), "TRD": ("human_T_delta", "VDJ"),
