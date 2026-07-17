@@ -76,7 +76,7 @@ def run_locus(locus: str) -> dict:
     # nt Pgen: native vs OLGA
     ours_nt, olga_nt = [], []
     for r in rows:
-        nt, V, J = r["cdr3_nt"], r["v_call"], r["j_call"]
+        nt, V, J = r["junction_nt"], r["v_call"], r["j_call"]
         ours_nt.append(native.pgen_nt(m, nt, V, J))
         olga_nt.append(po.compute_nt_CDR3_pgen(nt, V, J))
     r_nt, n_nt = logcorr(ours_nt, olga_nt)
@@ -85,7 +85,7 @@ def run_locus(locus: str) -> dict:
     prod = [r for r in rows if r["productive"]][:N_AA]
     ours_aa, olga_aa = [], []
     for r in prod:
-        aa, V, J = r["cdr3_aa"], r["v_call"], r["j_call"]
+        aa, V, J = r["junction_aa"], r["v_call"], r["j_call"]
         ours_aa.append(native.pgen_aa(m, aa, V, J))
         olga_aa.append(po.compute_aa_CDR3_pgen(aa, V, J))
     r_aa, n_aa = logcorr(ours_aa, olga_aa)
@@ -95,8 +95,8 @@ def run_locus(locus: str) -> dict:
     for cod, a in _CODON_TABLE.items():
         syn[a].append(cod)
     aa_nt_ok = None
-    for r in sorted(rows, key=lambda r: len(r["cdr3_aa"])):  # search all in-frame reads for a short one
-        aa, V, J = r["cdr3_aa"], r["v_call"], r["j_call"]
+    for r in sorted(rows, key=lambda r: len(r["junction_aa"])):  # search all in-frame reads for a short one
+        aa, V, J = r["junction_aa"], r["v_call"], r["j_call"]
         if int(np.prod([len(syn[a]) for a in aa])) <= 20000:
             brute = sum(native.pgen_nt(m, "".join(c), V, J) for c in itertools.product(*[syn[a] for a in aa]))
             aa_nt_ok = bool(np.isclose(native.pgen_aa(m, aa, V, J), brute, rtol=1e-6, atol=1e-300))
