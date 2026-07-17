@@ -10,6 +10,7 @@ from .diversity import (
     observed_richness,
     shannon_wiener,
 )
+from .functional import functional_diversity
 from .inext import (
     asymptotic_diversity,
     coverage,
@@ -34,6 +35,7 @@ __all__ = [
     "normalized_shannon_wiener",
     "inverse_simpson",
     "d50",
+    "functional_diversity",
     "rarefaction",
     "inext",
     "inext_batch",

@@ -82,7 +82,12 @@ def test_trb_vdj_lossless_vs_olga():
     om.load_and_process_igor_model(str(TRB / "model_marginals.txt"))
 
     v_names = [x[0] for x in g.genV]
-    d_names = [x[0] for x in g.genD]
+    # .strip() mirrors from_olga: OLGA's TRB model_params.txt writes "% TRBD1*01;..." and its
+    # parser keeps the space, so genD names arrive as ' TRBD1*01'. We normalise on import (the
+    # dirty name silently breaks every by-name join with arda). Lossless here means the
+    # PROBABILITIES round-trip, which is what this test asserts — the name is deliberately not
+    # byte-identical to OLGA's, and that deviation is the point.
+    d_names = [x[0].strip() for x in g.genD]
     j_names = [x[0] for x in g.genJ]
     m = from_olga(TRB, locus="TRB")
 
@@ -159,3 +164,23 @@ def test_parquet_roundtrip(locus, sub, tmp_path):
     for name in m.genomic:
         assert r.genomic[name].equals(m.genomic[name])
     r.validate()
+
+
+def test_gene_names_are_trimmed():
+    """Imported gene names must carry no surrounding whitespace.
+
+    OLGA's human_T_beta/model_params.txt writes ``% TRBD1*01;...`` with a space after the '%',
+    and its parser keeps it, so genD arrives as ``' TRBD1*01'``. Harmless inside OLGA (it never
+    name-matches D against anything external) but here every by-name join with arda — whose calls
+    are ``'TRBD1*01'`` — silently matches nothing, which turns an arda D-mask into a no-op rather
+    than an error. Pin the normalisation on every string column of every table, in both a VDJ and
+    a VJ locus.
+    """
+    for path, locus in ((TRB, "TRB"), (TRA, "TRA")):
+        m = from_olga(path, locus=locus)
+        for tname, t in m.tables.items():
+            for col in t.columns:
+                if t[col].dtype != pl.String:
+                    continue
+                dirty = [x for x in t[col].drop_nulls().unique().to_list() if x != x.strip()]
+                assert not dirty, f"{locus} {tname}.{col} has untrimmed names: {dirty[:3]}"

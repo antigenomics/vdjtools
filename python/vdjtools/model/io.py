@@ -43,7 +43,7 @@ def _genomic_table(gen_list, anchors, cut_segs, *, seg: str, has_anchor: bool) -
     """Build a genes_<seg> frame from OLGA's gen* list + cut segments (+ anchors for V/J)."""
     rows = []
     for i, entry in enumerate(gen_list):
-        name = entry[0]
+        name = entry[0].strip()   # OLGA's "% TRBD1*01;..." leaves a leading space — see from_olga
         if has_anchor:  # genV/genJ entries are [name, cdr3_trim, full_germline]
             cdr3_seg, full = entry[1], entry[2]
             anchor = anchors.get(name, (-1, ""))[0]
@@ -124,7 +124,13 @@ def from_olga(model_dir: str | Path, *, locus: str, organism: str = "human") -> 
         m.load_and_process_igor_model(str(marg))
 
         v_alleles = [x[0] for x in g.genV]
-        d_alleles = [x[0] for x in g.genD]
+        # .strip(): OLGA's human_T_beta/model_params.txt writes "% TRBD1*01;..." with a space
+        # after the '%', and its parser keeps it -- so the D names arrive as ' TRBD1*01'. Harmless
+        # inside OLGA (it never name-matches D against anything external) but here it silently
+        # breaks every by-name join with arda, whose calls are 'TRBD1*01'. Measured: TRB is the
+        # only affected locus (45 d_gene + 1323 d_del rows); V/J and the other 6 loci are clean.
+        # Pgen is unaffected -- D is summed by index, not name.
+        d_alleles = [x[0].strip() for x in g.genD]
         j_alleles = [x[0] for x in g.genJ]
 
         pj = m.PDJ.sum(axis=0)  # P(J), shape (J,)
