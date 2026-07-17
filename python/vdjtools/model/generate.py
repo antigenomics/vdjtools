@@ -58,11 +58,17 @@ def prepare_generation(model: Model) -> _GenPrep:
         return dict(zip(g[f"{seg}_allele"], g["cut_segment"]))
 
     def usable(seg):
-        # Only sample functional alleles (non-empty germline + a defined deletion distribution).
-        # OLGA keeps non-functional genes in the marginal with residual mass but can't recombine
-        # them; drawing them would emit sequences with zero generation probability.
+        # Only sample functional alleles that ALSO have a defined (non-empty) deletion distribution.
+        # OLGA keeps non-functional genes in the marginal with residual mass but can't recombine them;
+        # an EM gene_prior likewise floors a real-but-unseen allele at P>0 with an all-zero deletion
+        # table (drawable in the marginal, no recombination model). Drawing either would emit a
+        # zero-Pgen sequence and index a size-0 array in _pick, so require the deletion model here.
         g = model.genomic[f"genes_{seg}"]
-        return set(g.filter(g["functional"])[f"{seg}_allele"].to_list())
+        fun = set(g.filter(g["functional"])[f"{seg}_allele"].to_list())
+        col = f"{seg}_allele"
+        dtab = t[{"v": "v_3_del", "j": "j_5_del", "d": "d_del"}[seg]]
+        recomb = set(dtab.group_by(col).agg(pl.col("p").sum().alias("s")).filter(pl.col("s") > 0)[col].to_list())
+        return fun & recomb
 
     uv, uj = usable("v"), usable("j")
     ud = usable("d") if vdj else set()
