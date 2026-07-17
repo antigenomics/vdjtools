@@ -168,14 +168,24 @@ IMGT/HighV-QUEST, Vidjil, RTCR) to the canonical clonotype frame.
 Repertoire statistics (``vdjtools.stats``)
 ------------------------------------------
 
-Diversity estimators (observed, Chao1/ChaoE, Shannon/Simpson, d50, Efron-Thisted) with exact, resampled, rarefaction and quantile variants; spectratype; and V/J/VJ segment usage.
+Diversity estimators (observed, Chao1/ChaoE, Shannon/Simpson, d50, Efron-Thisted), iNEXT Hill-number rarefaction/extrapolation, similarity-aware (functional) diversity, spectratype, and V/J/VJ segment usage.
 
 ``vdjtools.stats.diversity``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Diversity indices (exact, resampled, quantile).
+Point-estimate diversity indices.
 
 .. automodule:: vdjtools.stats.diversity
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.stats.functional``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Leinster-Cobbold similarity-aware diversity profile + Rao's quadratic entropy.
+
+.. automodule:: vdjtools.stats.functional
    :members:
    :undoc-members:
    :show-inheritance:
