@@ -13,6 +13,22 @@ TCRnet), **arda** (AIRR annotation + markup repair; brings conda/mmseqs2).
   **Native only for Pgen DP, generation sampler, EM E-step** (Python-first everywhere else).
 - `tests/{cpp,python}/`, `docs/` (Sphinx + pydata, gh-pages), `.github/workflows/{ci,docs,publish}.yml`.
 - `CMakeLists.txt` (scikit-build-core + pybind11, C++20), `environment.yml` (conda), `setup.sh`.
+- `appendix/` — **library-only**: the LaTeX theory appendix (`murugan_model.tex` + `refs.bib` +
+  `bn_*.pdf`), `build_bundled_models.py` (builds the models *shipped in the wheel*) and
+  `concordance.py` (validates them against the OLGA oracle). Nothing that merely *uses* the library.
+
+## Repo split (2026-07-17) — benchmarks live elsewhere
+**`~/vcs/projects/2026-vdjtools-benchmark`** now holds the benchmark/campaign work: `bench/` (the
+`bm_*`/`bench_*` scripts, the confound gates — `accept_gate`, `depth_gate`, `theta_ceiling`,
+`cooccurrence_fpr`, `assoc_depth` — and `validate_batch_covid.py`) plus `scripts/`
+(`biomarker_bench.sbatch`). They are analyses that *use* vdjtools, not part of it — the same split
+mirpy made between `~/vcs/code/mirpy` and `~/vcs/projects/2026-mirpy-analysis`. This repo stays
+library + tests + docs; the **numbers of record stay in `SOURCES.md` here** (the Phase-6b tables),
+which now cite the benchmark repo's paths.
+
+⚠ **As of the move it is not a git repo** — nothing there is under version control yet.
+⚠ The scripts hardcode cluster paths (`/projects/biomarkers/{raw,results}`, `/projects/fmba_covid`)
+and are run ad hoc; they were never importable from here, so nothing in the library broke.
 
 ## Build / test / run
 ```bash
@@ -41,8 +57,9 @@ the Aldan-3 HPC cluster via the `aldan3` CLI (repo `../aldan3-client`) instead o
 Submit + monitor deterministically (every subcommand takes `--json`):
 `aldan3 slurm submit <script.sh> [-- ARGS…] [--env <e>] [--cpus/--mem/--time/--gpus …]`,
 then `aldan3 slurm queue` · `log <id>` · `hist <id>` (sacct usage) · `cancel <id>`;
-`aldan3 slurm template cpu|gpu|array -o job.sbatch` scaffolds a starter script. Keep the runnable
-`scripts/*.sh` in this repo; `aldan3` is just the external driver.
+`aldan3 slurm template cpu|gpu|array -o job.sbatch` scaffolds a starter script. The runnable
+`scripts/*.sbatch` now live in the **benchmark repo** (see the Repo split above), not here;
+`aldan3` is just the external driver.
 
 ## Git model
 `master` = v2 (tagged releases) ← `dev` (integration) ← `feature/*` (one per phase).
@@ -128,7 +145,7 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   stitch at the D placement (VDJ) or thread the J germline per J (VJ; J plays D's role). Key insight:
   cross-block coupling is codon-only (never the insertion Markov), so left/right factor cleanly. Exact
   vs OLGA machine-precision; **8.6x** faster on TRB, **1.9x** on TRA (`test_native_aa_vdj_matches_olga`,
-  `appendix/bench_pgen.py`). The VJ enumeration had been ~1000x slower than OLGA — the TM fixes it.
+  `~/vcs/projects/2026-vdjtools-benchmark/bench/bench_pgen.py`). The VJ enumeration had been ~1000x slower than OLGA — the TM fixes it.
 - **DONE 1h (v/j-agnostic + 1-mismatch aa Pgen)** — the codon check is now a 64-bit **allowed-codon
   mask** per position (`ok_codon`), so wildcards/motifs run in one pass. `native.pgen_aa(m, aa, v, j,
   mismatches=)`: `v`/`j`=None marginalizes that gene (V/J-agnostic, always supported); `mismatches=1`
@@ -190,7 +207,7 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   (`pack` no longer guards); OLGA cannot compute D-D Pgen at all. `test_native_dd_matches_python_reference`.
   **Superseded for in-frame nt by the aa transfer matrix (1i, ~15 ms/seq, 24×)** — `dd_middle` now runs
   only for non-in-frame nt and as the correctness oracle; it stays exact and is the reference the TM checks against.
-- **DONE real-data EM comparison** `appendix/bench_em.py` — `infer_native` on real nonfunc TRB+TRD reads
+- **DONE real-data EM comparison** `~/vcs/projects/2026-vdjtools-benchmark/bench/bench_em.py` — `infer_native` on real nonfunc TRB+TRD reads
   (single-D, arda-masked) vs legacy OLGA via `analyze`. Finding: **real repertoires have broader
   trim/insertion entropy than OLGA's synthetic model** (TRB d_del 6.4→7.6 bit, vd_ins 3.8→4.5); within-D
   coupling I(delD5;delD3|D)≈1.1 bit robust across both. Held-out loglik improves.
@@ -248,7 +265,7 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   over any bundled model (OLGA vs learned); `[examples]` extra. README/docs/SOURCES updated.
 - **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual).
 
-**AS/B27 motif campaign — `feature/as-b27-motif`** (`appendix/bm_ankspond.py`, runs locally in
+**AS/B27 motif campaign — `feature/as-b27-motif`** (`~/vcs/projects/2026-vdjtools-benchmark/bench/bm_ankspond.py`, runs locally in
 ~27 s; HF `isalgo/airr_ankspond`, 60 donors). Reproduces Komech 2018's TRBV9/TRBJ2-3 motif and
 fixed two real bugs on the way:
 
@@ -278,8 +295,8 @@ gains 4 wrong-V convergents). Not depth (MWU p=0.94). **38 of 40 `old/` donors r
 *ranking* is the result (motif at ranks 1,2,5,7,13; V+4mer `VGLY` rank 1, OR=25.0, beating the best
 single clonotype). **VDJdb release matters**: the 2024-06 checkout has **zero** records for this
 motif; 2025-12-29 has 7 (Yang 2022 *Nature*, B\*27:05, self + *E. coli* epitopes) — but that oracle
-is **partly circular** (same group, plausibly these donors). Handoff plan for mirpy:
-`~/vcs/projects/2026-mirpy-analysis` branch `as-b27-embedding`.
+is **partly circular** (same group, plausibly these donors). Handoff plan for mirpy: `~/vcs/projects/2026-mirpy-analysis` branch `as-b27-embedding`.
+The campaign script moved out with the rest of the benchmarks (see the Repo split above).
 
 Model schema notes: `ndel` is **biological** (neg = palindromic P-nt); dinucleotide row
 `(from_nt,to_nt,p)=P(next|prev)` (OLGA's col-stochastic `R[next,prev]`); validation allows a group

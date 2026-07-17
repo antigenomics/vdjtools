@@ -57,7 +57,7 @@ def _():
     # Validation degrades gracefully if absent — the screen itself needs no VDJdb.
     VDJDB = Path(os.environ.get("VDJDB_PATH",
                                 "~/vcs/code/vdjdb-db/database/vdjdb.slim.txt")).expanduser()
-    N_SUBJECTS = 400        # balanced subset; the full 786-subject run is appendix/bench_biomarker.py
+    N_SUBJECTS = 400        # balanced subset; the full 786-subject run is ~/vcs/projects/2026-vdjtools-benchmark/bench/bench_biomarker.py
 
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
@@ -305,7 +305,7 @@ def _(mo):
         specificity and 1-mismatch recovers more VDJdb overlap; and the same substrate yields
         co-occurring public-clone pairs. Built on `vdjtools.io` (streamed Parquet cohort),
         `vdjtools.biomarker.{association, cooccurrence, condition, stats}`, and the native
-        1-mismatch matcher. The full 786-subject benchmark is `appendix/bench_biomarker.py`.
+        1-mismatch matcher. The full 786-subject benchmark is `~/vcs/projects/2026-vdjtools-benchmark/bench/bench_biomarker.py`.
         """
     )
     return
