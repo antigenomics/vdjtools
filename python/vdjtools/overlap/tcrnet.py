@@ -12,9 +12,20 @@ to :func:`vdjmatch.evalue.query_evalues` (the ``seqtree`` E-value engine):
 - **target** = a fuzzy ``seqtree.Index`` over the *sample's own* unique CDR3s — so a
   clonotype's neighbour count is its within-sample degree;
 - **control** = a matched background repertoire (:func:`vdjmatch.evalue.background`);
-- for each query CDR3, ``E = (n_target / n_control_index_size)·n_control`` is the
-  neighbour count expected from the background, and ``p_enrichment`` is the Poisson
-  tail probability of seeing at least the observed within-sample degree by chance.
+- for each query CDR3, ``E = (N/M)·n_control`` — where ``N`` is the **target index size**
+  and ``M`` the **control index size** — is the neighbour count expected from the
+  background, and ``p_enrichment`` is the Poisson tail probability of seeing at least the
+  observed within-sample degree by chance. ``q_value`` is the Benjamini-Hochberg FDR over
+  the clonotypes scored in one call.
+
+**Self-hit handling** (this is subtle and was previously wrong). The query *is* a member of
+the target index but is *not* a member of the control, so the two sides need different
+treatment — and ``query_evalues(exclude_exact=True)`` punctures distance-0 hits on **both**.
+That silently dropped genuine public-clone neighbours from the background, understating ``E``
+and inflating significance. We therefore query with ``exclude_exact=False`` and subtract the
+self-hit from the target side only: verified, ``n_target`` differs by exactly 1 between the
+two modes for every query (the query's own copy), while ``n_control`` differs by 1 for the
+public clonotypes whose background neighbours were being discarded.
 
 **Locus handling.** A TCRnet neighbourhood is only meaningful within one locus (a TRA
 sequence has no true neighbours in a TRB background). When neither ``control`` nor
@@ -25,16 +36,16 @@ dropped with a warning. Passing ``control`` or ``locus`` explicitly overrides th
 scores every clonotype against that single background.
 
 Scope note: the legacy default was ``s,id,t = 1,0,1`` (one substitution, no indels,
-one total edit), i.e. vdjmatch ``"1,0,0,1"`` — the default here. ``exclude_exact`` is
-``True`` by default so a clonotype's own identical copy in the target/control is not
-counted as a neighbour.
+one total edit), i.e. vdjmatch ``"1,0,0,1"`` — the default here.
 """
 from __future__ import annotations
 
 import warnings
 
 import polars as pl
+from scipy.stats import poisson
 
+from ..biomarker.stats import fdr_bh
 from ..io.schema import JUNCTION_AA, COUNT, J_CALL, LOCUS, V_CALL, add_locus
 
 _VDJMATCH_HINT = (
@@ -42,7 +53,8 @@ _VDJMATCH_HINT = (
     "vdjmatch is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
 )
 
-_COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_control", "E", "p_enrichment", "p_any", LOCUS]
+_COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_control", "E",
+         "p_enrichment", "q_value", "p_any", LOCUS]
 
 
 def _require_vdjmatch():
@@ -63,13 +75,42 @@ def _collapse(sample: pl.DataFrame) -> pl.DataFrame:
                        pl.col(COUNT).sum().alias(COUNT)))
 
 
+def _finish(out: pl.DataFrame) -> pl.DataFrame:
+    """Add the BH q-value over every clonotype scored in one call, order, and sort.
+
+    One call is one family of tests: scoring a TRA+TRB sample asks "which clonotypes are
+    enriched *in this sample*", so the multiple-testing burden spans both loci. TCRnet
+    previously returned raw Poisson tails with no q-value at all, which over ~1e5 clonotypes
+    is not a threshold anyone can honestly apply.
+    """
+    q = fdr_bh(out["p_enrichment"].to_numpy())
+    return out.with_columns(pl.Series("q_value", q)).select(_COLS).sort("p_enrichment")
+
+
 def _score(agg, control, params, exclude_exact, threads, evalue, seqtree, locus):
-    """Score one already-collapsed (single-locus) frame against ``control``."""
+    """Score one already-collapsed (single-locus) frame against ``control``.
+
+    Always queries with ``exclude_exact=False`` and corrects the **target side only**. The
+    query is a member of its own sample's index (so its own copy must not count as a neighbour
+    of itself) but is *not* a member of the control (so a distance-0 control hit is a real
+    public-clone background neighbour and must count). ``E`` and ``p_enrichment`` are then
+    recomputed locally, because ``query_evalues``' own ``p_enrichment`` compares a
+    self-inclusive ``n_target`` against a self-free background scale.
+    """
     cdr3s = agg[JUNCTION_AA].to_list()
     target = seqtree.Index.build(cdr3s, alphabet="aa")
     ev = evalue.query_evalues(target, control, cdr3s, params,
-                              threads=threads, exclude_exact=exclude_exact)
-    ev = ev.rename({"query_cdr3": JUNCTION_AA, "n_target": "n_neighbors"})
+                              threads=threads, exclude_exact=False)
+    n_target, m_control = len(cdr3s), len(control)
+    degree = ev["n_target"].to_numpy() - (1 if exclude_exact else 0)
+    n_ctl = ev["n_control"].to_numpy()                  # query not in control: keep every hit
+    e = (n_target / max(m_control, 1)) * n_ctl
+    ev = ev.select(pl.col("query_cdr3").alias(JUNCTION_AA), pl.col("p_any")).with_columns(
+        pl.Series("n_neighbors", degree),
+        pl.Series("n_control", n_ctl),
+        pl.Series("E", e),
+        pl.Series("p_enrichment", poisson.sf(degree - 1, e)),   # P(X >= degree)
+    )
     return (agg.join(ev, on=JUNCTION_AA, how="left")
                .with_columns(pl.lit(locus, dtype=pl.Utf8).alias(LOCUS)))
 
@@ -96,15 +137,19 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
             per-locus split. When ``None`` (and ``control`` is ``None``) the sample is
             split by the locus of its ``v_call``.
         species: Species for the background control (default ``"human"``).
-        exclude_exact: Drop distance-0 (identical / self) hits from both target and
-            control counts, so a clonotype is not its own neighbour (default ``True``).
+        exclude_exact: Whether a clonotype's own copy counts toward its **within-sample**
+            degree (default ``True`` = it does not). This applies to the target side only —
+            the control side is never punctured, because the query is not a member of the
+            control and a distance-0 control hit is a genuine public-clone background
+            neighbour. Set ``False`` for the closed-ball convention ALICE uses.
         threads: Worker threads for the native search (``0`` = all cores).
 
     Returns:
         One row per unique clonotype (per locus) with columns ``junction_aa, v_call,
         j_call, duplicate_count, n_neighbors`` (within-sample degree), ``n_control``
         (background degree), ``E`` (expected neighbours), ``p_enrichment`` (Poisson
-        tail), ``p_any``, and ``locus`` — sorted by ascending ``p_enrichment``.
+        tail), ``q_value`` (Benjamini-Hochberg FDR over the clonotypes scored in this
+        call), ``p_any``, and ``locus`` — sorted by ascending ``p_enrichment``.
 
     Raises:
         ImportError: If vdjmatch is not importable (it is a base dependency).
@@ -122,7 +167,7 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
             control = evalue.background(locus=locus, species=species)
         out = _score(_collapse(sample), control, params, exclude_exact, threads,
                      evalue, seqtree, locus)
-        return out.select(_COLS).sort("p_enrichment")
+        return _finish(out)
 
     # Auto: split by v_call locus and score each locus against its matched background.
     withloc = add_locus(sample)
@@ -139,4 +184,4 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
                params, exclude_exact, threads, evalue, seqtree, loc)
         for loc in sorted(withloc[LOCUS].unique().to_list())
     ]
-    return pl.concat(parts).select(_COLS).sort("p_enrichment")
+    return _finish(pl.concat(parts))
