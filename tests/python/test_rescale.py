@@ -79,5 +79,40 @@ def test_rescale_j_and_selective_flags():
 
 def test_rescale_rejects_an_unusable_sample():
     m = load_bundled("TRB", "olga")
+    # An all-null V column is genuinely unusable.
+    s = _sample(["TRBV6-2*01"] * 3).with_columns(pl.lit(None, dtype=pl.String).alias("v_call"))
     with pytest.raises(ValueError, match="no usable"):
-        rescale_usage(m, _sample(["TRBV6-2*01,TRBV6-3*01"] * 5))   # ambiguous calls only
+        rescale_usage(m, s)
+
+
+def test_ambiguous_only_sample_is_usable_via_fractional_split():
+    """An all-ambiguous sample is NOT unusable — the ties still carry gene information."""
+    m = load_bundled("TRB", "olga")
+    r = rescale_usage(m, _sample(["TRBV6-2*01,TRBV6-3*01"] * 5))    # was: raised; now: 0.5/0.5
+    g = (r.tables["v_choice"].with_columns(pl.col("v_allele").str.split("*").list.first().alias("g"))
+         .group_by("g").agg(pl.col("p").sum()))
+    mass = {row["g"]: row["p"] for row in g.iter_rows(named=True)}
+    assert mass.get("TRBV6-2", 0) == pytest.approx(0.5)
+    assert mass.get("TRBV6-3", 0) == pytest.approx(0.5)
+
+
+def test_ambiguous_calls_are_split_fractionally_not_dropped():
+    """A comma tie is allocated 1/k per named gene, not discarded (duplicated loci tie constantly)."""
+    from vdjtools.model.rescale import _empirical
+
+    # 4 clonotypes: 2 unambiguous IGHV3-23, 2 ties naming IGHV3-23 + IGHV3-23D.
+    s = pl.DataFrame({
+        "junction_aa": [f"CAS{i}F" for i in range(4)],
+        "junction_nt": ["ACG"] * 4,
+        "v_call": ["IGHV3-23*01", "IGHV3-23*01",
+                   "IGHV3-23*01,IGHV3-23D*01", "IGHV3-23*01,IGHV3-23D*01"],
+        "j_call": ["IGHJ4*02"] * 4,
+        "duplicate_count": [1] * 4, "frequency": [0.25] * 4,
+    })
+    p = _empirical(s, "v_call")
+    # votes: IGHV3-23 = 2 + 0.5 + 0.5 = 3 ; IGHV3-23D = 0.5 + 0.5 = 1 ; total 4
+    assert p["IGHV3-23"] == pytest.approx(0.75)
+    assert p["IGHV3-23D"] == pytest.approx(0.25)
+    assert sum(p.values()) == pytest.approx(1.0)
+    # dropping the ties (the old behaviour) would have given IGHV3-23=1.0 and hidden IGHV3-23D
+    assert "IGHV3-23D" in p, "the duplicated-locus paralog was dropped"

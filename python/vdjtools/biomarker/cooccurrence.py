@@ -107,8 +107,11 @@ def cooccurrence(
             conditioning is active** (CMH is used), mirroring :func:`association`'s stratified
             branch. It *is* used when the guards below make conditioning fall back to pooled.
         alternative: ``"greater"`` (default; co-occurrence — the usual question), ``"less"``
-            (mutual exclusion) or ``"two-sided"``. Under CMH the two-sided χ² p is halved toward
-            ``or_mh``, so the direction is honoured on both branches.
+            (mutual exclusion) or ``"two-sided"``. Shapes the **Fisher** p (and, under CMH, the
+            halving of the two-sided χ² toward ``or_mh``). It does **not** shape a plain
+            ``test="chi2"`` p on the pooled branch: Pearson χ² is inherently two-sided, so a
+            depth-conditioning fallback with ``test="chi2"`` reports the same two-sided p
+            regardless of ``alternative`` — read ``direction``/``odds_ratio`` for the sign there.
         min_incidence, min_incidence_frac: Candidate-feature incidence threshold per chain.
         min_cooccurrence: Keep only pairs co-occurring in ≥ this many subjects.
         candidates_a, candidates_b: Restrict each chain's features to these keys.

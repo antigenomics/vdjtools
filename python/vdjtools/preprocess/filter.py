@@ -101,10 +101,19 @@ def _segment_matches(col: str, names: list[str]) -> pl.Expr:
     """Boolean expression: does this segment call match any query name (prefix)?
 
     Incomplete query names act as wildcards (legacy ``getAtFuzzy``): a match is a
-    prefix match on the raw call, so ``TRBV12`` matches ``TRBV12-3*01`` (allele-
-    insensitive) while ``TRBV12-3*01`` matches only itself.
+    prefix match, so ``TRBV12`` matches ``TRBV12-3*01`` (allele-insensitive) while
+    ``TRBV12-3*01`` matches only itself.
+
+    The match is per **comma-token**, not on the raw string: an AIRR call may be an
+    ambiguity tie like ``IGHV3-23*01,IGHV3-23D*01``, and a ``starts_with`` on the whole
+    string only ever tests the FIRST gene -- so ``filter_segment(v=["IGHV3-23D"])`` would
+    match none of the tens of thousands of rows that name IGHV3-23D only in a tie.
     """
-    return pl.any_horizontal([pl.col(col).str.starts_with(name) for name in names])
+    # Regex over the whole call: `name` at the start of the string OR right after a comma
+    # (+ optional whitespace). re.escape guards names containing regex metacharacters.
+    import re
+    pat = "(^|,)\\s*(" + "|".join(re.escape(n) for n in names) + ")"
+    return pl.col(col).str.contains(pat)
 
 
 def filter_segment(df: pl.DataFrame, v: list[str] | None = None,

@@ -38,15 +38,25 @@ def _empirical(sample: pl.DataFrame, call_col: str) -> dict[str, float]:
     than per read: usage is a property of the recombination, and read counts additionally carry
     clonal expansion and PCR.
 
-    Ambiguous comma-separated calls (``TRBV6-2*01,TRBV6-3*01``) are dropped rather than split --
-    they are a minority and assigning them arbitrarily would invent usage that was not observed.
+    Ambiguous comma-separated calls (``IGHV3-23*01,IGHV3-23D*01``) are split FRACTIONALLY, each
+    named gene getting ``1/k`` of the clonotype's vote. Dropping them is not missing-at-random:
+    duplicated loci (IGHV3-23/IGHV3-23D, IGHV1-69/IGHV1-69D) are near-identical, so the aligner
+    ties on them far more than on unique genes -- measured, 91% of real IGHV3-23 calls are ties,
+    so dropping them understates P(IGHV3-23), the most common human IGHV gene, by 10x, and that
+    error multiplies straight into Pgen (P(V) is a root factor). Fractional allocation is the
+    honest estimate under "the truth is one of these, equally likely a priori".
     """
-    s = sample.filter(pl.col(call_col).is_not_null() & ~pl.col(call_col).str.contains(","))
+    s = sample.filter(pl.col(call_col).is_not_null())
     if s.height == 0:
         raise ValueError(f"no usable {call_col} values in the sample — cannot rescale usage")
-    g = s.select(_gene(call_col).alias("g")).group_by("g").len()
-    tot = g["len"].sum()
-    return {r["g"]: r["len"] / tot for r in g.iter_rows(named=True)}
+    # Explode ties into (gene, 1/k) rows, then sum the fractional votes per gene.
+    genes = (pl.col(call_col).str.split(",")
+             .list.eval(pl.element().str.strip_chars().str.split("*").list.first()))
+    g = (s.select(genes.alias("g"))
+          .with_columns(w=pl.lit(1.0) / pl.col("g").list.len())
+          .explode("g").group_by("g").agg(pl.col("w").sum()))
+    tot = g["w"].sum()
+    return {r["g"]: r["w"] / tot for r in g.iter_rows(named=True)}
 
 
 def _reweight(table: pl.DataFrame, allele_col: str, target: dict[str, float],

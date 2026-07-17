@@ -453,19 +453,45 @@ def _gene_to_alleles(model: Model, seg: str) -> dict[str, list[str]]:
     return out
 
 
+def call_alleles(index: dict[str, list[str]], call: str | None) -> list[str]:
+    """All model alleles compatible with one AIRR gene call, ambiguity included.
+
+    Two kinds of ambiguity, and both must widen the mask rather than narrow it:
+
+    * **allele** — a call of ``TRBV20-1*03`` where the truth is ``*01``. Expanding to every model
+      allele of the gene keeps the right scenario reachable.
+    * **comma-separated genes** — AIRR writes an aligner's tie as ``IGHV3-23*01,IGHV3-23D*01``,
+      which means *the aligner could not tell these apart*. Splitting on ``*`` alone keeps only
+      ``IGHV3-23`` and silently DROPS ``IGHV3-23D`` — a different gene on a duplicated locus. If
+      the truth is the dropped one, its scenario is unreachable and EM misattributes the read.
+      Measured on human IGH: 23,176 of 160,324 non-functional clonotypes (14.5%) carry an
+      ambiguous V call; TRB 2.0%; TRA/TRD 0%.
+
+    Returns the union over every gene named, deduplicated and order-stable. Unknown genes
+    contribute nothing; a call naming no known gene yields ``[]``, which the E-step reads as
+    "unrestricted" — the honest degradation, since we know nothing about that read's gene.
+    """
+    if not call:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in call.split(","):
+        for a in index.get(part.strip().split("*")[0], []):
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
+    return out
+
+
 def gene_masks(model: Model, v_calls: list[str], j_calls: list[str]) -> list[tuple]:
     """Build per-read ``(v_genes, j_genes, d_genes)`` E-step masks from V/J gene calls.
 
-    Each call is expanded from an allele to *all* model alleles of its gene, so allele-level
-    ambiguity (a call of ``TRBV20-1*03`` vs the true ``*01``) never excludes the right scenario.
+    Each call is expanded to every model allele of every gene it names — see
+    :func:`call_alleles` for why both allele- and comma-ambiguity must widen the mask.
     D is left unrestricted (few D genes, and D calls on the short D germline are unreliable).
     """
     va, ja = _gene_to_alleles(model, "v"), _gene_to_alleles(model, "j")
-
-    def alleles(m, call):
-        return m.get(call.split("*")[0], []) if call else []
-
-    return [(alleles(va, v), alleles(ja, j), None) for v, j in zip(v_calls, j_calls)]
+    return [(call_alleles(va, v), call_alleles(ja, j), None) for v, j in zip(v_calls, j_calls)]
 
 
 def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> tuple[list[str], list[tuple]]:
@@ -522,6 +548,16 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         the data still decides the actual usage. Non-functional alleles (pseudogenes/ORFs) are
         deliberately NOT given mass -- the model cannot score them anyway.
 
+        The prior only protects alleles the data actually ATTRIBUTED reads to (soft count > 0),
+        NOT every functional allele: the E-step commits V-choice to one best-match allele per read,
+        so a functional secondary allele (e.g. TRDV2*03 when arda calls TRDV2*01) gets zero soft
+        count AND zero deletion/insertion counts. Handing it choice mass anyway makes it
+        selectable by the generative sampler while its deletion distribution is all-zero -> the
+        sampler draws it and then has nothing to draw a deletion from (IndexError). Guarding on
+        ``p > 0`` keeps every mass-bearing allele conditionally complete, which is what
+        `absorbing state' protection actually requires: rescue what was seen, do not invent what
+        was not (rescale_usage covers the cross-protocol `give me every gene' case separately).
+
         ``gene_prior=0.0`` (the default) is byte-identical to plain MLE normalization, so the
         exact-Pgen invariant on ``from_olga`` models is untouched.
         """
@@ -529,7 +565,8 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
             return norm(df, keys)
         ok = _functional_support(template, seg)
         return norm(df.with_columns(
-            p=pl.col("p") + pl.when(pl.col(allele_col).is_in(list(ok))).then(gene_prior).otherwise(0.0)
+            p=pl.col("p") + pl.when(pl.col(allele_col).is_in(list(ok)) & (pl.col("p") > 0))
+                              .then(gene_prior).otherwise(0.0)
         ), keys)
 
     def deletion(arr, alleles, col, nb, maxpal):
@@ -650,7 +687,13 @@ def infer_native(
         pm, _, _ = pack(model)
         counts = make_counts(pm)
         ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, 0, ddflags)
-        report.loglik.append(ll)
+        # Report the per-sequence MEAN, matching infer() (line ~431) -- estep_batch returns the
+        # summed log-likelihood, and appending it raw made infer_native's loglik differ from
+        # infer's by a factor of n (the two are documented as "same result"). Denominator is the
+        # input read count; n_scoreable is populated so the sum can be recovered if needed.
+        n = len(seqs_enc)
+        report.loglik.append(ll / n if n else float("-inf"))
+        report.n_scoreable.append(n)
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
         new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior, gene_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)

@@ -426,7 +426,16 @@ def read_vidjil(path: str | os.PathLike, sample_id: int = 0) -> pl.DataFrame:
         if sequence and start is not None and stop is not None:
             nt = sequence[start - 1:stop].upper() or None  # 1-based inclusive → py slice
         reads = clone.get("reads") or [0]
-        cnt = reads[sample_id] if sample_id < len(reads) else reads[0]
+        # Raise rather than silently fall back to reads[0]: a `sample_id` past the end of a clone's
+        # reads list is a user error (wrong index, or 1-based when the format is 0-based), and
+        # returning sample 0's counts under a different sample's name is a plausible-looking wrong
+        # answer with no error.
+        if sample_id >= len(reads):
+            raise IndexError(
+                f"vidjil sample_id={sample_id} out of range: a clone has {len(reads)} sample(s) "
+                f"(valid 0..{len(reads) - 1})"
+            )
+        cnt = reads[sample_id]
         rows.append({
             V_CALL: extract_vdj(seg.get("5")), D_CALL: extract_vdj(seg.get("4")),
             J_CALL: extract_vdj(seg.get("3")),

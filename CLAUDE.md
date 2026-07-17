@@ -254,8 +254,16 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   summation order dominates — absolute agreement ~1e-30; `test_pgen_nt` proves exactness on all 7 loci.
 - **DONE bundled models + loader** `model/bundled.py` (`load_bundled(locus, source)`, `list_bundled`) —
   ship all 7 loci × {`olga`, `learned`} in the wheel (`model/_bundled/`, ~1 MB; scikit-build-core packs
-  them automatically). `learned` = native EM on real HF out-of-frame reads (`appendix/build_bundled_models.py`,
-  2k clonotypes/locus, held-out LL improves on every locus).
+  them automatically). `learned` = native EM on the FULL real HF **non-functional** read set —
+  out-of-frame AND stop-codon, since both escaped selection and keeping only out-of-frame conditions
+  the training set on junction length mod 3 (`appendix/build_bundled_models.py`; **no cap, no
+  subsampling** — every clonotype surviving the germline filter, and the printed `n_used == n_clono`
+  is the check). ⚠ The old *"2k clonotypes/locus, held-out LL improves on every locus"* was wrong
+  twice: the cap was real, and the LL was the EM's **own training objective**, which EM increases
+  monotonically by construction — it validated nothing. Real held-out + oracle comparison:
+  `appendix/compare_models.py`. The bundled **`olga`** models come from the repo's own
+  `tests/python/fixtures/olga/default_models` (all 7 human loci; pip olga ships only 5 and no
+  TRG/TRD — those two trace to mirpy `legacy-v2` commit aeccd75, verified byte-identical).
 - **DONE arda-anchored D-D learning** — unregularized D-D EM over-attributes tandems on real data
   (identifiability; TRB→0.28). Two regularizers, both native==Python exact: **`dd_allowed`** per-read gate
   (a read may be n_D=2 only where arda called a `d2_call`) and **`nd_prior`** Dirichlet single-D pseudocount.
