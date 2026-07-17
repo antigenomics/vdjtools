@@ -75,7 +75,18 @@ def build(locus: str, name: str) -> dict:
     # subsample is a silent statement that the tail does not matter, and the tail is where the
     # rare V genes live -- the ones that collapse to P(V)=0 in the first place.
     seqs = [s.upper() for s in uniq["junction"].to_list()]
-    masks = gene_masks(base, uniq["v_call"].to_list(), uniq["j_call"].to_list())
+    # SOFT REALIGNMENT (Murugan/IGoR): consider ALL V/J candidates per read and let EM's soft
+    # counts determine the assignment, rather than hard-masking to arda's single best call. arda
+    # commits V-choice to one best-match allele, so a functional gene it systematically under-calls
+    # (TRBV12-4, TRBV11-3 -- observed solo hundreds of times, junctions scoring Pgen>0) never gets
+    # soft count and is driven to P(V)=0. An empty per-read V/J mask == all candidates (verified
+    # bit-identical to masks=None), so the E-step marginalises over every gene and a
+    # read incompatible with a gene contributes ~0 to it via Pgen -- no gene is ever hard-zeroed.
+    # ~15x slower than the arda mask (all V vs one), hence Aldan-3. D stays arda-masked: D is not
+    # the zeroing problem and its short germline makes the mask a real, safe speedup.
+    soft = os.environ.get("SOFT_REALIGN") == "1"
+    masks = ([([], [], None) for _ in seqs] if soft          # empty V/J list == all candidates
+             else gene_masks(base, uniq["v_call"].to_list(), uniq["j_call"].to_list()))
     if base.chain_type == "VDJ":
         # arda's D call, as a SET -- AIRR writes an aligner tie comma-separated
         # ("IGHD2-2*01,IGHD2-2*02,IGHD2-2*03"), so the old `r["d_call"] in dset` tested the whole
