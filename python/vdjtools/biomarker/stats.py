@@ -25,7 +25,12 @@ from scipy.special import betaln
 from scipy.stats import chi2 as _chi2
 from scipy.stats import false_discovery_control, hypergeom, norm
 
-_ALTERNATIVES = ("greater", "less", "two-sided")
+_ALTERNATIVES = ("greater", "less", "two-sided", "two-sided-minlike")
+
+#: R's ``fisher.test`` relative-error slack when comparing a table's likelihood to the
+#: observed one; scipy's ``fisher_exact`` uses the same guard. Without it, floating-point
+#: noise drops tables that are exactly as likely as the observed table.
+_MINLIKE_RELERR = 1 + 1e-7
 
 
 def _cells(a, b, c, d):
@@ -34,12 +39,48 @@ def _cells(a, b, c, d):
     return np.broadcast_arrays(a, b, c, d)
 
 
+def _two_sided_minlike(a, n, n_pos, present) -> np.ndarray:
+    """Minimum-likelihood two-sided Fisher p: Σ P(X=k) over all k at most as likely as ``a``.
+
+    Vectorised by grouping on the hypergeometric parameters ``(n, n_pos, present)`` — every
+    feature in a group shares one support and one pmf, so each group costs a single
+    ``hypergeom.pmf`` over its support plus a ``searchsorted``. In the paired-dynamics setting
+    the two library sizes are fixed per pair, so a group is just "features with the same
+    combined count", and the support is ``0..(a+b)`` because the library sizes dwarf it.
+    """
+    out = np.zeros(a.shape, dtype=np.float64)
+    flat_a, flat_out = a.reshape(-1), out.reshape(-1)
+    keys = np.stack([n.reshape(-1), n_pos.reshape(-1), present.reshape(-1)], axis=-1)
+    uniq, inv = np.unique(keys, axis=0, return_inverse=True)
+    for g, (gn, gk, gd) in enumerate(uniq):
+        sel = inv == g
+        lo, hi = max(0, gd - (gn - gk)), min(gk, gd)
+        support = np.arange(lo, hi + 1)
+        pmf = hypergeom.pmf(support, gn, gk, gd)
+        order = np.argsort(pmf, kind="stable")
+        cum = np.cumsum(pmf[order])
+        p_obs = hypergeom.pmf(flat_a[sel], gn, gk, gd)
+        # Sum the likelihood of every table no more likely than the observed one.
+        idx = np.searchsorted(pmf[order], p_obs * _MINLIKE_RELERR, side="right")
+        flat_out[sel] = np.where(idx > 0, cum[np.maximum(idx - 1, 0)], 0.0)
+    return np.minimum(out, 1.0)
+
+
 def fisher_p(a, b, c, d, alternative: str = "greater") -> np.ndarray:
     """Fisher's exact p-value per feature, as the hypergeometric tail (vectorised).
 
     ``"greater"`` tests enrichment in condition+ (one-tailed, the CMV setting), ``"less"``
     depletion, ``"two-sided"`` either (doubled smaller tail, capped at 1) — identical to the
     convention in :func:`vdjtools.biomarker.fisher_association`.
+
+    ``"two-sided-minlike"`` is the *minimum-likelihood* two-sided convention used by R's
+    ``fisher.test`` and :func:`scipy.stats.fisher_exact`: the sum of the likelihood of every
+    table at most as likely as the observed one. It differs from ``"two-sided"`` whenever the
+    margins are not exactly symmetric — measured on paired-dynamics-shaped tables, exactly
+    equal margins agree 300/300, but margins differing by rounding alone disagree 171/300 with
+    ``"two-sided"`` up to exactly 2× larger. Use it when comparing against R or scipy, or when
+    the margins are only near-equal; ``"two-sided"`` is kept as the default two-sided
+    convention because the association/co-occurrence results were computed with it.
     """
     if alternative not in _ALTERNATIVES:
         raise ValueError(f"alternative must be one of {_ALTERNATIVES}; got {alternative!r}")
@@ -47,6 +88,8 @@ def fisher_p(a, b, c, d, alternative: str = "greater") -> np.ndarray:
     n = a + b + c + d
     n_pos = a + c
     present = a + b
+    if alternative == "two-sided-minlike":
+        return _two_sided_minlike(a, n, n_pos, present)
     p_greater = hypergeom.sf(a - 1, n, n_pos, present)   # P(X >= a)
     p_less = hypergeom.cdf(a, n, n_pos, present)         # P(X <= a)
     if alternative == "greater":

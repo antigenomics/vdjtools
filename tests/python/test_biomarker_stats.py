@@ -36,6 +36,47 @@ def test_fisher_two_sided_is_doubled_min_tail():
         assert got[i] == pytest.approx(min(1.0, 2.0 * min(pg, pl)), rel=1e-9, abs=1e-12)
 
 
+def test_fisher_two_sided_minlike_matches_scipy():
+    # The R / scipy convention, added for the paired-dynamics test. This is the branch
+    # that must agree with the outside world.
+    got = stats.fisher_p(A, B, C, D, alternative="two-sided-minlike")
+    for i, (a, b, c, d) in enumerate(TABLES):
+        _, exp = fisher_exact([[a, b], [c, d]], alternative="two-sided")
+        assert got[i] == pytest.approx(exp, rel=1e-9, abs=1e-12)
+
+
+def test_fisher_two_sided_conventions_diverge_on_unequal_margins():
+    # Why the minlike branch has to exist. On thesis-shaped tables
+    # [[cA, cB], [R_A - cA, R_B - cB]] the doubling convention agrees with minlike only when
+    # the margins are EXACTLY symmetric. The downscale c = round(f * N_eff) makes the two
+    # realized library sizes near-equal but not equal, and near-equal is not equal: doubling
+    # then overstates p by up to exactly 2x. Pin both halves of that claim.
+    ra, m = 200_000, 40
+    ca = np.arange(0, m + 1)
+    cb = m - ca
+
+    eq = stats.fisher_p(ca, cb, ra - ca, ra - cb, alternative="two-sided")
+    eq_ml = stats.fisher_p(ca, cb, ra - ca, ra - cb, alternative="two-sided-minlike")
+    assert np.allclose(eq, eq_ml, rtol=1e-9)          # exactly equal margins: identical
+
+    rb = ra + 1200                                     # 0.6% drift, i.e. rounding
+    un = stats.fisher_p(ca, cb, ra - ca, rb - cb, alternative="two-sided")
+    un_ml = stats.fisher_p(ca, cb, ra - ca, rb - cb, alternative="two-sided-minlike")
+    assert not np.allclose(un, un_ml, rtol=1e-9)       # near-equal margins: they diverge
+    for i, (a, b, c, d) in enumerate(zip(ca, cb, ra - ca, rb - cb)):
+        _, exp = fisher_exact([[a, b], [c, d]], alternative="two-sided")
+        assert un_ml[i] == pytest.approx(exp, rel=1e-9, abs=1e-12)   # minlike tracks scipy
+    assert (un / np.maximum(un_ml, 1e-300)).max() == pytest.approx(2.0, rel=1e-6)
+
+
+def test_fisher_two_sided_minlike_handles_degenerate_support():
+    # a=0 with an empty "present" margin has a single-point support: p must be exactly 1,
+    # not 0 (searchsorted must include the observed table itself).
+    got = stats.fisher_p(np.array([0]), np.array([0]), np.array([4]), np.array([6]),
+                         alternative="two-sided-minlike")
+    assert got[0] == pytest.approx(1.0)
+
+
 @pytest.mark.parametrize("yates", [True, False])
 def test_chi2_matches_scipy(yates):
     got = stats.chi2_p(A, B, C, D, yates=yates)
