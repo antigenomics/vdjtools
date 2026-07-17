@@ -100,3 +100,73 @@ def test_overlap_needs_two_samples(tmp_path, gen):
     _airr_sample(gen[:50], 1).write_csv(a, separator="\t")
     r = runner.invoke(app, ["overlap", str(a)])
     assert r.exit_code != 0  # single sample → clean error
+
+
+# --- Phase 14: dynamics + the two enrichment nulls ---------------------------------------
+
+def _write_airr(path, df, seed, boost=None, scale=1):
+    """Write an AIRR sample; `boost` multiplies the first N clonotypes' counts."""
+    rng = np.random.default_rng(seed)
+    c = rng.integers(20, 400, df.height) * scale
+    if boost:
+        c[:boost] = c[:boost] * 50
+    out = df.with_columns(pl.Series("duplicate_count", c)).select(
+        "v_call", "j_call", "junction_aa", pl.col("junction_nt").alias("junction"),
+        "duplicate_count")
+    out.write_csv(path, separator="\t")
+
+
+def test_dynamics_classifies_a_pair(tmp_path, gen):
+    # --neff is pinned deliberately: this fixture is 150 clonotypes, which cannot support a
+    # mean-variance fit (estimate_neff correctly raises on it). CLI tests exercise the CLI;
+    # the estimator is tested against planted truths in test_dynamics_paired.py.
+    pre, post = tmp_path / "pre.tsv", tmp_path / "post.tsv"
+    _write_airr(pre, gen, seed=11)
+    _write_airr(post, gen, seed=12, boost=10)
+    r = runner.invoke(app, ["dynamics", str(pre), str(post), "--min-total", "4",
+                            "--neff", "50000"])
+    assert r.exit_code == 0, r.stdout
+    head, *rows = r.stdout.strip().splitlines()
+    assert "dynamics" in head and "q_value" in head
+    assert rows, "no clonotypes returned"
+    # the 50x-boosted clonotypes must come back as changed, not as `persistent`
+    assert "expanded" in r.stdout
+
+
+def test_dynamics_umi_skips_the_downscale(tmp_path, gen):
+    # --umi is the thesis's p.86 case: counts are already molecule counts, so there is no
+    # oversampling to undo and estimating N_eff would downscale twice.
+    pre, post = tmp_path / "a.tsv", tmp_path / "b.tsv"
+    _write_airr(pre, gen, seed=21)
+    _write_airr(post, gen, seed=22)
+    r = runner.invoke(app, ["dynamics", str(pre), str(post), "--umi", "--min-total", "4"])
+    assert r.exit_code == 0, r.stdout
+
+
+def test_dynamics_errors_on_an_unfittable_pair(tmp_path, gen):
+    # A pair too shallow to fit N_eff must fail loudly with a usable message, not return a
+    # guessed number. 150 clonotypes is genuinely unfittable -- and a silent fallback (say,
+    # "use the read depth") would be wrong by the whole oversampling factor with no error.
+    p = tmp_path / "t.tsv"
+    _write_airr(p, gen, seed=51)
+    r = runner.invoke(app, ["dynamics", str(p), str(p)])
+    assert r.exit_code != 0
+    assert "bins" in r.output or "shallow" in r.output
+
+
+def test_tcrnet_command(tmp_path, gen):
+    pytest.importorskip("vdjmatch")
+    p = tmp_path / "s.tsv"
+    _write_airr(p, gen, seed=31)
+    r = runner.invoke(app, ["tcrnet", str(p), "--locus", "TRB"])
+    assert r.exit_code == 0, r.stdout
+    assert "p_enrichment" in r.stdout and "q_value" in r.stdout
+
+
+def test_alice_command(tmp_path, gen):
+    pytest.importorskip("vdjmatch")
+    p = tmp_path / "s.tsv"
+    _write_airr(p, gen, seed=41)
+    r = runner.invoke(app, ["alice", str(p), "--locus", "TRB"])
+    assert r.exit_code == 0, r.stdout
+    assert "pgen_ball" in r.stdout and "q_value" in r.stdout

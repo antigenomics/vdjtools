@@ -247,3 +247,96 @@ def overlap(
             (a_id, a), (b_id, b) = items[i], items[k]
             rows.append({"sample_a": a_id, "sample_b": b_id, **overlap_metrics(a, b)})
     _write(pl.DataFrame(rows), out)
+
+
+@app.command()
+def dynamics(
+    pre: Path = typer.Argument(..., help="Earlier sample (e.g. pre-vaccination)."),
+    post: Path = typer.Argument(..., help="Later sample (e.g. post-vaccination)."),
+    fmt: str = _FMT, out: Optional[Path] = _OUT,
+    neff: Optional[float] = typer.Option(
+        None, "--neff", help="Pin the pair's effective sample size (default: estimate it)."),
+    umi: bool = typer.Option(
+        False, "--umi", help="Counts are UMI/molecule counts, not reads: skip the downscale "
+                             "(there is no oversampling to undo)."),
+    min_total: int = typer.Option(
+        6, "--min-total", help="Testability floor: combined downscaled count below this is "
+                               "reported as `untested`, not as unchanged."),
+    alpha: float = typer.Option(0.01, "--alpha", help="BH FDR threshold for calling a change."),
+) -> None:
+    """Paired within-donor test: which clonotypes changed between two timepoints.
+
+    Classifies every clonotype as emergent / expanded / persistent / contracted / vanishing
+    (or `untested`). Depth is handled PER PAIR via the effective sample size — never by
+    normalising a cohort to a common depth, which is not a defined operation here.
+    """
+    from vdjtools.dynamics import test_pair
+    from vdjtools.io.batch import read
+
+    a, b = read(pre, fmt=fmt), read(post, fmt=fmt)
+    try:
+        res = test_pair(a, b, neff=None if umi else (neff if neff is not None else "auto"),
+                        min_total=min_total, alpha=alpha)
+    except ValueError as e:                      # pair too shallow / too few shared clonotypes
+        _err(str(e))
+    _info("  ".join(f"{k}={v}" for k, v in
+                    sorted(res["dynamics"].value_counts().iter_rows())))
+    _write(res, out)
+
+
+@app.command()
+def tcrnet(
+    sample: Path = typer.Argument(..., help="Clonotype sample file."),
+    fmt: str = _FMT, out: Optional[Path] = _OUT,
+    locus: Optional[str] = typer.Option(None, "--locus", help="Force one locus (else per-locus)."),
+    species: str = typer.Option("human", "--species"),
+    scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
+    threads: int = typer.Option(0, "--threads", help="0 = all cores."),
+) -> None:
+    """Neighbourhood enrichment against a CONTROL REPERTOIRE (TCRnet).
+
+    The control absorbs thymic selection and endemic-pathogen expansions, which a generation
+    model cannot — at the cost of needing a large, HLA-matched cohort. See `alice` for the
+    generative null. Neither can see a monoclonal expansion: enrichment measures breadth.
+    """
+    from vdjtools.io.batch import read
+    from vdjtools.overlap import tcrnet as _tcrnet
+
+    try:
+        res = _tcrnet(read(sample, fmt=fmt), locus=locus, species=species, scope=scope,
+                      threads=threads)
+    except (ImportError, ValueError) as e:
+        _err(str(e))
+    _write(res, out)
+
+
+@app.command()
+def alice(
+    sample: Path = typer.Argument(..., help="Clonotype sample file."),
+    fmt: str = _FMT, out: Optional[Path] = _OUT,
+    locus: Optional[str] = typer.Option(None, "--locus", help="Force one locus (else per-locus)."),
+    source: str = typer.Option("olga", "--source", help="Bundled model source; leave on olga."),
+    scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
+    selection_q: float = typer.Option(9.41, "--q", help="Thymic-selection factor Q."),
+    min_degree: int = typer.Option(3, "--min-degree", help="Only test clonotypes with >= this "
+                                                           "many neighbours (self included)."),
+    min_count: int = typer.Option(2, "--min-count", help="Ignore clonotypes below this count."),
+    threads: int = typer.Option(0, "--threads", help="0 = all cores."),
+) -> None:
+    """Neighbourhood enrichment against a V(D)J GENERATION MODEL (ALICE).
+
+    Controls for the intrinsic biases of recombination, but knows nothing about selection or
+    about which clonotypes are already common in people — the complement of `tcrnet`. Returns
+    q_value and picks no threshold: the published ones differ 100-fold and were never
+    reconciled.
+    """
+    from vdjtools.io.batch import read
+    from vdjtools.overlap import alice as _alice
+
+    try:
+        res = _alice(read(sample, fmt=fmt), locus=locus, source=source, scope=scope,
+                     selection_q=selection_q, min_degree=min_degree, min_count=min_count,
+                     threads=threads)
+    except (ImportError, KeyError, ValueError) as e:
+        _err(str(e))
+    _write(res, out)
