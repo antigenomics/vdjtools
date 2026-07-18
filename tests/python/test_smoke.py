@@ -6,8 +6,14 @@ from vdjtools import _core
 
 
 def test_version():
-    assert vdjtools.__version__ == "2.9.0"
-    assert _core.version() == "2.9.0"
+    # Python and native cores must report the SAME version. Both are single-sourced from
+    # pyproject.toml (CMake parses it and injects VDJTOOLS_VERSION into _core), so asserting
+    # they AGREE — rather than a hand-copied literal — catches the real bug (Python/native
+    # drift) and never needs a per-release edit. A stale editable _core will fail here until
+    # ``pip install -e .`` rebuilds it.
+    assert vdjtools.__version__ == _core.version(), (
+        f"Python {vdjtools.__version__} != native {_core.version()} — rebuild the _core ext")
+    assert vdjtools.__version__.count(".") == 2   # looks like X.Y.Z
 
 
 def test_no_duplicated_hamming():
