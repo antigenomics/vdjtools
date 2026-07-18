@@ -42,6 +42,7 @@ tmp/
 
 # example-notebook data (fetched from HuggingFace, md5-cached; never committed)
 examples/.data/
+notebooks/.data/
 
 # marimo session/run cache
 __marimo__/

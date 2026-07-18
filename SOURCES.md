@@ -263,3 +263,23 @@ loaded with `vdjtools.model.load_bundled(locus, source)`. ~0.4 MB total (30–15
 |---|---|
 | `resources/profile/aa_property_table.txt` | amino-acid physicochemical properties (Phase 3) |
 | `resources/profile/cdr3contact.txt` | CDR3 contact-probability estimate (Phase 3) |
+
+## Longitudinal dynamics — vaccination time courses (clonotype tracking)
+
+Public TCRβ vaccination time courses for the `vdjtools.dynamics` framework + the
+`notebooks/vaccination_tracking.py` explorer. AIRR Rearrangement TSV (`duplicate_count`,
+`junction_aa`, `v_gene`/`j_gene`); a metadata sheet gives donor/day. Fetched via
+`huggingface_hub` (local-first: `./` → `~/hf/<name>/` → HF). All **experimental**.
+
+| Dataset | Origin | Format | How to obtain | Provenance |
+|---|---|---|---|---|
+| Yellow fever (YFV) | HF [`isalgo/airr_yfv19`](https://huggingface.co/datasets/isalgo/airr_yfv19) | per-sample `{donor}_{day}_{replica}.airr.tsv.gz` at repo root; `metadata.txt` (`file_name donor day replica`); donors P1/P2/Q1/Q2/S1/S2 (3 twin pairs); days −1(pre0)/0/7/15/45 | `hf_hub_download`; day 15 = response peak, day 45 = memory | **experimental** — bulk TCRβ, Pogorelyy et al. YFV twin study |
+| Influenza | HF [`isalgo/airr_flu_vac`](https://huggingface.co/datasets/isalgo/airr_flu_vac) | `samples/{sample}.airr.tsv.gz`; `metadata.tsv` (donor, day 0/5/12/45, cell_subset, HLA typing) | `hf_hub_download` | **experimental** — bulk TCRβ, influenza subunit (Influvac) vaccination |
+| Tick-borne encephalitis (TBEV) | HF [`isalgo/airr_tbev_vac`](https://huggingface.co/datasets/isalgo/airr_tbev_vac) | `samples/{sample}.airr.tsv.gz`; `metadata.tsv` (donor, day, phase, cell_subset CD4/CD8/bulk, full HLA typing) | `hf_hub_download` | **experimental** — TCRβ, inactivated TBE (two-dose) vaccination |
+
+Method provenance: the capture / recapture model (`dynamics.capture`) and 1-mismatch
+metaclonotype grouping (`dynamics.groups`) are a Python port of **VDJtrack**
+(`github.com/antigenomics/vdjtrack`, read-only oracle at `~/vcs/code/vdjtrack`), i.e. Pavlova,
+Zvyagin & Shugay, *Front Immunol* 2024, [10.3389/fimmu.2024.1321603](https://doi.org/10.3389/fimmu.2024.1321603).
+The per-clonotype `test_pair` (N_eff + Fisher) is Ayestaran, PhD thesis, Cambridge 2024. The
+edgeR NB-exact caller (`dynamics.expansion`) is that paper's §2.5 complementary method — **derived/computed**, not a dataset.
