@@ -8,6 +8,7 @@ from vdjtools.dynamics import (
     capture_paired_test,
     capture_rates,
     capture_test,
+    expansion_test,
     poisson_capture,
     size_class,
 )
@@ -124,3 +125,30 @@ def test_metaclonotypes_collapses_1mm_family(_vdjmatch):
     assert fam_row.height == 1                            # the family is ONE metaclonotype
     assert fam_row["dynamics"][0] == "expanded"
     assert fam_row["count_b"][0] > fam_row["count_a"][0]
+
+
+# --------------------------------------------------------------------------- edgeR NB exact
+def test_expansion_test_calls_planted_clone():
+    rng = np.random.default_rng(0)
+    n = 500
+    cdrs = ["CASS" + "".join(rng.choice(list("ACDEFGHIKLMNPQRSTVWY"), 5)) + "F"
+            for _ in range(n)]
+    base = rng.integers(1, 40, n)
+    post = base.copy()
+    post[0] = base[0] * 100                              # clone 0 expands 100x
+    res = expansion_test(_frame(cdrs, base), _frame(cdrs, post), log2fc=2.0)
+    assert res.filter(pl.col(JUNCTION_AA) == cdrs[0])["call"][0] == "expanded"
+    # no wholesale false positives: most clones are unchanged/untested
+    calls = res["call"].to_list()
+    assert calls.count("expanded") < 10
+    assert 0.0 < res["dispersion"][0] < 1.0              # qCML fit a sane common dispersion
+
+
+def test_expansion_test_null_when_unchanged():
+    rng = np.random.default_rng(2)
+    n = 400
+    cdrs = ["CASS" + "".join(rng.choice(list("ACDEFGHIKLMNPQRSTVWY"), 5)) + "F"
+            for _ in range(n)]
+    counts = rng.integers(5, 60, n)
+    res = expansion_test(_frame(cdrs, counts), _frame(cdrs, counts.copy()), log2fc=1.0)
+    assert "expanded" not in res["call"].to_list() and "contracted" not in res["call"].to_list()

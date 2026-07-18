@@ -32,6 +32,7 @@ from .capture import (
     poisson_capture,
     size_class,
 )
+from .expansion import expansion_test
 from .groups import test_metaclonotypes
 from .paired import DEFAULT_KEY, estimate_neff, test_pair
 
@@ -40,6 +41,7 @@ __all__ = [
     "estimate_neff",
     "test_pair",
     "test_metaclonotypes",
+    "expansion_test",
     "SIZE_CLASSES",
     "size_class",
     "poisson_capture",
