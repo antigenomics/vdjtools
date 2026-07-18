@@ -46,7 +46,10 @@ ITERS = int(os.environ.get("EM_ITERS", "12"))
 
 
 def build(locus: str, name: str) -> dict:
-    base = from_olga(OLGA / name, locus=locus)
+    # derive_orf=True: reconstruct the CDR3 germline for ORF alleles OLGA leaves empty (TRBV23-1 is
+    # 8.6% of real TRB), so EM can learn their usage instead of pinning them to P(V)=0. Safe here --
+    # this is an arda-native learned model, not the exact-OLGA Pgen oracle (which keeps derive_orf off).
+    base = from_olga(OLGA / name, locus=locus, derive_orf=True)
     dset = set(base.genomic["genes_d"]["d_allele"].to_list()) if base.chain_type == "VDJ" else set()
     vgenes = set(_gene_to_alleles(base, "v"))
     jgenes = set(_gene_to_alleles(base, "j"))
@@ -83,18 +86,14 @@ def build(locus: str, name: str) -> dict:
     # subsample is a silent statement that the tail does not matter, and the tail is where the
     # rare V genes live -- the ones that collapse to P(V)=0 in the first place.
     seqs = [s.upper() for s in uniq["junction"].to_list()]
-    # SOFT REALIGNMENT (Murugan/IGoR): consider ALL V/J candidates per read and let EM's soft
-    # counts determine the assignment, rather than hard-masking to arda's single best call. arda
-    # commits V-choice to one best-match allele, so a functional gene it systematically under-calls
-    # (TRBV12-4, TRBV11-3 -- observed solo hundreds of times, junctions scoring Pgen>0) never gets
-    # soft count and is driven to P(V)=0. An empty per-read V/J mask == all candidates (verified
-    # bit-identical to masks=None), so the E-step marginalises over every gene and a
-    # read incompatible with a gene contributes ~0 to it via Pgen -- no gene is ever hard-zeroed.
-    # ~15x slower than the arda mask (all V vs one), hence Aldan-3. D stays arda-masked: D is not
-    # the zeroing problem and its short germline makes the mask a real, safe speedup.
-    soft = os.environ.get("SOFT_REALIGN") == "1"
-    masks = ([([], [], None) for _ in seqs] if soft          # empty V/J list == all candidates
-             else gene_masks(base, uniq["v_call"].to_list(), uniq["j_call"].to_list()))
+    # Arda-masked E-step: each read's V/J restricted to arda's called gene(s). The germline-identical
+    # paralogs a hard call used to starve to P(V)=0 (TRBV6-6, TRBV6-3, TRBV12-4 -- observed thousands
+    # of times, then zeroed) are now kept alive upstream, in `_align_init`: its per-read alignment vote
+    # is SPLIT across all genes tied for the longest germline match (germline-identical genes tie
+    # exactly), so none seeds at 0 and the E-step's P(V)=0 absorbing state is never entered. No soft
+    # realignment needed -- an unrestricted all-candidates E-step just avalanches mass onto whichever
+    # germline is most permissive (IGKV3-20 0.10 -> 0.74), strictly worse than the anchored mask.
+    masks = gene_masks(base, uniq["v_call"].to_list(), uniq["j_call"].to_list())
     if base.chain_type == "VDJ":
         # arda's D call, as a SET -- AIRR writes an aligner tie comma-separated
         # ("IGHD2-2*01,IGHD2-2*02,IGHD2-2*03"), so the old `r["d_call"] in dset` tested the whole

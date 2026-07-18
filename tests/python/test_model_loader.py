@@ -36,6 +36,37 @@ def _lookup(df: pl.DataFrame, keys: list[str]) -> dict:
     return {tuple(r[:-1]) if len(keys) > 1 else r[0]: r[-1] for r in df.select([*keys, "p"]).iter_rows()}
 
 
+def test_derive_orf_is_opt_in_and_preserves_the_oracle():
+    """``derive_orf`` reconstructs ORF germlines for the learned builder without touching the oracle.
+
+    OLGA ships some ORF V alleles with an empty CDR3 germline (TRBV23-1, 8.6% of a real repertoire),
+    so ``from_olga`` cannot score them and EM pins them to P(V)=0. ``derive_orf=True`` rebuilds the
+    germline from ``full[anchor:]``; the default (False) must leave the model byte-identical, because
+    OLGA itself excludes those genes from Pgen and we keep the exact-OLGA invariant for the oracle.
+    """
+    oracle = from_olga(TRB, locus="TRB")                 # default: derive_orf=False
+    derived = from_olga(TRB, locus="TRB", derive_orf=True)
+
+    def row(m, a):
+        return m.genomic["genes_v"].filter(pl.col("v_allele") == a).row(0, named=True)
+
+    # oracle: ORF gene stays empty / non-functional (exact-OLGA behaviour)
+    assert row(oracle, "TRBV23-1*01")["cut_segment"] == ""
+    assert row(oracle, "TRBV23-1*01")["functional"] is False
+    # derived: scoreable, Cys-initiated germline, and now counted functional
+    d = row(derived, "TRBV23-1*01")
+    assert d["cut_segment"].startswith(("TGT", "TGC")), d["cut_segment"]
+    assert d["functional"] is True
+    assert derived.genomic["genes_v"].filter(pl.col("functional")).height > \
+        oracle.genomic["genes_v"].filter(pl.col("functional")).height
+    # every already-functional gene is untouched (only empty-cut ORF genes gain a germline)
+    o_cuts = dict(zip(oracle.genomic["genes_v"]["v_allele"], oracle.genomic["genes_v"]["cut_segment"]))
+    d_cuts = dict(zip(derived.genomic["genes_v"]["v_allele"], derived.genomic["genes_v"]["cut_segment"]))
+    for a, c in o_cuts.items():
+        if c:
+            assert d_cuts[a] == c, f"{a} germline changed under derive_orf"
+
+
 def test_event_graph_cycle_detected():
     good = {
         "a": Event("a", EventKind.GENE_CHOICE),

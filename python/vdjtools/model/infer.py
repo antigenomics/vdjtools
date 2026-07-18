@@ -313,11 +313,25 @@ def _align_init(template: Model, sequences: list[str]) -> dict[str, pl.DataFrame
     vj_votes: dict[tuple, float] = defaultdict(float)
     for s in sequences:
         s = s.upper()
-        bv = max(prep.functional_v, key=lambda v: _common_prefix(prep.cut["v"][v], s))
-        bj = max(prep.functional_j, key=lambda j: _common_suffix(prep.cut["j"][j], s))
-        v_votes[bv] += 1.0
-        j_votes[bj] += 1.0
-        vj_votes[(bv, bj)] += 1.0
+        # Split each read's vote across ALL genes tied for the longest germline match, not the first.
+        # Germline-identical paralogs (TRBV6-2/6-5/6-6, IGKV2-28/2D-28) tie EXACTLY, so a single-winner
+        # vote (Python ``max`` returns the first) hands the whole family to one representative and seeds
+        # the rest at P(V)=0 — which the E-step's ``if pv==0: continue`` then makes an absorbing state
+        # no amount of data escapes. Sharing the tie keeps every indistinguishable sibling reachable.
+        vsc = [(_common_prefix(prep.cut["v"][v], s), v) for v in prep.functional_v]
+        jsc = [(_common_suffix(prep.cut["j"][j], s), j) for j in prep.functional_j]
+        bv_best = max(sc for sc, _ in vsc)
+        bj_best = max(sc for sc, _ in jsc)
+        bvs = [v for sc, v in vsc if sc == bv_best]
+        bjs = [j for sc, j in jsc if sc == bj_best]
+        wv, wj = 1.0 / len(bvs), 1.0 / len(bjs)
+        for v in bvs:
+            v_votes[v] += wv
+        for j in bjs:
+            j_votes[j] += wj
+        for v in bvs:
+            for j in bjs:
+                vj_votes[(v, j)] += wv * wj
 
     events = template.manifest.events
     tables = _uniform_init(template)

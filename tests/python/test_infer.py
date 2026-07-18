@@ -88,6 +88,37 @@ def test_gene_masks():
     assert masks[0][2] is None  # D is left unrestricted
 
 
+def test_align_init_splits_germline_identical_ties():
+    """The alignment vote must be SHARED across germline-identical genes, never won outright by one.
+
+    Paralogs with a byte-identical ``cut_segment`` (TRBV6-2/6-5/6-6, IGKV2-28/2D-28) tie exactly on
+    the longest-germline-match vote. A single-winner vote (``max`` returns the first) seeds every
+    sibling but one at P(V)=0, and the E-step's ``if pv==0: continue`` makes that an absorbing state —
+    so a gene with thousands of aligned reads (TRBV6-6, 5.7% of real TRB) was zeroed for good. Here a
+    read whose V-portion is the shared germline must seed *every* functional sibling, not just one.
+    """
+    from vdjtools.model.infer import _align_init
+    from vdjtools.model.pgen import prepare
+
+    m = from_olga(TRB, locus="TRB")
+    prep = prepare(m)
+    cutmap: dict[str, list[str]] = collections.defaultdict(list)
+    for a in prep.functional_v:
+        cutmap[prep.cut["v"][a]].append(a)
+    fam = cutmap[prep.cut["v"]["TRBV6-2*01"]]                 # functional alleles sharing 6-2's germline
+    fam_genes = sorted({a.split("*")[0] for a in fam})
+    assert len(fam_genes) >= 2, "expected a germline-identical TRBV6 family"
+
+    jcut = prep.cut["j"][prep.functional_j[0]]
+    read = prep.cut["v"]["TRBV6-2*01"] + "GGGCCC" + jcut       # V germline + insert + J germline
+    tabs = _align_init(m, [read] * 10)
+    vg: dict[str, float] = collections.defaultdict(float)
+    for a, p in zip(tabs["v_choice"]["v_allele"], tabs["v_choice"]["p"]):
+        vg[a.split("*")[0]] += p
+    missing = [g for g in fam_genes if vg.get(g, 0.0) == 0.0]
+    assert not missing, f"_align_init zeroed germline-identical siblings (absorbing-state bug): {missing}"
+
+
 @pytest.mark.slow
 def test_vdj_estep_accumulates():
     """Cover the VDJ EM soft-count path (_accum_vdj: D-gene / delD / VD+DJ insertion counts).

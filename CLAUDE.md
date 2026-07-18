@@ -271,7 +271,18 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   D-loci: TRB **0.000**, TRD **0.006**, IGH **0.009** (plausible; arda hard-call ~4%). `test_dd_anchor_and_prior…`.
 - **DONE marimo explorer** `notebooks/model_explorer.py` — reactive Bayes-net/entropy/MI/marginal explorer
   over any bundled model (OLGA vs learned); `[examples]` extra. README/docs/SOURCES updated.
-- **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual).
+- **DONE V-zeroing fix (2 root causes)** — the shipped learned models zeroed 68/89 TRB V alleles; NOT a
+  masking/soft-realign problem (soft realign avalanches mass onto the most permissive germline,
+  IGKV3-20 0.10→0.74 — removed). (1) `infer._align_init` collapsed germline-identical paralogs: `max(...)`
+  takes the first of an exact tie (TRBV6-2/6-5/6-6, IGKV2-28/2D-28 tie identically), seeding the rest at
+  P(V)=0 which the E-step's `if pv==0: continue` makes absorbing — fixed by splitting each read's vote
+  across all tied genes. (2) `io.from_olga(derive_orf=True)` (opt-in, builder-only) reconstructs the CDR3
+  germline OLGA leaves empty for ORF alleles (TRBV23-1, 8.6% of real TRB) from `full[anchor:]`; the oracle
+  default keeps it off (exact-OLGA-Pgen invariant). Result: **0 functional genes zeroed**, Pearson(arda,
+  learned) 0.97 (TRB). `test_infer.py::test_align_init_splits_germline_identical_ties`,
+  `test_model_loader.py::test_derive_orf_is_opt_in_and_preserves_the_oracle`. Learned models rebuilt (masked, arda-anchored).
+- **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual); the
+  `derive_orf` reconstruction covers the ORF-usage case but not full-length stitching.
 
 **AS/B27 motif campaign — `feature/as-b27-motif`** (`~/vcs/projects/2026-vdjtools-benchmark/bench/bm_ankspond.py`, runs locally in
 ~27 s; HF `isalgo/airr_ankspond`, 60 donors). Reproduces Komech 2018's TRBV9/TRBJ2-3 motif and

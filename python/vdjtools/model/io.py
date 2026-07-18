@@ -25,6 +25,7 @@ from .model import Model
 from .schema import Manifest
 
 _NT = "ACGT"
+_ACGT = frozenset(_NT)
 
 
 def _gene(allele: str) -> str:
@@ -39,14 +40,31 @@ def _read_anchors(path: Path) -> dict[str, tuple[int, str]]:
     return {r[0]: (int(r[1]), str(r[2])) for r in df.iter_rows()}
 
 
-def _genomic_table(gen_list, anchors, cut_segs, *, seg: str, has_anchor: bool) -> pl.DataFrame:
-    """Build a genes_<seg> frame from OLGA's gen* list + cut segments (+ anchors for V/J)."""
+def _genomic_table(gen_list, anchors, cut_segs, *, seg: str, has_anchor: bool,
+                   max_pal: int = 0, derive_orf: bool = False) -> pl.DataFrame:
+    """Build a genes_<seg> frame from OLGA's gen* list + cut segments (+ anchors for V/J).
+
+    ``derive_orf`` (opt-in, off by default): OLGA leaves the CDR3-trim and cut segment EMPTY for a
+    handful of ORF V/J alleles even though their full germline + CDR3 anchor are present, so an ORF
+    gene an aligner (arda) actually calls — TRBV23-1 is 8.6% of a real TRB repertoire — is unscoreable
+    and pinned to P(V)=0. With ``derive_orf=True`` the missing CDR3-region germline is reconstructed
+    (``full[anchor:]``, palindrome-cut) so EM can learn its usage. **Off for the ``from_olga`` oracle**:
+    OLGA itself excludes those empty-cut genes from Pgen, so deriving them there would break the
+    exact-OLGA-Pgen invariant — the model *builder* turns it on for arda-native learned models only.
+    """
+    from . import reference as ref
+
     rows = []
     for i, entry in enumerate(gen_list):
         name = entry[0].strip()   # OLGA's "% TRBD1*01;..." leaves a leading space — see from_olga
+        cut = cut_segs[i]
         if has_anchor:  # genV/genJ entries are [name, cdr3_trim, full_germline]
             cdr3_seg, full = entry[1], entry[2]
             anchor = anchors.get(name, (-1, ""))[0]
+            if (derive_orf and not cut and anchor >= 0 and len(full) > anchor
+                    and set(full[anchor:]) <= _ACGT):  # skip IUPAC-ambiguous germlines (e.g. IGHV3-54 'Y'): unencodable
+                cdr3_seg = full[anchor:]
+                cut = ref.cut_segment(cdr3_seg, seg.upper(), max_pal)
         else:  # genD entries are [name, germline]
             full, cdr3_seg, anchor = entry[1], entry[1], -1
         rows.append(
@@ -55,9 +73,9 @@ def _genomic_table(gen_list, anchors, cut_segs, *, seg: str, has_anchor: bool) -
                 "gene": _gene(name),
                 "full_germline": full,
                 "cdr3_segment": cdr3_seg,
-                "cut_segment": cut_segs[i],
+                "cut_segment": cut,
                 "anchor": anchor,
-                "functional": len(cut_segs[i]) > 0,
+                "functional": len(cut) > 0,
             }
         )
     return pl.DataFrame(rows)
@@ -94,7 +112,7 @@ def _dinucl_table(R: np.ndarray) -> pl.DataFrame:
     )
 
 
-def from_olga(model_dir: str | Path, *, locus: str, organism: str = "human") -> Model:
+def from_olga(model_dir: str | Path, *, locus: str, organism: str = "human", derive_orf: bool = False) -> Model:
     """Import an OLGA default-model directory into a :class:`Model`.
 
     Args:
@@ -177,9 +195,9 @@ def from_olga(model_dir: str | Path, *, locus: str, organism: str = "human") -> 
             "j_5": int(g.max_delJ_palindrome),
         }
         genomic = {
-            "genes_v": _genomic_table(g.genV, v_anchors, g.cutV_genomic_CDR3_segs, seg="v", has_anchor=True),
+            "genes_v": _genomic_table(g.genV, v_anchors, g.cutV_genomic_CDR3_segs, seg="v", has_anchor=True, max_pal=int(g.max_delV_palindrome), derive_orf=derive_orf),
             "genes_d": _genomic_table(g.genD, {}, g.cutD_genomic_CDR3_segs, seg="d", has_anchor=False),
-            "genes_j": _genomic_table(g.genJ, j_anchors, g.cutJ_genomic_CDR3_segs, seg="j", has_anchor=True),
+            "genes_j": _genomic_table(g.genJ, j_anchors, g.cutJ_genomic_CDR3_segs, seg="j", has_anchor=True, max_pal=int(g.max_delJ_palindrome), derive_orf=derive_orf),
         }
     else:  # VJ
         g = olm.GenomicDataVJ()
@@ -218,8 +236,8 @@ def from_olga(model_dir: str | Path, *, locus: str, organism: str = "human") -> 
         }
         palindrome_max = {"v_3": int(g.max_delV_palindrome), "j_5": int(g.max_delJ_palindrome)}
         genomic = {
-            "genes_v": _genomic_table(g.genV, v_anchors, g.cutV_genomic_CDR3_segs, seg="v", has_anchor=True),
-            "genes_j": _genomic_table(g.genJ, j_anchors, g.cutJ_genomic_CDR3_segs, seg="j", has_anchor=True),
+            "genes_v": _genomic_table(g.genV, v_anchors, g.cutV_genomic_CDR3_segs, seg="v", has_anchor=True, max_pal=int(g.max_delV_palindrome), derive_orf=derive_orf),
+            "genes_j": _genomic_table(g.genJ, j_anchors, g.cutJ_genomic_CDR3_segs, seg="j", has_anchor=True, max_pal=int(g.max_delJ_palindrome), derive_orf=derive_orf),
         }
 
     manifest = Manifest(
