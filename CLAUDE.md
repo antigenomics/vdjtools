@@ -297,7 +297,9 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   locus** (IGH 74 V vs the raw OLGA oracle's 49). Per-locus clonotypes/iters/coverage in the commit body;
   arda-anchored P(n_D=2) all near zero (IGH 3.6e-4, TRB 8.5e-5, TRD 1.1e-2). IGH is the cost outlier — ~35 D
   genes, ~half its reads lack an arda D call → full 35-gene single-D enumeration every E-step → 4.1 h; the
-  other six run in seconds–minutes. Ready to merge to `dev` for release.
+  other six run in seconds–minutes. **Shipped in v2.9.0** (`3286047` on `master`, tag `v2.9.0`, on PyPI with
+  cp310–313 wheels). Follow-up: `rescale.py:63` raises a Polars-2.0 `empty_as_null` DeprecationWarning
+  (behaviour unchanged until Polars 2.0; set `empty_as_null=True` when convenient).
 - **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual); the
   `derive_orf` reconstruction covers the ORF-usage case but not full-length stitching.
 
