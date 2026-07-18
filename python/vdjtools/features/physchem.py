@@ -20,7 +20,7 @@ from importlib import resources
 
 import polars as pl
 
-from ..io.schema import JUNCTION_AA, LOCUS, add_locus, weight_expr
+from ..io.schema import JUNCTION_AA, LOCUS, add_locus, column_names, weight_expr
 
 #: Default property subset: Kidera-factor-free physicochemistry + the 10 Kidera factors.
 DEFAULT_PROPERTIES = (
@@ -64,9 +64,9 @@ def _region_expr(region: str) -> pl.Expr:
     raise ValueError(f"region must be 'all', 'trimmed' or 'center'; got {region!r}")
 
 
-def physchem_profile(df: pl.DataFrame, group_by=("v_call", "j_call"),
+def physchem_profile(df, group_by=("v_call", "j_call"),
                      region: str = "all", weight: str = "reads",
-                     properties: "tuple[str, ...] | None" = None) -> pl.DataFrame:
+                     properties: "tuple[str, ...] | None" = None, by=()):
     """Group-wise weighted mean of CDR3 physicochemical properties.
 
     For each clonotype the region residues are looked up in the property table and
@@ -74,7 +74,8 @@ def physchem_profile(df: pl.DataFrame, group_by=("v_call", "j_call"),
     per group by a weighted mean ``Σ w_c m_c / Σ w_c`` (``w_c`` = clonotype weight).
 
     Args:
-        df: A clonotype frame.
+        df: A clonotype frame (eager ``pl.DataFrame`` or lazy ``pl.LazyFrame`` — e.g. a
+            whole cohort from :func:`vdjtools.io.scan_cohort`); result mirrors the input.
         group_by: Grouping column(s). Either the string ``"locus"`` (derived if
             absent) or an iterable of column names present in ``df`` (default
             ``("v_call", "j_call")``).
@@ -82,18 +83,22 @@ def physchem_profile(df: pl.DataFrame, group_by=("v_call", "j_call"),
         weight: ``"reads"``, ``"unique"``, or ``"freq"``.
         properties: Property names to compute. Defaults to
             :data:`DEFAULT_PROPERTIES`.
+        by: Extra column(s) to **prepend** to the group key (e.g. ``["sample_id"]`` to
+            profile a whole cohort in one pass). Empty by default — byte-identical to
+            the per-sample profile.
 
     Returns:
-        Tidy ``pl.DataFrame`` with the group columns, ``region``, ``property`` and
-        ``mean_value``, sorted by group then property.
+        Tidy frame with the ``by`` columns, the group columns, ``region``, ``property``
+        and ``mean_value``, sorted by group then property (lazy when ``df`` is lazy).
 
     Raises:
         ValueError: If ``region`` is unknown or a requested property is missing.
     """
     props = list(properties) if properties is not None else list(DEFAULT_PROPERTIES)
     group_cols = [group_by] if isinstance(group_by, str) else list(group_by)
+    keys = [*by, *group_cols]
 
-    df = df if LOCUS in df.columns else add_locus(df)
+    df = df if LOCUS in column_names(df) else add_locus(df)
     tbl = load_property_table()
     missing = [p for p in props if p not in tbl.columns]
     if missing:
@@ -105,8 +110,10 @@ def physchem_profile(df: pl.DataFrame, group_by=("v_call", "j_call"),
     )
     work = work.filter(pl.col("_region").is_not_null()
                        & (pl.col("_region").str.len_chars() > 0))
-    if work.height == 0:
-        return pl.DataFrame(schema={**{c: pl.Utf8 for c in group_cols},
+    # Empty-input fast path (eager only — a LazyFrame has no cheap height; its pipeline
+    # yields the same empty result on collect).
+    if isinstance(work, pl.DataFrame) and work.height == 0:
+        return pl.DataFrame(schema={**{c: pl.Utf8 for c in keys},
                                     "region": pl.Utf8, "property": pl.Utf8,
                                     "mean_value": pl.Float64})
 
@@ -117,17 +124,18 @@ def physchem_profile(df: pl.DataFrame, group_by=("v_call", "j_call"),
     work = work.with_columns(pl.col("_region").str.slice(pl.col("_pos"), 1).alias("amino_acid"))
     work = work.join(tbl.select(["amino_acid", *props]), on="amino_acid", how="inner")
 
-    # per-clonotype mean of each property over its residues
-    per_clone = work.group_by(["_cid", *group_cols], maintain_order=True).agg(
+    # per-clonotype mean of each property over its residues (_cid is a global row index,
+    # unique per clonotype across the whole cohort, so per-clone means are sample-correct)
+    per_clone = work.group_by(["_cid", *keys], maintain_order=True).agg(
         pl.col("_w").first(),
         *[pl.col(p).mean().alias(p) for p in props],
     )
     # weighted mean per group, then melt to tidy long form
-    grouped = per_clone.group_by(group_cols, maintain_order=True).agg(
+    grouped = per_clone.group_by(keys, maintain_order=True).agg(
         [((pl.col(p) * pl.col("_w")).sum() / pl.col("_w").sum()).alias(p) for p in props]
     )
-    tidy = grouped.unpivot(index=group_cols, on=props,
+    tidy = grouped.unpivot(index=keys, on=props,
                            variable_name="property", value_name="mean_value")
     return tidy.with_columns(pl.lit(region).alias("region")).select(
-        [*group_cols, "region", "property", "mean_value"]
-    ).sort([*group_cols, "property"])
+        [*keys, "region", "property", "mean_value"]
+    ).sort([*keys, "property"])

@@ -3,7 +3,14 @@
 Readers return the canonical clonotype frame defined in :mod:`vdjtools.io.schema`.
 """
 from . import schema
-from .batch import iter_samples, read, read_metadata, read_samples, sniff_format
+from .batch import (
+    iter_samples,
+    map_samples,
+    read,
+    read_metadata,
+    read_samples,
+    sniff_format,
+)
 from .cohort import ingest_cohort, scan_cohort
 from .convert import (
     read_arda,
@@ -53,6 +60,7 @@ __all__ = [
     "read_metadata",
     "read_samples",
     "iter_samples",
+    "map_samples",
     "ingest_cohort",
     "scan_cohort",
     "sniff_format",

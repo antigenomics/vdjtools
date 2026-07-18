@@ -24,6 +24,7 @@ from ..io.schema import (
     LOCUS,
     V_CALL,
     add_locus,
+    column_names,
     strip_allele,
     weight_expr,
 )
@@ -57,34 +58,37 @@ def _explode_kmers(df: pl.DataFrame, k: int, flank: int = 0) -> pl.DataFrame:
     return df.drop("_len", "_core", "_clen", "_pos")
 
 
-def kmer_profile(df: pl.DataFrame, k: int = 3, weight: str = "reads",
-                 by_locus: bool = True, flank: int = 0) -> pl.DataFrame:
+def kmer_profile(df, k: int = 3, weight: str = "reads",
+                 by_locus: bool = True, flank: int = 0, by=()):
     """CDR3 amino-acid k-mer spectrum.
 
     Args:
-        df: A clonotype frame.
+        df: A clonotype frame (eager ``pl.DataFrame`` or lazy ``pl.LazyFrame`` — e.g. a
+            whole cohort from :func:`vdjtools.io.scan_cohort`); result mirrors the input.
         k: K-mer length (default 3).
         weight: ``"reads"``, ``"unique"``, or ``"freq"``.
         by_locus: If ``True``, break the spectrum down per locus.
         flank: Residues to drop from each end before windowing (see the module docstring);
             ``0`` (default) keeps the whole junction, ``4`` gives the ``seqtree`` core.
+        by: Extra column(s) to **prepend** to the group key (e.g. ``["sample_id"]`` for
+            a one-pass cohort spectrum). Empty by default — byte-identical to per-sample.
 
     Returns:
-        Long-format ``pl.DataFrame`` with ``kmer``, ``weight`` and (if ``by_locus``)
-        ``locus``, sorted by k-mer.
+        Long-format frame with ``kmer``, ``weight``, the ``by`` columns and (if
+        ``by_locus``) ``locus``, sorted by the group key (lazy when ``df`` is lazy).
     """
-    df = df if LOCUS in df.columns else add_locus(df)
+    df = df if LOCUS in column_names(df) else add_locus(df)
     df = df.with_columns(weight_expr(weight).alias("weight"))
     df = _explode_kmers(df, k, flank)
-    group = [LOCUS, "kmer"] if by_locus else ["kmer"]
+    group = [*by, *([LOCUS, "kmer"] if by_locus else ["kmer"])]
     return (df.group_by(group, maintain_order=True)
               .agg(pl.col("weight").sum())
               .sort(group))
 
 
-def v_kmer_c_profile(df: pl.DataFrame, k: int = 3, weight: str = "reads",
+def v_kmer_c_profile(df, k: int = 3, weight: str = "reads",
                      by_locus: bool = True, keep_allele: bool = False,
-                     flank: int = 0) -> pl.DataFrame:
+                     flank: int = 0, by=()):
     """Joint (V gene, k-mer, C gene) profile — a tidy feature-matrix source.
 
     Produces one aggregated row per ``(v_call, kmer, c_call)`` combination (plus
@@ -92,23 +96,26 @@ def v_kmer_c_profile(df: pl.DataFrame, k: int = 3, weight: str = "reads",
     ``c_call`` (common in native vdjtools data) is retained as its own group.
 
     Args:
-        df: A clonotype frame.
+        df: A clonotype frame (eager or lazy; see :func:`kmer_profile`).
         k: K-mer length (default 3).
         weight: ``"reads"``, ``"unique"``, or ``"freq"``.
         by_locus: If ``True``, include ``locus`` in the grouping.
         keep_allele: If ``True``, keep V allele suffixes; otherwise collapse V to
             gene level (default).
         flank: Residues to drop from each end before windowing (see the module docstring).
+        by: Extra column(s) prepended to the group key (e.g. ``["sample_id"]`` for a
+            one-pass cohort feature source).
 
     Returns:
-        Long-format ``pl.DataFrame`` with ``v_call``, ``kmer``, ``c_call``,
-        ``weight`` and (if ``by_locus``) ``locus``.
+        Long-format frame with ``v_call``, ``kmer``, ``c_call``, ``weight``, the ``by``
+        columns and (if ``by_locus``) ``locus`` (lazy when ``df`` is lazy).
     """
-    df = df if LOCUS in df.columns else add_locus(df)
+    df = df if LOCUS in column_names(df) else add_locus(df)
     v = pl.col(V_CALL) if keep_allele else strip_allele(pl.col(V_CALL))
     df = df.with_columns(v.alias(V_CALL), weight_expr(weight).alias("weight"))
     df = _explode_kmers(df, k, flank)
-    group = [LOCUS, V_CALL, "kmer", C_CALL] if by_locus else [V_CALL, "kmer", C_CALL]
+    group = [*by, *([LOCUS, V_CALL, "kmer", C_CALL] if by_locus
+                    else [V_CALL, "kmer", C_CALL])]
     return (df.group_by(group, maintain_order=True)
               .agg(pl.col("weight").sum())
               .sort(group, nulls_last=True))

@@ -51,6 +51,22 @@ SCHEMA: dict[str, pl.DataType] = {
 COLUMNS: list[str] = list(SCHEMA)
 
 
+def column_names(df: "pl.DataFrame | pl.LazyFrame") -> list[str]:
+    """Column names of an eager **or** lazy frame.
+
+    Uses :meth:`polars.LazyFrame.collect_schema` for a ``LazyFrame`` so the check
+    does not emit polars' "resolving schema" performance warning; falls back to
+    ``.columns`` for an eager ``DataFrame``.
+
+    Args:
+        df: A ``pl.DataFrame`` or ``pl.LazyFrame``.
+
+    Returns:
+        The list of column names.
+    """
+    return df.collect_schema().names() if isinstance(df, pl.LazyFrame) else df.columns
+
+
 def locus_of(v_call: str | None) -> str | None:
     """Return the locus (first three characters) of an IMGT V-gene call.
 

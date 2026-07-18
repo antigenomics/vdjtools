@@ -13,6 +13,7 @@ by default, to stdout (progress/errors go to stderr), so commands pipe cleanly.
 """
 from __future__ import annotations
 
+import functools
 import sys
 from pathlib import Path
 from typing import Optional
@@ -79,19 +80,24 @@ def _read_seq_table(path: Path, column: Optional[str], no_header: bool) -> tuple
     return df, col
 
 
-def _sample_frames(samples, metadata, base_dir, sample_col, file_template, fmt) -> dict:
-    """{sample_id: frame} — from a metadata table if given, else the positional sample files."""
-    from vdjtools.io.batch import read, read_metadata, read_samples
+def _sample_items(samples, metadata, base_dir, sample_col, file_template) -> list:
+    """[(sample_id, path), ...] — from a metadata table if given, else positional files.
+
+    Returns paths, not loaded frames: the caller streams them through
+    :func:`vdjtools.io.map_samples` so only ``O(workers)`` samples are ever resident.
+    """
+    from vdjtools.io.batch import read_metadata
 
     if metadata is not None:
         md = read_metadata(metadata)
         if sample_col not in md.columns:
             _err(f"--sample-col {sample_col!r} not in metadata columns: {md.columns}")
-        return read_samples(md, base_dir or Path(metadata).parent, sample_col=sample_col,
-                            file_template=file_template, fmt=fmt, add_metadata=False, as_dict=True)
+        base = base_dir or Path(metadata).parent
+        return [(str(r[sample_col]), base / file_template.format(sample=r[sample_col]))
+                for r in md.iter_rows(named=True)]
     if not samples:
         _err("give sample files as arguments, or -m/--metadata <table> (with --base-dir)")
-    return {Path(s).name.split(".")[0]: read(s, fmt=fmt) for s in samples}
+    return [(Path(s).name.split(".")[0], s) for s in samples]
 
 
 def _tag(df: pl.DataFrame, sample_id: str) -> pl.DataFrame:
@@ -182,19 +188,35 @@ _SCOL = typer.Option("sample_name", "--sample-col", help="Metadata column with t
 _TMPL = typer.Option("{sample}.tsv.gz", "--file-template", help="Sample filename template (with -m).")
 _FMT = typer.Option("auto", "--format", help="auto | vdjtools | airr.")
 _OUT = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout).")
+_THREADS = typer.Option(
+    0, "--threads", "-t",
+    help="Worker threads over samples (0 = all cores). Lower to core count if compute-bound.",
+)
+_COHORT = typer.Option(
+    None, "--cohort",
+    help="Pre-ingested parquet cohort dir (vdjtools.io.ingest_cohort): one streamed "
+         "out-of-core pass over the whole cohort instead of per-sample files.",
+)
 
 
 @app.command()
 def diversity(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
-    fmt: str = _FMT, out: Optional[Path] = _OUT,
+    fmt: str = _FMT, threads: int = _THREADS, cohort: Optional[Path] = _COHORT,
+    out: Optional[Path] = _OUT,
 ) -> None:
     """Per-sample diversity (observed richness, Chao, Efron-Thisted, Shannon, Simpson, d50)."""
-    from vdjtools.stats.diversity import diversity_stats
+    from vdjtools.io.batch import map_samples
+    from vdjtools.stats.diversity import diversity_cohort, diversity_stats
 
-    frames = _sample_frames(samples, metadata, base_dir, sample_col, file_template, fmt)
-    rows = [_tag(diversity_stats(df), sid) for sid, df in frames.items()]
+    if cohort is not None:
+        from vdjtools.io.cohort import scan_cohort
+        _write(diversity_cohort(scan_cohort(cohort, join_metadata=False)), out)
+        return
+    items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
+    rows = [_tag(res, sid) for sid, res in
+            map_samples(diversity_stats, items, fmt=fmt, workers=threads or None)]
     _write(pl.concat(rows, how="vertical_relaxed"), out)
 
 
@@ -203,13 +225,22 @@ def spectratype(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
     fmt: str = _FMT, kind: str = typer.Option("aa", help="aa | nt (length unit)."),
-    weight: str = typer.Option("reads", help="reads | unique | freq."), out: Optional[Path] = _OUT,
+    weight: str = typer.Option("reads", help="reads | unique | freq."),
+    threads: int = _THREADS, cohort: Optional[Path] = _COHORT, out: Optional[Path] = _OUT,
 ) -> None:
     """Per-sample CDR3 length spectratype."""
+    from vdjtools.io.batch import map_samples
     from vdjtools.stats.spectratype import spectratype as _spec
 
-    frames = _sample_frames(samples, metadata, base_dir, sample_col, file_template, fmt)
-    rows = [_tag(_spec(df, kind=kind, weight=weight), sid) for sid, df in frames.items()]
+    if cohort is not None:
+        from vdjtools.io.cohort import scan_cohort
+        _write(_spec(scan_cohort(cohort, join_metadata=False), kind=kind, weight=weight,
+                     by=["sample_id"]).collect(engine="streaming"), out)
+        return
+    items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
+    fn = functools.partial(_spec, kind=kind, weight=weight)
+    rows = [_tag(res, sid) for sid, res in
+            map_samples(fn, items, fmt=fmt, workers=threads or None)]
     _write(pl.concat(rows, how="vertical_relaxed"), out)
 
 
@@ -218,13 +249,22 @@ def segment_usage(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
     fmt: str = _FMT, segment: str = typer.Option("v", help="v | d | j | c."),
-    weight: str = typer.Option("reads", help="reads | unique | freq."), out: Optional[Path] = _OUT,
+    weight: str = typer.Option("reads", help="reads | unique | freq."),
+    threads: int = _THREADS, cohort: Optional[Path] = _COHORT, out: Optional[Path] = _OUT,
 ) -> None:
     """Per-sample V/D/J/C segment usage."""
+    from vdjtools.io.batch import map_samples
     from vdjtools.stats.usage import segment_usage as _usage
 
-    frames = _sample_frames(samples, metadata, base_dir, sample_col, file_template, fmt)
-    rows = [_tag(_usage(df, segment=segment, weight=weight), sid) for sid, df in frames.items()]
+    if cohort is not None:
+        from vdjtools.io.cohort import scan_cohort
+        _write(_usage(scan_cohort(cohort, join_metadata=False), segment=segment,
+                      weight=weight, by=["sample_id"]).collect(engine="streaming"), out)
+        return
+    items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
+    fn = functools.partial(_usage, segment=segment, weight=weight)
+    rows = [_tag(res, sid) for sid, res in
+            map_samples(fn, items, fmt=fmt, workers=threads or None)]
     _write(pl.concat(rows, how="vertical_relaxed"), out)
 
 
@@ -232,20 +272,26 @@ def segment_usage(
 def overlap(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
-    fmt: str = _FMT, out: Optional[Path] = _OUT,
+    fmt: str = _FMT, threads: int = _THREADS, out: Optional[Path] = _OUT,
 ) -> None:
     """Exact-match pairwise repertoire overlap (D, F, F2, R) for every sample pair."""
-    from vdjtools.overlap.metrics import overlap_metrics
+    from vdjtools.io.batch import map_samples
+    from vdjtools.overlap.metrics import DEFAULT_KEY, _aggregate, _overlap_from_agg
 
-    frames = _sample_frames(samples, metadata, base_dir, sample_col, file_template, fmt)
-    items = list(frames.items())
+    items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
     if len(items) < 2:
         _err("overlap needs at least two samples")
+    key = list(DEFAULT_KEY)
+    # Aggregate each sample ONCE (streamed + parallel), then every O(n^2) pair is a join
+    # over the pre-aggregated frames — not a re-aggregation of both raw frames per pair
+    # (bitwise-identical to overlap_metrics, which cluster.pairwise_distances also reuses).
+    aggs = map_samples(lambda df: _aggregate(df, key), items, fmt=fmt, workers=threads or None)
     rows = []
-    for i in range(len(items)):
-        for k in range(i + 1, len(items)):
-            (a_id, a), (b_id, b) = items[i], items[k]
-            rows.append({"sample_a": a_id, "sample_b": b_id, **overlap_metrics(a, b)})
+    for i in range(len(aggs)):
+        for k in range(i + 1, len(aggs)):
+            (a_id, a), (b_id, b) = aggs[i], aggs[k]
+            rows.append({"sample_a": a_id, "sample_b": b_id,
+                         **_overlap_from_agg(a, b, key)[1]})
     _write(pl.DataFrame(rows), out)
 
 
