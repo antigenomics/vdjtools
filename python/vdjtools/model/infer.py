@@ -30,7 +30,7 @@ class InferenceReport:
 
     loglik: list[float] = field(default_factory=list)  # mean per-sequence log-Pgen (over scoreable reads)
     n_scoreable: list[int] = field(default_factory=list)
-    gene_tv: list[float] = field(default_factory=list)  # V-usage total-variation vs previous iter
+    gene_tv: list[float] = field(default_factory=list)  # relative log-likelihood change vs previous iter (the convergence signal)
     n_iter: int = 0
     converged: bool = False
 
@@ -40,6 +40,21 @@ def _tv(a: pl.DataFrame, b: pl.DataFrame, keycols: list[str]) -> float:
     da = {tuple(r[:-1]): r[-1] for r in a.select([*keycols, "p"]).iter_rows()}
     db = {tuple(r[:-1]): r[-1] for r in b.select([*keycols, "p"]).iter_rows()}
     return 0.5 * sum(abs(da.get(k, 0.0) - db.get(k, 0.0)) for k in set(da) | set(db))
+
+
+def _loglik_rel(loglik: list[float]) -> float:
+    """Relative change in mean log-likelihood between the last two iterations (``inf`` before iter 1).
+
+    The natural EM convergence signal, and it reflects the WHOLE model (trims/insertions/D-D), not just
+    V usage — which, arda-masked, settles in ~2 iterations while those are still moving. It is usable
+    because the fixes keep the scoreable-read set stable across iterations, so mean log-lik is now
+    monotone (the non-monotonicity that once forced a V-usage criterion is gone). Scale-free, so one
+    ``tol`` works across loci whose absolute log-lik differs (TRA ≈ −19, IGK ≈ −13, TRD ≈ −35).
+    """
+    if len(loglik) < 2:
+        return float("inf")
+    prev, cur = loglik[-2], loglik[-1]
+    return abs(cur - prev) / (abs(prev) + 1e-12)
 
 
 def _insert_markov(seq: str, R: np.ndarray, bias: np.ndarray, *, from_right: bool):
@@ -448,12 +463,12 @@ def infer(
 
         new_tables = _mstep(template, counts, nd_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
-        # Converge on marginal stability (V-usage total variation), which is robust to the
-        # changing set of scoreable reads that makes raw mean-log-lik non-monotonic.
-        tv = _tv(model.tables["v_choice"], new_model.tables["v_choice"], ["v_allele"])
-        report.gene_tv.append(tv)
         model = new_model
-        if it > 0 and tv < tol:
+        # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
+        # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
+        rel = _loglik_rel(report.loglik)
+        report.gene_tv.append(rel)
+        if it > 0 and rel < tol:
             report.converged = True
             break
 
@@ -775,11 +790,13 @@ def infer_native(
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
         new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior, gene_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
-        tv = _tv(model.tables["v_choice"], new_model.tables["v_choice"], ["v_allele"])
-        report.gene_tv.append(tv)
         report.n_iter = it + 1
         model = new_model
-        if it > 0 and tv < tol:
+        # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
+        # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
+        rel = _loglik_rel(report.loglik)
+        report.gene_tv.append(rel)
+        if it > 0 and rel < tol:
             report.converged = True
             break
     # Completion pass: EM only keeps genes whose CDR3s were producibly observed, so functional genes

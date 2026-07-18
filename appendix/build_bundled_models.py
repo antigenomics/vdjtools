@@ -12,8 +12,10 @@ insertion-length model would then happily learn.
 
 No cap, no subsampling: every clonotype surviving the germline filter goes into EM.
 
-Fixed-iteration EM (tol=0): arda masks pin V, so the V-usage convergence check would stop after ~2
-iters before the trims/insertions/n_d converge — running a fixed budget converges them properly.
+Convergence-based EM: stop when the relative log-likelihood improvement falls below EM_TOL (whole-model
+signal — the old V-usage criterion settled in ~2 iters while trims/insertions/n_d were still moving, so
+it was disabled; log-lik is monotone now that the fixes keep the scoreable-read set stable). EM_ITERS is
+a generous safety cap, not the target.
 
 Reproduce (needs [model] extra + arda/mmseqs2 + HF access):  python appendix/build_bundled_models.py
 """
@@ -42,7 +44,8 @@ DEST = Path("python/vdjtools/model/_bundled/learned")
 WORK = Path(os.environ.get("EM_WORK", "/tmp/em_work"))
 LOCI = {"TRA": "human_T_alpha", "TRB": "human_T_beta", "TRG": "human_T_gamma", "TRD": "human_T_delta",
         "IGH": "human_B_heavy", "IGK": "human_B_kappa", "IGL": "human_B_lambda"}
-ITERS = int(os.environ.get("EM_ITERS", "12"))
+ITERS = int(os.environ.get("EM_ITERS", "15"))          # generous safety cap
+EM_TOL = float(os.environ.get("EM_TOL", "1e-4"))       # stop at relative log-lik improvement < this
 
 
 def build(locus: str, name: str) -> dict:
@@ -124,7 +127,7 @@ def build(locus: str, name: str) -> dict:
     if base.chain_type == "VDJ" and not single_d:
         dd_allowed = [r.get("d2_call") is not None for r in uniq.iter_rows(named=True)]
     t = time.perf_counter()
-    model, rep = infer_native(base, seqs, masks=masks, max_iter=ITERS, tol=0.0,
+    model, rep = infer_native(base, seqs, masks=masks, max_iter=ITERS, tol=EM_TOL,
                               single_d=single_d, dd_allowed=dd_allowed, nd_prior=nd_prior,
                               gene_prior=gene_prior)
     dt = time.perf_counter() - t
