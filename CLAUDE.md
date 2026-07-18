@@ -32,8 +32,8 @@ and are run ad hoc; they were never importable from here, so nothing in the libr
 
 ## Build / test / run
 ```bash
-conda env create -f environment.yml && conda activate vdjtools   # or reuse .venv
-pip install -e ".[dev,test]"                                      # builds _core
+uv venv && source .venv/bin/activate && uv pip install -e ".[dev,test]"   # builds _core (default)
+# or `bash setup.sh` (uv-first, portable bash/zsh); conda env.yml only for mmseqs2 + slow arda tests
 pytest tests/python -q
 cmake -S . -B build -DVDJTOOLS_TESTS=ON && cmake --build build && ctest --test-dir build
 sphinx-build -W --keep-going -b html docs docs/_build/html        # docs gate (zero warnings)

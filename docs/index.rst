@@ -10,8 +10,9 @@ built on the antigenomics ecosystem (`seqtree <https://github.com/antigenomics/s
 
 .. note::
 
-   **v2.2.0** — the native V(D)J model engine plus the full analytics suite (diversity, overlap/TCRnet,
-   preprocessing, biomarkers, single-cell), CDR features, and legacy-format ingestion (MiXcr, MiGec,
+   **v3.0.0** — the native V(D)J model engine plus the full analytics suite (diversity, overlap/TCRnet,
+   preprocessing, biomarkers, single-cell), longitudinal clonotype **dynamics** (paired expansion
+   testing + the VDJtrack recapture model), CDR features, and legacy-format ingestion (MiXcr, MiGec,
    immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype columns follow the AIRR **junction**
    convention (``junction_nt`` / ``junction_aa``). The legacy Groovy/Java vdjtools (v1.x) lives on the
    ``legacy-1.x`` branch and its releases remain available under the repository's tags.
@@ -51,15 +52,21 @@ the repertoire analytics (sample files or a metadata table, like the legacy tool
    vdjtools models                                # list the bundled models
    vdjtools generate -m TRB -n 1000 -o gen.tsv    # sample sequences   (cf. olga-generate_sequences)
    vdjtools pgen seqs.tsv -m TRB -o pgen.tsv      # Pgen per CDR3       (cf. olga-compute_pgen)
-   vdjtools pgen seqs.tsv -m TRB --mismatches 1   # + the Hamming-1 ball; --v-col/--j-col to condition
+
+   vdjtools convert mixcr.txt.gz -o clones.parquet   # any format → canonical TSV / Parquet
+   vdjtools filter clones.parquet --coding --min-freq 1e-4 -o coding.tsv
+   vdjtools downsample clones.parquet 100000 -o ds.tsv
 
    vdjtools diversity     sampleA.tsv sampleB.tsv -o diversity.tsv
    vdjtools overlap       *.tsv -o overlap.tsv
    vdjtools segment-usage *.tsv --segment v -o usage.tsv
-   vdjtools spectratype   *.tsv -o spectra.tsv
+   vdjtools spectratype   --cohort cohort_parquet/ -o spectra.tsv     # one streamed pass
+   vdjtools dynamics      day0.tsv day15.tsv -o tracked.tsv           # paired expansion test
 
-Native vdjtools and AIRR inputs are auto-detected; every command writes TSV to ``-o`` (or stdout).
-Run ``vdjtools <command> --help`` for options.
+Native vdjtools, AIRR, Parquet, and third-party inputs are auto-detected; every command writes to
+``-o`` — TSV, or Parquet when the path ends in ``.parquet`` / ``.pq`` — or to stdout. Cohort commands
+parallelise over samples with ``-t/--threads`` or stream a Parquet cohort with ``--cohort``. Run
+``vdjtools <command> --help`` for options.
 
 Performance
 -----------
@@ -89,7 +96,10 @@ Capabilities (see the :doc:`API reference <api>` and the project ROADMAP):
 - **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree), similarity-aware overlap, clustering.
 - **Preprocess** — downsampling, error-correction, batch-effect correction, pooling/joining.
 - **Biomarker** — incidence-based association (Fisher) and metaclonotype grouping.
-- **Single-cell** — AIRR Cell / 10x interoperability, chain pairing + QC, and paired α/β Pgen.
+- **Dynamics** — longitudinal clonotype tracking: paired within-donor expansion testing, the VDJtrack
+  size-bucket recapture model, metaclonotype-grouped testing, and an edgeR NB-exact caller.
+- **Single-cell** — AIRR Cell / 10x interoperability, chain pairing + QC, paired α/β Pgen, and an
+  AnnData / scverse bridge (``.h5ad`` / ``.zarr``).
 
 .. toctree::
    :hidden:

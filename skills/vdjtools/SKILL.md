@@ -16,8 +16,8 @@ Minimal OO — free functions returning `pl.DataFrame`.
 ## Build / test / run
 
 ```bash
-conda env create -f environment.yml && conda activate vdjtools   # or reuse .venv
-pip install -e ".[dev,test]"                                     # builds the _core C++ ext
+uv venv && source .venv/bin/activate && uv pip install -e ".[dev,test]"   # builds _core (default)
+# or `bash setup.sh` (uv-first, portable bash/zsh); conda env.yml only for mmseqs2 + slow arda tests
 pytest tests/python -q -m "not slow"                             # fast suite
 sphinx-build -W --keep-going -b html docs docs/_build/html       # docs (zero-warning gate)
 ```
@@ -139,10 +139,13 @@ Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Wi
 `q_measure`, …); `to_anndata`.
 
 ### `vdjtools.cli`
-The `vdjtools` typer app: `models`, `generate`, `pgen`, `diversity`, `overlap`, `segment-usage`,
-`spectratype`, `dynamics`, `tcrnet`, `alice`. Inputs auto-detected; TSV to `-o`/stdout. The
-per-sample analytics commands take **`--threads N`** (parallel over samples, `map_samples`) and
-**`--cohort DIR`** (one streamed pass over a pre-ingested `scan_cohort` Parquet dataset).
+The `vdjtools` typer app. Model: `models`, `generate`, `pgen`. Data: **`convert`** (any format →
+canonical), **`downsample`**, **`filter`** (`--coding`/`--noncoding`/`--min-freq`/`--v`/`--j`),
+**`pool`** (`--join`). Analytics: `diversity`, `overlap`, `segment-usage`, `spectratype`.
+Longitudinal/enrichment: `dynamics`, `tcrnet`, `alice`. Inputs auto-detected; **`-o` is
+format-aware** — `.parquet`/`.pq` → Parquet, else TSV (or stdout). The per-sample analytics
+commands take **`--threads N`** (parallel over samples, `map_samples`) and **`--cohort DIR`** (one
+streamed pass over a pre-ingested `scan_cohort` Parquet dataset).
 
 ### Notebooks (`pip install "vdjtools[examples]"` → `marimo edit notebooks/<name>.py`)
 `model_explorer` (recombination Bayes net), `biomarker_explorer` (Emerson association /

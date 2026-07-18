@@ -35,6 +35,18 @@ Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git ta
   samples) and `--cohort DIR` (one streamed pass over a pre-ingested Parquet cohort); the `overlap`
   command now pre-aggregates each sample once.
 
+### Added — CLI & packaging
+
+- New `vdjtools` subcommands: **`convert`** (read any supported format — native / AIRR / Parquet /
+  MiXcr / MiGec / MiTCR / immunoSEQ / IMGT / Vidjil / RTCR / TRUST4 / arda — and write the canonical
+  table), **`downsample`**, **`filter`** (coding / non-coding / frequency / V-J segment), and
+  **`pool`** (flat pool or incidence `--join`).
+- Every command's `-o` is now **format-aware**: a `.parquet` / `.pq` path writes Parquet, anything
+  else (or stdout) writes TSV.
+- Development switched to **uv** — one repo-local `.venv`, no conda. `setup.sh` is rewritten to be
+  uv-first (with a `python -m venv` fallback) and **portable across bash and zsh**. `environment.yml`
+  is now optional, needed only for MMseqs2 (arda's aligner) + the slow arda round-trip tests.
+
 ### Added — notebooks (marimo, `[examples]` extra)
 
 - `notebooks/vaccination_tracking.py` — clonotype tracking + recapture model across YFV / influenza

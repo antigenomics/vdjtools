@@ -1,15 +1,21 @@
 """vdjtools command-line interface (typer) — one ``vdjtools`` entry point.
 
-Two families of commands:
+Command families:
 
 * **Model engine** (OLGA/IGoR-style, on the native recombination core + built-in models):
   ``pgen`` (generation probability), ``generate`` (sample sequences), ``models`` (list built-ins).
+* **Data** (format conversion + preprocessing): ``convert`` (any format → canonical TSV/Parquet),
+  ``downsample``, ``filter`` (coding / frequency / segment), ``pool`` (pool or incidence-join samples).
 * **Repertoire analytics** (vanilla-vdjtools-style, over sample files or a metadata table):
   ``diversity``, ``spectratype``, ``segment-usage``, ``overlap``.
+* **Longitudinal & enrichment**: ``dynamics`` (paired within-donor expansion test), ``tcrnet`` /
+  ``alice`` (neighbourhood enrichment vs a control cohort / a generation model).
 
 Analytics commands take either a list of sample files or ``-m/--metadata <table>`` (+ ``--base-dir``),
-mirroring the metadata-driven workflow of the legacy tool. Every command writes a TSV to ``-o`` or,
-by default, to stdout (progress/errors go to stderr), so commands pipe cleanly.
+mirroring the metadata-driven workflow of the legacy tool, and run in parallel over samples
+(``-t/--threads``) or in one streamed pass over a pre-ingested Parquet cohort (``--cohort``). Every
+command writes to ``-o`` — TSV, or Parquet when the path ends in ``.parquet`` / ``.pq`` — or, by
+default, to stdout (progress/errors go to stderr), so commands pipe cleanly.
 """
 from __future__ import annotations
 
@@ -54,11 +60,15 @@ def _load_model(model: Optional[str], source: str, model_path: Optional[Path]):
 
 
 def _write(df: pl.DataFrame, out: Optional[Path]) -> None:
+    """Write a result frame. ``.parquet`` / ``.pq`` → Parquet; anything else (or stdout) → TSV."""
     if out is None:
         sys.stdout.write(df.write_csv(separator="\t"))
+        return
+    if out.suffix.lower() in (".parquet", ".pq"):
+        df.write_parquet(out)
     else:
         df.write_csv(out, separator="\t")
-        _info(f"wrote {df.height} rows → {out}")
+    _info(f"wrote {df.height} rows → {out}")
 
 
 def _is_nt(seq: str) -> bool:
@@ -197,6 +207,92 @@ _COHORT = typer.Option(
     help="Pre-ingested parquet cohort dir (vdjtools.io.ingest_cohort): one streamed "
          "out-of-core pass over the whole cohort instead of per-sample files.",
 )
+
+
+# ---------------------------------------------------------------------------- data commands
+@app.command()
+def convert(
+    input: Path = typer.Argument(..., help="Clonotype file in any supported format."),
+    fmt: str = _FMT, out: Optional[Path] = _OUT,
+) -> None:
+    """Read any supported format and write the canonical AIRR-junction table.
+
+    Auto-detects native vdjtools / AIRR / Parquet and the third-party exports (MiXcr, MiGec,
+    MiTCR, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Output is TSV, or Parquet
+    when ``-o`` ends in ``.parquet`` / ``.pq`` — the typed, columnar, at-scale store.
+    """
+    from vdjtools.io.batch import read
+
+    try:
+        _write(read(input, fmt=fmt), out)
+    except ValueError as e:                          # unknown fmt / unrecognised header
+        _err(str(e))
+
+
+@app.command()
+def downsample(
+    input: Path = typer.Argument(..., help="Clonotype sample file."),
+    size: int = typer.Argument(..., help="Target size (reads, or unique clonotypes with --clones)."),
+    fmt: str = _FMT, out: Optional[Path] = _OUT,
+    clones: bool = typer.Option(False, "--clones", help="Draw unique clonotypes, not reads."),
+    seed: int = typer.Option(0, "--seed", help="Random seed for reproducible draws."),
+) -> None:
+    """Randomly down-sample a repertoire to a common depth (reads, or unique clonotypes)."""
+    from vdjtools.io.batch import read
+    from vdjtools.preprocess import downsample as _ds
+
+    _write(_ds(read(input, fmt=fmt), size, by="clones" if clones else "reads", seed=seed), out)
+
+
+@app.command(name="filter")
+def filter_(
+    input: Path = typer.Argument(..., help="Clonotype sample file."),
+    fmt: str = _FMT, out: Optional[Path] = _OUT,
+    coding: bool = typer.Option(False, "--coding", help="Keep only coding (in-frame, stop-free) clonotypes."),
+    noncoding: bool = typer.Option(False, "--noncoding", help="Keep only NON-coding clonotypes (the complement)."),
+    min_freq: Optional[float] = typer.Option(None, "--min-freq", help="Keep clonotypes with frequency >= this."),
+    v: Optional[str] = typer.Option(None, "--v", help="Comma-separated V segments (prefix ok)."),
+    j: Optional[str] = typer.Option(None, "--j", help="Comma-separated J segments (prefix ok)."),
+    remove: bool = typer.Option(False, "--remove", help="With --v/--j: remove the listed segments instead of keeping them."),
+) -> None:
+    """Filter clonotypes: coding / non-coding, by frequency, and/or by V/J segment."""
+    from vdjtools import preprocess
+    from vdjtools.io.batch import read
+
+    if coding and noncoding:
+        _err("--coding and --noncoding are mutually exclusive")
+    df = read(input, fmt=fmt)
+    if coding or noncoding:
+        df = preprocess.filter_functional(df, keep="coding" if coding else "noncoding")
+    if min_freq is not None:
+        df = preprocess.filter_frequency(df, min_freq=min_freq)
+    if v or j:
+        df = preprocess.filter_segment(df, v=v.split(",") if v else None,
+                                       j=j.split(",") if j else None, keep=not remove)
+    _write(df, out)
+
+
+@app.command()
+def pool(
+    samples: list[Path] = typer.Argument(..., help="Two or more clonotype sample files."),
+    fmt: str = _FMT, out: Optional[Path] = _OUT,
+    key: str = typer.Option("aa", "--key", help="Match key: strict | nt | ntV | ntVJ | aa | aaV | aaVJ."),
+    join: bool = typer.Option(False, "--join", help="Incidence join (clonotypes shared across samples) instead of a flat pool."),
+    min_samples: int = typer.Option(2, "--min-samples", help="With --join: keep clonotypes seen in >= this many samples."),
+) -> None:
+    """Pool (sum counts) or join (incidence) clonotypes across several samples."""
+    from vdjtools import preprocess
+    from vdjtools.io.batch import read
+
+    if len(samples) < 2:
+        _err("pool needs at least two samples")
+    frames = [read(s, fmt=fmt) for s in samples]
+    try:
+        res = (preprocess.join_samples(frames, key=key, min_samples=min_samples) if join
+               else preprocess.pool_samples(frames, key=key))
+    except ValueError as e:                          # unknown key
+        _err(str(e))
+    _write(res, out)
 
 
 @app.command()
