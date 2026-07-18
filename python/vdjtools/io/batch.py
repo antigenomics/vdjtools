@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import polars as pl
@@ -235,3 +236,38 @@ def read_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
     if as_dict:
         return frames
     return pl.concat(list(frames.values()), how="vertical_relaxed")
+
+
+def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None):
+    """Read each sample and apply ``fn`` to it, in parallel, low peak memory.
+
+    The parallel, streaming replacement for "load the whole cohort, then loop over it":
+    each worker reads **one** sample, reduces it via ``fn`` (typically a per-sample
+    summary statistic returning a small frame), and discards the raw clonotype frame —
+    so peak memory is ``O(workers)`` samples, not the whole cohort. Reading (gzip TSV
+    decode + polars parse) and ``fn`` (polars ``group_by`` / numpy) both release the
+    GIL, so a thread pool runs them genuinely in parallel with no frame pickling.
+
+    Args:
+        fn: A callable ``pl.DataFrame -> T`` applied to each sample's canonical
+            clonotype frame (e.g. :func:`vdjtools.stats.diversity.diversity_stats`).
+        items: Iterable of ``(sample_id, path)`` pairs (e.g. from a metadata sheet).
+        fmt: Reader format passed to :func:`read` (``"auto"`` sniffs each file).
+        workers: Max worker threads. ``None`` uses the pool default
+            (``min(32, os.cpu_count() + 4)``); pass a smaller value if ``fn`` is
+            compute-bound, to avoid oversubscribing polars' own thread pool.
+
+    Returns:
+        A list of ``(sample_id, fn(frame))`` in the **same order as** ``items``
+        (input/metadata order, regardless of which sample finishes first).
+    """
+    items = list(items)
+
+    def work(item):
+        sid, path = item
+        return sid, fn(read(path, fmt=fmt))
+
+    # ThreadPoolExecutor.map yields results in input order, so output order is
+    # deterministic (metadata order) no matter the completion order.
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return list(ex.map(work, items))

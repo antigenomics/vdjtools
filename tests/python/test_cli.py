@@ -102,6 +102,64 @@ def test_overlap_needs_two_samples(tmp_path, gen):
     assert r.exit_code != 0  # single sample → clean error
 
 
+# --- data commands: convert / downsample / filter / pool ---------------------------------
+
+def test_convert_to_parquet_and_stdout(tmp_path, gen):
+    src = tmp_path / "s.tsv"
+    _write_airr(src, gen, seed=61)
+
+    pq = tmp_path / "out.parquet"                      # format-aware -o: .parquet -> Parquet
+    r = runner.invoke(app, ["convert", str(src), "-o", str(pq)])
+    assert r.exit_code == 0, r.stdout
+    df = pl.read_parquet(pq)
+    assert {"v_call", "j_call", "junction_aa", "duplicate_count", "frequency"} <= set(df.columns)
+
+    r2 = runner.invoke(app, ["convert", str(src)])     # no -o -> canonical TSV on stdout
+    assert r2.exit_code == 0, r2.stdout
+    assert "junction_aa" in r2.stdout.splitlines()[0]
+
+
+def test_downsample_reduces_reads(tmp_path, gen):
+    src, out = tmp_path / "s.tsv", tmp_path / "ds.tsv"
+    _write_airr(src, gen, seed=62)                     # ~31k reads over 150 clonotypes
+    r = runner.invoke(app, ["downsample", str(src), "500", "--seed", "1", "-o", str(out)])
+    assert r.exit_code == 0, r.stdout
+    assert pl.read_csv(out, separator="\t")["duplicate_count"].sum() == 500
+
+
+def test_filter_coding_and_guard(tmp_path, gen):
+    src, out = tmp_path / "s.tsv", tmp_path / "f.tsv"
+    _write_airr(src, gen, seed=63)
+    r = runner.invoke(app, ["filter", str(src), "--coding", "-o", str(out)])
+    assert r.exit_code == 0, r.stdout
+    df = pl.read_csv(out, separator="\t")
+    assert df.height > 0 and not df["junction_aa"].str.contains(r"\*").any()  # no stop codons
+    # --coding and --noncoding together is a clean error, not both-filters-applied
+    assert runner.invoke(app, ["filter", str(src), "--coding", "--noncoding"]).exit_code != 0
+
+
+def test_pool_flat_and_join(tmp_path, gen):
+    a, b = tmp_path / "a.tsv", tmp_path / "b.tsv"
+    _write_airr(a, gen[:100], seed=64)
+    _write_airr(b, gen[50:150], seed=65)               # 50 clonotypes shared with a
+    flat = tmp_path / "pool.tsv"
+    r = runner.invoke(app, ["pool", str(a), str(b), "-o", str(flat)])
+    assert r.exit_code == 0, r.stdout
+    df = pl.read_csv(flat, separator="\t")
+    assert df.height <= 200 and "incidence" in df.columns   # shared clonotypes collapse
+
+    joint = tmp_path / "joint.tsv"
+    rj = runner.invoke(app, ["pool", str(a), str(b), "--join", "--min-samples", "2", "-o", str(joint)])
+    assert rj.exit_code == 0, rj.stdout
+    assert pl.read_csv(joint, separator="\t").height >= 1   # the shared ones survive the 2-sample join
+
+
+def test_pool_needs_two_samples(tmp_path, gen):
+    a = tmp_path / "a.tsv"
+    _write_airr(a, gen, seed=66)
+    assert runner.invoke(app, ["pool", str(a)]).exit_code != 0
+
+
 # --- Phase 14: dynamics + the two enrichment nulls ---------------------------------------
 
 def _write_airr(path, df, seed, boost=None, scale=1):

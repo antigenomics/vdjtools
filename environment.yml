@@ -1,9 +1,15 @@
-# Dedicated conda environment for vdjtools.
-# Provides Python, a C++ toolchain (to build the _core pybind11 extension), and MMseqs2.
+# OPTIONAL conda environment for vdjtools — only if you want MMseqs2 (arda's aligner) and a
+# bundled C++ toolchain from conda. The default/recommended dev setup is uv (no conda needed):
+#
+#   bash setup.sh            # uv venv + editable install (builds _core); see setup.sh
+#   # or by hand:
+#   uv venv && source .venv/bin/activate && uv pip install -e ".[dev,test]"
+#
+# Use this file only when you need MMseqs2 for the annotation / slow arda round-trip tests:
 #
 #   conda env create -f environment.yml
 #   conda activate vdjtools
-#   pip install -e ".[dev,test]"
+#   uv pip install -e ".[dev,test]"      # (or: pip install -e ".[dev,test]")
 #
 # NB: this conda env is a convenience for DEVELOPMENT, not a requirement. arda (the germline
 # reference + VDJ-model backend) is a plain pip base dependency, so `pip install vdjtools`

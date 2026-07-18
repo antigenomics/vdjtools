@@ -18,9 +18,16 @@ from ..io.schema import COUNT
 
 
 def _counts(df: pl.DataFrame) -> np.ndarray:
-    """Extract the positive integer clonotype count vector from a frame."""
+    """Extract the positive integer clonotype count vector from a frame (sorted).
+
+    Returned ascending so every estimator's floating-point reduction (Σf·ln f, Σf²) is
+    summed in a fixed, numerically-stable order — making :func:`diversity_stats`
+    independent of the input's clonotype row order, so the streamed cohort path
+    (:func:`diversity_cohort`, which reconstructs the vector from the count spectrum)
+    is bit-identical to the per-sample path.
+    """
     c = df[COUNT].drop_nulls().to_numpy().astype(np.int64)
-    return c[c > 0]
+    return np.sort(c[c > 0])
 
 
 def observed_richness(counts: np.ndarray) -> int:
@@ -237,3 +244,44 @@ def diversity_stats(df: pl.DataFrame, extrapolate_to: int | None = None) -> pl.D
         "inverse_simpson": [inverse_simpson(counts)],
         "d50": [d50(counts)],
     })
+
+
+def diversity_cohort(cohort, extrapolate_to: int | None = None, *,
+                     sample_col: str = "sample_id") -> pl.DataFrame:
+    """Per-sample :func:`diversity_stats` for a whole cohort, low peak memory + exact.
+
+    Collapses the cohort to each sample's **count-frequency spectrum** in one streamed
+    pass — ``group_by([sample_id, duplicate_count]).agg(len)`` — which is bounded by the
+    number of distinct counts per sample (tiny), never the number of clonotypes. Each
+    sample's count vector is then reconstructed from its spectrum and fed to the exact
+    per-sample estimators, so every value is **bit-identical** to running
+    :func:`diversity_stats` on the full sample (including Efron–Thisted / chaoE / d50,
+    which need the spectrum/sorted form). Peak memory is ``O(Σ distinct counts)``, so a
+    cohort far larger than RAM is handled with one :meth:`~polars.LazyFrame.collect`.
+
+    Args:
+        cohort: A clonotype cohort with a ``sample_id`` column — a lazy
+            :func:`vdjtools.io.scan_cohort` frame (streamed) or an eager
+            ``pl.DataFrame``.
+        extrapolate_to: Target depth for ``chaoE`` (see :func:`diversity_stats`).
+        sample_col: The per-sample id column (default ``"sample_id"``).
+
+    Returns:
+        One row per sample: ``sample_id`` followed by the :func:`diversity_stats`
+        columns, in first-appearance order of ``sample_id``.
+    """
+    lf = cohort if isinstance(cohort, pl.LazyFrame) else cohort.lazy()
+    # Sort the (tiny) spectrum by sample_col so partition order — and thus output row
+    # order — is deterministic (sample_id-sorted), independent of scan/group_by order.
+    spectrum = (lf.filter(pl.col(COUNT) > 0)
+                  .group_by([sample_col, COUNT]).agg(pl.len().alias("_fx"))
+                  .collect(engine="streaming").sort(sample_col))
+    rows = []
+    for sub in spectrum.partition_by(sample_col, maintain_order=True):
+        counts = np.repeat(sub[COUNT].to_numpy(), sub["_fx"].to_numpy())
+        row = diversity_stats(pl.DataFrame({COUNT: counts}), extrapolate_to)
+        rows.append(row.select(pl.lit(sub[sample_col][0]).alias(sample_col), pl.all()))
+    if not rows:
+        base = diversity_stats(pl.DataFrame({COUNT: np.array([], dtype=np.int64)}))
+        return base.select(pl.lit(None, dtype=pl.Utf8).alias(sample_col), pl.all()).clear()
+    return pl.concat(rows, how="vertical_relaxed")

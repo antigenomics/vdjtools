@@ -27,12 +27,13 @@ Built on the antigenomics ecosystem:
 [vdjmatch](https://github.com/antigenomics/vdjmatch) (overlap + TCRnet),
 [arda](https://github.com/antigenomics/arda) (AIRR annotation + markup repair).
 
-> **Status: `v2.2.0`** — the native V(D)J model engine plus the full analytics suite (diversity,
-> overlap/TCRnet, preprocessing, biomarkers, single-cell), CDR features, and legacy-format ingestion
-> (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype columns follow the AIRR
-> **junction** convention (`junction_nt` / `junction_aa`). The legacy v1.x tool lives on the
-> [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch and its releases
-> remain available under the repository tags (`v0.0.1` … `1.2.1`).
+> **Status: `v3.0.0`** — the native V(D)J model engine plus the full analytics suite (diversity,
+> overlap/TCRnet, preprocessing, biomarkers, single-cell), **longitudinal clonotype dynamics**
+> (paired expansion testing + the VDJtrack recapture model), CDR features, and legacy-format
+> ingestion (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype
+> columns follow the AIRR **junction** convention (`junction_nt` / `junction_aa`). The legacy v1.x
+> tool lives on the [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch
+> and its releases remain available under the repository tags (`v0.0.1` … `1.2.1`).
 
 ## Install
 
@@ -71,16 +72,23 @@ for germline lookup, Pgen, generation, or the analytics. Install it via conda/br
 
 ### Development
 
+Uses [uv](https://docs.astral.sh/uv/) — one repo-local `.venv`, no conda:
+
 ```bash
-conda env create -f environment.yml   # python + C++ toolchain + mmseqs2 (arda's aligner)
-conda activate vdjtools
-pip install -e ".[dev,test]"          # builds the _core C++ extension
+uv venv && source .venv/bin/activate
+uv pip install -e ".[dev,test]"       # builds the _core C++ extension (scikit-build-core)
 ```
 
-The conda env is a convenience, not a requirement — `pip install -e ".[dev,test]"` in any venv
-works. It supplies MMseqs2 so the slow arda annotation round-trips in the test suite run too.
+Or run the bootstrap script (portable across bash/zsh, uv-first with a `python -m venv` fallback):
 
-Or run the bootstrap script: `bash setup.sh --dev-parents --tests`.
+```bash
+bash setup.sh --dev-parents --tests   # or: zsh setup.sh
+```
+
+You need a C++ toolchain (Xcode CLT on macOS, build-essential on Linux) for the native `_core`
+extension. MMseqs2 is arda's aligner, needed **only** for the annotation path and the slow arda
+round-trip tests — `brew install mmseqs2`, or use the optional `environment.yml` conda env which
+bundles it.
 
 ## Quickstart — recombination model engine
 
@@ -110,6 +118,14 @@ pip install "vdjtools[examples]"
 marimo edit notebooks/model_explorer.py
 ```
 
+Interactive **marimo** notebooks (data auto-loads from HuggingFace, or a local `~/hf/` copy):
+
+- `notebooks/vaccination_tracking.py` — clonotype **tracking** + the recapture model across
+  yellow-fever / influenza / TBE vaccination time courses (`vdjtools.dynamics`).
+- `notebooks/aging.py` — cohort-**streaming** diversity, clone-size and spectratype vs age.
+- `notebooks/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 **"AS27" motif**: disease vs HLA-B27 carriage.
+- `notebooks/biomarker_explorer.py` — Emerson public-TCR association + co-occurrence.
+
 ## Command line
 
 `pip install vdjtools` installs the `vdjtools` command — the model engine (OLGA/IGoR-style) and the
@@ -122,15 +138,28 @@ vdjtools generate -m TRB -n 1000 -o gen.tsv    # sample sequences   (cf. olga-ge
 vdjtools pgen seqs.tsv -m TRB -o pgen.tsv      # Pgen per CDR3       (cf. olga-compute_pgen)
 vdjtools pgen seqs.tsv -m TRB --mismatches 1   # + the Hamming-1 ball; --v-col/--j-col to condition
 
+# data — convert any format to the canonical table (TSV, or Parquet by extension), preprocess
+vdjtools convert mixcr.txt.gz -o clones.parquet   # MiXcr/immunoSEQ/AIRR/… → canonical Parquet
+vdjtools downsample clones.parquet 100000 -o ds.tsv
+vdjtools filter clones.parquet --coding --min-freq 1e-4 -o coding.tsv
+vdjtools pool s1.tsv s2.tsv s3.tsv --join --min-samples 2 -o joint.tsv
+
 # repertoire analytics — sample files, or a cohort via -m/--metadata + --base-dir
 vdjtools diversity      sampleA.tsv sampleB.tsv -o diversity.tsv
 vdjtools overlap        *.tsv -o overlap.tsv
 vdjtools segment-usage  *.tsv --segment v -o usage.tsv
 vdjtools spectratype    *.tsv -o spectra.tsv
+vdjtools diversity      -m metadata.txt --base-dir samples/ --threads 8 -o div.tsv   # parallel cohort
+vdjtools spectratype    --cohort cohort_parquet/ -o spectra.tsv                       # one streamed pass
+
+# longitudinal — paired within-donor expansion test between two timepoints
+vdjtools dynamics day0.tsv day15.tsv -o tracked.tsv
 ```
 
-Native vdjtools and AIRR Rearrangement inputs are auto-detected; every command writes TSV to `-o`
-(or stdout, so it pipes). Run `vdjtools <command> --help` for options.
+Native vdjtools, AIRR Rearrangement, Parquet, and third-party inputs are auto-detected; every
+command writes to `-o` — **TSV, or Parquet when the path ends in `.parquet` / `.pq`** — or to stdout
+(so it pipes). Cohort commands parallelise over samples with `-t/--threads` or stream a pre-ingested
+Parquet cohort with `--cohort`. Run `vdjtools <command> --help` for options.
 
 ## Analytics (Python API)
 
@@ -165,6 +194,22 @@ preprocess.correct(preprocess.filter_functional(sample))
 # cross-batch V/J-usage bias: batch-correct usage, then resample the clonotype table
 usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")  # Vlasova 2026
 fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")
+```
+
+Longitudinal tracking — which clonotypes changed between two timepoints, and the VDJtrack recapture
+model (Pavlova, Zvyagin & Shugay 2024):
+
+```python
+from vdjtools import dynamics
+
+# paired within-donor test: emergent / expanded / persistent / contracted / vanishing
+tracked = dynamics.test_pair(day0, day15)                  # depth handled per-pair (effective N)
+grouped = dynamics.test_metaclonotypes(day0, day15, scope="1,0,0,1")  # 1-Hamming CDR3 ball first
+called  = dynamics.expansion_test(day0, day15)             # edgeR NB-exact caller (log2FC + p)
+
+# VDJtrack size-bucket recapture model — recapture fraction per clone-size class (Beta bands);
+# split by a group column + capture_test() for the group effect (see notebooks/vaccination_tracking.py)
+rates = dynamics.capture_rates(pre, post)
 ```
 
 Incidence-based clonotype association (Emerson 2017 / Howie 2015 / De Witt 2018 / Vlasova 2026)
@@ -224,7 +269,12 @@ suites (`RUN_BENCHMARK=1`).
 - **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree), similarity-aware overlap, clustering.
 - **Preprocess** — downsampling, error-correction, VJ-usage batch-effect correction, pooling/joining.
 - **Biomarker** — incidence association (Fisher / χ² / Bayesian / permutation) vs binary / HLA-allele / CMH-stratified conditions; α-β & same-chain co-occurrence pairing; metaclonotypes.
-- **Single-cell** — AIRR Cell / 10x interoperability, chain pairing + QC, and paired α/β Pgen.
+- **Dynamics** — longitudinal clonotype tracking between timepoints: the paired within-donor
+  expansion test (emergent / expanded / persistent / contracted / vanishing), the VDJtrack
+  size-bucket **recapture model**, metaclonotype-grouped testing, and an edgeR NB-exact caller
+  ([`vdjtools.dynamics`](python/vdjtools/dynamics)).
+- **Single-cell** — AIRR Cell / 10x interoperability, chain pairing + QC, paired α/β Pgen, and a
+  `to_anndata` bridge into the scverse ecosystem (writes `.h5ad` / `.zarr` via AnnData).
 
 ## License
 

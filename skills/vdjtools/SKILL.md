@@ -16,8 +16,8 @@ Minimal OO — free functions returning `pl.DataFrame`.
 ## Build / test / run
 
 ```bash
-conda env create -f environment.yml && conda activate vdjtools   # or reuse .venv
-pip install -e ".[dev,test]"                                     # builds the _core C++ ext
+uv venv && source .venv/bin/activate && uv pip install -e ".[dev,test]"   # builds _core (default)
+# or `bash setup.sh` (uv-first, portable bash/zsh); conda env.yml only for mmseqs2 + slow arda tests
 pytest tests/python -q -m "not slow"                             # fast suite
 sphinx-build -W --keep-going -b html docs docs/_build/html       # docs (zero-warning gate)
 ```
@@ -33,8 +33,9 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `read_rtcr`, `read_trust4` (`*_report.tsv`), `read_arda` (arda AIRR output, delegates to
   `read_airr`) (`vdjtools.io.convert`; ported from the legacy Groovy parsers + tool docs, incl.
   Adaptive→IMGT gene conversion).
-- **Cohorts**: `read_metadata`, `read_samples`, `iter_samples` (streaming), `sniff_format`;
-  `ingest_cohort` / `scan_cohort` (hive-partitioned Parquet, lazy).
+- **Cohorts**: `read_metadata`, `read_samples`, `iter_samples` (streaming), **`map_samples(fn,
+  items, *, workers=)`** (thread-parallel per-sample reduce, `O(workers)`-sample RAM, input-order),
+  `sniff_format`; `ingest_cohort` / `scan_cohort` (hive-partitioned Parquet, lazy).
 - **Schema**: `SCHEMA, COLUMNS`, constants `V_CALL D_CALL J_CALL C_CALL JUNCTION_AA JUNCTION_NT COUNT
   FREQ LOCUS`; helpers `normalize, add_locus, locus_of, recompute_frequency`.
 
@@ -57,12 +58,14 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
 - Tandem-D (D-D) supported throughout (`vdjtools.model.dd`).
 
 ### `vdjtools.stats` — diversity, spectratype, usage
-- `diversity_stats` (all indices), individual: `observed_richness, chao1, chao_e, efron_thisted,
-  shannon_wiener, normalized_shannon_wiener, inverse_simpson, d50`.
+- `diversity_stats` (all indices, per sample), **`diversity_cohort(cohort)`** (whole cohort in one
+  streamed count-spectrum pass, bit-exact vs per-sample); individual: `observed_richness, chao1,
+  chao_e, efron_thisted, shannon_wiener, normalized_shannon_wiener, inverse_simpson, d50`.
 - Rarefaction: `rarefaction`, `inext` (Hill q=0/1/2, size+coverage), `inext_batch`,
   `rarefaction_batch`, `inext_coverage`, `asymptotic_diversity`, `coverage`, `sample_coverage`,
   `estimate_d`.
-- `segment_usage`, `vj_usage`, `spectratype`, `vj_spectratype`.
+- `segment_usage`, `vj_usage`, `spectratype`, `vj_spectratype` — each takes **`by=["sample_id"]`**
+  to compute the whole cohort in one fused `group_by` over a `scan_cohort` LazyFrame (stream-collect).
 
 ### `vdjtools.features` — CDR features
 `physchem_profile` (region × property), `kmer_profile`, `v_kmer_c_profile`, `load_property_table`,
@@ -72,6 +75,20 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
 `overlap_metrics`, `overlap_pair`, `DEFAULT_KEY`; `fuzzy_overlap`, `fuzzy_overlap_metrics`;
 `similarity_overlap`, `similarity_matrix`, `SimilarityMatrices` (TINA / Leinster-Cobbold);
 `tcrnet`; `pairwise_distances`, `cluster_samples`; `track_clonotypes`.
+
+### `vdjtools.dynamics` — longitudinal clonotype dynamics (within-donor, across timepoints)
+Tests **frequency change across timepoints** within a subject (vs `biomarker`'s incidence across subjects).
+- **`test_pair(a, b, *, neff="auto", key=, min_total=, alpha=)`** — per-clonotype paired test:
+  two-step-sampling `N_eff` (Ayestaran 2024) + two-tailed Fisher; classes emergent/expanded/
+  persistent/contracted/vanishing. Also `estimate_neff`.
+- **`test_metaclonotypes(a, b, *, scope="1,0,0,1"|"1,1,1,1", match_v=, match_j=)`** — the same test on
+  1-Hamming / 1-Levenshtein CDR3 groups (power for convergent expansions; delegates to `metaclonotypes`).
+- **Recapture model** (VDJtrack; Pavlova, Zvyagin & Shugay 2024) `vdjtools.dynamics.capture`:
+  `capture_rates` (size buckets singleton/doubleton/tripleton/large × recapture fraction + Beta CI),
+  `capture_test` (log-linear `log(recapture) ~ size + group + log(div_ratio)`), `capture_paired_test`,
+  `poisson_capture`, `size_class`, `SIZE_CLASSES`.
+- **`expansion_test(a, b, *, dispersion="auto", log2fc=, alpha=)`** — edgeR NB-exact caller (TMM +
+  qCML common dispersion + beta-binomial exact test; the paper's §2.5 complementary method).
 
 ### `vdjtools.preprocess`
 `downsample`, `select_top`; `filter_functional`, `filter_frequency`, `filter_segment`,
@@ -122,8 +139,19 @@ Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Wi
 `q_measure`, …); `to_anndata`.
 
 ### `vdjtools.cli`
-The `vdjtools` typer app: `models`, `generate`, `pgen`, `diversity`, `overlap`, `segment-usage`,
-`spectratype`. Inputs auto-detected; TSV to `-o`/stdout.
+The `vdjtools` typer app. Model: `models`, `generate`, `pgen`. Data: **`convert`** (any format →
+canonical), **`downsample`**, **`filter`** (`--coding`/`--noncoding`/`--min-freq`/`--v`/`--j`),
+**`pool`** (`--join`). Analytics: `diversity`, `overlap`, `segment-usage`, `spectratype`.
+Longitudinal/enrichment: `dynamics`, `tcrnet`, `alice`. Inputs auto-detected; **`-o` is
+format-aware** — `.parquet`/`.pq` → Parquet, else TSV (or stdout). The per-sample analytics
+commands take **`--threads N`** (parallel over samples, `map_samples`) and **`--cohort DIR`** (one
+streamed pass over a pre-ingested `scan_cohort` Parquet dataset).
+
+### Notebooks (`pip install "vdjtools[examples]"` → `marimo edit notebooks/<name>.py`)
+`model_explorer` (recombination Bayes net), `biomarker_explorer` (Emerson association /
+co-occurrence), **`vaccination_tracking`** (YFV/flu/TBEV clonotype dynamics + recapture model),
+**`aging`** (cohort-streaming diversity / clone-size / spectratype vs age), **`ankspond_motif`**
+(AS27 TRBV9 motif, disease-vs-B27-carriage). Local-first data (`./` → `~/hf/` → HuggingFace).
 
 ## Conventions
 - **arda germline is the single source of germline truth** — resolve V/D/J germline + CDR3 anchors

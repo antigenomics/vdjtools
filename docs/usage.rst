@@ -167,6 +167,56 @@ the paper's own FMBA covid TCRβ cohort (deep repertoires, ~3.3M reads/sample): 
 explained by batch drops from η²≈0.11 to ≈0.002 while the grand-mean usage and per-sample read
 depth are preserved.
 
+Longitudinal dynamics
+---------------------
+
+:mod:`vdjtools.dynamics` compares two samples of the **same donor** — which clonotypes changed
+between timepoints. Depth is handled *per pair* via a two-step effective sample size (never by
+normalising a whole cohort to a common depth, which is not defined here):
+
+.. code-block:: python
+
+   from vdjtools import dynamics, preprocess
+
+   day0 = demo_sample(seed=1)
+   day15 = preprocess.downsample(day0, day0["duplicate_count"].sum() // 2, seed=7)   # a later draw
+
+   # paired within-donor test: every clonotype -> emergent / expanded / persistent /
+   # contracted / vanishing (or `untested` when the pair is too shallow to call it)
+   tracked = dynamics.test_pair(day0, day15)
+   tracked["dynamics"].value_counts()
+
+   # group near-identical CDR3s (a 1-Hamming ball, V/J-pinned) BEFORE testing, for power on
+   # convergent expansions — scope "1,0,0,1" = 1 substitution, "1,1,1,1" = 1 edit (Levenshtein)
+   grouped = dynamics.test_metaclonotypes(day0, day15, scope="1,0,0,1")
+
+   # complementary edgeR NB-exact caller (TMM + qCML common dispersion) -> log2FC + p
+   called = dynamics.expansion_test(day0, day15)
+
+The **recapture model** (Pavlova, Zvyagin & Shugay, *Front Immunol* 2024) asks a different
+question: do *particular* clonotypes reappear more than the background rate, and does that depend
+on clone size? Clonotypes are binned by size (singleton / doubleton / tripleton / large), each
+bin's recapture fraction gets a ``Beta`` credible interval, and a log-linear model tests the
+**group** effect:
+
+.. code-block:: python
+
+   import polars as pl
+
+   # tag the clonotypes of interest (e.g. antigen-specific) vs the rest, in the PRE sample
+   specific = set(day0["junction_aa"].head(20))
+   pre = day0.with_columns(
+       pl.when(pl.col("junction_aa").is_in(specific)).then(pl.lit("specific"))
+         .otherwise(pl.lit("background")).alias("group"))
+
+   rates = dynamics.capture_rates(pre, day15, group_col="group")   # recapture per (group, size)
+   dynamics.capture_test(rates)                                    # log-linear group effect + p
+
+Across several donors, concatenate the per-donor ``capture_rates(..., donor=<id>)`` frames and use
+:func:`~vdjtools.dynamics.capture_paired_test` for the per-size-class paired t-test. The full
+worked example — sunken/alluvial tracking plots, a VDJdb overlay, and the capture ribbons — is
+``marimo edit notebooks/vaccination_tracking.py``.
+
 Biomarker association
 ---------------------
 
@@ -292,6 +342,14 @@ Explore the whole screen interactively — condition (CMV / HLA-allele / CMH), t
 scope, a live VDJdb overlay, and a co-occurrence panel — with
 ``marimo edit notebooks/biomarker_explorer.py`` (Emerson HIP via HuggingFace).
 
+The longitudinal and cohort workflows have their own interactive notebooks (``pip install
+"vdjtools[examples]"``): ``marimo edit notebooks/vaccination_tracking.py`` (clonotype tracking +
+the :mod:`vdjtools.dynamics` recapture model across yellow-fever / influenza / TBE vaccination
+time courses), ``notebooks/aging.py`` (cohort-streaming diversity / clone-size / spectratype
+across the Britanova "Cord Blood to Centenarians" cohort), and ``notebooks/ankspond_motif.py``
+(the ankylosing-spondylitis TRBV9 "AS27" motif — disease vs HLA-B27 carriage). Each prefers a
+local ``~/hf/`` or ``./`` data copy, else fetches from HuggingFace.
+
 Single-cell
 -----------
 
@@ -338,17 +396,30 @@ surface.
 Command line
 ------------
 
-Every workflow above has a CLI counterpart; inputs are auto-detected and results are written
-as TSV to ``-o`` (or stdout):
+Every workflow above has a CLI counterpart; inputs are auto-detected and results are written to
+``-o`` — TSV, or **Parquet when the path ends in** ``.parquet`` / ``.pq`` — or to stdout:
 
 .. code-block:: bash
 
    vdjtools models                                # list the bundled models
    vdjtools generate -m TRB -n 1000 -o gen.tsv    # (cf. olga-generate_sequences)
    vdjtools pgen seqs.tsv -m TRB -o pgen.tsv      # (cf. olga-compute_pgen)
+
+   # data: convert any format to the canonical table, and preprocess
+   vdjtools convert mixcr.txt.gz -o clones.parquet    # → canonical Parquet (or .tsv)
+   vdjtools filter clones.parquet --coding --min-freq 1e-4 -o coding.tsv
+   vdjtools downsample clones.parquet 100000 -o ds.tsv
+   vdjtools pool s1.tsv s2.tsv --join --min-samples 2 -o joint.tsv
+
+   # analytics (sample files, or -m metadata + --base-dir; parallel with -t, or stream --cohort)
    vdjtools diversity     sampleA.tsv sampleB.tsv -o diversity.tsv
    vdjtools overlap       *.tsv -o overlap.tsv
    vdjtools segment-usage *.tsv --segment v -o usage.tsv
-   vdjtools spectratype   *.tsv -o spectra.tsv
+   vdjtools spectratype   -m metadata.txt --base-dir samples/ -t 8 -o spectra.tsv
+   vdjtools diversity     --cohort cohort_parquet/ -o div.tsv
+
+   # longitudinal + enrichment
+   vdjtools dynamics day0.tsv day15.tsv -o tracked.tsv    # paired within-donor expansion test
+   vdjtools tcrnet   sample.tsv -o net.tsv                 # neighbourhood enrichment (control cohort)
 
 Run ``vdjtools <command> --help`` for options.

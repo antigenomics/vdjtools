@@ -15,5 +15,5 @@ never pays the cost of the compiled extension or heavy optional dependencies unt
 feature that needs them is used.
 """
 
-__version__ = "2.9.0"
+__version__ = "3.0.0"
 __all__ = ["__version__"]

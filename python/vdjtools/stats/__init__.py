@@ -3,6 +3,7 @@ from .diversity import (
     chao1,
     chao_e,
     d50,
+    diversity_cohort,
     diversity_stats,
     efron_thisted,
     inverse_simpson,
@@ -27,6 +28,7 @@ from .usage import segment_usage, vj_usage
 
 __all__ = [
     "diversity_stats",
+    "diversity_cohort",
     "observed_richness",
     "chao1",
     "chao_e",
