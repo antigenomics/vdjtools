@@ -116,3 +116,44 @@ def test_ambiguous_calls_are_split_fractionally_not_dropped():
     assert sum(p.values()) == pytest.approx(1.0)
     # dropping the ties (the old behaviour) would have given IGHV3-23=1.0 and hidden IGHV3-23D
     assert "IGHV3-23D" in p, "the duplicated-locus paralog was dropped"
+
+
+def test_rescale_transfers_usage_across_protocols():
+    """Cross-protocol transfer: DNA-multiplex usage onto the 5'RACE junction model.
+
+    Our learned models are 5'RACE (isalgo/airr_model_read); OLGA is DNA-multiplex. V/J usage is
+    protocol-dependent, the junction (recombination) model is not — so ``rescale_usage`` must take a
+    DNA-protocol repertoire's usage and keep the 5'RACE deletions/insertions/dinucleotides untouched.
+    Shown on loci both protocols cover; gamma/delta (TRG/TRD) are ours-only (no DNA-based OLGA model),
+    so they are excluded from the cross-protocol comparison.
+    """
+    import numpy as np
+
+    from vdjtools.model.generate import generate
+
+    def gene_usage(m):
+        return {r["g"]: r["p"] for r in
+                m.tables["v_choice"].with_columns(pl.col("v_allele").str.split("*").list.first().alias("g"))
+                .group_by("g").agg(pl.col("p").sum()).iter_rows(named=True)}
+
+    for locus, junction_events in (
+        ("TRB", ["v_3_del", "j_5_del", "d_del", "vd_ins", "dj_ins", "vd_dinucl", "dj_dinucl", "d_gene", "n_d"]),
+        ("IGK", ["v_3_del", "j_5_del", "vj_ins", "vj_dinucl"]),
+    ):
+        race = load_bundled(locus, "learned")            # 5'RACE junction model (our lab)
+        dna = load_bundled(locus, "olga")                # DNA-multiplex usage
+        dna_lib = generate(dna, 12000, seed=1)           # a DNA-protocol repertoire
+        out = rescale_usage(race, dna_lib)
+
+        # the recombination machinery stays the 5'RACE model's, byte for byte
+        for ev in junction_events:
+            assert out.tables[ev].equals(race.tables[ev]), f"{locus} {ev} changed — rescale touched the junction model"
+
+        # ...while V usage has moved to the DNA protocol: closer to DNA than to the 5'RACE original
+        u_out, u_dna, u_race = gene_usage(out), gene_usage(dna), gene_usage(race)
+        genes = sorted(set(u_dna) | set(u_race))
+        a = np.array([u_out.get(g, 0.0) for g in genes])
+        d = np.array([u_dna.get(g, 0.0) for g in genes])
+        r = np.array([u_race.get(g, 0.0) for g in genes])
+        assert np.corrcoef(a, d)[0, 1] > 0.95, f"{locus}: rescaled usage does not match the DNA sample"
+        assert np.corrcoef(a, d)[0, 1] > np.corrcoef(a, r)[0, 1], f"{locus}: usage did not move toward DNA"

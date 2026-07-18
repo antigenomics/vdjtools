@@ -281,6 +281,16 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   default keeps it off (exact-OLGA-Pgen invariant). Result: **0 functional genes zeroed**, Pearson(arda,
   learned) 0.97 (TRB). `test_infer.py::test_align_init_splits_germline_identical_ties`,
   `test_model_loader.py::test_derive_orf_is_opt_in_and_preserves_the_oracle`. Learned models rebuilt (masked, arda-anchored).
+- **DONE full gene coverage** `infer.augment_from_oracle(learned, oracle)` — EM only keeps genes seen
+  producibly, but a user's library may hold genes 5'RACE/this cohort never amplified. The template IS the
+  OLGA oracle (differs only in D/D-D, orthogonal to V/J), so for every functional gene absent from the
+  learned model we transplant its own oracle usage + all child tables it parents (deletion, P(J|V), P(D|J));
+  for genes neither reference carries (OLGA-usage-0, e.g. TRAV11) the germline-nearest oracle gene's profile
+  at a floor. `infer_native` runs it when `gene_prior>0`. Result: **0 functional genes absent** on every
+  locus, model stays generatively complete (`generate` no longer IndexErrors on a restored VJ gene).
+  `rescale_usage` then adapts usage to the user's library — cross-protocol transfer (5'RACE learned ↔ OLGA
+  DNA) pinned by `test_rescale.py::test_rescale_transfers_usage_across_protocols` (TRG/TRD ours-only,
+  excluded). `test_infer.py::test_augment_from_oracle_*`.
 - **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual); the
   `derive_orf` reconstruction covers the ORF-usage case but not full-length stitching.
 

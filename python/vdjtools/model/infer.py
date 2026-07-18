@@ -539,6 +539,70 @@ def _functional_support(template: Model, seg: str) -> set[str]:
     return set(g.filter(pl.col("functional"))[f"{seg}_allele"].to_list())
 
 
+def augment_from_oracle(learned: Model, oracle: Model) -> Model:
+    """Fill functional genes the learned model left at P=0 with the ORACLE's own usage and conditionals.
+
+    A learned model carries only the genes arda saw *producibly* in the training repertoire; a user's
+    library (different protocol/tissue) can be full of genes 5'RACE or this cohort never amplified, or
+    that arda called but the germline can't emit (a source mismatch, or a hard-call tie it lost). The
+    OLGA oracle models every functional gene it knows with a real per-gene usage and deletion profile,
+    and differs from the learned model ONLY in D/D-D handling — orthogonal to V/J gene identity — so its
+    V/J genes transplant cleanly. For each functional (scoreable) gene present in the oracle but absent
+    from the learned model, this copies the oracle's choice mass AND every child table the gene parents
+    (its deletion profile, P(J|V) on a VJ locus, P(D|J) for a J), then renormalizes — so no functional
+    gene is silently missing. Usage is the oracle's here; :func:`~vdjtools.model.rescale.rescale_usage`
+    adapts it to the user's actual library (its cross-protocol job). Idempotent.
+    """
+    from difflib import SequenceMatcher
+
+    tables = dict(learned.tables)
+    for seg in ("v", "j"):
+        acol, choice_ev = f"{seg}_allele", f"{seg}_choice"
+        g = learned.genomic[f"genes_{seg}"]
+        cut = {r[acol]: r["cut_segment"] for r in g.iter_rows(named=True)}
+        by_gene: dict[str, list[str]] = defaultdict(list)
+        for r in g.filter(pl.col("functional")).iter_rows(named=True):
+            by_gene[r["gene"]].append(r[acol])
+        lmass = {r[acol]: r["p"] for r in tables[choice_ev].group_by(acol).agg(pl.col("p").sum()).iter_rows(named=True)}
+        omass = {r[acol]: r["p"] for r in oracle.tables[choice_ev].group_by(acol).agg(pl.col("p").sum()).iter_rows(named=True)}
+        oracle_donors = [a for a in cut if omass.get(a, 0) > 0 and cut.get(a)]
+        if not oracle_donors:
+            continue
+        floor = min(p for p in omass.values() if p > 0) * 0.5      # usage for genes no reference models
+        direct: set[str] = set()          # gene the oracle has -> copy its own alleles verbatim
+        proxy: dict[str, str] = {}        # gene neither has -> rep allele <- germline-nearest oracle allele
+        for alleles in by_gene.values():
+            if any(lmass.get(a, 0) > 0 for a in alleles):          # already present in learned
+                continue
+            own = [a for a in alleles if omass.get(a, 0) > 0 and cut.get(a)]
+            if own:
+                direct |= set(own)
+                continue
+            rep = next((a for a in alleles if a.endswith("*01") and cut.get(a)),
+                       next((a for a in alleles if cut.get(a)), None))
+            if rep is not None:                                    # else: no germline (unscoreable ORF)
+                proxy[rep] = max(oracle_donors, key=lambda b: SequenceMatcher(None, cut[rep], cut[b]).ratio())
+        if not direct and not proxy:
+            continue
+        moved = list(direct) + list(proxy)
+        for ev in list(tables):        # choice table + every child (deletion, P(J|V), P(D|J))
+            if acol not in tables[ev].columns or ev not in oracle.tables or acol not in oracle.tables[ev].columns:
+                continue
+            parts = [tables[ev].filter(~pl.col(acol).is_in(moved))]
+            if direct:                 # oracle carries the gene: copy its rows verbatim (own usage + profile)
+                parts.append(oracle.tables[ev].filter(pl.col(acol).is_in(list(direct))))
+            for rep, donor in proxy.items():   # neither has it: nearest oracle gene's profile, relabelled
+                parts.append(oracle.tables[ev].filter(pl.col(acol) == donor).with_columns(pl.lit(rep).alias(acol)))
+            tables[ev] = pl.concat(parts)
+        nk = normalization_keys(learned.manifest.events[choice_ev])
+        if proxy:                      # proxy genes inherited the donor's usage — override with the floor
+            tables[choice_ev] = tables[choice_ev].with_columns(
+                p=pl.when(pl.col(acol).is_in(list(proxy))).then(floor).otherwise(pl.col("p")))
+        tot = pl.col("p").sum().over(nk) if nk else pl.col("p").sum()
+        tables[choice_ev] = tables[choice_ev].with_columns(p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
+    return Model(manifest=learned.manifest, tables=tables, genomic=learned.genomic)
+
+
 def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0,
                   gene_prior=0.0) -> dict[str, pl.DataFrame]:
     vdj = template.chain_type == "VDJ"
@@ -718,4 +782,11 @@ def infer_native(
         if it > 0 and tv < tol:
             report.converged = True
             break
+    # Completion pass: EM only keeps genes whose CDR3s were producibly observed, so functional genes
+    # arda never saw (or saw but couldn't emit) end at P=0 — yet a user's library may be full of them.
+    # ``template`` is the OLGA oracle (from_olga seed), differing only in D/D-D, so transplant its own
+    # usage + conditionals for every functional gene the learned model is missing. Only in the prior
+    # mode (``gene_prior > 0``), i.e. "keep every real gene reachable".
+    if gene_prior > 0:
+        model = augment_from_oracle(model, template)
     return model, report
