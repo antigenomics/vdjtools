@@ -413,7 +413,7 @@ VJ-usage batch-effect correction.
 Repertoire dynamics (``vdjtools.dynamics``)
 -------------------------------------------
 
-Paired **within-donor** clonotype testing across timepoints (Ayestaran 2024): per-pair effective sample size, deterministic downscale, two-tailed Fisher, and a five-way classification into emergent / expanded / persistent / contracted / vanishing. The sibling of ``vdjtools.biomarker`` — that tests incidence across *subjects*, this tests frequency across *timepoints* — and the complement of ``vdjtools.overlap.tcrnet`` / ``alice``, which measure breadth where this measures magnitude.
+Longitudinal **within-donor** clonotype testing across timepoints. Three complementary tools: a per-clonotype paired test (Ayestaran 2024) with per-pair effective sample size, deterministic downscale, two-tailed Fisher, and a five-way classification (emergent / expanded / persistent / contracted / vanishing); the same test on 1-Hamming / 1-Levenshtein CDR3 metaclonotype groups; and the VDJtrack size-bucket recapture model with an edgeR NB-exact caller (Pavlova, Zvyagin & Shugay 2024). The sibling of ``vdjtools.biomarker`` — that tests incidence across *subjects*, this tests frequency across *timepoints*.
 
 ``vdjtools.dynamics.paired``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -421,6 +421,36 @@ Paired **within-donor** clonotype testing across timepoints (Ayestaran 2024): pe
 Per-pair ``N_eff`` estimation and the paired clonotype test.
 
 .. automodule:: vdjtools.dynamics.paired
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.dynamics.groups``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Metaclonotype (1-Hamming / 1-Levenshtein CDR3 ball) grouping before the paired test.
+
+.. automodule:: vdjtools.dynamics.groups
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.dynamics.capture``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The VDJtrack recapture model: size buckets, Poisson capture, Beta credible intervals, log-linear group test.
+
+.. automodule:: vdjtools.dynamics.capture
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.dynamics.expansion``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The edgeR-style negative-binomial exact expansion caller (TMM + qCML + beta-binomial exact test).
+
+.. automodule:: vdjtools.dynamics.expansion
    :members:
    :undoc-members:
    :show-inheritance:

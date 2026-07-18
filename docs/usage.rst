@@ -292,6 +292,14 @@ Explore the whole screen interactively — condition (CMV / HLA-allele / CMH), t
 scope, a live VDJdb overlay, and a co-occurrence panel — with
 ``marimo edit notebooks/biomarker_explorer.py`` (Emerson HIP via HuggingFace).
 
+The longitudinal and cohort workflows have their own interactive notebooks (``pip install
+"vdjtools[examples]"``): ``marimo edit notebooks/vaccination_tracking.py`` (clonotype tracking +
+the :mod:`vdjtools.dynamics` recapture model across yellow-fever / influenza / TBE vaccination
+time courses), ``notebooks/aging.py`` (cohort-streaming diversity / clone-size / spectratype
+across the Britanova "Cord Blood to Centenarians" cohort), and ``notebooks/ankspond_motif.py``
+(the ankylosing-spondylitis TRBV9 "AS27" motif — disease vs HLA-B27 carriage). Each prefers a
+local ``~/hf/`` or ``./`` data copy, else fetches from HuggingFace.
+
 Single-cell
 -----------
 

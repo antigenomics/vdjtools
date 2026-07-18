@@ -110,6 +110,14 @@ pip install "vdjtools[examples]"
 marimo edit notebooks/model_explorer.py
 ```
 
+Interactive **marimo** notebooks (data auto-loads from HuggingFace, or a local `~/hf/` copy):
+
+- `notebooks/vaccination_tracking.py` — clonotype **tracking** + the recapture model across
+  yellow-fever / influenza / TBE vaccination time courses (`vdjtools.dynamics`).
+- `notebooks/aging.py` — cohort-**streaming** diversity, clone-size and spectratype vs age.
+- `notebooks/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 **"AS27" motif**: disease vs HLA-B27 carriage.
+- `notebooks/biomarker_explorer.py` — Emerson public-TCR association + co-occurrence.
+
 ## Command line
 
 `pip install vdjtools` installs the `vdjtools` command — the model engine (OLGA/IGoR-style) and the
