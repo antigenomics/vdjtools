@@ -207,6 +207,12 @@ def permutation_p(present: np.ndarray, labels: np.ndarray, *, n_perm: int = 1000
     fixed, so the null is exactly the hypergeometric one — this converges to
     :func:`fisher_p` as ``n_perm → ∞`` and is a robust check for sparse tables. Uses the
     add-one estimator ``(1 + #exceed)/(1 + n_perm)``. Seeded → reproducible.
+
+    A permutation's counts are ``L @ present`` with ``L`` the 0/1 permuted-label matrix, so a
+    chunk of permutations is one BLAS call instead of ``n_perm`` fancy-index copies (~15x). The
+    chunk still draws ``rng.permutation(n_sub)`` once per permutation in the original order, so
+    p-values are unchanged for a given seed; and summing 0/1 to an integer <= n_sub is exact in
+    float64 whatever order BLAS accumulates in.
     """
     if alternative not in ("greater", "less"):
         raise ValueError("permutation supports 'greater' or 'less'")
@@ -214,16 +220,20 @@ def permutation_p(present: np.ndarray, labels: np.ndarray, *, n_perm: int = 1000
     labels = np.asarray(labels, dtype=bool)
     a_obs = present[labels].sum(axis=0)                        # per-feature condition+ count
     rng = np.random.default_rng(seed)
-    n_sub = present.shape[0]
+    n_sub, n_feat = present.shape
     n_pos = int(labels.sum())
-    exceed = np.zeros(present.shape[1], dtype=np.int64)
-    for _ in range(n_perm):
-        idx = rng.permutation(n_sub)[:n_pos]
-        a_perm = present[idx].sum(axis=0)
-        if alternative == "greater":
-            exceed += a_perm >= a_obs
-        else:
-            exceed += a_perm <= a_obs
+    exceed = np.zeros(n_feat, dtype=np.int64)
+    # Bound the (chunk x n_feat) intermediate to ~64 MB: at 100k features a single full
+    # (n_perm x n_feat) matmul would allocate ~800 MB.
+    chunk = max(1, min(n_perm, 8_000_000 // max(n_feat, 1)))
+    for start in range(0, n_perm, chunk):
+        k = min(chunk, n_perm - start)
+        L = np.zeros((k, n_sub))
+        for r in range(k):
+            L[r, rng.permutation(n_sub)[:n_pos]] = 1.0
+        a_perm = L @ present                                   # [k, n_feat]
+        exceed += ((a_perm >= a_obs) if alternative == "greater"
+                   else (a_perm <= a_obs)).sum(axis=0)
     return (1.0 + exceed) / (1.0 + n_perm)
 
 

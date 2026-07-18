@@ -143,8 +143,11 @@ def read_parquet(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataF
             f"Parquet file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {df.columns}"
         )
     df = df.select([pl.col(src).alias(canon) for canon, src in found.items()])
-    df = df.with_columns(_first_call(pl.col(c)) for c in (V_CALL, D_CALL, J_CALL)
-                         if c in df.columns)
+    # Do NOT collapse comma ambiguity here (unlike read_vdjtools, whose legacy single-call format
+    # takes the first token by convention). Parquet is the at-scale storage format for a canonical
+    # frame: read_airr and scan_cohort preserve a tie like "IGHV3-23*01,IGHV3-23D*01" whole, so a
+    # round-trip through write_parquet must too -- otherwise AIRR->parquet->read_parquet silently
+    # drops IGHV3-23D, exactly the ambiguity the model.infer.call_alleles fix exists to keep.
     if COUNT not in df.columns:
         df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
     df = schema.normalize(df, recompute_freq=True)
@@ -211,7 +214,15 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     if COUNT not in df.columns:
         df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
     else:
-        df = df.with_columns(pl.col(COUNT).cast(pl.Int64, strict=False).fill_null(1))
+        # Cast via Float64: the TSV is read as Utf8, and a count of "5000.0" (pandas writes any
+        # integer column that ever held a NaN as float) cannot go straight to Int64 -- strict=False
+        # yields null, and fill_null(1) then silently turns a 5000-read clone into a singleton,
+        # inverting the clonal hierarchy with no error. Float64->Int64 truncates toward zero,
+        # matching io/convert.py::_to_int (int(float(x))). A genuinely unparseable cell still
+        # becomes null -> 1, which is the documented default for a missing count.
+        df = df.with_columns(
+            pl.col(COUNT).cast(pl.Float64, strict=False).cast(pl.Int64, strict=False).fill_null(1)
+        )
 
     # Legacy clonotype identity is (V, J, CDR3nt); junction_aa is kept in the key so
     # files with no nt column still collapse (redundant when nt is present). D and C

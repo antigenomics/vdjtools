@@ -30,7 +30,7 @@ class InferenceReport:
 
     loglik: list[float] = field(default_factory=list)  # mean per-sequence log-Pgen (over scoreable reads)
     n_scoreable: list[int] = field(default_factory=list)
-    gene_tv: list[float] = field(default_factory=list)  # V-usage total-variation vs previous iter
+    gene_tv: list[float] = field(default_factory=list)  # relative log-likelihood change vs previous iter (the convergence signal)
     n_iter: int = 0
     converged: bool = False
 
@@ -40,6 +40,21 @@ def _tv(a: pl.DataFrame, b: pl.DataFrame, keycols: list[str]) -> float:
     da = {tuple(r[:-1]): r[-1] for r in a.select([*keycols, "p"]).iter_rows()}
     db = {tuple(r[:-1]): r[-1] for r in b.select([*keycols, "p"]).iter_rows()}
     return 0.5 * sum(abs(da.get(k, 0.0) - db.get(k, 0.0)) for k in set(da) | set(db))
+
+
+def _loglik_rel(loglik: list[float]) -> float:
+    """Relative change in mean log-likelihood between the last two iterations (``inf`` before iter 1).
+
+    The natural EM convergence signal, and it reflects the WHOLE model (trims/insertions/D-D), not just
+    V usage — which, arda-masked, settles in ~2 iterations while those are still moving. It is usable
+    because the fixes keep the scoreable-read set stable across iterations, so mean log-lik is now
+    monotone (the non-monotonicity that once forced a V-usage criterion is gone). Scale-free, so one
+    ``tol`` works across loci whose absolute log-lik differs (TRA ≈ −19, IGK ≈ −13, TRD ≈ −35).
+    """
+    if len(loglik) < 2:
+        return float("inf")
+    prev, cur = loglik[-2], loglik[-1]
+    return abs(cur - prev) / (abs(prev) + 1e-12)
 
 
 def _insert_markov(seq: str, R: np.ndarray, bias: np.ndarray, *, from_right: bool):
@@ -313,11 +328,25 @@ def _align_init(template: Model, sequences: list[str]) -> dict[str, pl.DataFrame
     vj_votes: dict[tuple, float] = defaultdict(float)
     for s in sequences:
         s = s.upper()
-        bv = max(prep.functional_v, key=lambda v: _common_prefix(prep.cut["v"][v], s))
-        bj = max(prep.functional_j, key=lambda j: _common_suffix(prep.cut["j"][j], s))
-        v_votes[bv] += 1.0
-        j_votes[bj] += 1.0
-        vj_votes[(bv, bj)] += 1.0
+        # Split each read's vote across ALL genes tied for the longest germline match, not the first.
+        # Germline-identical paralogs (TRBV6-2/6-5/6-6, IGKV2-28/2D-28) tie EXACTLY, so a single-winner
+        # vote (Python ``max`` returns the first) hands the whole family to one representative and seeds
+        # the rest at P(V)=0 — which the E-step's ``if pv==0: continue`` then makes an absorbing state
+        # no amount of data escapes. Sharing the tie keeps every indistinguishable sibling reachable.
+        vsc = [(_common_prefix(prep.cut["v"][v], s), v) for v in prep.functional_v]
+        jsc = [(_common_suffix(prep.cut["j"][j], s), j) for j in prep.functional_j]
+        bv_best = max(sc for sc, _ in vsc)
+        bj_best = max(sc for sc, _ in jsc)
+        bvs = [v for sc, v in vsc if sc == bv_best]
+        bjs = [j for sc, j in jsc if sc == bj_best]
+        wv, wj = 1.0 / len(bvs), 1.0 / len(bjs)
+        for v in bvs:
+            v_votes[v] += wv
+        for j in bjs:
+            j_votes[j] += wj
+        for v in bvs:
+            for j in bjs:
+                vj_votes[(v, j)] += wv * wj
 
     events = template.manifest.events
     tables = _uniform_init(template)
@@ -434,12 +463,12 @@ def infer(
 
         new_tables = _mstep(template, counts, nd_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
-        # Converge on marginal stability (V-usage total variation), which is robust to the
-        # changing set of scoreable reads that makes raw mean-log-lik non-monotonic.
-        tv = _tv(model.tables["v_choice"], new_model.tables["v_choice"], ["v_allele"])
-        report.gene_tv.append(tv)
         model = new_model
-        if it > 0 and tv < tol:
+        # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
+        # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
+        rel = _loglik_rel(report.loglik)
+        report.gene_tv.append(rel)
+        if it > 0 and rel < tol:
             report.converged = True
             break
 
@@ -453,19 +482,45 @@ def _gene_to_alleles(model: Model, seg: str) -> dict[str, list[str]]:
     return out
 
 
+def call_alleles(index: dict[str, list[str]], call: str | None) -> list[str]:
+    """All model alleles compatible with one AIRR gene call, ambiguity included.
+
+    Two kinds of ambiguity, and both must widen the mask rather than narrow it:
+
+    * **allele** — a call of ``TRBV20-1*03`` where the truth is ``*01``. Expanding to every model
+      allele of the gene keeps the right scenario reachable.
+    * **comma-separated genes** — AIRR writes an aligner's tie as ``IGHV3-23*01,IGHV3-23D*01``,
+      which means *the aligner could not tell these apart*. Splitting on ``*`` alone keeps only
+      ``IGHV3-23`` and silently DROPS ``IGHV3-23D`` — a different gene on a duplicated locus. If
+      the truth is the dropped one, its scenario is unreachable and EM misattributes the read.
+      Measured on human IGH: 23,176 of 160,324 non-functional clonotypes (14.5%) carry an
+      ambiguous V call; TRB 2.0%; TRA/TRD 0%.
+
+    Returns the union over every gene named, deduplicated and order-stable. Unknown genes
+    contribute nothing; a call naming no known gene yields ``[]``, which the E-step reads as
+    "unrestricted" — the honest degradation, since we know nothing about that read's gene.
+    """
+    if not call:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in call.split(","):
+        for a in index.get(part.strip().split("*")[0], []):
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
+    return out
+
+
 def gene_masks(model: Model, v_calls: list[str], j_calls: list[str]) -> list[tuple]:
     """Build per-read ``(v_genes, j_genes, d_genes)`` E-step masks from V/J gene calls.
 
-    Each call is expanded from an allele to *all* model alleles of its gene, so allele-level
-    ambiguity (a call of ``TRBV20-1*03`` vs the true ``*01``) never excludes the right scenario.
+    Each call is expanded to every model allele of every gene it names — see
+    :func:`call_alleles` for why both allele- and comma-ambiguity must widen the mask.
     D is left unrestricted (few D genes, and D calls on the short D germline are unreliable).
     """
     va, ja = _gene_to_alleles(model, "v"), _gene_to_alleles(model, "j")
-
-    def alleles(m, call):
-        return m.get(call.split("*")[0], []) if call else []
-
-    return [(alleles(va, v), alleles(ja, j), None) for v, j in zip(v_calls, j_calls)]
+    return [(call_alleles(va, v), call_alleles(ja, j), None) for v, j in zip(v_calls, j_calls)]
 
 
 def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> tuple[list[str], list[tuple]]:
@@ -486,7 +541,85 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
 # Native EM: the E-step runs in C++ (_core.estep_batch); the M-step re-normalizes the returned
 # dense soft-count arrays back into polars tables. Same result as pure-Python infer(), much faster.
 
-def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0) -> dict[str, pl.DataFrame]:
+def _functional_support(template: Model, seg: str) -> set[str]:
+    """The allele names the germline says are real and functional for one segment.
+
+    This is the support a ``gene_prior`` is spread over: the germline reference (arda for
+    arda-native models, OLGA's own for ``from_olga`` ones) is the authority on which alleles
+    exist, and EM should never be able to declare one of them impossible.
+    """
+    g = template.genomic.get(f"genes_{seg}")
+    if g is None:
+        return set()
+    return set(g.filter(pl.col("functional"))[f"{seg}_allele"].to_list())
+
+
+def augment_from_oracle(learned: Model, oracle: Model) -> Model:
+    """Fill functional genes the learned model left at P=0 with the ORACLE's own usage and conditionals.
+
+    A learned model carries only the genes arda saw *producibly* in the training repertoire; a user's
+    library (different protocol/tissue) can be full of genes 5'RACE or this cohort never amplified, or
+    that arda called but the germline can't emit (a source mismatch, or a hard-call tie it lost). The
+    OLGA oracle models every functional gene it knows with a real per-gene usage and deletion profile,
+    and differs from the learned model ONLY in D/D-D handling — orthogonal to V/J gene identity — so its
+    V/J genes transplant cleanly. For each functional (scoreable) gene present in the oracle but absent
+    from the learned model, this copies the oracle's choice mass AND every child table the gene parents
+    (its deletion profile, P(J|V) on a VJ locus, P(D|J) for a J), then renormalizes — so no functional
+    gene is silently missing. Usage is the oracle's here; :func:`~vdjtools.model.rescale.rescale_usage`
+    adapts it to the user's actual library (its cross-protocol job). Idempotent.
+    """
+    from difflib import SequenceMatcher
+
+    tables = dict(learned.tables)
+    for seg in ("v", "j"):
+        acol, choice_ev = f"{seg}_allele", f"{seg}_choice"
+        g = learned.genomic[f"genes_{seg}"]
+        cut = {r[acol]: r["cut_segment"] for r in g.iter_rows(named=True)}
+        by_gene: dict[str, list[str]] = defaultdict(list)
+        for r in g.filter(pl.col("functional")).iter_rows(named=True):
+            by_gene[r["gene"]].append(r[acol])
+        lmass = {r[acol]: r["p"] for r in tables[choice_ev].group_by(acol).agg(pl.col("p").sum()).iter_rows(named=True)}
+        omass = {r[acol]: r["p"] for r in oracle.tables[choice_ev].group_by(acol).agg(pl.col("p").sum()).iter_rows(named=True)}
+        oracle_donors = [a for a in cut if omass.get(a, 0) > 0 and cut.get(a)]
+        if not oracle_donors:
+            continue
+        floor = min(p for p in omass.values() if p > 0) * 0.5      # usage for genes no reference models
+        direct: set[str] = set()          # gene the oracle has -> copy its own alleles verbatim
+        proxy: dict[str, str] = {}        # gene neither has -> rep allele <- germline-nearest oracle allele
+        for alleles in by_gene.values():
+            if any(lmass.get(a, 0) > 0 for a in alleles):          # already present in learned
+                continue
+            own = [a for a in alleles if omass.get(a, 0) > 0 and cut.get(a)]
+            if own:
+                direct |= set(own)
+                continue
+            rep = next((a for a in alleles if a.endswith("*01") and cut.get(a)),
+                       next((a for a in alleles if cut.get(a)), None))
+            if rep is not None:                                    # else: no germline (unscoreable ORF)
+                proxy[rep] = max(oracle_donors, key=lambda b: SequenceMatcher(None, cut[rep], cut[b]).ratio())
+        if not direct and not proxy:
+            continue
+        moved = list(direct) + list(proxy)
+        for ev in list(tables):        # choice table + every child (deletion, P(J|V), P(D|J))
+            if acol not in tables[ev].columns or ev not in oracle.tables or acol not in oracle.tables[ev].columns:
+                continue
+            parts = [tables[ev].filter(~pl.col(acol).is_in(moved))]
+            if direct:                 # oracle carries the gene: copy its rows verbatim (own usage + profile)
+                parts.append(oracle.tables[ev].filter(pl.col(acol).is_in(list(direct))))
+            for rep, donor in proxy.items():   # neither has it: nearest oracle gene's profile, relabelled
+                parts.append(oracle.tables[ev].filter(pl.col(acol) == donor).with_columns(pl.lit(rep).alias(acol)))
+            tables[ev] = pl.concat(parts)
+        nk = normalization_keys(learned.manifest.events[choice_ev])
+        if proxy:                      # proxy genes inherited the donor's usage — override with the floor
+            tables[choice_ev] = tables[choice_ev].with_columns(
+                p=pl.when(pl.col(acol).is_in(list(proxy))).then(floor).otherwise(pl.col("p")))
+        tot = pl.col("p").sum().over(nk) if nk else pl.col("p").sum()
+        tables[choice_ev] = tables[choice_ev].with_columns(p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
+    return Model(manifest=learned.manifest, tables=tables, genomic=learned.genomic)
+
+
+def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0,
+                  gene_prior=0.0) -> dict[str, pl.DataFrame]:
     vdj = template.chain_type == "VDJ"
     mp = template.manifest.palindrome_max
     nV, nJ, nD = len(v_alleles), len(j_alleles), len(d_alleles)
@@ -494,6 +627,40 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
     def norm(df, keys):
         tot = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
         return df.with_columns(p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
+
+    def gene_choice(df, allele_col, seg, keys):
+        """Normalize a gene-choice table, optionally with a Dirichlet prior over the germline.
+
+        ``P(V)=0`` is an ABSORBING STATE of this EM: the E-step weights every scenario by P(V),
+        so an allele that reaches zero count can never be re-attributed and is dead for good. One
+        unlucky iteration permanently deletes a real gene. Measured on human TRB: the learned
+        model kept 30 of the 57 V genes OLGA carries, having seen 54 of them in the training data.
+
+        A pseudocount over the germline's FUNCTIONAL alleles fixes it at the source: the germline
+        is the authority on what exists, so nothing real is ever assigned probability zero, while
+        the data still decides the actual usage. Non-functional alleles (pseudogenes/ORFs) are
+        deliberately NOT given mass -- the model cannot score them anyway.
+
+        The prior only protects alleles the data actually ATTRIBUTED reads to (soft count > 0),
+        NOT every functional allele: the E-step commits V-choice to one best-match allele per read,
+        so a functional secondary allele (e.g. TRDV2*03 when arda calls TRDV2*01) gets zero soft
+        count AND zero deletion/insertion counts. Handing it choice mass anyway makes it
+        selectable by the generative sampler while its deletion distribution is all-zero -> the
+        sampler draws it and then has nothing to draw a deletion from (IndexError). Guarding on
+        ``p > 0`` keeps every mass-bearing allele conditionally complete, which is what
+        `absorbing state' protection actually requires: rescue what was seen, do not invent what
+        was not (rescale_usage covers the cross-protocol `give me every gene' case separately).
+
+        ``gene_prior=0.0`` (the default) is byte-identical to plain MLE normalization, so the
+        exact-Pgen invariant on ``from_olga`` models is untouched.
+        """
+        if not gene_prior:
+            return norm(df, keys)
+        ok = _functional_support(template, seg)
+        return norm(df.with_columns(
+            p=pl.col("p") + pl.when(pl.col(allele_col).is_in(list(ok)) & (pl.col("p") > 0))
+                              .then(gene_prior).otherwise(0.0)
+        ), keys)
 
     def deletion(arr, alleles, col, nb, maxpal):
         a = np.repeat(alleles, nb)
@@ -506,11 +673,11 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
                                   "p": list(arr)}), ["from_nt"])
 
     t = {}
-    t["v_choice"] = norm(pl.DataFrame({"v_allele": v_alleles, "p": list(counts.v_choice)}), [])
+    t["v_choice"] = gene_choice(pl.DataFrame({"v_allele": v_alleles, "p": list(counts.v_choice)}), "v_allele", "v", [])
     t["v_3_del"] = deletion(counts.v_3_del, v_alleles, "v_allele", nbins["v"], mp["v_3"])
     t["j_5_del"] = deletion(counts.j_5_del, j_alleles, "j_allele", nbins["j"], mp["j_5"])
     if vdj:
-        t["j_choice"] = norm(pl.DataFrame({"j_allele": j_alleles, "p": list(counts.j_choice)}), [])
+        t["j_choice"] = gene_choice(pl.DataFrame({"j_allele": j_alleles, "p": list(counts.j_choice)}), "j_allele", "j", [])
         t["d_gene"] = norm(pl.DataFrame({
             "j_allele": np.repeat(j_alleles, nD), "d_allele": np.tile(d_alleles, nJ),
             "p": list(counts.d_gene)}), ["j_allele"])
@@ -563,11 +730,19 @@ def infer_native(
     p_nd2_init: float = 0.02,
     dd_allowed: list | None = None,
     nd_prior: float = 0.0,
+    gene_prior: float = 0.0,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
-    ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior``). Learns tandem-D (``n_D=2``) by
+    ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior`` / ``gene_prior``).
+
+    ``gene_prior`` is a Dirichlet pseudocount spread over the germline's **functional** V/J
+    alleles in each M-step. ``P(V)=0`` is an absorbing state of this EM — the E-step weights
+    scenarios by P(V), so a zeroed allele can never be re-attributed — and on real data that
+    silently deletes real genes for good (human TRB: 30 of 57 V genes survived unregularized).
+    The germline says which alleles exist; the prior keeps all of them reachable and lets the
+    data set the usage. ``0.0`` (default) is byte-identical to plain MLE. Learns tandem-D (``n_D=2``) by
     default on the D-bearing loci: the native E-step accumulates the second-D soft counts via a
     factorized forward/backward pass, read-parallelized across cores.
     """
@@ -605,15 +780,30 @@ def infer_native(
         pm, _, _ = pack(model)
         counts = make_counts(pm)
         ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, 0, ddflags)
-        report.loglik.append(ll)
+        # Report the per-sequence MEAN, matching infer() (line ~431) -- estep_batch returns the
+        # summed log-likelihood, and appending it raw made infer_native's loglik differ from
+        # infer's by a factor of n (the two are documented as "same result"). Denominator is the
+        # input read count; n_scoreable is populated so the sum can be recovered if needed.
+        n = len(seqs_enc)
+        report.loglik.append(ll / n if n else float("-inf"))
+        report.n_scoreable.append(n)
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
-        new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior)
+        new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior, gene_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
-        tv = _tv(model.tables["v_choice"], new_model.tables["v_choice"], ["v_allele"])
-        report.gene_tv.append(tv)
         report.n_iter = it + 1
         model = new_model
-        if it > 0 and tv < tol:
+        # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
+        # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
+        rel = _loglik_rel(report.loglik)
+        report.gene_tv.append(rel)
+        if it > 0 and rel < tol:
             report.converged = True
             break
+    # Completion pass: EM only keeps genes whose CDR3s were producibly observed, so functional genes
+    # arda never saw (or saw but couldn't emit) end at P=0 — yet a user's library may be full of them.
+    # ``template`` is the OLGA oracle (from_olga seed), differing only in D/D-D, so transplant its own
+    # usage + conditionals for every functional gene the learned model is missing. Only in the prior
+    # mode (``gene_prior > 0``), i.e. "keep every real gene reachable".
+    if gene_prior > 0:
+        model = augment_from_oracle(model, template)
     return model, report

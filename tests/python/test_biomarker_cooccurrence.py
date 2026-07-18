@@ -269,3 +269,23 @@ def test_cooccurrence_is_reproducible_across_runs():
 def test_alternative_is_validated():
     with pytest.raises(ValueError, match="alternative must be"):
         cooccurrence(_paired_cohort(), alternative="nope")
+
+
+def test_bincount_is_exact_vs_int64_matmul():
+    """The BLAS route must be bitwise-identical to the int64 matmul it replaced.
+
+    Entries are dot products of 0/1 over n_universe subjects, so they are integers well under
+    2**53 and float64 carries them exactly. Pin that, since the whole reason to route through
+    float64 is speed and a silent rounding would be a wrong biomarker count.
+    """
+    from vdjtools.biomarker.cooccurrence import _bincount
+
+    rng = np.random.default_rng(0)
+    for n_sub, n_feat, p in ((572, 200, 0.11), (50, 33, 0.5), (7, 3, 1.0)):
+        m_a = rng.random((n_sub, n_feat)) < p
+        m_b = rng.random((n_sub, n_feat)) < p
+        got = _bincount(m_a, m_b)
+        want = m_a.T.astype(np.int64) @ m_b.astype(np.int64)
+        assert np.array_equal(got, want)
+        assert got.dtype == want.dtype
+        assert got.max() <= n_sub                      # the bound the exactness argument rests on

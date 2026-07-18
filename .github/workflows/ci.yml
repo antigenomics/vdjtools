@@ -37,6 +37,18 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install package (compiles the _core C++ extension)
-        run: pip install -e ".[test]"
+        # oracle/overlap/sc are pure-pip and gate the tests that matter most: [oracle] pulls olga,
+        # without which the entire "native Pgen == OLGA exactly on all 7 loci" suite (9 files) is
+        # importorskip'd -- i.e. the library's central correctness claim never runs in CI, which is
+        # how a collapsed model once shipped green. [overlap]=sklearn, [sc]=anndata un-skip more.
+        # arda/vdjmatch/seqtree are base deps and install here; only the arda-annotate tests that
+        # need the mmseqs2 *binary* (not on CI) and the huggingface_hub tests (no data access) skip.
+        run: pip install -e ".[test,oracle,overlap,sc]"
       - name: Test
         run: pytest tests/python -q
+      - name: Assert the OLGA oracle suite actually ran (guard against silent skip)
+        # If olga stops importing, the suite would silently skip and CI would still be green. Fail
+        # loudly instead: at least one olga-gated test must be collected and not skipped.
+        run: |
+          python -c "import olga.load_model" || { echo 'olga did not install; oracle suite would skip'; exit 1; }
+          pytest tests/python/test_pgen_nt.py -q --co >/dev/null

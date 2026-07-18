@@ -254,8 +254,16 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   summation order dominates — absolute agreement ~1e-30; `test_pgen_nt` proves exactness on all 7 loci.
 - **DONE bundled models + loader** `model/bundled.py` (`load_bundled(locus, source)`, `list_bundled`) —
   ship all 7 loci × {`olga`, `learned`} in the wheel (`model/_bundled/`, ~1 MB; scikit-build-core packs
-  them automatically). `learned` = native EM on real HF out-of-frame reads (`appendix/build_bundled_models.py`,
-  2k clonotypes/locus, held-out LL improves on every locus).
+  them automatically). `learned` = native EM on the FULL real HF **non-functional** read set —
+  out-of-frame AND stop-codon, since both escaped selection and keeping only out-of-frame conditions
+  the training set on junction length mod 3 (`appendix/build_bundled_models.py`; **no cap, no
+  subsampling** — every clonotype surviving the germline filter, and the printed `n_used == n_clono`
+  is the check). ⚠ The old *"2k clonotypes/locus, held-out LL improves on every locus"* was wrong
+  twice: the cap was real, and the LL was the EM's **own training objective**, which EM increases
+  monotonically by construction — it validated nothing. Real held-out + oracle comparison:
+  `appendix/compare_models.py`. The bundled **`olga`** models come from the repo's own
+  `tests/python/fixtures/olga/default_models` (all 7 human loci; pip olga ships only 5 and no
+  TRG/TRD — those two trace to mirpy `legacy-v2` commit aeccd75, verified byte-identical).
 - **DONE arda-anchored D-D learning** — unregularized D-D EM over-attributes tandems on real data
   (identifiability; TRB→0.28). Two regularizers, both native==Python exact: **`dd_allowed`** per-read gate
   (a read may be n_D=2 only where arda called a `d2_call`) and **`nd_prior`** Dirichlet single-D pseudocount.
@@ -263,7 +271,35 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   D-loci: TRB **0.000**, TRD **0.006**, IGH **0.009** (plausible; arda hard-call ~4%). `test_dd_anchor_and_prior…`.
 - **DONE marimo explorer** `notebooks/model_explorer.py` — reactive Bayes-net/entropy/MI/marginal explorer
   over any bundled model (OLGA vs learned); `[examples]` extra. README/docs/SOURCES updated.
-- **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual).
+- **DONE V-zeroing fix (2 root causes)** — the shipped learned models zeroed 68/89 TRB V alleles; NOT a
+  masking/soft-realign problem (soft realign avalanches mass onto the most permissive germline,
+  IGKV3-20 0.10→0.74 — removed). (1) `infer._align_init` collapsed germline-identical paralogs: `max(...)`
+  takes the first of an exact tie (TRBV6-2/6-5/6-6, IGKV2-28/2D-28 tie identically), seeding the rest at
+  P(V)=0 which the E-step's `if pv==0: continue` makes absorbing — fixed by splitting each read's vote
+  across all tied genes. (2) `io.from_olga(derive_orf=True)` (opt-in, builder-only) reconstructs the CDR3
+  germline OLGA leaves empty for ORF alleles (TRBV23-1, 8.6% of real TRB) from `full[anchor:]`; the oracle
+  default keeps it off (exact-OLGA-Pgen invariant). Result: **0 functional genes zeroed**, Pearson(arda,
+  learned) 0.97 (TRB). `test_infer.py::test_align_init_splits_germline_identical_ties`,
+  `test_model_loader.py::test_derive_orf_is_opt_in_and_preserves_the_oracle`. Learned models rebuilt (masked, arda-anchored).
+- **DONE full gene coverage** `infer.augment_from_oracle(learned, oracle)` — EM only keeps genes seen
+  producibly, but a user's library may hold genes 5'RACE/this cohort never amplified. The template IS the
+  OLGA oracle (differs only in D/D-D, orthogonal to V/J), so for every functional gene absent from the
+  learned model we transplant its own oracle usage + all child tables it parents (deletion, P(J|V), P(D|J));
+  for genes neither reference carries (OLGA-usage-0, e.g. TRAV11) the germline-nearest oracle gene's profile
+  at a floor. `infer_native` runs it when `gene_prior>0`. Result: **0 functional genes absent** on every
+  locus, model stays generatively complete (`generate` no longer IndexErrors on a restored VJ gene).
+  `rescale_usage` then adapts usage to the user's library — cross-protocol transfer (5'RACE learned ↔ OLGA
+  DNA) pinned by `test_rescale.py::test_rescale_transfers_usage_across_protocols` (TRG/TRD ours-only,
+  excluded). `test_infer.py::test_augment_from_oracle_*`.
+- **DONE rebuild (`f5ac45b`, `feature/model-collapse`)** — all 7 `learned` models regenerated on the full
+  non-functional read set with the three fixes above + convergence EM (stop on relative log-lik, `26607d2`;
+  IGH converged at 9 iters, IGL at the 12-iter cap). Verified **0 functional V and J genes absent on every
+  locus** (IGH 74 V vs the raw OLGA oracle's 49). Per-locus clonotypes/iters/coverage in the commit body;
+  arda-anchored P(n_D=2) all near zero (IGH 3.6e-4, TRB 8.5e-5, TRD 1.1e-2). IGH is the cost outlier — ~35 D
+  genes, ~half its reads lack an arda D call → full 35-gene single-D enumeration every E-step → 4.1 h; the
+  other six run in seconds–minutes. Ready to merge to `dev` for release.
+- **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual); the
+  `derive_orf` reconstruction covers the ORF-usage case but not full-length stitching.
 
 **AS/B27 motif campaign — `feature/as-b27-motif`** (`~/vcs/projects/2026-vdjtools-benchmark/bench/bm_ankspond.py`, runs locally in
 ~27 s; HF `isalgo/airr_ankspond`, 60 donors). Reproduces Komech 2018's TRBV9/TRBJ2-3 motif and

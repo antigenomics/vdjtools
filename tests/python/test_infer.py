@@ -88,6 +88,80 @@ def test_gene_masks():
     assert masks[0][2] is None  # D is left unrestricted
 
 
+def test_align_init_splits_germline_identical_ties():
+    """The alignment vote must be SHARED across germline-identical genes, never won outright by one.
+
+    Paralogs with a byte-identical ``cut_segment`` (TRBV6-2/6-5/6-6, IGKV2-28/2D-28) tie exactly on
+    the longest-germline-match vote. A single-winner vote (``max`` returns the first) seeds every
+    sibling but one at P(V)=0, and the E-step's ``if pv==0: continue`` makes that an absorbing state —
+    so a gene with thousands of aligned reads (TRBV6-6, 5.7% of real TRB) was zeroed for good. Here a
+    read whose V-portion is the shared germline must seed *every* functional sibling, not just one.
+    """
+    from vdjtools.model.infer import _align_init
+    from vdjtools.model.pgen import prepare
+
+    m = from_olga(TRB, locus="TRB")
+    prep = prepare(m)
+    cutmap: dict[str, list[str]] = collections.defaultdict(list)
+    for a in prep.functional_v:
+        cutmap[prep.cut["v"][a]].append(a)
+    fam = cutmap[prep.cut["v"]["TRBV6-2*01"]]                 # functional alleles sharing 6-2's germline
+    fam_genes = sorted({a.split("*")[0] for a in fam})
+    assert len(fam_genes) >= 2, "expected a germline-identical TRBV6 family"
+
+    jcut = prep.cut["j"][prep.functional_j[0]]
+    read = prep.cut["v"]["TRBV6-2*01"] + "GGGCCC" + jcut       # V germline + insert + J germline
+    tabs = _align_init(m, [read] * 10)
+    vg: dict[str, float] = collections.defaultdict(float)
+    for a, p in zip(tabs["v_choice"]["v_allele"], tabs["v_choice"]["p"]):
+        vg[a.split("*")[0]] += p
+    missing = [g for g in fam_genes if vg.get(g, 0.0) == 0.0]
+    assert not missing, f"_align_init zeroed germline-identical siblings (absorbing-state bug): {missing}"
+
+
+def test_augment_from_oracle_restores_absent_genes_and_stays_generative():
+    """A functional gene the learned model left at P=0 is transplanted from the oracle, not left absent.
+
+    EM keeps only genes producibly observed in the training repertoire, so a functional gene arda never
+    saw (or saw but couldn't emit) ends at P=0 with empty child tables — yet a user's library may be full
+    of it. ``augment_from_oracle`` copies the ORACLE's own usage AND every child table the gene parents
+    (deletion AND, on a VJ locus, its P(J|V) — deletion alone leaves an empty child and crashes the
+    sampler), keeping the model valid and generatively complete. Genes present in the germline but not in
+    the oracle (unscoreable ORF) stay absent.
+    """
+    import polars as pl
+
+    from vdjtools.model import Model
+    from vdjtools.model.generate import generate
+    from vdjtools.model.infer import augment_from_oracle
+
+    oracle = from_olga(TRA, locus="TRA", derive_orf=True)
+    victim = "TRAV18"                                    # zero it out to simulate an absent gene
+    zero_v = pl.col("v_allele").str.starts_with(victim + "*")
+    tables = dict(oracle.tables)
+    tables["v_choice"] = oracle.tables["v_choice"].with_columns(p=pl.when(zero_v).then(0.0).otherwise(pl.col("p")))
+    tables["v_choice"] = tables["v_choice"].with_columns(p=pl.col("p") / pl.col("p").sum())
+    tables["v_3_del"] = oracle.tables["v_3_del"].with_columns(p=pl.when(zero_v).then(0.0).otherwise(pl.col("p")))
+    tables["j_choice"] = oracle.tables["j_choice"].with_columns(p=pl.when(zero_v).then(0.0).otherwise(pl.col("p")))
+    learned = Model(manifest=oracle.manifest, tables=tables, genomic=oracle.genomic)
+    assert learned.tables["v_choice"].filter(zero_v)["p"].sum() == 0.0
+
+    done = augment_from_oracle(learned, oracle)
+    done.validate()                                       # P(J|V) still sums to 1 per V
+    assert done.tables["v_choice"].filter(zero_v)["p"].sum() > 0, "absent gene left at 0"
+    assert done.tables["v_3_del"].filter(zero_v & (pl.col("p") > 0)).height > 0, "no deletion profile transplanted"
+    # force the restored gene's usage high, then it MUST be sampled without crashing (empty P(J|V) -> IndexError pre-fix)
+    forced = dict(done.tables)
+    forced["v_choice"] = done.tables["v_choice"].with_columns(p=pl.when(zero_v).then(10.0).otherwise(pl.col("p")))
+    forced["v_choice"] = forced["v_choice"].with_columns(p=pl.col("p") / pl.col("p").sum())
+    forced_m = Model(manifest=done.manifest, tables=forced, genomic=done.genomic)
+    n = generate(forced_m, 4000, seed=0).filter(pl.col("v_call").str.starts_with(victim)).height
+    assert n > 0, "restored gene never sampled"
+    # idempotent: a second pass changes nothing
+    again = augment_from_oracle(done, oracle)
+    assert again.tables["v_choice"].equals(done.tables["v_choice"])
+
+
 @pytest.mark.slow
 def test_vdj_estep_accumulates():
     """Cover the VDJ EM soft-count path (_accum_vdj: D-gene / delD / VD+DJ insertion counts).

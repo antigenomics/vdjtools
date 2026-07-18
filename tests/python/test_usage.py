@@ -42,3 +42,35 @@ def test_vj_usage_pairs():
     assert pairs[("TRBV20-1", "TRBJ1-1")] == 1
     assert pairs[("TRBV20-1", "TRBJ2-1")] == 1
     assert "locus" in vj.columns
+
+
+def test_strip_allele_never_drops_a_gene_from_a_tie():
+    """A comma-ambiguous call keeps every distinct gene; a same-gene allele tie collapses to one.
+
+    Regression: the old greedy `\\*.*$` matched from the first `*` to end and silently dropped
+    IGHV3-23D from "IGHV3-23*01,IGHV3-23D*01", so it reported zero usage cohort-wide.
+    """
+    from vdjtools.io.schema import strip_allele
+
+    df = pl.DataFrame({"g": ["TRBV12-3*01", "IGHV3-23*01,IGHV3-23D*01",
+                             "IGHV1-2*02,IGHV1-2*04", "TRBV20-1", None]})
+    out = df.select(strip_allele(pl.col("g")).alias("g"))["g"].to_list()
+    assert out[0] == "TRBV12-3"
+    assert out[1] == "IGHV3-23,IGHV3-23D"          # both genes kept
+    assert out[2] == "IGHV1-2"                      # same-gene allele tie -> single gene
+    assert out[3] == "TRBV20-1"
+    assert out[4] is None
+
+
+def test_segment_usage_counts_the_second_gene_of_a_tie():
+    """IGHV3-23D must not vanish from segment usage when it appears only in ties."""
+    from vdjtools.stats import segment_usage
+
+    df = pl.DataFrame({
+        "v_call": ["IGHV3-23*01,IGHV3-23D*01"] * 3 + ["IGHV1-2*02"] * 2,
+        "j_call": ["IGHJ4*02"] * 5, "junction_aa": [f"CAS{i}F" for i in range(5)],
+        "junction_nt": ["ACG"] * 5, "duplicate_count": [1] * 5, "frequency": [0.2] * 5,
+    })
+    u = segment_usage(df, "v", weight="unique")
+    genes = set(u["v_call"].to_list())
+    assert any("IGHV3-23D" in g for g in genes), f"IGHV3-23D dropped from usage: {genes}"

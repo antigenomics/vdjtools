@@ -3,7 +3,7 @@
 Two model sets, seven human loci each, live under ``vdjtools/model/_bundled/``:
 
 - ``olga`` — imported from OLGA's default models (the exact-Pgen bootstrap; single-D).
-- ``learned`` — EM-inferred from real out-of-frame reads (HuggingFace), tandem-D on the D-bearing
+- ``learned`` — EM-inferred from real non-functional reads (out-of-frame + stop-codon, HuggingFace), tandem-D on the D-bearing
   loci (IGH/TRD/TRB). These carry a learned ``P(n_D=2)`` and broader trim/insertion distributions
   than the synthetic OLGA models.
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 from importlib.resources import as_file, files
 
 from .io import load_model
+from .collapse import collapse_alleles
 from .model import Model
 
 #: The two shipped model sets.
@@ -23,13 +24,18 @@ SOURCES = ("olga", "learned")
 LOCI = ("TRA", "TRB", "TRG", "TRD", "IGH", "IGK", "IGL")
 
 
-def load_bundled(locus: str, source: str = "olga") -> Model:
+def load_bundled(locus: str, source: str = "olga", *, collapse: bool = True) -> Model:
     """Load a precomputed model shipped with the package (no OLGA/HuggingFace at runtime).
 
     Args:
         locus: One of ``TRA TRB TRG TRD IGH IGK IGL`` (case-insensitive).
         source: ``"olga"`` (OLGA bootstrap, exact Pgen) or ``"learned"`` (EM-inferred from real
-            out-of-frame reads; tandem-D on IGH/TRD/TRB).
+            non-functional reads; tandem-D on IGH/TRD/TRB).
+        collapse: If ``True`` (default), collapse each gene to a single ``*01`` allele via
+            :func:`~vdjtools.model.collapse.collapse_alleles` — the working gene-level resolution,
+            in which Pgen also collapses a clonotype's allele to ``*01`` (short-read aligners cannot
+            resolve alleles reliably, so the suffix is noise). Pass ``collapse=False`` for full
+            allele resolution, e.g. the exact-OLGA-Pgen fidelity check.
 
     Returns:
         The :class:`~vdjtools.model.model.Model`.
@@ -44,7 +50,8 @@ def load_bundled(locus: str, source: str = "olga") -> Model:
     if not root.is_dir():
         raise FileNotFoundError(f"no bundled {source!r} model for locus {locus!r}")
     with as_file(root) as path:
-        return load_model(path)
+        m = load_model(path)
+    return collapse_alleles(m) if collapse else m
 
 
 def list_bundled() -> dict[str, list[str]]:

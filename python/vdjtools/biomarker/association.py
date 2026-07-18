@@ -205,8 +205,18 @@ def _assemble(base: pl.DataFrame, a, b, c, d, present, n_pos, n_neg, tests, alte
             elif t == "chi2":
                 p = stats.chi2_p(a, b, c, d)
             elif perm_present is not None and a.size:
-                p = stats.permutation_p(perm_present, perm_labels, n_perm=n_perm, seed=seed,
-                                        alternative=("less" if alternative == "less" else "greater"))
+                if alternative == "two-sided":
+                    # A real two-sided permutation p (doubling convention), not a silent
+                    # substitution of the upper tail. Same seed -> same permutation draws for
+                    # both tails; 2*min(greater, less) clamped to 1.
+                    pg = stats.permutation_p(perm_present, perm_labels, n_perm=n_perm, seed=seed,
+                                             alternative="greater")
+                    plt = stats.permutation_p(perm_present, perm_labels, n_perm=n_perm, seed=seed,
+                                              alternative="less")
+                    p = np.minimum(1.0, 2.0 * np.minimum(pg, plt))
+                else:
+                    p = stats.permutation_p(perm_present, perm_labels, n_perm=n_perm, seed=seed,
+                                            alternative=alternative)
             else:
                 p = np.zeros(a.size)
             cols["p_value"] = pl.Series(p, dtype=pl.Float64)

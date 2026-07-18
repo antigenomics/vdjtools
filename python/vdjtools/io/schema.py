@@ -117,10 +117,16 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame
     """
     exprs = []
     for col, dtype in SCHEMA.items():
-        if col in df.columns:
-            exprs.append(pl.col(col).cast(dtype, strict=False).alias(col))
-        else:
+        if col not in df.columns:
             exprs.append(pl.lit(None, dtype=dtype).alias(col))
+        elif col == COUNT:
+            # Route the count through Float64: read via the all-Utf8 TSV path, a count of "5000.0"
+            # (pandas float-formats any integer column that once held a NaN) fails a direct
+            # Utf8->Int64 cast, becomes null, and recompute_frequency then reports frequency 0.0
+            # for a real clone. Float64->Int64 truncates toward zero (== io/convert.py::_to_int).
+            exprs.append(pl.col(col).cast(pl.Float64, strict=False).cast(dtype, strict=False).alias(col))
+        else:
+            exprs.append(pl.col(col).cast(dtype, strict=False).alias(col))
     df = df.with_columns(exprs)
     if recompute_freq:
         df = recompute_frequency(df)
@@ -151,13 +157,24 @@ def weight_expr(weight: str) -> pl.Expr:
 
 
 def strip_allele(expr: pl.Expr) -> pl.Expr:
-    """Strip the IMGT allele suffix (``*01``) from a segment-call expression.
+    """Reduce a segment-call expression to gene resolution, ambiguity-safe.
+
+    Strips the IMGT allele suffix from **every** gene an AIRR call names, not just the first. The
+    old ``\\*.*$`` regex matched from the FIRST ``*`` to end of string, so a comma-ambiguous call
+    like ``IGHV3-23*01,IGHV3-23D*01`` collapsed to ``IGHV3-23`` -- silently dropping IGHV3-23D,
+    which then reported zero usage across a whole cohort despite being named in tens of thousands
+    of rows. Genes are de-duplicated after stripping, so an allele-level tie *within* one gene
+    (``IGHV1-2*02,IGHV1-2*04``) correctly collapses to the single unambiguous gene ``IGHV1-2``,
+    while a genuine cross-gene tie stays ``IGHV3-23,IGHV3-23D``.
 
     Args:
         expr: A polars string expression over segment calls.
 
     Returns:
-        The expression with everything from the first ``*`` onward removed
-        (``TRBV12-3*01`` → ``TRBV12-3``); nulls pass through unchanged.
+        Each call reduced to its distinct gene(s), sorted and comma-joined
+        (``TRBV12-3*01`` → ``TRBV12-3``; ``A*01,A*02`` → ``A``; ``A*01,B*01`` → ``A,B``);
+        nulls pass through unchanged.
     """
-    return expr.str.replace(r"\*.*$", "")
+    return (expr.str.split(",")
+            .list.eval(pl.element().str.strip_chars().str.replace(r"\*.*$", ""))
+            .list.unique().list.sort().list.join(","))
