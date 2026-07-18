@@ -291,6 +291,13 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   `rescale_usage` then adapts usage to the user's library — cross-protocol transfer (5'RACE learned ↔ OLGA
   DNA) pinned by `test_rescale.py::test_rescale_transfers_usage_across_protocols` (TRG/TRD ours-only,
   excluded). `test_infer.py::test_augment_from_oracle_*`.
+- **DONE rebuild (`f5ac45b`, `feature/model-collapse`)** — all 7 `learned` models regenerated on the full
+  non-functional read set with the three fixes above + convergence EM (stop on relative log-lik, `26607d2`;
+  IGH converged at 9 iters, IGL at the 12-iter cap). Verified **0 functional V and J genes absent on every
+  locus** (IGH 74 V vs the raw OLGA oracle's 49). Per-locus clonotypes/iters/coverage in the commit body;
+  arda-anchored P(n_D=2) all near zero (IGH 3.6e-4, TRB 8.5e-5, TRD 1.1e-2). IGH is the cost outlier — ~35 D
+  genes, ~half its reads lack an arda D call → full 35-gene single-D enumeration every E-step → 4.1 h; the
+  other six run in seconds–minutes. Ready to merge to `dev` for release.
 - **TODO** arda full-length V/J germline helper still needed for arda-native stitching (P1c residual); the
   `derive_orf` reconstruction covers the ORF-usage case but not full-length stitching.
 
