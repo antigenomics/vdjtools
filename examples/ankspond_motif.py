@@ -3,7 +3,7 @@
 # new/): reproduce the public TRBV9/TRBJ2-3 CDR3 motif (Komech et al. 2018, Rheumatology 57:1097)
 # and settle its confound — B27 is ~26/27 tied to disease, so only the B27-MATCHED contrast
 # (AS/B27+ vs healthy/B27+) can separate disease from carriage. Run with:
-#     marimo edit notebooks/ankspond_motif.py
+#     marimo edit examples/ankspond_motif.py
 import marimo
 
 __generated_with = "0.23.14"

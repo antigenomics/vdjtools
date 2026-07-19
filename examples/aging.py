@@ -4,7 +4,7 @@
 # Parquet scan drives every summary: diversity (diversity_cohort), the clone-size distribution
 # (singleton -> hyperexpanded), CDR3 spectratype and V-gene usage, each computed as a single
 # streamed group_by over the whole cohort. Run with:
-#     marimo edit notebooks/aging.py
+#     marimo edit examples/aging.py
 import marimo
 
 __generated_with = "0.23.14"

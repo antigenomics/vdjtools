@@ -39,7 +39,7 @@ Precomputed models for all 7 human loci ship in the wheel (no OLGA or download n
 
 Matches OLGA's Pgen to machine precision across all 7 loci, adds tandem-D (D-D) support, and
 learns models from your own reads (:func:`vdjtools.model.infer.infer_native`). Explore any model's
-recombination Bayes net interactively with ``marimo edit notebooks/model_explorer.py``.
+recombination Bayes net interactively with ``marimo edit examples/model_explorer.py``.
 
 Command line
 ------------

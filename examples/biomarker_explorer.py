@@ -3,7 +3,7 @@
 # condition (CMV / HLA-A*02 / CMV|HLA-A*02 CMH), a statistical test (Fisher / Chi² / Bayesian
 # BF / log-odds / permutation), and a match scope (CDR3[+V[+J]], exact or 1-mismatch); see the
 # volcano with a live VDJdb-CMV overlay, the top hits, and a same-chain public-TCRβ
-# co-occurrence panel. Run with:  marimo edit notebooks/biomarker_explorer.py
+# co-occurrence panel. Run with:  marimo edit examples/biomarker_explorer.py
 import marimo
 
 __generated_with = "0.23.14"
@@ -74,7 +74,7 @@ def _(mo):
         `metadata.txt` (786 subjects) carries **CMV serostatus** (`+`/`−`/`NA`) and **2-digit
         HLA-A/B typing**. We take a balanced subset and pull just those repertoires
         (`corr/HIP#####.txt.gz`, VDJtools format) from HuggingFace into the gitignored
-        `notebooks/.data/biomarker_nb/` cache, stream them into a hive-partitioned Parquet
+        `examples/.data/biomarker_nb/` cache, stream them into a hive-partitioned Parquet
         cohort once, then scan it as one out-of-core `polars` LazyFrame.
         """
     )

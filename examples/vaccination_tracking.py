@@ -4,7 +4,7 @@
 # track every clonotype across the time course, classify each pre->post pair with the
 # effective-sample-size paired test (`vdjtools.dynamics.test_pair`), and read off the VDJtrack
 # recapture model (size buckets x Poisson capture). Run with:
-#     marimo edit notebooks/vaccination_tracking.py
+#     marimo edit examples/vaccination_tracking.py
 import marimo
 
 __generated_with = "0.23.14"

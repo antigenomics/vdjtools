@@ -267,7 +267,7 @@ loaded with `vdjtools.model.load_bundled(locus, source)`. ~0.4 MB total (30–15
 ## Longitudinal dynamics — vaccination time courses (clonotype tracking)
 
 Public TCRβ vaccination time courses for the `vdjtools.dynamics` framework + the
-`notebooks/vaccination_tracking.py` explorer. AIRR Rearrangement TSV (`duplicate_count`,
+`examples/vaccination_tracking.py` explorer. AIRR Rearrangement TSV (`duplicate_count`,
 `junction_aa`, `v_gene`/`j_gene`); a metadata sheet gives donor/day. Fetched via
 `huggingface_hub` (local-first: `./` → `~/hf/<name>/` → HF). All **experimental**.
 

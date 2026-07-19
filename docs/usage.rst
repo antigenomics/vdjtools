@@ -215,7 +215,7 @@ bin's recapture fraction gets a ``Beta`` credible interval, and a log-linear mod
 Across several donors, concatenate the per-donor ``capture_rates(..., donor=<id>)`` frames and use
 :func:`~vdjtools.dynamics.capture_paired_test` for the per-size-class paired t-test. The full
 worked example — sunken/alluvial tracking plots, a VDJdb overlay, and the capture ribbons — is
-``marimo edit notebooks/vaccination_tracking.py``.
+``marimo edit examples/vaccination_tracking.py``.
 
 Biomarker association
 ---------------------
@@ -340,13 +340,13 @@ chains — in-silico α-β pairing (Howie 2015, Vlasova 2026) and same-chain co-
 
 Explore the whole screen interactively — condition (CMV / HLA-allele / CMH), test, match
 scope, a live VDJdb overlay, and a co-occurrence panel — with
-``marimo edit notebooks/biomarker_explorer.py`` (Emerson HIP via HuggingFace).
+``marimo edit examples/biomarker_explorer.py`` (Emerson HIP via HuggingFace).
 
 The longitudinal and cohort workflows have their own interactive notebooks (``pip install
-"vdjtools[examples]"``): ``marimo edit notebooks/vaccination_tracking.py`` (clonotype tracking +
+"vdjtools[examples]"``): ``marimo edit examples/vaccination_tracking.py`` (clonotype tracking +
 the :mod:`vdjtools.dynamics` recapture model across yellow-fever / influenza / TBE vaccination
-time courses), ``notebooks/aging.py`` (cohort-streaming diversity / clone-size / spectratype
-across the Britanova "Cord Blood to Centenarians" cohort), and ``notebooks/ankspond_motif.py``
+time courses), ``examples/aging.py`` (cohort-streaming diversity / clone-size / spectratype
+across the Britanova "Cord Blood to Centenarians" cohort), and ``examples/ankspond_motif.py``
 (the ankylosing-spondylitis TRBV9 "AS27" motif — disease vs HLA-B27 carriage). Each prefers a
 local ``~/hf/`` or ``./`` data copy, else fetches from HuggingFace.
 
@@ -390,7 +390,7 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
 Learn a model from your own **non-functional** reads — out-of-frame *or* stop-codon, since both
 escaped selection — with :func:`vdjtools.model.infer.infer_native`,
 and explore any model's recombination Bayes net interactively with
-``marimo edit notebooks/model_explorer.py``. See the :doc:`API reference <api>` for the full
+``marimo edit examples/model_explorer.py``. See the :doc:`API reference <api>` for the full
 surface.
 
 Command line

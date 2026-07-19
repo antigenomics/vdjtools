@@ -3,6 +3,12 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## Unreleased
+
+- Consolidated the example notebooks: the old `notebooks/` directory was merged into
+  **`examples/`**, so every marimo explorer now lives under `examples/` (docs / README / skills
+  updated to match). Examples are not shipped in the wheel — this is a repository-layout change only.
+
 ## 3.0.0
 
 ### Added — longitudinal clonotype dynamics (`vdjtools.dynamics`)
@@ -49,11 +55,11 @@ Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git ta
 
 ### Added — notebooks (marimo, `[examples]` extra)
 
-- `notebooks/vaccination_tracking.py` — clonotype tracking + recapture model across YFV / influenza
+- `examples/vaccination_tracking.py` — clonotype tracking + recapture model across YFV / influenza
   / TBE vaccination time courses.
-- `notebooks/aging.py` — cohort-streaming diversity / clone-size / spectratype across the Britanova
+- `examples/aging.py` — cohort-streaming diversity / clone-size / spectratype across the Britanova
   ageing cohort.
-- `notebooks/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 "AS27" motif (disease vs HLA-B27
+- `examples/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 "AS27" motif (disease vs HLA-B27
   carriage; Komech 2018).
 
 ### Fixed
