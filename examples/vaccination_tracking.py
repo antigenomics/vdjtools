@@ -33,7 +33,7 @@ def _(mo):
           whether the *response* persists more than background.
 
         Data auto-loads from HuggingFace (`isalgo/airr_yfv19` · `airr_flu_vac` · `airr_tbev_vac`),
-        preferring a local `~/hf/` or `./` copy if present.
+        preferring a local `./data_dump/` copy (gitignored) if present.
         """
     )
     return
@@ -69,9 +69,11 @@ def _():
                    "contracted": "#0072B2", "vanishing": "#CC79A7", "untested": "#E5E5E5"}
 
     def fetch(repo, filename):
-        """Local-first data fetch: ./<file>, ~/hf/<repo-basename>/<file>, else HuggingFace."""
-        for root in (Path.cwd(), Path.home() / "hf" / repo.split("/")[-1]):
-            p = root / filename
+        """./data_dump/<repo-basename>/<filename> (gitignored; symlink your copy), else HuggingFace."""
+        _nb = mo.notebook_dir() or Path.cwd()
+        sub = repo.split("/")[-1]
+        for root in (Path.cwd(), _nb, _nb.parent):
+            p = root / "data_dump" / sub / filename
             if p.exists():
                 return str(p)
         import huggingface_hub as hub

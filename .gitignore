@@ -51,3 +51,4 @@ __marimo__/
 .coverage.*
 htmlcov/
 
+data_dump/

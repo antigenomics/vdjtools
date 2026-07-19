@@ -6,6 +6,7 @@ enrichment than a size-matched random OLGA-generated set. vdjmatch (the ``overla
 extra) is guarded; the real-data files skip cleanly when absent.
 """
 import gzip
+import os
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,9 @@ from vdjtools import overlap as O
 
 pytest.importorskip("vdjmatch")
 
-_MIRPY_ASSETS = Path("/Users/mikesh/vcs/code/mirpy/tests/assets")
+# Optional real-data assets (gitignored); the test below skips cleanly when absent. Drop them
+# (or symlink) under ./data_dump/mirpy-assets/, or point $MIRPY_ASSETS at a checkout.
+_MIRPY_ASSETS = Path(os.environ.get("MIRPY_ASSETS", "data_dump/mirpy-assets"))
 _AA = "ACDEFGHIKLMNPQRSTVWY"
 
 

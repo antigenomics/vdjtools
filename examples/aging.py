@@ -6,7 +6,7 @@
 #     spectratype, each a single streamed group_by over a `scan_cohort` LazyFrame (flat memory);
 #   * coverage-standardized iNEXT diversity + rarefaction (the depth-confound-free headline);
 #   * pairwise repertoire overlap -> MDS (repertoires diverge from a cord-blood centre with age).
-# Data auto-loads from HuggingFace, preferring a local `~/hf/` or `./` copy. Run with:
+# Data auto-loads from HuggingFace, preferring a local `./data_dump/` copy (gitignored; symlink your data there). Run with:
 #     marimo edit examples/aging.py
 import marimo
 
@@ -38,7 +38,7 @@ def _(mo):
           a distance and embedded with **MDS**: cord-blood samples cluster centrally, older donors
           scatter to the periphery.
 
-        Data auto-loads from HuggingFace, preferring a local `~/hf/` or `./` copy.
+        Data auto-loads from HuggingFace, preferring a local `./data_dump/` copy (gitignored; symlink your data there).
         """
     )
     return
@@ -75,10 +75,16 @@ def _():
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
 
     def local_base(mo_dir):
-        """Return a directory holding the aging files, preferring a local mirror."""
-        for root in (mo_dir, Path.cwd(), Path.home() / "hf" / "airr_benchmark"):
-            if (root / HF_FOLDER / "metadata_aging.txt").exists():
-                return root / HF_FOLDER
+        """The aging files under ./data_dump/airr_benchmark/, else None.
+
+        ``data_dump/`` is gitignored — drop the dataset there or symlink your copy
+        (``ln -s /path/to/airr_benchmark data_dump/airr_benchmark``); otherwise the cell
+        below fetches from HuggingFace.
+        """
+        for root in (Path.cwd(), mo_dir, mo_dir.parent):
+            cand = root / "data_dump" / "airr_benchmark" / HF_FOLDER
+            if (cand / "metadata_aging.txt").exists():
+                return cand
         return None
 
     return (COUNT, HF_FOLDER, KEY, MDS, OKABE, Path, REPO, diversity_cohort,

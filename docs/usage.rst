@@ -348,7 +348,7 @@ the :mod:`vdjtools.dynamics` recapture model across yellow-fever / influenza / T
 time courses), ``examples/aging.py`` (cohort-streaming diversity / clone-size / spectratype
 across the Britanova "Cord Blood to Centenarians" cohort), and ``examples/ankspond_motif.py``
 (the ankylosing-spondylitis TRBV9 "AS27" motif — disease vs HLA-B27 carriage). Each prefers a
-local ``~/hf/`` or ``./`` data copy, else fetches from HuggingFace.
+local ``./data_dump/`` copy (gitignored; symlink your data there), else fetches from HuggingFace.
 
 Single-cell
 -----------

@@ -28,7 +28,7 @@ def _(mo):
         us honest: B27 carriage **among healthy donors** (should be null if it is disease), and
         the lone AS/B27− donor.
 
-        Data auto-loads from HuggingFace (`isalgo/airr_ankspond`), preferring a local `~/hf/` copy.
+        Data auto-loads from HuggingFace (`isalgo/airr_ankspond`), preferring a local `./data_dump/` copy (gitignored).
         """
     )
     return
@@ -56,10 +56,12 @@ def _():
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73", "grey": "#8C8C8C"}
 
     def fetch(filename):
-        """Local-first: ./<f>, ~/hf/airr_ankspond/<f>, else HuggingFace."""
-        for root in (Path.cwd(), Path.home() / "hf" / "airr_ankspond"):
-            if (root / filename).exists():
-                return str(root / filename)
+        """./data_dump/airr_ankspond/<filename> (gitignored; symlink your copy), else HuggingFace."""
+        _nb = mo.notebook_dir() or Path.cwd()
+        for root in (Path.cwd(), _nb, _nb.parent):
+            p = root / "data_dump" / "airr_ankspond" / filename
+            if p.exists():
+                return str(p)
         import huggingface_hub as hub
         return hub.hf_hub_download(REPO, filename, repo_type="dataset")
 
