@@ -1,4 +1,18 @@
-# vdjtools v2 examples
+# vdjtools examples
+
+Every example is an interactive [marimo](https://marimo.io) notebook — `pip install -e ".[examples]"`
+(add `,overlap` / `,sc` where noted), then `marimo edit examples/<name>.py`.
+
+**Data** auto-loads from HuggingFace, but each notebook first looks in a gitignored **`./data_dump/`**
+directory at the repo root — drop the datasets there, or symlink your local copies, and nothing is
+re-downloaded:
+
+```bash
+mkdir -p data_dump
+ln -s /path/to/airr_benchmark data_dump/airr_benchmark        # etc. per dataset
+# VDJdb: notebooks fetch the latest antigenomics/vdjdb-db release automatically,
+# or drop vdjdb.slim.txt(.gz) in data_dump/ to skip the download.
+```
 
 ## `aging.py` — TCR repertoire aging (streaming + iNEXT + overlap)
 
@@ -29,7 +43,8 @@ marimo run  examples/aging.py                 # read-only served app
 
 Auto-loads from the HuggingFace dataset
 [`isalgo/airr_benchmark`](https://huggingface.co/datasets/isalgo/airr_benchmark) (folder
-`vdjtools/`, full sequencing depth — **~0.5 GB total**), preferring a local `~/hf/` or `./` copy.
+`vdjtools/`, full sequencing depth — **~0.5 GB total**), preferring a local **`./data_dump/`** copy
+(gitignored — symlink your data there, e.g. `ln -s /path/to/airr_benchmark data_dump/airr_benchmark`).
 The selected samples are ingested once into the **gitignored** `examples/.data/aging_nb/`
 hive-partitioned Parquet cohort; HuggingFace verifies integrity and caches, so a re-run fetches
 nothing. The `samples` slider trades coverage of the age range against runtime (overlap is O(n²)).
@@ -110,13 +125,39 @@ marimo edit examples/emerson_biomarker.py
 ```
 
 Data: a **balanced 400-subject subset** of [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip)
-(the Emerson HIP cohort) auto-downloads into the gitignored
-`examples/.data/emerson_nb/` cache (HuggingFace verifies integrity; a re-run
-fetches nothing). VDJdb validation needs a local `vdjdb-db` slim dump and is
-skipped gracefully if absent. The **full 786-subject, non-interactive** version is
-[`emerson_cmv_hla.py`](emerson_cmv_hla.py) — run it with
-`python examples/emerson_cmv_hla.py` (writes volcano plots + a vdjdb-validated hit
-list; peak ~22 GB RAM at full scale).
+(the Emerson HIP cohort) auto-downloads into the gitignored `examples/.data/emerson_nb/` cache
+(HuggingFace verifies integrity; a re-run fetches nothing). VDJdb validation resolves a
+`./data_dump/` copy, else fetches the latest `antigenomics/vdjdb-db` release (both cached), and is
+skipped gracefully if unavailable.
+
+## `emerson_cmv_hla.py` — the same screen at cohort scale (streaming Fisher)
+
+A [marimo](https://marimo.io) notebook running the CMV / HLA-A\*02 screen at scale: the cohort is
+streamed into a hive-partitioned Parquet dataset one sample at a time (`ingest_cohort`), analysed
+as one out-of-core LazyFrame (`scan_cohort`), and the per-feature Fisher tests are vectorised
+through the hypergeometric tail — the cohort never fully in RAM (peak RSS reported per step). A
+**subjects** slider scales toward the full 786; **CMV** is one-tailed, **HLA-A\*02** two-tailed,
+each with an inline volcano and a VDJdb overlay, plus an optional 1-mismatch metaclonotype screen.
+The interactive, condition×test×scope companion is [`emerson_biomarker.py`](emerson_biomarker.py).
+
+```bash
+pip install -e ".[examples,overlap]"
+marimo edit examples/emerson_cmv_hla.py
+```
+
+## `scale_cohort.py` — large-cohort analytics (Parquet + streaming, flat memory)
+
+A [marimo](https://marimo.io) notebook demonstrating the out-of-core cohort pattern on a
+**synthetic** cohort you size with a slider: `ingest_cohort` streams every sample into a
+hive-partitioned Parquet dataset one at a time (peak RSS ≈ one sample, reported), then every
+statistic — the V-usage matrix, per-sample richness, an age-filtered count — is a `group_by`
+collected with `engine="streaming"` over a single `scan_cohort` LazyFrame. Slide the sample count
+up (toward thousands) and watch peak RSS stay flat. No data download.
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/scale_cohort.py
+```
 
 ## `vaccination_tracking.py` — longitudinal clonotype tracking + recapture model
 

@@ -14,6 +14,12 @@ Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git ta
   `aging.py` and `aging_airr_benchmark.py` (both removed, along with the now-unused
   `aging_manifest.json`). Fixes a latent `cdr3_aa`-vs-`junction_aa` key bug in the old benchmark
   notebook (stale since the v2.2.0 junction rename).
+- **Every example is now a marimo notebook** — converted the two remaining plain scripts
+  (`emerson_cmv_hla.py`, `scale_cohort.py`).
+- **No user-specific absolute paths in the examples/tests** — each notebook resolves data from a
+  gitignored **`./data_dump/`** directory first (symlink your copies there), then falls back to
+  HuggingFace. VDJdb is fetched from the latest `antigenomics/vdjdb-db` release (cached to
+  `./data_dump/`) instead of a hardcoded local checkout.
 
 ## 3.0.0
 

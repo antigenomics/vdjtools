@@ -40,7 +40,6 @@ def _(mo):
 @app.cell
 def _():
     # --- imports & configuration (single cell so every name is defined once) ---
-    import os
     from pathlib import Path
 
     import marimo as mo
@@ -53,16 +52,38 @@ def _():
     from vdjtools.biomarker import association, cooccurrence, condition  # condition = the module
 
     REPO_ID = "isalgo/airr_hip"
-    # Local VDJdb slim dump (antigenomics/vdjdb-db); point VDJDB_PATH at your checkout.
-    # Validation degrades gracefully if absent — the screen itself needs no VDJdb.
-    VDJDB = Path(os.environ.get("VDJDB_PATH",
-                                "~/vcs/code/vdjdb-db/database/vdjdb.slim.txt")).expanduser()
-    N_SUBJECTS = 400        # balanced subset; the full 786-subject run is ~/vcs/projects/2026-vdjtools-benchmark/bench/bench_biomarker.py
+    N_SUBJECTS = 400        # balanced subset; the full 786-subject run lives in the benchmark repo
 
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
-    return (N_SUBJECTS, OKABE, Path, REPO_ID, S, VDJDB, association, condition,
-            cooccurrence, mo, np, pl, plt, vio)
+
+    def vdjdb_slim():
+        """Path to vdjdb.slim.txt(.gz): a local ./data_dump/ copy if present, else fetch the
+        latest antigenomics/vdjdb-db release into ./data_dump/ (cached). None if unavailable —
+        VDJdb validation degrades gracefully, the screen itself needs no VDJdb."""
+        _nb = mo.notebook_dir() or Path.cwd()
+        for root in (Path.cwd(), _nb, _nb.parent):
+            for name in ("vdjdb.slim.txt", "vdjdb.slim.txt.gz"):
+                if (root / "data_dump" / name).exists():
+                    return root / "data_dump" / name
+        import io as _io, json, urllib.request, zipfile
+        dd = (_nb.parent if _nb.name == "examples" else Path.cwd()) / "data_dump"
+        try:
+            dd.mkdir(parents=True, exist_ok=True)
+            _rel = json.load(urllib.request.urlopen(
+                "https://api.github.com/repos/antigenomics/vdjdb-db/releases/latest", timeout=30))
+            _url = next(a["browser_download_url"] for a in _rel["assets"] if a["name"].endswith(".zip"))
+            with urllib.request.urlopen(_url, timeout=180) as _r:
+                _z = zipfile.ZipFile(_io.BytesIO(_r.read()))
+            _m = next(n for n in _z.namelist() if n.endswith(("vdjdb.slim.txt", "vdjdb.slim.txt.gz")))
+            _dest = dd / Path(_m).name
+            _dest.write_bytes(_z.read(_m))
+            return _dest
+        except Exception:
+            return None
+
+    return (N_SUBJECTS, OKABE, Path, REPO_ID, S, association, condition,
+            cooccurrence, mo, np, pl, plt, vdjdb_slim, vio)
 
 
 @app.cell
@@ -121,19 +142,20 @@ def _(corr_dir, data_dir, meta, mo, vio):
 
 
 @app.cell
-def _(VDJDB, mo, pl):
-    # VDJdb CMV validation set (human TRB), if the local dump is present.
-    if VDJDB.exists():
-        _v = pl.read_csv(VDJDB, separator="\t", infer_schema_length=0)
+def _(mo, pl, vdjdb_slim):
+    # VDJdb CMV validation set (human TRB): ./data_dump/ copy, else fetched from the vdjdb-db release.
+    _vdjdb = vdjdb_slim()
+    if _vdjdb is not None:
+        _v = pl.read_csv(_vdjdb, separator="\t", infer_schema_length=0)
         vdjdb_cmv = (_v.filter((pl.col("gene") == "TRB") & (pl.col("species") == "HomoSapiens")
                                & pl.col("antigen.species").str.contains("CMV"))
                      .group_by("cdr3").agg(
                          pl.col("antigen.epitope").unique().sort().str.join(", ").alias("epitope"),
                          pl.col("mhc.a").unique().sort().str.join(", ").alias("mhc")))
-        _msg = f"VDJdb CMV reference: **{vdjdb_cmv.height} human TRB CDR3s**."
+        _msg = f"VDJdb CMV reference (`{_vdjdb.name}`): **{vdjdb_cmv.height} human TRB CDR3s**."
     else:
         vdjdb_cmv = None
-        _msg = f"> VDJdb not found at `{VDJDB}` — validation skipped."
+        _msg = "> VDJdb unavailable (no `./data_dump/` copy and the release fetch failed) — validation skipped."
     mo.md(_msg)
     return (vdjdb_cmv,)
 
@@ -305,7 +327,7 @@ def _(mo):
         specificity and 1-mismatch recovers more VDJdb overlap; and the same substrate yields
         co-occurring public-clone pairs. Built on `vdjtools.io` (streamed Parquet cohort),
         `vdjtools.biomarker.{association, cooccurrence, condition, stats}`, and the native
-        1-mismatch matcher. The full 786-subject benchmark is `~/vcs/projects/2026-vdjtools-benchmark/bench/bench_biomarker.py`.
+        1-mismatch matcher. The full 786-subject benchmark lives in the separate benchmark repo.
         """
     )
     return
