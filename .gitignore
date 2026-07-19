@@ -51,4 +51,5 @@ __marimo__/
 .coverage.*
 htmlcov/
 
-data_dump/
+data_dump/*
+!data_dump/.gitkeep
