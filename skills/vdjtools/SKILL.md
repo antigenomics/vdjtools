@@ -147,7 +147,7 @@ format-aware** — `.parquet`/`.pq` → Parquet, else TSV (or stdout). The per-s
 commands take **`--threads N`** (parallel over samples, `map_samples`) and **`--cohort DIR`** (one
 streamed pass over a pre-ingested `scan_cohort` Parquet dataset).
 
-### Notebooks (`pip install "vdjtools[examples]"` → `marimo edit notebooks/<name>.py`)
+### Notebooks (`pip install "vdjtools[examples]"` → `marimo edit examples/<name>.py`)
 `model_explorer` (recombination Bayes net), `biomarker_explorer` (Emerson association /
 co-occurrence), **`vaccination_tracking`** (YFV/flu/TBEV clonotype dynamics + recapture model),
 **`aging`** (cohort-streaming diversity / clone-size / spectratype vs age), **`ankspond_motif`**

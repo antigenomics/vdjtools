@@ -115,16 +115,16 @@ Explore any model's recombination **Bayes net** interactively (entropy, mutual i
 
 ```bash
 pip install "vdjtools[examples]"
-marimo edit notebooks/model_explorer.py
+marimo edit examples/model_explorer.py
 ```
 
 Interactive **marimo** notebooks (data auto-loads from HuggingFace, or a local `~/hf/` copy):
 
-- `notebooks/vaccination_tracking.py` — clonotype **tracking** + the recapture model across
+- `examples/vaccination_tracking.py` — clonotype **tracking** + the recapture model across
   yellow-fever / influenza / TBE vaccination time courses (`vdjtools.dynamics`).
-- `notebooks/aging.py` — cohort-**streaming** diversity, clone-size and spectratype vs age.
-- `notebooks/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 **"AS27" motif**: disease vs HLA-B27 carriage.
-- `notebooks/biomarker_explorer.py` — Emerson public-TCR association + co-occurrence.
+- `examples/aging.py` — cohort-**streaming** diversity, clone-size and spectratype vs age.
+- `examples/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 **"AS27" motif**: disease vs HLA-B27 carriage.
+- `examples/biomarker_explorer.py` — Emerson public-TCR association + co-occurrence.
 
 ## Command line
 
@@ -208,7 +208,7 @@ grouped = dynamics.test_metaclonotypes(day0, day15, scope="1,0,0,1")  # 1-Hammin
 called  = dynamics.expansion_test(day0, day15)             # edgeR NB-exact caller (log2FC + p)
 
 # VDJtrack size-bucket recapture model — recapture fraction per clone-size class (Beta bands);
-# split by a group column + capture_test() for the group effect (see notebooks/vaccination_tracking.py)
+# split by a group column + capture_test() for the group effect (see examples/vaccination_tracking.py)
 rates = dynamics.capture_rates(pre, post)
 ```
 

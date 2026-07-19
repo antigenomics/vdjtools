@@ -1,7 +1,7 @@
 # vdjtools — interactive recombination-model explorer.
 # Reactive marimo app: pick a locus and model source, see its Bayes net (nodes = marginal entropy H,
 # edges = mutual information I), the per-event entropy / MI tables, a marginal distribution, and an
-# OLGA-vs-learned comparison. Run with:  marimo edit notebooks/model_explorer.py
+# OLGA-vs-learned comparison. Run with:  marimo edit examples/model_explorer.py
 import marimo
 
 __generated_with = "0.23.14"

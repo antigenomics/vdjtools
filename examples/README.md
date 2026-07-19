@@ -121,3 +121,65 @@ skipped gracefully if absent. The **full 786-subject, non-interactive** version 
 [`emerson_cmv_hla.py`](emerson_cmv_hla.py) — run it with
 `python examples/emerson_cmv_hla.py` (writes volcano plots + a vdjdb-validated hit
 list; peak ~22 GB RAM at full scale).
+
+## `vaccination_tracking.py` — longitudinal clonotype tracking + recapture model
+
+A [marimo](https://marimo.io) notebook tracking clonotypes across **vaccination time
+courses** (yellow-fever [`isalgo/airr_yfv19`](https://huggingface.co/datasets/isalgo/airr_yfv19),
+influenza `isalgo/airr_flu_vac`, TBE `isalgo/airr_tbev_vac`) with `vdjtools.dynamics`: the paired
+within-donor expansion test (`test_pair` → emergent / expanded / persistent / contracted /
+vanishing) as sunken/alluvial and trajectory plots, metaclonotype-grouped testing, and the
+**VDJtrack recapture model** (`capture_rates` / `capture_test`, Beta credible bands).
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/vaccination_tracking.py
+```
+
+## `aging.py` — cohort-streaming aging statistics
+
+A [marimo](https://marimo.io) notebook showcasing the v3 **cohort-streaming** stats on the
+Britanova "Cord Blood to Centenarians" cohort (`isalgo/airr_benchmark`, folder `vdjtools/`):
+`diversity_cohort` and fused `spectratype` / `segment_usage` over a `scan_cohort` LazyFrame, plus
+singleton / hyperexpanded clone fractions vs age. The streaming companion to the overlap/MDS-focused
+[`aging_airr_benchmark.py`](aging_airr_benchmark.py) above.
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/aging.py
+```
+
+## `ankspond_motif.py` — the ankylosing-spondylitis "AS27" motif
+
+A [marimo](https://marimo.io) notebook reproducing the Komech 2018 **TRBV9 / TRBJ2-3** CDR3β motif
+in ankylosing spondylitis on [`isalgo/airr_ankspond`](https://huggingface.co/datasets/isalgo/airr_ankspond)
+(60 donors), with the disease-vs-HLA-B27-carriage contrast — B27 is 26/27 confounded with AS, so
+only the B27-matched comparison separates disease from carriage (AS/B27+ 16/26 vs HD/B27+ 1/12,
+OR ≈ 17.6) — plus a metaclonotype family view.
+
+```bash
+pip install -e ".[examples,overlap]"
+marimo edit examples/ankspond_motif.py
+```
+
+## `biomarker_explorer.py` — public-TCR association + co-occurrence (interactive)
+
+A [marimo](https://marimo.io) notebook over the Emerson HIP cohort: `biomarker.association`
+(condition × test × match-scope, with a live VDJdb overlay) plus a `biomarker.cooccurrence` panel
+— the interactive superset of [`emerson_biomarker.py`](emerson_biomarker.py).
+
+```bash
+pip install -e ".[examples,overlap]"
+marimo edit examples/biomarker_explorer.py
+```
+
+## `model_explorer.py` — recombination Bayes-net explorer
+
+A [marimo](https://marimo.io) notebook exploring any bundled recombination model (OLGA vs learned):
+the Bayes-net graph, per-event entropy, mutual information, and the marginal tables
+(`vdjtools.model.analyze`). No download — uses the models shipped in the wheel.
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/model_explorer.py
+```

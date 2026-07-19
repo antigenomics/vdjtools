@@ -269,7 +269,7 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   (a read may be n_D=2 only where arda called a `d2_call`) and **`nd_prior`** Dirichlet single-D pseudocount.
   `infer/infer_native(..., dd_allowed=, nd_prior=)`; native `estep_batch(..., dd_allowed)`. Anchored learned
   D-loci: TRB **0.000**, TRD **0.006**, IGH **0.009** (plausible; arda hard-call ~4%). `test_dd_anchor_and_prior…`.
-- **DONE marimo explorer** `notebooks/model_explorer.py` — reactive Bayes-net/entropy/MI/marginal explorer
+- **DONE marimo explorer** `examples/model_explorer.py` — reactive Bayes-net/entropy/MI/marginal explorer
   over any bundled model (OLGA vs learned); `[examples]` extra. README/docs/SOURCES updated.
 - **DONE V-zeroing fix (2 root causes)** — the shipped learned models zeroed 68/89 TRB V alleles; NOT a
   masking/soft-realign problem (soft realign avalanches mass onto the most permissive germline,
