@@ -4,7 +4,7 @@
 #   examples/run.sh --headless   # (or any marimo edit flag) forwarded through
 #
 # To serve it read-only instead (run-only app, no editing), use:
-#   marimo run examples/aging_airr_benchmark.py
+#   marimo run examples/aging.py
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-exec marimo edit "$here/aging_airr_benchmark.py" "$@"
+exec marimo edit "$here/aging.py" "$@"

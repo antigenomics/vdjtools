@@ -257,7 +257,7 @@ def _(mo):
         kernel recovers more, and the smooth BLOSUM62 kernel places **every** pair on a
         graded continuum. (At this deliberately shallow, tractable depth the age structure
         itself is faint — the point here is the *sensitivity* of each lens, not an age
-        clock; the full-depth aging signal is the `aging_airr_benchmark.py` notebook.)
+        clock; the full-depth aging signal is the `aging.py` notebook.)
         """
     )
     return

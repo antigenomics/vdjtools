@@ -1,42 +1,38 @@
 # vdjtools v2 examples
 
-## `aging_airr_benchmark.py` — TCR repertoire aging
+## `aging.py` — TCR repertoire aging (streaming + iNEXT + overlap)
 
-A [marimo](https://marimo.io) notebook that reproduces the classic aging signals
-of the human TCR-beta repertoire on the full-depth Britanova **"Cord Blood to
-Centenarians"** cohort (the legacy vdjtools aging example: 79 donors, ages 0–103,
-including 8 cord-blood samples) using the basic-analytics layer of vdjtools v2. It
-loads the native `.txt.gz` files with `vdjtools.io` (`read_metadata` / `vio.read`)
-and shows three things:
+A [marimo](https://marimo.io) notebook reproducing the classic aging signals of the human
+TCR-beta repertoire on the full-depth Britanova **"Cord Blood to Centenarians"** cohort (78
+donors, ages 0–103), reading each signal three complementary ways from a single cohort load:
 
-- **Diversity declines with age** — coverage-standardized Hill-number diversity
-  via iNEXT (`inext_batch`, `estimate_d`, `sample_coverage`), Spearman r ≈ −0.71.
-- **Repertoires diverge with age** — pairwise repertoire overlap
-  (`vdjtools.overlap`, the exact-match `F` metric) after equal-depth downsampling,
-  embedded with metric MDS: cord-blood samples cluster centrally and older donors
-  scatter to the periphery (distance-from-centroid vs age r ≈ +0.64).
-- **Repertoires become more clonal with age** — top-clone read share, r ≈ +0.70 —
+- **Cohort-streaming stats** — `stats.diversity_cohort`, the singleton→hyperexpanded clone-size
+  distribution, and the CDR3 `spectratype`, each a single streamed `group_by` over a
+  `io.scan_cohort` LazyFrame (peak memory independent of cohort size).
+- **Diversity declines with age** — coverage-standardized Hill-number diversity via iNEXT
+  (`sample_coverage`, `estimate_d`, `inext_batch`) that removes the sequencing-depth confound,
   plus the classic rarefaction/extrapolation curves (`rarefaction`).
-
-### Run it
+- **Repertoires diverge with age** — pairwise exact-match overlap (`vdjtools.overlap`, the `F`
+  metric on CDR3aa+V+J) after equal-depth downsampling, embedded with metric MDS: young samples
+  cluster centrally and older donors scatter to the periphery.
+- **Repertoires become more clonal with age** — top-clone read share.
 
 ```bash
-pip install -e ".[examples]"
-examples/run.sh                              # interactive marimo editor
+pip install -e ".[examples,overlap]"          # overlap = vdjmatch/seqtree + scikit-learn (MDS)
+examples/run.sh                               # interactive marimo editor
 # or directly:
-marimo edit examples/aging_airr_benchmark.py
-marimo run  examples/aging_airr_benchmark.py # read-only served app
+marimo edit examples/aging.py
+marimo run  examples/aging.py                 # read-only served app
 ```
 
 ### Data
 
-The notebook's first cell auto-downloads its inputs from the HuggingFace dataset
-[`isalgo/airr_benchmark`](https://huggingface.co/datasets/isalgo/airr_benchmark)
-(folder `vdjtools/`, full sequencing depth — **~0.5 GB total**) into the
-**gitignored** `examples/.data/aging/` directory. Every file is verified against
-the committed `aging_manifest.json` (`{filename: md5}`): a file already present
-with the right md5 is skipped with no network call, so a second run downloads
-nothing. The cache directory is never committed.
+Auto-loads from the HuggingFace dataset
+[`isalgo/airr_benchmark`](https://huggingface.co/datasets/isalgo/airr_benchmark) (folder
+`vdjtools/`, full sequencing depth — **~0.5 GB total**), preferring a local `~/hf/` or `./` copy.
+The selected samples are ingested once into the **gitignored** `examples/.data/aging_nb/`
+hive-partitioned Parquet cohort; HuggingFace verifies integrity and caches, so a re-run fetches
+nothing. The `samples` slider trades coverage of the age range against runtime (overlap is O(n²)).
 
 ## `single_cell.py` — paired-chain single-cell TCR (10x dCODE)
 
@@ -134,19 +130,6 @@ vanishing) as sunken/alluvial and trajectory plots, metaclonotype-grouped testin
 ```bash
 pip install -e ".[examples]"
 marimo edit examples/vaccination_tracking.py
-```
-
-## `aging.py` — cohort-streaming aging statistics
-
-A [marimo](https://marimo.io) notebook showcasing the v3 **cohort-streaming** stats on the
-Britanova "Cord Blood to Centenarians" cohort (`isalgo/airr_benchmark`, folder `vdjtools/`):
-`diversity_cohort` and fused `spectratype` / `segment_usage` over a `scan_cohort` LazyFrame, plus
-singleton / hyperexpanded clone fractions vs age. The streaming companion to the overlap/MDS-focused
-[`aging_airr_benchmark.py`](aging_airr_benchmark.py) above.
-
-```bash
-pip install -e ".[examples]"
-marimo edit examples/aging.py
 ```
 
 ## `ankspond_motif.py` — the ankylosing-spondylitis "AS27" motif

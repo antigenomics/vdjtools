@@ -8,6 +8,12 @@ Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git ta
 - Consolidated the example notebooks: the old `notebooks/` directory was merged into
   **`examples/`**, so every marimo explorer now lives under `examples/` (docs / README / skills
   updated to match). Examples are not shipped in the wheel — this is a repository-layout change only.
+- Merged the two aging notebooks into one **`examples/aging.py`**: it now covers the
+  cohort-streaming stats (`diversity_cohort` / clone-size / spectratype), the coverage-standardized
+  iNEXT diversity + rarefaction, and the pairwise-overlap→MDS divergence — the union of the old
+  `aging.py` and `aging_airr_benchmark.py` (both removed, along with the now-unused
+  `aging_manifest.json`). Fixes a latent `cdr3_aa`-vs-`junction_aa` key bug in the old benchmark
+  notebook (stale since the v2.2.0 junction rename).
 
 ## 3.0.0
 
