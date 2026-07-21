@@ -203,10 +203,32 @@ def _finalize(rows: list[dict]) -> pl.DataFrame:
 # --- format readers ---------------------------------------------------------------------
 
 def read_mixcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
-    """Read a MiXcr ``exportClones`` table (v1/2 or v3/4 header dialect)."""
+    """Read a MiXcr ``exportClones`` table — legacy (v1/2) or current (v3/4) dialect.
+
+    The two header dialects name every field differently, so both spellings are accepted
+    for each column:
+
+    ==============  ==========================  ================================================
+    field           legacy (v1/2)               current (v3/4)
+    ==============  ==========================  ================================================
+    count           ``Clone count``             ``cloneCount`` / ``readCount`` / ``uniqueTagCountMolecule``
+    V/D/J/C hits    ``All V hits`` …            ``allVHitsWithScore`` …
+    CDR3 nt / aa    ``N. Seq. CDR3`` …          ``nSeqCDR3`` / ``aaSeqCDR3``
+    ==============  ==========================  ================================================
+
+    MiXcr's current field API exposes ``-readCount`` / ``-readFraction`` (there is no
+    ``-cloneCount`` field any more), while the default preset still *labels* the column
+    ``cloneCount`` — so a v4 export carries one spelling or the other depending on how it
+    was produced, and both must parse.
+
+    Count precedence is read-based first (``cloneCount`` → ``readCount``), with the UMI
+    molecule count (``uniqueTagCountMolecule``) used only when no read count column is
+    present. On a UMI library the molecule count is the less PCR-biased abundance, so
+    prefer exporting it alone if that is the quantity you want.
+    """
     raw = _read_tsv(path, n_rows=n_rows)
     lo = _lower_map(raw.columns)
-    count_c = _pick(lo, "clone count", "clonecount")
+    count_c = _pick(lo, "clone count", "clonecount", "readcount", "uniquetagcountmolecule")
     v_c = _pick(lo, "all v hits", "allvhitswithscore")
     d_c = _pick(lo, "all d hits", "alldhitswithscore")
     j_c = _pick(lo, "all j hits", "alljhitswithscore")

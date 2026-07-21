@@ -209,3 +209,37 @@ def test_read_vidjil_raises_on_out_of_range_sample(tmp_path):
     assert read_vidjil(p, sample_id=1)["duplicate_count"][0] == 7      # in range
     with pytest.raises(IndexError, match="out of range"):
         read_vidjil(p, sample_id=2)
+
+
+# MiXcr's current field API exposes `-readCount` (there is no `-cloneCount` field any
+# more) while the default preset still labels the column `cloneCount`, and a UMI export
+# may carry only `uniqueTagCountMolecule`. All three must parse to the same abundance.
+_MIXCR_HEAD = ("cloneId\t{count}\tallVHitsWithScore\tallDHitsWithScore\tallJHitsWithScore\t"
+               "allCHitsWithScore\tnSeqCDR3\taaSeqCDR3\n"
+               "0\t42\tTRBV13*00(1000)\tTRBD1*00(50)\tTRBJ2-4*00(900)\tTRBC1*00(10)\t"
+               "TGTGCCAGCAGCTTAGGGGAAAACATTCAGTACTTC\tCASSLGENIQYF\n")
+
+
+@pytest.mark.parametrize("count_col", ["cloneCount", "readCount", "uniqueTagCountMolecule"])
+def test_read_mixcr_accepts_every_count_spelling(tmp_path, count_col):
+    """v3/4 count columns all resolve; a v4 `-readCount` export used to raise outright."""
+    p = tmp_path / f"{count_col}.txt"
+    p.write_text(_MIXCR_HEAD.format(count=count_col))
+    df = convert.read_mixcr(p)
+    assert df.height == 1
+    r = df.row(0, named=True)
+    assert r["duplicate_count"] == 42
+    assert (r["v_call"], r["d_call"], r["j_call"], r["c_call"]) == \
+           ("TRBV13", "TRBD1", "TRBJ2-4", "TRBC1")
+    assert r["junction_aa"] == "CASSLGENIQYF"
+    assert r["locus"] == "TRB"
+
+
+def test_read_mixcr_prefers_read_count_over_molecule_count(tmp_path):
+    """With both present the read-based count wins — the pre-existing behaviour."""
+    p = tmp_path / "both.txt"
+    p.write_text("cloneId\tuniqueTagCountMolecule\tcloneCount\tallVHitsWithScore\t"
+                 "allJHitsWithScore\tnSeqCDR3\taaSeqCDR3\n"
+                 "0\t7\t42\tTRBV13*00(1000)\tTRBJ2-4*00(900)\t"
+                 "TGTGCCAGCAGCTTAGGGGAAAACATTCAGTACTTC\tCASSLGENIQYF\n")
+    assert convert.read_mixcr(p)["duplicate_count"][0] == 42
