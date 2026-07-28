@@ -87,4 +87,50 @@ def test_learned_models_load_and_score(locus):
 
 
 def test_sources_constant():
-    assert SOURCES == ("olga", "learned")
+    assert SOURCES == ("olga", "learned", "arda")
+
+
+# --- the arda-namespace set (organism-keyed; the only one with mouse) -----------------
+
+def test_arda_set_is_reachable_and_covers_mouse():
+    """The 9 shipped arda models load through the public loader, mouse included.
+
+    They were on disk but unreachable before: ``SOURCES`` omitted ``"arda"``, and the loader
+    keyed ``_bundled/<source>/<LOCUS>`` while the arda dirs are ``<organism>_<LOCUS>``.
+    """
+    keys = list_bundled()["arda"]
+    assert set(keys) == {f"human_{loc}" for loc in LOCI} | {"mouse_TRA", "mouse_TRB"}
+
+
+@pytest.mark.parametrize("locus", LOCI)
+def test_load_arda_human_model(locus):
+    m = load_bundled(locus, "arda")
+    assert m.chain_type == ("VDJ" if locus in VDJ else "VJ")
+    assert m.genomic["genes_v"].height > 0 and "v_choice" in m.tables
+
+
+@pytest.mark.parametrize("locus", ["TRA", "TRB"])
+def test_load_arda_mouse_model_and_generate(locus):
+    """Mouse generation — impossible through the public API before, no mouse model was reachable."""
+    m = load_bundled(locus, "arda", organism="mouse")
+    assert m.chain_type == ("VDJ" if locus in VDJ else "VJ")
+    df = __import__("vdjtools.model.generate", fromlist=["generate"]).generate(
+        m, 20, seed=0, productive_only=True)
+    assert df.height == 20
+    assert df["v_call"].str.starts_with(f"{locus}V").all()   # arda IMGT names, mouse germline
+
+
+def test_organism_is_not_silently_ignored_by_human_only_sets():
+    # asking olga/learned for mouse must fail loudly, not hand back the human model
+    for src in ("olga", "learned"):
+        with pytest.raises(ValueError, match="human-only"):
+            load_bundled("TRB", src, organism="mouse")
+    with pytest.raises(FileNotFoundError, match="available"):
+        load_bundled("IGH", "arda", organism="mouse")     # arda has no mouse IGH
+
+
+def test_arda_and_learned_are_different_namespaces():
+    """The point of the arda set: allele names come from arda, so they can differ from OLGA's."""
+    a = load_bundled("TRB", "arda").tables["v_choice"]["v_allele"].to_list()
+    lrn = load_bundled("TRB", "learned").tables["v_choice"]["v_allele"].to_list()
+    assert set(a) != set(lrn)

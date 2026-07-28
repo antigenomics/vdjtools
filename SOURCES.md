@@ -239,13 +239,18 @@ which Mikelov dataset is intended before use. (References verified via PubMed; D
 
 ## Bundled precomputed models (shipped in the wheel)
 
-Ship under `python/vdjtools/model/_bundled/<source>/<LOCUS>/` (parquet marginals + `manifest.json`);
-loaded with `vdjtools.model.load_bundled(locus, source)`. ~0.4 MB total (30–150 KB/model).
+Ship under `python/vdjtools/model/_bundled/<source>/<key>/` (parquet marginals + `manifest.json`);
+loaded with `vdjtools.model.load_bundled(locus, source, organism=...)`. ~1.9 MB total
+(30–150 KB/model). The `key` is the bare `<LOCUS>` for `olga`/`learned` (human-only sets) and
+`<organism>_<LOCUS>` for `arda`, the only set covering mouse; `load_bundled` derives the right key
+from `organism=`, and refuses a non-human organism for the human-only sets rather than silently
+handing back the human model.
 
 | Model set | Origin | How to rebuild | Provenance |
 |---|---|---|---|
 | `olga` (7 loci) | `from_olga` on the OLGA default models above | `python appendix/build_bundled_models.py` (the OLGA part is inline in the precompute) | **derived** — OLGA generative parameters converted to the polars schema (keeps OLGA germline; exact-Pgen bootstrap, single-D) |
 | `learned` (7 loci) | native EM (`infer_native`) on real out-of-frame HF reads (2 000 unique clonotypes/locus, 12 fixed iters, arda V/J[/D]-masked) seeded from the `olga` model | `python appendix/build_bundled_models.py` | **computed from experimental data** — real-repertoire gene-usage/trim/insertion marginals. D-bearing loci (IGH/TRD/TRB) carry an **arda-anchored tandem-D** event: a read may be `n_D=2` only where arda called a second D (`d2_call`), which counters the tandem-vs-long-insertion identifiability that inflates unregularized D-D EM (TRB 0.28→**0.00**, TRD 0.18→**0.006**, IGH **0.009**). `EM_SINGLE_D=1` / `ND_PRIOR` are alternative regularizers. |
+| `arda` (9 models: 7 human loci + **mouse TRA/TRB**) | the same native EM as `learned`, but seeded from the `from_arda` scaffold rather than the OLGA model, so the gene set + germline come from **arda** (`vdjtools.model.reference`) | `python appendix/build_bundled_models.py` | **computed from experimental data**, in the **arda IMGT allele namespace**. Use this set when the rest of the pipeline is arda-annotated (e.g. `mirpy`'s prototypes and baked germline distances) so generated sequences share one allele namespace with the query data instead of falling back on name matching; it is also the only bundled set with a non-human organism. NB `from_arda` on its own returns *placeholder* marginals meant to be refit — these are the refit ones. |
 
 ## Golden fixtures (tests)
 
