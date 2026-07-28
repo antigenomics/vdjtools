@@ -3,7 +3,30 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## Unreleased
+## 3.1.0 — 2026-07-28
+
+### Added
+
+- **The bundled `arda` model set is reachable.** `_bundled/arda/` has shipped 9 EM-refit models —
+  the 7 human loci **plus mouse TRA/TRB** — in every wheel, but no public call could reach them:
+  `SOURCES` listed only `("olga", "learned")`, and `load_bundled` keyed
+  `_bundled/<source>/<LOCUS>` while the arda directories are `<organism>_<LOCUS>`, so
+  `list_bundled()` reported them as absent. (`from_arda` is not a substitute — it returns the
+  *placeholder* marginals meant to be refit by `infer_native`, not these refit ones.)
+
+  `load_bundled` gains a keyword-only `organism=` (default `"human"`) and derives the directory key
+  per set. This is the only bundled set in the **arda IMGT allele namespace** — the frame that
+  arda-annotated pipelines such as `mirpy`'s prototypes and baked germline distances live in — and
+  the only bundled set covering a non-human organism.
+
+### Changed
+
+- `load_bundled` now **raises** when a non-human `organism` is asked of the human-only `olga` /
+  `learned` sets, instead of silently handing back the human model; `FileNotFoundError` lists the
+  keys that *are* available for that set. Every existing caller passes `(locus, source)`
+  positionally and is unaffected.
+
+### Repository
 
 - Consolidated the example notebooks: the old `notebooks/` directory was merged into
   **`examples/`**, so every marimo explorer now lives under `examples/` (docs / README / skills
