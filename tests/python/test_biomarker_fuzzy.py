@@ -4,7 +4,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from vdjtools.biomarker import association
+from vdjtools.biomarker import association, prepare_fuzzy_features
 from vdjtools.io import schema as S
 
 
@@ -52,6 +52,29 @@ def test_fuzzy_universe_is_not_restricted_to_candidates():
                                   min_incidence=1, candidates=cand, alternative="greater")
     hit = res.filter(pl.col(S.JUNCTION_AA) == "CASSPAAAF")
     assert int(hit["n_pos_present"][0]) == 10, "fuzzy universe was clipped to the candidate set"
+
+
+def test_prepare_fuzzy_features_matches_direct_call_and_is_reusable():
+    """A cached FeatureFrame must give the same result as building it fresh per call, across
+    multiple designs sharing the same cohort/key/candidates/scope (the redundant-collect fix)."""
+    cohort, key = _cohort(), (S.JUNCTION_AA, S.V_CALL)
+    direct = association(cohort, _design(), test="fisher", key=key, match="fuzzy",
+                        min_incidence=1, alternative="greater")
+
+    feats = prepare_fuzzy_features(cohort, key=key)
+    cached = association(cohort, _design(), test="fisher", features=feats,
+                        min_incidence=1, alternative="greater")
+    assert cached.sort(S.JUNCTION_AA).equals(direct.sort(S.JUNCTION_AA))
+
+    # a second, different design reuses the same handle without rebuilding the search
+    design2 = pl.DataFrame({"sample_id": [f"case{i}" for i in range(10)]
+                                        + [f"ctl{i}" for i in range(10)],
+                           "_pos": [i < 5 for i in range(10)] + [False] * 10})
+    direct2 = association(cohort, design2, test="fisher", key=key, match="fuzzy",
+                         min_incidence=1, alternative="greater")
+    cached2 = association(cohort, design2, test="fisher", features=feats,
+                         min_incidence=1, alternative="greater")
+    assert cached2.sort(S.JUNCTION_AA).equals(direct2.sort(S.JUNCTION_AA))
 
 
 def test_fuzzy_v_must_match_exactly():

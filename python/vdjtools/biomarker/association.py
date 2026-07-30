@@ -16,11 +16,14 @@ four axes, all sharing the same streamed subject-incidence table:
 
 The heavy step (the incidence table) is one streamed ``group_by`` over a
 :func:`vdjtools.io.scan_cohort` LazyFrame; every test is then vectorised numpy over the whole
-feature table.
+feature table. For ``match="fuzzy"``, that step is a cohort-wide search independent of the
+phenotype design — :func:`prepare_fuzzy_features` builds it once for reuse across many designs
+(``association(..., features=...)``) instead of paying its cost on every call.
 """
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 import polars as pl
@@ -32,6 +35,44 @@ from . import stats
 from .metaclonotype import metaclonotypes
 
 _TESTS = ("fisher", "chi2", "bayes_logodds", "bayes_bf", "permutation")
+
+
+@dataclass(frozen=True)
+class FeatureFrame:
+    """A precomputed :func:`association` feature frame, reusable across many designs.
+
+    Built once by :func:`prepare_fuzzy_features`; pass to :func:`association` as ``features=``
+    to skip re-running the fuzzy search when testing many phenotype designs against the same
+    cohort/key/candidates/scope.
+    """
+    feat_lf: pl.LazyFrame
+    idcols: list[str]
+    rep: pl.DataFrame | None
+
+
+def prepare_fuzzy_features(cohort: pl.LazyFrame | pl.DataFrame, key: tuple[str, ...] = DEFAULT_KEY,
+                           *, candidates: pl.DataFrame | None = None, scope: str = "1,0,0,1",
+                           productive_only: bool = True, strip_allele: bool = True,
+                           threads: int = 0) -> FeatureFrame:
+    """Precompute a ``match="fuzzy"`` feature frame once, for reuse across many designs.
+
+    The fuzzy search (collecting the cohort's full per-locus CDR3 universe, then
+    :func:`vdjmatch.cluster.overlap`) depends only on ``(cohort, key, candidates, scope)`` —
+    never on the phenotype design. A caller testing many designs against the same cohort (e.g.
+    one HLA gene per call, same candidates every time) should build this **once** and pass it to
+    every :func:`association` call via ``features=``, instead of paying the full search cost on
+    every call.
+
+    Example:
+        >>> feats = prepare_fuzzy_features(cohort, key=("junction_aa", "v_call"),
+        ...                                candidates=candidates)
+        >>> for design in designs:
+        ...     association(cohort, design, features=feats)
+    """
+    feat_lf, idcols, rep = _feature_frame(cohort, key, "fuzzy", productive_only=productive_only,
+                                         strip_allele=strip_allele, scope=scope, threads=threads,
+                                         candidates=candidates)
+    return FeatureFrame(feat_lf, idcols, rep)
 
 
 def _fuzzy_feature_frame(lf: pl.LazyFrame, key: tuple[str, ...], *, scope: str, threads: int,
@@ -251,6 +292,7 @@ def association(
     n_perm: int = 1000,
     seed: int = 0,
     threads: int = 0,
+    features: FeatureFrame | None = None,
 ) -> pl.DataFrame:
     """Test each clonotype feature's subject incidence against a condition.
 
@@ -261,7 +303,13 @@ def association(
             and either the reserved ``_pos``/``_level``/``_stratum`` columns (from
             :mod:`vdjtools.biomarker.condition`) or a plain binary ``pheno_col``.
         pheno_col: Binary phenotype column (if ``phenotype`` has no ``_pos``).
-        level_col: Category-level column → one test per level (adds a ``level`` column).
+        level_col: Category-level column → one test per level (adds a ``level`` column). Cost is
+            **multiplicative, not additive**, in the number of levels: the feature-join at the
+            heart of `association()` duplicates every matched feature row once per level the
+            design carries for that sample (a legitimate consequence of each level needing its
+            own incidence table), so a design with many levels (e.g. one row per HLA allele) can
+            dominate memory even though the feature frame itself costs the same regardless of how
+            many levels the design has.
         stratum_col: Stratum column → the tests are combined by Cochran–Mantel–Haenszel.
         test: One test or a list of ``{"fisher", "chi2", "bayes_logodds", "bayes_bf",
             "permutation"}`` (long output, one row per feature×level×test). Ignored when
@@ -283,6 +331,10 @@ def association(
         candidates: Restrict testing to these feature keys (a frame with the ``key`` columns).
         alternative: ``"greater"`` / ``"less"`` / ``"two-sided"`` (Fisher/permutation).
         n_perm, seed: Permutation settings.
+        features: A precomputed :class:`FeatureFrame` from :func:`prepare_fuzzy_features`, reused
+            across designs that share the same cohort/key/candidates/scope. When set, ``key``,
+            ``match``, ``candidates``, ``scope``, ``productive_only`` and ``strip_allele`` are
+            ignored — they are already baked into ``features``.
 
     Returns:
         Long frame: feature key (or ``meta_id`` + representative key + ``n_members``), optional
@@ -296,9 +348,12 @@ def association(
         if t not in _TESTS:
             raise ValueError(f"test must be a subset of {_TESTS}; got {t!r}")
 
-    feat_lf, idcols, rep = _feature_frame(cohort, key, match, productive_only=productive_only,
-                                          strip_allele=strip_allele, scope=scope,
-                                          threads=threads, candidates=candidates)
+    if features is not None:
+        feat_lf, idcols, rep = features.feat_lf, features.idcols, features.rep
+    else:
+        feat_lf, idcols, rep = _feature_frame(cohort, key, match, productive_only=productive_only,
+                                              strip_allele=strip_allele, scope=scope,
+                                              threads=threads, candidates=candidates)
     design = _normalize_design(phenotype, pheno_col, level_col, stratum_col)
     # Restrict the design to subjects we actually OBSERVED. n_pos/n_neg below are the arms of the
     # 2x2 (c = n_pos - a is "condition-positive subjects without the feature"), so a labelled

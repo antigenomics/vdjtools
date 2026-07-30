@@ -3,6 +3,22 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.1.1 — 2026-07-30
+
+### Fixed
+
+- **`biomarker.association(match="fuzzy")` re-ran the full-cohort search on every call**, even
+  when a caller tests many phenotype designs (e.g. one per HLA gene) against the same
+  cohort/key/candidates/scope — the search depends only on those, never on the design. At
+  full-corpus scale (~50k donors) this drove peak memory from 48G to 256-350G per SLURM task on
+  diverse BCR light chains, entirely from redundant `collect()`/`.to_list()` work repeated once
+  per design instead of once. Added `prepare_fuzzy_features(cohort, key, candidates=, scope=) ->
+  FeatureFrame` + `association(..., features=)` so the search is opt-in-cacheable: build it once,
+  reuse across every design against the same cohort.
+- Documented that `level_col`'s memory cost is **multiplicative, not additive**: `association()`'s
+  feature-join duplicates every matched row once per design level (correct behaviour — each level
+  needs its own incidence table — but easy to miss from the prior wording).
+
 ## 3.1.0 — 2026-07-28
 
 ### Added

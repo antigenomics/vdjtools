@@ -8,13 +8,15 @@ incidence against a condition (binary / category / stratified) with a choice of 
 Fisher special case; :func:`metaclonotypes` groups 1-mismatch variants.
 """
 from . import condition, stats
-from .association import association, select_candidates
+from .association import FeatureFrame, association, prepare_fuzzy_features, select_candidates
 from .cooccurrence import cooccurrence
 from .fisher import fisher_association
 from .metaclonotype import metaclonotypes
 
 __all__ = [
     "association",          # general incidence association (any test / condition / scope)
+    "prepare_fuzzy_features",  # cacheable match="fuzzy" feature frame, reused across designs
+    "FeatureFrame",         # handle returned by prepare_fuzzy_features
     "cooccurrence",         # feature-vs-feature co-occurrence (α-β + same-chain)
     "select_candidates",    # public features over an incidence count / fraction threshold
     "fisher_association",   # Emerson-2017 Fisher special case (back-compat)

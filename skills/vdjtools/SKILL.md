@@ -100,7 +100,7 @@ default or `"sigmoid"` = Vlasova 2026 z-score + grand-mean-preserving sigmoid), 
 ### `vdjtools.biomarker`
 Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Witt 2018 / Vlasova 2026).
 - `association(cohort, design, *, test=, level_col=, stratum_col=, key=, match=, min_incidence[_frac]=,
-  candidates=, alternative=)` — feature-vs-condition; `test` ∈ {`fisher`,`chi2`,`bayes_logodds`,
+  candidates=, alternative=, features=)` — feature-vs-condition; `test` ∈ {`fisher`,`chi2`,`bayes_logodds`,
   `bayes_bf`,`permutation`} (str or list → long output w/ `test` col); category via `level_col` (one-vs-rest),
   paired via `stratum_col` (Cochran–Mantel–Haenszel). Match scope = `key` (`(junction_aa,)`/`+v`/`+v+j`) × `match`:
   - `exact` — the key itself.
@@ -108,7 +108,11 @@ Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Wi
     Candidate KEEPS its identity and GAINS incidence; V/J in the key must match exactly. Delegates to
     `vdjmatch.cluster.overlap`. **This is what finds biomarkers.** `key=(junction_aa,v_call)` ≫ `junction_aa`
     alone (real cohort: donor q<0.01 7 → 78). NB `candidates=` is the QUERY set only — the universe stays the
-    whole cohort (a candidate's neighbours usually aren't candidates).
+    whole cohort (a candidate's neighbours usually aren't candidates). The search itself depends only
+    on `(cohort,key,candidates,scope)`, never the design — `prepare_fuzzy_features(cohort, key,
+    candidates=, scope=) -> FeatureFrame` builds it once, reuse via `association(..., features=)`
+    across many designs against the same cohort (e.g. one call per HLA gene) instead of paying the
+    collect+search cost per call.
   - `1mm` — **CLUSTERING** via `metaclonotypes`: MERGES candidates, tests the group. Different operation;
     belongs *downstream* of a biomarker list (Hamming graph / classifier), not to discovery.
 - **Unit + null (the two things that go wrong):** the sampling unit is the **subject** — Emerson beat
