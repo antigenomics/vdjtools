@@ -19,6 +19,12 @@ Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git ta
   feature-join duplicates every matched row once per design level (correct behaviour — each level
   needs its own incidence table — but easy to miss from the prior wording).
 
+### Changed
+
+- Bumped the `seqtree` floor to `>=0.6.1` — fixes a corrupted Miyazawa–Jernigan A–N contact
+  energy in `structural()` (0.6.0) and names the offending sequence/index in `gapblock_matrix`'s
+  alphabet error instead of just the bad symbol (0.6.1).
+
 ## 3.1.0 — 2026-07-28
 
 ### Added
