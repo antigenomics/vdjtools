@@ -3,6 +3,17 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.1.2 — 2026-07-30
+
+### Changed
+
+- Bumped the `vdjmatch` floor to `>=0.1.2` — a fresh install of 3.1.1 could resolve `vdjmatch`
+  0.1.1, whose `cluster.overlap()` raised `SchemaError` on any query with zero fuzzy matches
+  (`a_idx`/`b_idx` defaulted to a `Null` dtype with no hits to infer from, then failed to join
+  against the `Int64`-typed lookup frames); this broke `vdjtools.overlap.fuzzy.fuzzy_overlap` and
+  CI's `test_overlap_fuzzy.py::test_fuzzy_no_match_empty_and_zero_metrics`. Fixed upstream in
+  vdjmatch 0.1.2.
+
 ## 3.1.1 — 2026-07-30
 
 ### Fixed
