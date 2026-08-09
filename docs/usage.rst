@@ -49,6 +49,13 @@ AIRR annotation output). Every reader returns the same canonical frame:
    df = vio.read("clones.txt")           # auto-detect + convert to the canonical frame
    df = vio.read_immunoseq("adaptive.tsv")   # or call a converter explicitly
 
+Adaptive/immunoSEQ gene names are resolved through a shipped, CDR-validated lookup table
+(``resources/adaptive_imgt_map.tsv``) rather than by stripping zero-padding: whether the
+trailing group of ``TCRAV01-01`` is an IMGT subgroup (``TRAV1-1``) or an allele
+(``TCRAV22-01`` → ``TRAV22``) is a per-family fact no pattern can decide. Family calls
+(``TCRBV12-X``), slash ties (``TCRBV03-01/03-02``) and co-locus names (``TCRAV38-02`` →
+``TRAV38-2/DV8``) resolve too; tokens outside the table fall back to the legacy rewrite.
+
 Load a whole cohort from a metadata sheet (one row per sample, plus any phenotype columns),
 joining the metadata onto every clonotype:
 

@@ -3,6 +3,31 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.2.0 — 2026-08-09
+
+### Fixed
+
+- **Adaptive/immunoSEQ gene names were wrong for 100 of the 161 tokens** seen in the IMMREP25
+  release + the pairSEQ mock cohort (22,058 of 44,000 gene calls), and **every one of those 100
+  outputs is a gene name absent from the IMGT human reference**. `_adaptive_to_imgt` normalised
+  Adaptive tokens with a global `re.sub(r"0([1-9])", r"\1", …)`, which always re-emits the trailing
+  `-01` as an IMGT *subgroup*: `TCRAJ39-01 → "TRAJ39-1"` (no human TRAJ gene has a subgroup),
+  `TCRBV09-01 → "TRBV9-1"`, `TCRBD01-01 → "TRBD1-1"`. Slash ties (`TCRBV03-01/03-02`), family-only
+  calls (`TCRBV20-X`) and co-locus names (`TCRAV38-02`, IMGT `TRAV38-2/DV8`) were passed through
+  verbatim. Any consumer resolving gene names against a germline reference silently lost the rows —
+  tcrdist3 dropped 100 % of both cohorts.
+
+  Whether a token's trailing group is a subgroup or an allele is a per-family fact (`TCRAV01-01` =
+  `TRAV1-1`, but `TCRAV22-01` = `TRAV22`), so no regex can decide it. `read_immunoseq` now resolves
+  V, D **and** J calls through a shipped CDR-validated table, `resources/adaptive_imgt_map.tsv`
+  (163 tokens; the choice among candidates is decided by exact-matching germline CDR1+CDR2 —
+  provenance in `SOURCES.md`, rationale in `appendix/adaptive_imgt_map.md`). Tokens outside the
+  table fall back to the legacy rewrite, so unknown input behaves exactly as before.
+  The legacy Groovy `CommonUtil.extractVDJImmunoSeq` has the same defect — a v1 bug inherited by
+  v2, not a porting regression.
+- **`read_mixcr` accepts every MiXcr count spelling** (`cloneCount`, `readCount`,
+  `uniqueTagCountMolecule`) — a v4 `-readCount` export used to raise outright.
+
 ## 3.1.1 — 2026-07-30
 
 ### Fixed

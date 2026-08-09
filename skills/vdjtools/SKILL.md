@@ -31,8 +31,10 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `read_parquet`; **converters** `read_mixcr` (v1/2+v3/4, incl. C-gene/BCR isotype), `read_migec`,
   `read_immunoseq` (Adaptive v1/v2), `read_imgt` (IMGT/HighV-QUEST), `read_vidjil` (JSON),
   `read_rtcr`, `read_trust4` (`*_report.tsv`), `read_arda` (arda AIRR output, delegates to
-  `read_airr`) (`vdjtools.io.convert`; ported from the legacy Groovy parsers + tool docs, incl.
-  Adaptive→IMGT gene conversion).
+  `read_airr`) (`vdjtools.io.convert`; ported from the legacy Groovy parsers + tool docs).
+  Adaptive→IMGT gene names come from the shipped CDR-validated `resources/adaptive_imgt_map.tsv`
+  (subgroup-vs-allele is a per-family fact: `TCRAV01-01`→`TRAV1-1` but `TCRAV22-01`→`TRAV22`;
+  family calls, slash ties and `/DVn` co-locus names resolve too), legacy zero-strip off-table.
 - **Cohorts**: `read_metadata`, `read_samples`, `iter_samples` (streaming), **`map_samples(fn,
   items, *, workers=)`** (thread-parallel per-sample reduce, `O(workers)`-sample RAM, input-order),
   `sniff_format`; `ingest_cohort` / `scan_cohort` (hive-partitioned Parquet, lazy).

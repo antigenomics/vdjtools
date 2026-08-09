@@ -21,10 +21,13 @@ formats are collapsed to unique clonotypes with summed counts.
 """
 from __future__ import annotations
 
+import csv
+import functools
 import gzip
 import json
 import os
 import re
+from importlib import resources
 from pathlib import Path
 
 import polars as pl
@@ -149,12 +152,38 @@ def extract_vdj(field: str | None) -> str | None:
 _ZERO_PAD = re.compile(r"0([1-9])")
 
 
-def _adaptive_to_imgt(field: str | None) -> str | None:
-    """Adaptive immunoSEQ → IMGT: ``extract_vdj`` then ``TCR→TR`` and drop zero-padding.
+@functools.lru_cache(maxsize=1)
+def _adaptive_map() -> dict[str, str]:
+    """Adaptive token → IMGT gene, from the shipped CDR-validated table (cached).
 
-    ``"TCRBV29-01" → "TRBV29-1"``; ``"unresolved" → None``. Port of
-    ``CommonUtil.extractVDJImmunoSeq`` (single-value form).
+    Built by ``appendix/build_adaptive_imgt_map.py``; provenance in ``SOURCES.md``, rationale in
+    ``appendix/adaptive_imgt_map.md``.
     """
+    txt = resources.files("vdjtools.resources").joinpath("adaptive_imgt_map.tsv").read_text()
+    return {r["adaptive_token"]: r["imgt_gene"]
+            for r in csv.DictReader(txt.splitlines(), delimiter="\t")
+            if r["imgt_gene"] and r["status"] != "unresolved_dropped"}
+
+
+def _adaptive_to_imgt(field: str | None) -> str | None:
+    """Adaptive immunoSEQ → IMGT gene name, via the shipped lookup table.
+
+    ``"TCRBV29-01" → "TRBV29-1"``, ``"TCRAJ39-01" → "TRAJ39"``,
+    ``"TCRAV38-02" → "TRAV38-2/DV8"``, ``"TCRBV12-X" → "TRBV12-3"``; ``"unresolved" → None``.
+
+    Whether an Adaptive token's trailing group is an IMGT subgroup or an allele is a per-family
+    fact (``TCRAV01-01`` = ``TRAV1-1`` but ``TCRAV22-01`` = ``TRAV22``), so no regex can decide it:
+    the legacy zero-strip of ``CommonUtil.extractVDJImmunoSeq`` emits a *non-existent* gene name
+    for 100 of the 161 tokens seen in IMMREP25 + pairSEQ. Off-table tokens fall back to that
+    legacy rewrite, so unknown input behaves exactly as before.
+    """
+    if field is None:
+        return None
+    # look the raw token up before any splitting — slash ties (``TCRBV03-01/03-02``) are keys.
+    tok = field.split(",")[0].replace('"', "").strip().split("*")[0]
+    hit = _adaptive_map().get(tok)
+    if hit:
+        return hit
     gene = extract_vdj(field)
     if gene is None or gene.lower() == "unresolved":
         return None

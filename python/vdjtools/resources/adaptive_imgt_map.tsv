@@ -1,0 +1,164 @@
+chain	segment	adaptive_token	n_records	imgt_allele	imgt_gene	evidence	n_candidates	cdr1_match	cdr2_match	allele_ambiguous	status
+A	J	TCRAJ01-01	2	TRAJ1*01	TRAJ1	unique J gene of this family in the IMGT reference; mean CDR3 3'-end agreement with germline J segment YESITSQLQF = 1.00 aa over 2 rows	1			False	gene_list_unique
+A	J	TCRAJ02-01	1	TRAJ2*01	TRAJ2	unique J gene of this family in the IMGT reference; mean CDR3 3'-end agreement with germline J segment NTGGTIDKLTF = 1.00 aa over 1 rows	1			False	gene_list_unique
+A	J	TCRAJ03-01	91	TRAJ3*01	TRAJ3	mean CDR3 3'-end agreement with germline J segment GYSSASKIIF = 7.03 aa over 91 rows	1			False	validated_by_cdr
+A	J	TCRAJ04-01	199	TRAJ4*01	TRAJ4	mean CDR3 3'-end agreement with germline J segment FSGGYNKLIF = 8.64 aa over 199 rows	1			False	validated_by_cdr
+A	J	TCRAJ05-01	145	TRAJ5*01	TRAJ5	mean CDR3 3'-end agreement with germline J segment DTGRRALTF = 7.69 aa over 145 rows	1			False	validated_by_cdr
+A	J	TCRAJ06-01	210	TRAJ6*01	TRAJ6	mean CDR3 3'-end agreement with germline J segment ASGGSYIPTF = 7.93 aa over 210 rows	1			False	validated_by_cdr
+A	J	TCRAJ07-01	56	TRAJ7*01	TRAJ7	mean CDR3 3'-end agreement with germline J segment DYGNNRLAF = 6.29 aa over 56 rows	1			False	validated_by_cdr
+A	J	TCRAJ08-01	213	TRAJ8*01	TRAJ8	mean CDR3 3'-end agreement with germline J segment NTGFQKLVF = 7.82 aa over 213 rows	1			False	validated_by_cdr
+A	J	TCRAJ09-01	221	TRAJ9*01	TRAJ9	mean CDR3 3'-end agreement with germline J segment GNTGGFKTIF = 8.00 aa over 221 rows	1			False	validated_by_cdr
+A	J	TCRAJ10-01	224	TRAJ10*01	TRAJ10	mean CDR3 3'-end agreement with germline J segment ILTGGGNKLTF = 8.83 aa over 224 rows	1			False	validated_by_cdr
+A	J	TCRAJ11-01	169	TRAJ11*01	TRAJ11	mean CDR3 3'-end agreement with germline J segment NSGYSTLTF = 6.85 aa over 169 rows	1			False	validated_by_cdr
+A	J	TCRAJ12-01	172	TRAJ12*01	TRAJ12	mean CDR3 3'-end agreement with germline J segment MDSSYKLIF = 8.25 aa over 172 rows	1			False	validated_by_cdr
+A	J	TCRAJ13-01	271	TRAJ13*01	TRAJ13	mean CDR3 3'-end agreement with germline J segment NSGGYQKVTF = 8.26 aa over 271 rows	2			True	validated_by_cdr
+A	J	TCRAJ14-01	3	TRAJ14*01	TRAJ14	unique J gene of this family in the IMGT reference; mean CDR3 3'-end agreement with germline J segment IYSTFIF = 2.00 aa over 3 rows	1			False	gene_list_unique
+A	J	TCRAJ15-01	191	TRAJ15*01	TRAJ15	mean CDR3 3'-end agreement with germline J segment NQAGTALIF = 7.58 aa over 191 rows	2			True	validated_by_cdr
+A	J	TCRAJ16-01	124	TRAJ16*01	TRAJ16	mean CDR3 3'-end agreement with germline J segment FSDGQKLLF = 7.43 aa over 124 rows	1			False	validated_by_cdr
+A	J	TCRAJ17-01	137	TRAJ17*01	TRAJ17	mean CDR3 3'-end agreement with germline J segment IKAAGNKLTF = 8.99 aa over 137 rows	1			False	validated_by_cdr
+A	J	TCRAJ18-01	218	TRAJ18*01	TRAJ18	mean CDR3 3'-end agreement with germline J segment DRGSTLGRLYF = 9.99 aa over 218 rows	1			False	validated_by_cdr
+A	J	TCRAJ19-01	1	TRAJ19*01	TRAJ19	unique J gene of this family in the IMGT reference; mean CDR3 3'-end agreement with germline J segment YQRFYNFTF = 3.00 aa over 1 rows	1			False	gene_list_unique
+A	J	TCRAJ20-01	407	TRAJ20*01	TRAJ20	mean CDR3 3'-end agreement with germline J segment SNDYKLSF = 6.54 aa over 407 rows	1			False	validated_by_cdr
+A	J	TCRAJ21-01	285	TRAJ21*01	TRAJ21	mean CDR3 3'-end agreement with germline J segment YNFNKFYF = 6.85 aa over 285 rows	1			False	validated_by_cdr
+A	J	TCRAJ22-01	249	TRAJ22*01	TRAJ22	mean CDR3 3'-end agreement with germline J segment SSGSARQLTF = 8.45 aa over 249 rows	1			False	validated_by_cdr
+A	J	TCRAJ23-01	296	TRAJ23*01	TRAJ23	mean CDR3 3'-end agreement with germline J segment IYNQGGKLIF = 7.46 aa over 296 rows	2			True	validated_by_cdr
+A	J	TCRAJ24-01	202	TRAJ24*02	TRAJ24	mean CDR3 3'-end agreement with germline J segment TTDSWGKLQF = 8.10 aa over 202 rows	2			False	validated_by_cdr
+A	J	TCRAJ26-01	281	TRAJ26*01	TRAJ26	mean CDR3 3'-end agreement with germline J segment DNYGQNFVF = 7.63 aa over 281 rows	1			False	validated_by_cdr
+A	J	TCRAJ27-01	238	TRAJ27*01	TRAJ27	mean CDR3 3'-end agreement with germline J segment NTNAGKSTF = 7.11 aa over 238 rows	1			False	validated_by_cdr
+A	J	TCRAJ28-01	532	TRAJ28*01	TRAJ28	mean CDR3 3'-end agreement with germline J segment YSGAGSYQLTF = 10.10 aa over 532 rows	1			False	validated_by_cdr
+A	J	TCRAJ29-01	260	TRAJ29*01	TRAJ29	mean CDR3 3'-end agreement with germline J segment NSGNTPLVF = 7.50 aa over 260 rows	1			False	validated_by_cdr
+A	J	TCRAJ30-01	262	TRAJ30*01	TRAJ30	mean CDR3 3'-end agreement with germline J segment NRDDKIIF = 6.57 aa over 262 rows	1			False	validated_by_cdr
+A	J	TCRAJ31-01	375	TRAJ31*01	TRAJ31	mean CDR3 3'-end agreement with germline J segment NNNARLMF = 5.69 aa over 375 rows	1			False	validated_by_cdr
+A	J	TCRAJ32-01	323	TRAJ32*01	TRAJ32	mean CDR3 3'-end agreement with germline J segment NYGGATNKLIF = 9.26 aa over 323 rows	2			False	validated_by_cdr
+A	J	TCRAJ33-01	387	TRAJ33*01	TRAJ33	mean CDR3 3'-end agreement with germline J segment DSNYQLIW = 7.29 aa over 387 rows	1			False	validated_by_cdr
+A	J	TCRAJ34-01	230	TRAJ34*01	TRAJ34	mean CDR3 3'-end agreement with germline J segment SYNTDKLIF = 6.88 aa over 230 rows	1			False	validated_by_cdr
+A	J	TCRAJ35-01	23	TRAJ35*01	TRAJ35	mean CDR3 3'-end agreement with germline J segment IGFGNVLHC = 6.52 aa over 23 rows	1			False	validated_by_cdr
+A	J	TCRAJ38-01	134	TRAJ38*01	TRAJ38	mean CDR3 3'-end agreement with germline J segment NAGNNRKLIW = 8.98 aa over 134 rows	1			False	validated_by_cdr
+A	J	TCRAJ39-01	283	TRAJ39*01	TRAJ39	mean CDR3 3'-end agreement with germline J segment NNNAGNMLTF = 7.82 aa over 283 rows	1			False	validated_by_cdr
+A	J	TCRAJ40-01	346	TRAJ40*01	TRAJ40	mean CDR3 3'-end agreement with germline J segment TTSGTYKYIF = 8.03 aa over 346 rows	1			False	validated_by_cdr
+A	J	TCRAJ41-01	214	TRAJ41*01	TRAJ41	mean CDR3 3'-end agreement with germline J segment NSNSGYALNF = 7.43 aa over 214 rows	1			False	validated_by_cdr
+A	J	TCRAJ42-01	315	TRAJ42*01	TRAJ42	mean CDR3 3'-end agreement with germline J segment NYGGSQGNLIF = 9.47 aa over 315 rows	1			False	validated_by_cdr
+A	J	TCRAJ43-01	397	TRAJ43*01	TRAJ43	mean CDR3 3'-end agreement with germline J segment NNNDMRF = 5.65 aa over 397 rows	1			False	validated_by_cdr
+A	J	TCRAJ44-01	196	TRAJ44*01	TRAJ44	mean CDR3 3'-end agreement with germline J segment NTGTASKLTF = 8.62 aa over 196 rows	1			False	validated_by_cdr
+A	J	TCRAJ45-01	286	TRAJ45*01	TRAJ45	mean CDR3 3'-end agreement with germline J segment YSGGGADGLTF = 9.89 aa over 286 rows	1			False	validated_by_cdr
+A	J	TCRAJ46-01	1	TRAJ46*01	TRAJ46	unique J gene of this family in the IMGT reference; mean CDR3 3'-end agreement with germline J segment KKSSGDKLTF = 4.00 aa over 1 rows	1			False	gene_list_unique
+A	J	TCRAJ47-01	216	TRAJ47*01	TRAJ47	mean CDR3 3'-end agreement with germline J segment EYGNKLVF = 7.31 aa over 216 rows	2			True	validated_by_cdr
+A	J	TCRAJ48-01	267	TRAJ48*01	TRAJ48	mean CDR3 3'-end agreement with germline J segment SNFGNEKLTF = 8.41 aa over 267 rows	1			False	validated_by_cdr
+A	J	TCRAJ49-01	308	TRAJ49*01	TRAJ49	mean CDR3 3'-end agreement with germline J segment NTGNQFYF = 7.01 aa over 308 rows	1			False	validated_by_cdr
+A	J	TCRAJ50-01	51	TRAJ50*01	TRAJ50	mean CDR3 3'-end agreement with germline J segment KTSYDKVIF = 8.14 aa over 51 rows	1			False	validated_by_cdr
+A	J	TCRAJ52-01	267	TRAJ52*01	TRAJ52	mean CDR3 3'-end agreement with germline J segment NAGGTSYGKLTF = 10.50 aa over 267 rows	1			False	validated_by_cdr
+A	J	TCRAJ53-01	171	TRAJ53*01	TRAJ53	mean CDR3 3'-end agreement with germline J segment NSGGSNYKLTF = 9.70 aa over 171 rows	1			False	validated_by_cdr
+A	J	TCRAJ54-01	290	TRAJ54*01	TRAJ54	mean CDR3 3'-end agreement with germline J segment IQGAQKLVF = 8.26 aa over 290 rows	1			False	validated_by_cdr
+A	J	TCRAJ56-01	72	TRAJ56*01	TRAJ56	mean CDR3 3'-end agreement with germline J segment YTGANSKLTF = 8.53 aa over 72 rows	1			False	validated_by_cdr
+A	J	TCRAJ57-01	177	TRAJ57*01	TRAJ57	mean CDR3 3'-end agreement with germline J segment TQGGSEKLVF = 8.23 aa over 177 rows	1			False	validated_by_cdr
+A	J	TCRAJ58-01	10	TRAJ58*01	TRAJ58	mean CDR3 3'-end agreement with germline J segment *ETSGSRLTF = 6.40 aa over 10 rows	1			False	validated_by_cdr
+A	J	TCRAJ60-01	1	TRAJ60*01	TRAJ60	unique J gene of this family in the IMGT reference; mean CDR3 3'-end agreement with germline J segment KIT*MLNF = 2.00 aa over 1 rows	1			False	gene_list_unique
+A	V	TCRAV01-01	113	TRAV1-1*01	TRAV1-1	cdr1=TSGFYG cdr2=NALDGL matches 1/2 candidate allele(s) in 90/90 rows	2	True	True	False	validated_by_cdr
+A	V	TCRAV01-02	430	TRAV1-2*01	TRAV1-2	cdr1=TSGFNG cdr2=NVLDGL matches 2/2 candidate allele(s) in 410/410 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV02-01	470	TRAV2*01	TRAV2	cdr1=VSNAYN cdr2=GSKP matches 2/2 candidate allele(s) in 50/50 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV03-01	441	TRAV3*01	TRAV3	cdr1=VSGNPY cdr2=YITGDNLV matches 1/1 candidate allele(s) in 440/440 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV04-01	862	TRAV4*01	TRAV4	cdr1=NIATNDY cdr2=GYKTK matches 1/1 candidate allele(s) in 860/860 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV05-01	296	TRAV5*01	TRAV5	cdr1=DSSSTY cdr2=IFSNMDM matches 1/1 candidate allele(s) in 290/290 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV06-01	52	TRAV6*01	TRAV6	cdr1=NYSPAY cdr2=IRENEKE matches 6/6 candidate allele(s) in 30/30 rows	6	True	True	True	validated_by_cdr
+A	V	TCRAV08-01	184	TRAV8-1*01	TRAV8-1	cdr1=YGGTVN cdr2=YFSGDPLV matches 2/2 candidate allele(s) in 180/180 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV08-02	130	TRAV8-2*01	TRAV8-2	cdr1=SSYSPS cdr2=YTSAATLV matches 2/2 candidate allele(s) in 130/130 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV08-03	264	TRAV8-3*01	TRAV8-3	cdr1=YGATPY cdr2=YFSGDTLV matches 3/3 candidate allele(s) in 260/260 rows	3	True	True	True	validated_by_cdr
+A	V	TCRAV08-04	250	TRAV8-4*01	TRAV8-4	cdr1=SSVPPY cdr2=YTSAATLV matches 4/7 candidate allele(s) in 250/250 rows	7	True	True	True	validated_by_cdr
+A	V	TCRAV08-06	430	TRAV8-6*01	TRAV8-6	cdr1=SSVSVY cdr2=YLSGSTLV matches 2/2 candidate allele(s) in 430/430 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV09-02	149	TRAV9-2*01	TRAV9-2	cdr1=ATGYPS cdr2=ATKADDK matches 4/4 candidate allele(s) in 120/120 rows	4	True	True	True	validated_by_cdr
+A	V	TCRAV10-01	78	TRAV10*01	TRAV10	cdr1=VSPFSN cdr2=MTFSENT matches 1/1 candidate allele(s) in 70/70 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV12-01	232	TRAV12-1*01	TRAV12-1	cdr1=NSASQS cdr2=VYSSGN matches 2/2 candidate allele(s) in 210/210 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV12-02	761	TRAV12-2*01	TRAV12-2	cdr1=DRGSQS cdr2=IYSNGD matches 2/3 candidate allele(s) in 760/760 rows	3	True	True	True	validated_by_cdr
+A	V	TCRAV12-03	308	TRAV12-3*01	TRAV12-3	cdr1=NSAFQY cdr2=TYSSGN matches 2/2 candidate allele(s) in 280/280 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV13-01	506	TRAV13-1*01	TRAV13-1	cdr1=DSASNY cdr2=IRSNVGE matches 3/3 candidate allele(s) in 440/440 rows	3	True	True	True	validated_by_cdr
+A	V	TCRAV13-02	127	TRAV13-2*01	TRAV13-2	cdr1=NSASDY cdr2=IRSNMDK matches 2/2 candidate allele(s) in 120/120 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV14-01	42	TRAV14/DV4*01	TRAV14/DV4	unique gene in the IMGT reference; no CDR evidence in the inputs	4			True	gene_list_unique
+A	V	TCRAV16-01	100	TRAV16*01	TRAV16	cdr1=YSGSPE cdr2=HISR matches 1/1 candidate allele(s) in 100/100 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV17-01	440	TRAV17*01	TRAV17	cdr1=TSINN cdr2=IRSNERE matches 1/1 candidate allele(s) in 440/440 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV19-01	970	TRAV19*01	TRAV19	cdr1=TRDTTYY cdr2=RNSFDEQN matches 1/1 candidate allele(s) in 940/940 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV20-01	225	TRAV20*01	TRAV20	cdr1=VSGLRG cdr2=LYSAGEE matches 4/4 candidate allele(s) in 220/220 rows	4	True	True	True	validated_by_cdr
+A	V	TCRAV21-01	378	TRAV21*01	TRAV21	cdr1=DSAIYN cdr2=IQSSQRE matches 2/2 candidate allele(s) in 350/350 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV22-01	201	TRAV22*01	TRAV22	cdr1=DSVNN cdr2=IPSGT matches 1/1 candidate allele(s) in 200/200 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV23-01	73	TRAV23/DV6*01	TRAV23/DV6	cdr1=NTAFDY cdr2=IRPDVSE matches 4/4 candidate allele(s) in 40/40 rows	4	True	True	True	validated_by_cdr
+A	V	TCRAV24-01	149	TRAV24*01	TRAV24	cdr1=SSNFYA cdr2=MTLNGDE matches 2/2 candidate allele(s) in 140/140 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV25-01	119	TRAV25*01	TRAV25	cdr1=TTLSN cdr2=LVKSGEV matches 1/1 candidate allele(s) in 110/110 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV26-01	116	TRAV26-1*01	TRAV26-1	cdr1=TISGNEY cdr2=GLKNN matches 3/3 candidate allele(s) in 70/70 rows	3	True	True	True	validated_by_cdr
+A	V	TCRAV26-02	173	TRAV26-2*01	TRAV26-2	cdr1=TISGTDY cdr2=GLTSN matches 2/2 candidate allele(s) in 160/160 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV27-01	277	TRAV27*01	TRAV27	cdr1=SVFSS cdr2=VVTGGEV matches 3/3 candidate allele(s) in 250/250 rows	3	True	True	True	validated_by_cdr
+A	V	TCRAV29-01	339	TRAV29/DV5*01	TRAV29/DV5	cdr1=NSMFDY cdr2=ISSIKDK matches 2/2 candidate allele(s) in 320/320 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV30-01	71	TRAV30*01	TRAV30	cdr1=KALYS cdr2=LLKGGEQ matches 4/4 candidate allele(s) in 70/70 rows	4	True	True	True	validated_by_cdr
+A	V	TCRAV34-01	31	TRAV34*01	TRAV34	cdr1=KTLYG cdr2=LQKGGEE matches 1/1 candidate allele(s) in 30/30 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV35-01	216	TRAV35*01	TRAV35	cdr1=SIFNT cdr2=LYKAGEL matches 2/2 candidate allele(s) in 210/210 rows	2	True	True	True	validated_by_cdr
+A	V	TCRAV36-01	81	TRAV36/DV7*01	TRAV36/DV7	cdr1=VTNFRS cdr2=LTSSGIE matches 3/4 candidate allele(s) in 60/80 rows; 20 further rows carry another allele of the same gene	4	True	True	True	validated_by_cdr
+A	V	TCRAV38-01	273	TRAV38-1*01	TRAV38-1	cdr1=TSENNYY cdr2=QEAYKQQN matches 2/4 candidate allele(s) in 260/260 rows	4	True	True	True	validated_by_cdr
+A	V	TCRAV38-02	444	TRAV38-2/DV8*01	TRAV38-2/DV8	cdr1=TSESDYY cdr2=QEAYKQQN matches 1/1 candidate allele(s) in 430/430 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV39-01	163	TRAV39*01	TRAV39	cdr1=TTSDR cdr2=LLSNGAV matches 1/1 candidate allele(s) in 160/160 rows	1	True	True	False	validated_by_cdr
+A	V	TCRAV41-01	29	TRAV41*01	TRAV41	unique gene in the IMGT reference; no CDR evidence in the inputs	1			False	gene_list_unique
+A	V	TCRDV01-01	7	TRDV1*01	TRDV1	unique gene in the IMGT reference; no CDR evidence in the inputs	1			False	gene_list_unique
+B	D	TCRBD01-01	0	TRBD1*01	TRBD1	unique gene in the IMGT reference; no CDR evidence in the inputs	1			False	gene_list_unique
+B	D	TCRBD02-01	0	TRBD2*01	TRBD2	unique gene in the IMGT reference; no CDR evidence in the inputs	2			True	gene_list_unique
+B	J	TCRBJ01-01	1205	TRBJ1-1*01	TRBJ1-1	mean CDR3 3'-end agreement with germline J segment NTEAFF = 5.09 aa over 1205 rows	1			False	validated_by_cdr
+B	J	TCRBJ01-02	621	TRBJ1-2*01	TRBJ1-2	unique J gene of this family in the IMGT reference; mean CDR3 3'-end agreement with germline J segment NYGYTF = 4.90 aa over 621 rows	1			False	gene_list_unique
+B	J	TCRBJ01-03	120	TRBJ1-3*01	TRBJ1-3	mean CDR3 3'-end agreement with germline J segment SGNTIYF = 6.32 aa over 120 rows	1			False	validated_by_cdr
+B	J	TCRBJ01-04	154	TRBJ1-4*01	TRBJ1-4	mean CDR3 3'-end agreement with germline J segment TNEKLFF = 5.32 aa over 154 rows	1			False	validated_by_cdr
+B	J	TCRBJ01-05	459	TRBJ1-5*01	TRBJ1-5	mean CDR3 3'-end agreement with germline J segment SNQPQHF = 5.58 aa over 459 rows	1			False	validated_by_cdr
+B	J	TCRBJ01-06	249	TRBJ1-6*01	TRBJ1-6	mean CDR3 3'-end agreement with germline J segment SYNSPLHF = 6.02 aa over 249 rows	2			True	validated_by_cdr
+B	J	TCRBJ02-01	2561	TRBJ2-1*01	TRBJ2-1	mean CDR3 3'-end agreement with germline J segment SYNEQFF = 5.27 aa over 2561 rows	1			False	validated_by_cdr
+B	J	TCRBJ02-02	838	TRBJ2-2*01	TRBJ2-2	mean CDR3 3'-end agreement with germline J segment NTGELFF = 6.01 aa over 838 rows	1			False	validated_by_cdr
+B	J	TCRBJ02-03	995	TRBJ2-3*01	TRBJ2-3	mean CDR3 3'-end agreement with germline J segment STDTQYF = 5.58 aa over 995 rows	1			False	validated_by_cdr
+B	J	TCRBJ02-04	152	TRBJ2-4*01	TRBJ2-4	mean CDR3 3'-end agreement with germline J segment AKNIQYF = 5.45 aa over 152 rows	1			False	validated_by_cdr
+B	J	TCRBJ02-05	964	TRBJ2-5*01	TRBJ2-5	mean CDR3 3'-end agreement with germline J segment QETQYF = 5.19 aa over 964 rows	1			False	validated_by_cdr
+B	J	TCRBJ02-06	186	TRBJ2-6*01	TRBJ2-6	mean CDR3 3'-end agreement with germline J segment SGANVLTF = 7.15 aa over 186 rows	1			False	validated_by_cdr
+B	J	TCRBJ02-07	2496	TRBJ2-7*01	TRBJ2-7	unique J gene of this family in the IMGT reference; mean CDR3 3'-end agreement with germline J segment SYEQYF = 4.83 aa over 2496 rows	2			True	gene_list_unique
+B	V	TCRBV02-01	482	TRBV2*01	TRBV2	cdr1=SNHLY cdr2=FYNNEI matches 3/3 candidate allele(s) in 480/480 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV03-01	1	TRBV3-1*01	TRBV3-1	unique gene in the IMGT reference; no CDR evidence in the inputs	2			True	gene_list_unique
+B	V	TCRBV03-01/03-02	170	TRBV3-1*01	TRBV3-1	cdr1=LGHDT cdr2=YNNKEL matches 1/5 candidate allele(s) in 170/170 rows	5	True	True	False	tie_resolved
+B	V	TCRBV04-01	634	TRBV4-1*01	TRBV4-1	cdr1=MGHRA cdr2=YSYEKL matches 2/2 candidate allele(s) in 630/630 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV04-02	202	TRBV4-2*01	TRBV4-2	cdr1=LGHNA cdr2=YNFKEQ matches 2/2 candidate allele(s) in 200/200 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV04-03	207	TRBV4-3*01	TRBV4-3	cdr1=LGHNA cdr2=YSLEER matches 4/4 candidate allele(s) in 200/200 rows	4	True	True	True	validated_by_cdr
+B	V	TCRBV05-01	601	TRBV5-1*01	TRBV5-1	cdr1=SGHRS cdr2=YFSETQ matches 2/2 candidate allele(s) in 600/600 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV05-04	150	TRBV5-4*01	TRBV5-4	cdr1=SGHNT cdr2=YYREEE matches 3/4 candidate allele(s) in 150/150 rows	4	True	True	True	validated_by_cdr
+B	V	TCRBV05-05	130	TRBV5-5*01	TRBV5-5	cdr1=SGHKS cdr2=YYEKEE matches 2/3 candidate allele(s) in 130/130 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV05-06	120	TRBV5-6*01	TRBV5-6	cdr1=SGHDT cdr2=YYEEEE matches 1/1 candidate allele(s) in 120/120 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV05-08	20	TRBV5-8*01	TRBV5-8	cdr1=SGHTS cdr2=YDEGEE matches 2/2 candidate allele(s) in 20/20 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV05-X	10	TRBV5-6*01	TRBV5-6	cdr1=SGHDT cdr2=YYEEEE matches 1/15 candidate allele(s) in 10/10 rows	15	True	True	False	tie_resolved
+B	V	TCRBV06-01	111	TRBV6-1*01	TRBV6-1	cdr1=MNHNS cdr2=SASEGT matches 1/1 candidate allele(s) in 110/110 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV06-02	10	TRBV6-2*01	TRBV6-2	cdr1=MNHEY cdr2=SVGEGT matches 1/1 candidate allele(s) in 10/10 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV06-02/06-03	150	TRBV6-2*01	TRBV6-2	cdr1=MNHEY cdr2=SVGEGT matches 2/2 candidate allele(s) in 150/150 rows; CDR-identical genes TRBV6-2,TRBV6-3	2	True	True	True	tie_resolved
+B	V	TCRBV06-04	10	TRBV6-4*01	TRBV6-4	cdr1=MRHNA cdr2=SNTAGT matches 2/2 candidate allele(s) in 10/10 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV06-05	311	TRBV6-5*01	TRBV6-5	cdr1=MNHEY cdr2=SVGAGI matches 1/1 candidate allele(s) in 190/310 rows; heterogeneous: 120 rows carry CDRs of !TRBV6-1	1	True	True	False	validated_by_cdr
+B	V	TCRBV06-06	160	TRBV6-6*01	TRBV6-6	cdr1=MNHNY cdr2=SVGAGI matches 4/5 candidate allele(s) in 140/160 rows; 20 further rows carry another allele of the same gene	5	True	True	True	validated_by_cdr
+B	V	TCRBV06-X	130	TRBV6-5*01	TRBV6-5	cdr1=MNHEY cdr2=SVGAGI matches 2/14 candidate allele(s) in 70/130 rows; CDR-identical genes TRBV6-5,TRBV6-6; heterogeneous: 40 rows carry CDRs of TRBV6-2,TRBV6-3; 20 further rows carry another allele of the same gene	14	True	True	True	tie_resolved
+B	V	TCRBV07-02	240	TRBV7-2*01	TRBV7-2	cdr1=SGHTA cdr2=FQGNSA matches 4/4 candidate allele(s) in 240/240 rows	4	True	True	True	validated_by_cdr
+B	V	TCRBV07-03	140	TRBV7-3*01	TRBV7-3	cdr1=SGHTA cdr2=FQGTGA matches 5/5 candidate allele(s) in 140/140 rows	5	True	True	True	validated_by_cdr
+B	V	TCRBV07-06	30	TRBV7-6*01	TRBV7-6	cdr1=SGHVS cdr2=FNYEAQ matches 2/2 candidate allele(s) in 30/30 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV07-08	60	TRBV7-8*01	TRBV7-8	cdr1=SGHVS cdr2=FQNEAQ matches 3/3 candidate allele(s) in 60/60 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV07-09	1172	TRBV7-9*01	TRBV7-9	cdr1=SEHNR cdr2=FQNEAQ matches 6/7 candidate allele(s) in 1170/1170 rows	7	True	True	True	validated_by_cdr
+B	V	TCRBV07-X	70	TRBV7-6*01	TRBV7-6	cdr1=SGHVS cdr2=FNYEAQ matches 2/25 candidate allele(s) in 70/70 rows	25	True	True	True	tie_resolved
+B	V	TCRBV09-01	795	TRBV9*01	TRBV9	cdr1=SGDLS cdr2=YYNGEE matches 3/3 candidate allele(s) in 790/790 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV10-01	70	TRBV10-1*01	TRBV10-1	cdr1=WNHNN cdr2=SYGVQD matches 1/2 candidate allele(s) in 70/70 rows	2	True	True	False	validated_by_cdr
+B	V	TCRBV10-02	100	TRBV10-2*01	TRBV10-2	cdr1=WSHSY cdr2=SAAADI matches 2/2 candidate allele(s) in 100/100 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV10-03	130	TRBV10-3*01	TRBV10-3	cdr1=ENHRY cdr2=SYGVKD matches 4/4 candidate allele(s) in 130/130 rows	4	True	True	True	validated_by_cdr
+B	V	TCRBV11-01	50	TRBV11-1*01	TRBV11-1	cdr1=SGHAT cdr2=FQDESV matches 1/1 candidate allele(s) in 50/50 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV11-02	200	TRBV11-2*01	TRBV11-2	cdr1=SGHAT cdr2=FQNNGV matches 3/3 candidate allele(s) in 200/200 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV11-03	140	TRBV11-3*01	TRBV11-3	cdr1=SGHNT cdr2=YENEEA matches 3/3 candidate allele(s) in 140/140 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV11-X	20	TRBV11-1*01	TRBV11-1	cdr1=SGHAT cdr2=FQDESV matches 1/7 candidate allele(s) in 20/20 rows	7	True	True	False	tie_resolved
+B	V	TCRBV12-03	3	TRBV12-3*01	TRBV12-3	unique gene in the IMGT reference; no CDR evidence in the inputs	1			False	gene_list_unique
+B	V	TCRBV12-03/12-04	90	TRBV12-3*01	TRBV12-3	cdr1=SGHNS cdr2=FNNNVP matches 1/3 candidate allele(s) in 90/90 rows	3	True	True	False	tie_resolved
+B	V	TCRBV12-05	90	TRBV12-5*01	TRBV12-5	cdr1=LGHNT cdr2=FRNRAP matches 1/1 candidate allele(s) in 90/90 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV12-X	180	TRBV12-3*01	TRBV12-3	cdr1=SGHNS cdr2=FNNNVP matches 1/6 candidate allele(s) in 180/180 rows	6	True	True	False	tie_resolved
+B	V	TCRBV13-01	61	TRBV13*01	TRBV13	cdr1=PRHDT cdr2=FYEKMQ matches 2/2 candidate allele(s) in 60/60 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV14-01	100	TRBV14*01	TRBV14	cdr1=SGHDN cdr2=FVKESK matches 2/2 candidate allele(s) in 100/100 rows	2	True	True	True	validated_by_cdr
+B	V	TCRBV15-01	113	TRBV15*01	TRBV15	cdr1=LNHNV cdr2=YYDKDF matches 2/3 candidate allele(s) in 100/100 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV16-01	10	TRBV16*01	TRBV16	cdr1=KGHSY cdr2=FQNENV matches 2/3 candidate allele(s) in 10/10 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV18-01	101	TRBV18*01	TRBV18	cdr1=KGHSH cdr2=LQKENI matches 1/1 candidate allele(s) in 100/100 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV19-01	210	TRBV19*01	TRBV19	cdr1=LNHDA cdr2=SQIVND matches 1/3 candidate allele(s) in 210/210 rows	3	True	True	False	validated_by_cdr
+B	V	TCRBV20-01	114	TRBV20-1*01	TRBV20-1	cdr1=DFQATT cdr2=SNEGSKA matches 6/7 candidate allele(s) in 100/100 rows	7	True	True	True	validated_by_cdr
+B	V	TCRBV20-X	680	TRBV20-1*01	TRBV20-1	cdr1=DFQATT cdr2=SNEGSKA matches 6/7 candidate allele(s) in 680/680 rows	7	True	True	True	tie_resolved
+B	V	TCRBV23-01	7	TRBV23-1*01	TRBV23-1	unique gene in the IMGT reference; no CDR evidence in the inputs	1			False	gene_list_unique
+B	V	TCRBV24-01	50	TRBV24-1*01	TRBV24-1	cdr1=KGHDR cdr2=SFDVKD matches 1/1 candidate allele(s) in 50/50 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV25-01	30	TRBV25-1*01	TRBV25-1	cdr1=MGHDK cdr2=SYGVNS matches 1/1 candidate allele(s) in 30/30 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV27-01	671	TRBV27*01	TRBV27	cdr1=MNHEY cdr2=SMNVEV matches 1/1 candidate allele(s) in 670/670 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV28-01	344	TRBV28*01	TRBV28	cdr1=MDHEN cdr2=SYDVKM matches 1/1 candidate allele(s) in 340/340 rows	1	True	True	False	validated_by_cdr
+B	V	TCRBV29-01	1203	TRBV29-1*01	TRBV29-1	cdr1=SQVTM cdr2=ANQGSEA matches 3/3 candidate allele(s) in 320/320 rows	3	True	True	True	validated_by_cdr
+B	V	TCRBV30-01	117	TRBV30*01	TRBV30	cdr1=GTSNPN cdr2=SVGIG matches 3/4 candidate allele(s) in 70/70 rows	4	True	True	True	validated_by_cdr

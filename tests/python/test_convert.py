@@ -243,3 +243,36 @@ def test_read_mixcr_prefers_read_count_over_molecule_count(tmp_path):
                  "0\t7\t42\tTRBV13*00(1000)\tTRBJ2-4*00(900)\t"
                  "TGTGCCAGCAGCTTAGGGGAAAACATTCAGTACTTC\tCASSLGENIQYF\n")
     assert convert.read_mixcr(p)["duplicate_count"][0] == 42
+
+
+# Adaptive token -> IMGT gene. The legacy zero-strip re-emits every trailing `-01` as a subgroup,
+# which is a gene name that does not exist for 100 of the 161 tokens of IMMREP25 + pairSEQ.
+# Oracles: the CDR-validated resources/adaptive_imgt_map.tsv (appendix/adaptive_imgt_map.md).
+@pytest.mark.parametrize("token,gene", [
+    ("TCRBV29-01", "TRBV29-1"),        # trailing group genuinely IS a subgroup — must not regress
+    ("TCRAV01-01", "TRAV1-1"),         # ditto
+    ("TCRAJ39-01", "TRAJ39"),          # allele read as subgroup; no human TRAJ has a subgroup
+    ("TCRAV22-01", "TRAV22"),          # ditto, V
+    ("TCRBV09-01", "TRBV9"),           # ditto, the most frequent offender
+    ("TCRBD01-01", "TRBD1"),           # ditto, D genes (read_immunoseq maps D_CALL too)
+    ("TCRBV03-01/03-02", "TRBV3-1"),   # slash tie was passed through verbatim
+    ("TCRBV12-X", "TRBV12-3"),         # family-only call was passed through verbatim
+    ("TCRAV38-02", "TRAV38-2/DV8"),    # co-locus name was not reconstructed
+    ("TCRBJ02-06*01", "TRBJ2-6"),      # allele suffix on the token
+    ("TCRBV99-99", "TRBV99-99"),       # off-table -> legacy rewrite, behaviour unchanged
+    ("unresolved", None),
+    (None, None),
+])
+def test_adaptive_to_imgt(token, gene):
+    assert convert._adaptive_to_imgt(token) == gene
+
+
+def test_read_immunoseq_uses_the_validated_gene_map(tmp_path):
+    """End-to-end: V, D and J calls all go through the table (`TRBV9`, not `TRBV9-1`)."""
+    p = tmp_path / "is.tsv"
+    p.write_text("rearrangement\tamino_acid\tframe_type\tv_index\tcdr3_length\t"
+                 "v_gene\td_gene\tj_gene\ttemplates\treads\n"
+                 "TGTGCCAGCAGCTTAGGGGAAAACATTCAGTACTTC\tCASSLGENIQYF\tIn\t0\t15\t"
+                 "TCRBV09-01\tTCRBD01-01\tTCRBJ02-04\t50\t50\n")
+    r = convert.read_immunoseq(p).row(0, named=True)
+    assert (r["v_call"], r["d_call"], r["j_call"]) == ("TRBV9", "TRBD1", "TRBJ2-4")
