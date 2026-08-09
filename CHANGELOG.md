@@ -3,7 +3,52 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## Unreleased
+## 3.1.1 — 2026-07-30
+
+### Fixed
+
+- **`biomarker.association(match="fuzzy")` re-ran the full-cohort search on every call**, even
+  when a caller tests many phenotype designs (e.g. one per HLA gene) against the same
+  cohort/key/candidates/scope — the search depends only on those, never on the design. At
+  full-corpus scale (~50k donors) this drove peak memory from 48G to 256-350G per SLURM task on
+  diverse BCR light chains, entirely from redundant `collect()`/`.to_list()` work repeated once
+  per design instead of once. Added `prepare_fuzzy_features(cohort, key, candidates=, scope=) ->
+  FeatureFrame` + `association(..., features=)` so the search is opt-in-cacheable: build it once,
+  reuse across every design against the same cohort.
+- Documented that `level_col`'s memory cost is **multiplicative, not additive**: `association()`'s
+  feature-join duplicates every matched row once per design level (correct behaviour — each level
+  needs its own incidence table — but easy to miss from the prior wording).
+
+### Changed
+
+- Bumped the `seqtree` floor to `>=0.6.1` — fixes a corrupted Miyazawa–Jernigan A–N contact
+  energy in `structural()` (0.6.0) and names the offending sequence/index in `gapblock_matrix`'s
+  alphabet error instead of just the bad symbol (0.6.1).
+
+## 3.1.0 — 2026-07-28
+
+### Added
+
+- **The bundled `arda` model set is reachable.** `_bundled/arda/` has shipped 9 EM-refit models —
+  the 7 human loci **plus mouse TRA/TRB** — in every wheel, but no public call could reach them:
+  `SOURCES` listed only `("olga", "learned")`, and `load_bundled` keyed
+  `_bundled/<source>/<LOCUS>` while the arda directories are `<organism>_<LOCUS>`, so
+  `list_bundled()` reported them as absent. (`from_arda` is not a substitute — it returns the
+  *placeholder* marginals meant to be refit by `infer_native`, not these refit ones.)
+
+  `load_bundled` gains a keyword-only `organism=` (default `"human"`) and derives the directory key
+  per set. This is the only bundled set in the **arda IMGT allele namespace** — the frame that
+  arda-annotated pipelines such as `mirpy`'s prototypes and baked germline distances live in — and
+  the only bundled set covering a non-human organism.
+
+### Changed
+
+- `load_bundled` now **raises** when a non-human `organism` is asked of the human-only `olga` /
+  `learned` sets, instead of silently handing back the human model; `FileNotFoundError` lists the
+  keys that *are* available for that set. Every existing caller passes `(locus, source)`
+  positionally and is unaffected.
+
+### Repository
 
 - Consolidated the example notebooks: the old `notebooks/` directory was merged into
   **`examples/`**, so every marimo explorer now lives under `examples/` (docs / README / skills
