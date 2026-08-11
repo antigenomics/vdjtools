@@ -49,6 +49,9 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   threads=)`** (thread-parallel across sequences, bitwise-identical to serial, ~11× on 16 cores).
   Pure-Python reference impls in `vdjtools.model.pgen`.
 - **Generate**: `vdjtools.model.generate.generate(model, n, seed=, productive_only=)` → `pl.DataFrame`.
+  ⚠ `seed=` is reproducible **across processes** only from **3.3.0**: `collapse_alleles` used
+  unordered polars `group_by`, so the collapsed table's row order varied per process and the same
+  seed drew a different allele. Expectations recorded from `generate()` before 3.3.0 are stale.
 - **Infer (EM)**: `vdjtools.model.infer.infer` / `infer_native(template, seqs, masks=, dd_allowed=,
   nd_prior=, single_d=)`.
 - **Germline (arda = single source of truth)** `vdjtools.model.reference`: `load_germline(locus,

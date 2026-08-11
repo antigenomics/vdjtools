@@ -104,7 +104,8 @@ native.pgen_nt(model, "TGTGCCAGCAGC...")        # nucleotide generation probabil
 native.pgen_aa(model, "CASSLAPGATNEKLFF")       # amino-acid Pgen (codon-marginalised)
 native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # + the whole Hamming-1 ball
 native.pgen_aa_batch(model, seqs, mismatches=1, threads=0)  # Pgen over many CDR3s, thread-parallel (~11×)
-generate(model, 1000)                           # sample a repertoire -> polars DataFrame
+generate(model, 1000, seed=1)                    # sample a repertoire -> polars DataFrame
+                                                # seed= is process-stable from 3.3.0
 ```
 
 Where Pgen *sums* over recombination scenarios, `model.viterbi` takes the **argmax** — the single

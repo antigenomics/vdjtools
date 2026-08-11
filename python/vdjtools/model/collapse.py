@@ -49,7 +49,7 @@ def _allele_weights(choice: pl.DataFrame, allele_col: str) -> pl.DataFrame:
 def _collapse_choice(choice: pl.DataFrame, allele_col: str) -> pl.DataFrame:
     """Marginal choice at gene resolution, relabelled ``gene*01``."""
     return (choice.with_columns(_gene(allele_col).alias("_g"))
-            .group_by("_g").agg(pl.col("p").sum())
+            .group_by("_g", maintain_order=True).agg(pl.col("p").sum())
             .with_columns(pl.col("_g").map_elements(_rep, return_dtype=pl.Utf8).alias(allele_col))
             .drop("_g").select(allele_col, "p"))
 
@@ -60,7 +60,7 @@ def _collapse_conditional(tbl: pl.DataFrame, allele_col: str, weights: pl.DataFr
     w = weights.rename({"_a": allele_col})
     out = (tbl.join(w, on=allele_col, how="inner")
            .with_columns(pw=pl.col("p") * pl.col("w"))
-           .group_by(["_g", *bin_cols]).agg(pl.col("pw").sum().alias("p"))
+           .group_by(["_g", *bin_cols], maintain_order=True).agg(pl.col("pw").sum().alias("p"))
            .with_columns(pl.col("_g").map_elements(_rep, return_dtype=pl.Utf8).alias(allele_col))
            .drop("_g"))
     return out.select(allele_col, *bin_cols, "p")
@@ -105,17 +105,17 @@ def collapse_alleles(model: Model) -> Model:
         # VJ: j_choice is P(J|V) keyed (v_allele, j_allele). Collapse J within each V allele
         # (sum over J sub-alleles), then collapse V (weighted average over V sub-alleles).
         jc = (t["j_choice"].with_columns(_gene("v_allele").alias("_gv"), _gene("j_allele").alias("_gj"))
-              .group_by(["v_allele", "_gv", "_gj"]).agg(pl.col("p").sum()))   # sum J alleles
+              .group_by(["v_allele", "_gv", "_gj"], maintain_order=True).agg(pl.col("p").sum()))   # sum J alleles
         jc = (jc.join(wv.rename({"_a": "v_allele", "_g": "_gv"}), on=["v_allele", "_gv"])
               .with_columns(pw=pl.col("p") * pl.col("w"))
-              .group_by(["_gv", "_gj"]).agg(pl.col("pw").sum().alias("p"))    # weighted avg over V alleles
+              .group_by(["_gv", "_gj"], maintain_order=True).agg(pl.col("pw").sum().alias("p"))    # weighted avg over V alleles
               .with_columns(pl.col("_gv").map_elements(_rep, return_dtype=pl.Utf8).alias("v_allele"),
                             pl.col("_gj").map_elements(_rep, return_dtype=pl.Utf8).alias("j_allele")))
         new["j_choice"] = jc.select("v_allele", "j_allele", "p")
         # j_5_del keyed by j_allele: weight by the J marginal P(J) = Σ_V P(J|V)P(V).
         pv = _marginal(t["v_choice"], "v_allele").rename({"_a": "v_allele"})
         jmarg = (t["j_choice"].join(pv, on="v_allele").with_columns(pj=pl.col("p") * pl.col("p_right"))
-                 .group_by("j_allele").agg(pl.col("pj").sum().alias("p")))
+                 .group_by("j_allele", maintain_order=True).agg(pl.col("pj").sum().alias("p")))
         wjm = _allele_weights(jmarg, "j_allele")
         new["j_5_del"] = _collapse_conditional(t["j_5_del"], "j_allele", wjm, ["ndel"])
 
@@ -125,17 +125,17 @@ def collapse_alleles(model: Model) -> Model:
         # (weighted average over J sub-alleles, by j_choice usage).
         wj_full = _allele_weights(t["j_choice"], "j_allele")
         dg = (t["d_gene"].with_columns(_gene("j_allele").alias("_gj"), _gene("d_allele").alias("_gd"))
-              .group_by(["j_allele", "_gj", "_gd"]).agg(pl.col("p").sum()))     # sum D alleles
+              .group_by(["j_allele", "_gj", "_gd"], maintain_order=True).agg(pl.col("p").sum()))     # sum D alleles
         dg = (dg.join(wj_full.rename({"_a": "j_allele", "_g": "_gj"}), on=["j_allele", "_gj"])
               .with_columns(pw=pl.col("p") * pl.col("w"))
-              .group_by(["_gj", "_gd"]).agg(pl.col("pw").sum().alias("p"))       # weighted avg over J alleles
+              .group_by(["_gj", "_gd"], maintain_order=True).agg(pl.col("pw").sum().alias("p"))       # weighted avg over J alleles
               .with_columns(pl.col("_gj").map_elements(_rep, return_dtype=pl.Utf8).alias("j_allele"),
                             pl.col("_gd").map_elements(_rep, return_dtype=pl.Utf8).alias("d_allele")))
         new["d_gene"] = dg.select("j_allele", "d_allele", "p")
         # d_del keyed by d_allele: weight by the D marginal P(D) = Σ_J P(D|J)P(J).
         pj = _marginal(t["j_choice"], "j_allele").rename({"_a": "j_allele"})
         dmarg = (t["d_gene"].join(pj, on="j_allele").with_columns(pd=pl.col("p") * pl.col("p_right"))
-                 .group_by("d_allele").agg(pl.col("pd").sum().alias("p")))
+                 .group_by("d_allele", maintain_order=True).agg(pl.col("pd").sum().alias("p")))
         wdm = _allele_weights(dmarg, "d_allele")
         bins = [c for c in t["d_del"].columns if c not in ("d_allele", "p")]
         new["d_del"] = _collapse_conditional(t["d_del"], "d_allele", wdm, bins)
@@ -144,10 +144,10 @@ def collapse_alleles(model: Model) -> Model:
         if "d2_gene" in t:
             wd1 = _allele_weights(dmarg, "d_allele")                     # weights over the parent D1
             d2 = (t["d2_gene"].with_columns(_gene("d_allele").alias("_gd1"), _gene("d2_allele").alias("_gd2"))
-                  .group_by(["d_allele", "_gd1", "_gd2"]).agg(pl.col("p").sum()))          # sum D2 sub-alleles
+                  .group_by(["d_allele", "_gd1", "_gd2"], maintain_order=True).agg(pl.col("p").sum()))          # sum D2 sub-alleles
             d2 = (d2.join(wd1.rename({"_a": "d_allele", "_g": "_gd1"}), on=["d_allele", "_gd1"])
                   .with_columns(pw=pl.col("p") * pl.col("w"))
-                  .group_by(["_gd1", "_gd2"]).agg(pl.col("pw").sum().alias("p"))            # weighted avg over D1
+                  .group_by(["_gd1", "_gd2"], maintain_order=True).agg(pl.col("pw").sum().alias("p"))            # weighted avg over D1
                   .with_columns(pl.col("_gd1").map_elements(_rep, return_dtype=pl.Utf8).alias("d_allele"),
                                 pl.col("_gd2").map_elements(_rep, return_dtype=pl.Utf8).alias("d2_allele")))
             new["d2_gene"] = d2.select("d_allele", "d2_allele", "p")
@@ -156,7 +156,7 @@ def collapse_alleles(model: Model) -> Model:
             pd1 = dmarg.select(pl.col("d_allele").alias("_a"), "p")
             d2marg = (t["d2_gene"].join(pd1.rename({"_a": "d_allele"}), on="d_allele")
                       .with_columns(pd2=pl.col("p") * pl.col("p_right"))
-                      .group_by("d2_allele").agg(pl.col("pd2").sum().alias("p")))
+                      .group_by("d2_allele", maintain_order=True).agg(pl.col("pd2").sum().alias("p")))
             wd2 = _allele_weights(d2marg, "d2_allele")
             b2 = [c for c in t["d2_del"].columns if c not in ("d2_allele", "p")]
             new["d2_del"] = _collapse_conditional(t["d2_del"], "d2_allele", wd2, b2)

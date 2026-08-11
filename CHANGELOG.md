@@ -54,23 +54,29 @@ satisfy this; an out-of-frame draw does not (measured: 8 aa against 25 nt).
 
 - `arda-mapper` pinned to **>= 2.19.0** (was >= 2.5.5).
 
-### ⚠ Found, NOT fixed — `generate(model, n, seed=)` is not reproducible across processes
+### Fixed — `generate(model, n, seed=)` was not reproducible across processes
 
-`seed=` gives identical output within one process and **different output in a new one**. It is not
-hash randomisation (`PYTHONHASHSEED=0` does not help). `generate.py` builds its sampling tables with
-**seven unordered `group_by` calls** (plus a `set()` at :70), and polars' `group_by` is a
-multithreaded hash aggregation — so each group's value array comes out in a process-dependent order
-and the same seeded draw selects a different value. `_pick`/`default_rng` are correct; the ordering
-under them is not.
+Same seed, same wheel, a **new interpreter → a different draw**. Within one process it looked
+perfect, which is why no existing test caught it.
 
-Same class as the nondeterminism recorded against arda's `correct` ("polars `group_by` is a
-multithreaded hash aggregation used 3x unordered").
+Root cause: **`collapse_alleles`** — which `load_bundled(..., collapse=True)` runs by default —
+built its tables with unordered polars `group_by().agg()`. `group_by` is a multithreaded hash
+aggregation, so the collapsed table's **row order varied per process**; `_cum` then assigned the
+same cumulative interval to a different allele, and the same `rng.random()` drew a different one.
+`_pick` and `default_rng` were correct throughout — the ordering beneath them was not.
 
-⛔ **Deliberately not fixed here.** The repair is small (`maintain_order=True`, and sort the set),
-but it *changes generated output*, so every seeded expectation elsewhere has to be re-derived in the
-same commit — that is its own change, not a rider on this one. Consequence meanwhile: no documented
-example may quote a specific `generate()` draw. The README example uses a literal CDR3 for exactly
-this reason.
+⚠ **Not hash randomisation.** `PYTHONHASHSEED=0` did not help, which is what ruled it out and
+pointed at the aggregation. Same class as the nondeterminism recorded against arda's `correct`
+stage.
+
+Fixed by `maintain_order=True` on all 12 `group_by` calls in `collapse.py` and all 7 in
+`generate.py`. Verified identical across 5 separate processes on TRA, TRB and IGH.
+
+⛔ **This changes generated output** for a given seed — it has to, since the old order was
+arbitrary. Any recorded expectation from `generate()` predating 3.3.0 must be re-derived.
+
+New tests run the sampler in a **subprocess**, because an in-process test agrees even with the bug
+present; they fail 4 of 5 without the fix.
 
 ## 3.2.0 — 2026-08-09
 
