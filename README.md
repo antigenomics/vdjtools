@@ -112,13 +112,12 @@ most likely one, which is the V/D/J boundary markup:
 
 ```python
 from vdjtools.model import best_scenario
-from vdjtools.model.generate import generate
 
-r = generate(model, 1, seed=2, productive_only=True).row(0, named=True)
-sc = best_scenario(model, r["junction_nt"], v=r["v_call"], j=r["j_call"])
+sc = best_scenario(model, "TGTGCCAGCAGCTTAGGGACAGGGGGCTACGAGCAGTACTTC",
+                   v="TRBV19*01", j="TRBJ2-7*01")     # ALLELE names, as the model's tables are
 
 sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, in CDR3-nt space
-# -> 13, 'TRBD1*01', 19, 23, 25    -- V/J are ALLELE names, as the model's tables are
+# -> 8, 'TRBD1*01', 15, 24, 26
 ```
 
 It reuses the same tables and the same loops as `pgen_nt`, so the chosen D obeys `P(D|J)` — a

@@ -54,6 +54,24 @@ satisfy this; an out-of-frame draw does not (measured: 8 aa against 25 nt).
 
 - `arda-mapper` pinned to **>= 2.19.0** (was >= 2.5.5).
 
+### ⚠ Found, NOT fixed — `generate(model, n, seed=)` is not reproducible across processes
+
+`seed=` gives identical output within one process and **different output in a new one**. It is not
+hash randomisation (`PYTHONHASHSEED=0` does not help). `generate.py` builds its sampling tables with
+**seven unordered `group_by` calls** (plus a `set()` at :70), and polars' `group_by` is a
+multithreaded hash aggregation — so each group's value array comes out in a process-dependent order
+and the same seeded draw selects a different value. `_pick`/`default_rng` are correct; the ordering
+under them is not.
+
+Same class as the nondeterminism recorded against arda's `correct` ("polars `group_by` is a
+multithreaded hash aggregation used 3x unordered").
+
+⛔ **Deliberately not fixed here.** The repair is small (`maintain_order=True`, and sort the set),
+but it *changes generated output*, so every seeded expectation elsewhere has to be re-derived in the
+same commit — that is its own change, not a rider on this one. Consequence meanwhile: no documented
+example may quote a specific `generate()` draw. The README example uses a literal CDR3 for exactly
+this reason.
+
 ## 3.2.0 — 2026-08-09
 
 ### Fixed
