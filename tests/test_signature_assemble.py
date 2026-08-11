@@ -158,3 +158,39 @@ class TestCohort:
         assert v["vsig:qc:-:n_loci_present"] == 2.0
         assert np.isfinite(v["vsig:pair:-:log_IGH_TRB"])
         assert v["vsig:pair:-:log_IGH_TRB"] != 0.0
+
+
+class TestFullTier:
+    """The full tier must compute what it declares, or say plainly that it cannot."""
+
+    def test_composition_and_pgen_are_computed_not_holes(self):
+        v = vsig({"TRB": frame(2000, seed=20)}, tier="full")
+        for col in ("vsig:aa:TRB:C", "vsig:aa:TRB:G",
+                    "vsig:pchem:TRB:all_hydropathy", "vsig:pchem:TRB:center_charge",
+                    "vsig:pgen:TRB:mean_log10", "vsig:pgen:TRB:sd_log10"):
+            assert np.isfinite(v[col]), f"{col} is declared at full tier but came back a hole"
+
+    def test_residue_composition_is_bounded(self):
+        """Arcsine, so every residue column lives in [0, pi/2] whatever the depth."""
+        v = vsig({"TRB": frame(2000, seed=21)}, tier="full")
+        vals = [v[f"vsig:aa:TRB:{c}"] for c in "ACDEFGHIKLMNPQRSTVWY"]
+        assert all(0.0 <= x <= np.pi / 2 for x in vals)
+
+    def test_frac_atypical_needs_a_reference_quantile(self):
+        """Being 'atypical' is meaningless without something to be atypical against."""
+        assert np.isnan(vsig({"TRB": frame(500, seed=22)}, tier="full")["vsig:pgen:TRB:frac_atypical"])
+        with_ref = vsig({"TRB": frame(500, seed=22)}, tier="full", pgen_q05={"TRB": -12.0})
+        assert np.isfinite(with_ref["vsig:pgen:TRB:frac_atypical"])
+
+    def test_pgen_is_reproducible_across_calls(self):
+        """The subsample is CRC32-seeded, not hash()-seeded, so it survives a new process."""
+        a = vsig({"TRB": frame(5000, seed=23)}, tier="full")["vsig:pgen:TRB:mean_log10"]
+        b = vsig({"TRB": frame(5000, seed=23)}, tier="full")["vsig:pgen:TRB:mean_log10"]
+        assert a == b
+
+    def test_strict_refuses_a_tier_it_cannot_fully_compute(self):
+        with pytest.raises(ValueError, match="not computed yet"):
+            vsig({"TRB": frame(200, seed=24)}, tier="full", strict=True)
+
+    def test_strict_accepts_a_tier_it_can(self):
+        assert vsig({"TRB": frame(200, seed=25)}, tier="core", strict=True)

@@ -39,8 +39,17 @@ def _locus_frames(sample) -> dict[str, pl.DataFrame]:
             for k, v in df.partition_by(LOCUS, as_dict=True).items()}
 
 
+#: Blocks the layout declares but nothing computes yet. Requested explicitly, they raise rather
+#: than returning silent holes: a column that is always nan is indistinguishable from one the
+#: sample genuinely could not support, and the difference is exactly what the masks exist to
+#: preserve. ``pub`` needs the frozen public-clonotype panel; ``usage`` needs the frozen
+#: functional-gene vocabulary.
+UNIMPLEMENTED: tuple[str, ...] = ("pub", "usage")
+
+
 def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DEFAULT_CSTAR,
-         weight: str = "log2p1") -> dict[str, float]:
+         weight: str = "log2p1", pgen_q05: dict[str, float] | None = None,
+         threads: int = 0, strict: bool = False) -> dict[str, float]:
     """The ``vsig`` half of one sample's signature, as ``{column_name: value}``.
 
     Args:
@@ -48,15 +57,29 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         tier: ``"core"``, ``"standard"`` or ``"full"``.
         cstar: Coverage level for the standardised Hill numbers; a scalar or ``{locus: level}``.
         weight: Clone-size weight ``g`` (see :func:`~vdjtools.signature.blocks.work_frame`).
+        pgen_q05: Per-locus frozen 5th-percentile ``log10 Pgen`` for ``pgen:*:frac_atypical``;
+            that column stays ``nan`` without it, since "atypical" is meaningless without a
+            reference to be atypical against.
+        threads: Worker threads for the Pgen batch; 0 = auto.
+        strict: Raise if the requested tier includes a block listed in :data:`UNIMPLEMENTED`.
+            Off by default so ``tier="full"`` still runs; on when a caller needs the guarantee
+            that every declared column was actually computed.
 
     Returns:
         Every column :func:`vdjtools.signature.layout.columns` lists for ``tier`` and ``"vsig"``,
         in that order, with ``nan`` where the sample could not support one.
 
     Raises:
-        ValueError: If ``tier`` is unknown.
+        ValueError: If ``tier`` is unknown, or ``strict`` and the tier reaches an unimplemented
+            block.
     """
     want = L.columns(tier, "vsig")
+    pending = sorted({L.parse(c)[1] for c in want} & set(UNIMPLEMENTED))
+    if pending and strict:
+        raise ValueError(
+            f"tier {tier!r} includes block(s) {pending}, which are declared in the layout but "
+            "not computed yet — they would come back as silent holes. Drop strict=True to "
+            "accept that, or use a narrower tier.")
     out = dict.fromkeys(want, np.nan)
     frames = _locus_frames(sample)
     full = tier == "full"
@@ -91,6 +114,13 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         div = B.div_block(clean, level, tier_full=full)
         _put(out, f"vsig:div:{locus}", div)
         out[f"vsig:mask:{locus}:estimable"] = float(np.isfinite(div.get("1D_c", np.nan)))
+
+        if std:
+            _put(out, f"vsig:pgen:{locus}",
+                 B.pgen_block(work, locus, q05=(pgen_q05 or {}).get(locus), threads=threads))
+        if full:
+            _put(out, f"vsig:aa:{locus}", B.aa_block(work))
+            _put(out, f"vsig:pchem:{locus}", B.pchem_block(work))
 
         if locus == "IGH":
             _put(out, "vsig:iso:IGH", B.iso_block(work, tier_full=full))

@@ -307,6 +307,97 @@ def pair_block(reads: dict[str, float]) -> dict[str, float]:
             for a, b in PAIRS}
 
 
+# ------------------------------------------------------------------------- composition (full)
+
+
+def aa_block(df: pl.DataFrame) -> dict[str, float]:
+    """Weighted residue composition of the junctions — 20 parts, arcsine-stabilised.
+
+    Only ``k=1``. A 3-mer spectrum is 8,000 cells against roughly 1,200 tokens at the corpus
+    median depth, so it is >85% structural zeros and its log-ratio coordinates end up a
+    depth read-out wearing a motif label. Single residues are ~1,400 observations over 20 parts
+    — genuinely estimated. Motif structure is the geometry half's job, where it is dense.
+    """
+    from ..features.kmer import kmer_profile
+
+    keys = list("ACDEFGHIKLMNPQRSTVWY")
+    if df.height == 0:
+        return dict.fromkeys(keys, np.nan)
+    prof = kmer_profile(df, k=1, weight="freq", by_locus=False)
+    got = dict(zip(prof["kmer"].to_list(), prof["weight"].to_list()))
+    total = sum(got.values())
+    m = float(df[JUNCTION_AA].str.len_chars().sum())      # residues actually observed
+    if total <= 0:
+        return dict.fromkeys(keys, np.nan)
+    return {k: float(T.arcsine(got.get(k, 0.0) / total, m)) for k in keys}
+
+
+def pchem_block(df: pl.DataFrame, regions=("all", "center")) -> dict[str, float]:
+    """Weighted mean physicochemistry of the junction, over two regions.
+
+    Two regions rather than the legacy five, and means rather than four quantiles apiece: at a
+    hundred clonotypes the quantiles of a per-clonotype property are noise, while the weighted
+    mean is a well-behaved average over every residue seen.
+    """
+    from ..features.physchem import DEFAULT_PROPERTIES, physchem_profile
+
+    keys = [f"{r}_{p}" for r in regions for p in DEFAULT_PROPERTIES]
+    if df.height == 0:
+        return dict.fromkeys(keys, np.nan)
+    out = dict.fromkeys(keys, np.nan)
+    for region in regions:
+        prof = physchem_profile(df, group_by="locus", region=region, weight="freq")
+        for row in prof.iter_rows(named=True):
+            key = f"{region}_{row['property']}"
+            if key in out and row["mean_value"] is not None:
+                out[key] = float(row["mean_value"])
+    return out
+
+
+def pgen_block(df: pl.DataFrame, locus: str, *, q05: float | None = None,
+               n_max: int = 2000, threads: int = 0) -> dict[str, float]:
+    """Generation probability of the junctions under the bundled recombination model.
+
+    How *surprising* this repertoire's receptors are: a clone that recombination produces
+    readily is weak evidence of anything, while a low-Pgen clone that reached detectable size
+    had help. ``frac_atypical`` is the share sitting below a frozen reference quantile.
+
+    V and J are **marginalised** (``v=None, j=None``) rather than conditioned on the observed
+    calls. The batch API wants allele-level names and raises on gene-level ones, and AIRR frames
+    are gene-level after allele stripping — so conditioning here would either crash or, worse,
+    silently condition on whichever alleles happened to survive.
+
+    Subsampled deterministically to ``n_max`` junctions, seeded from the locus name via CRC32
+    rather than :func:`hash`, whose string hashing is randomised per process and would make the
+    column irreproducible across runs.
+    """
+    import zlib
+
+    from ..model.bundled import load_bundled
+    from ..model.native import pgen_aa_batch
+
+    nan = {"mean_log10": np.nan, "sd_log10": np.nan, "frac_atypical": np.nan}
+    if df.height == 0:
+        return nan
+    juncs = df[JUNCTION_AA].to_list()
+    if len(juncs) > n_max:
+        rng = np.random.default_rng(zlib.crc32(locus.encode()))
+        juncs = [juncs[i] for i in rng.choice(len(juncs), n_max, replace=False)]
+    try:
+        p = np.asarray(pgen_aa_batch(load_bundled(locus), juncs, v=None, j=None, threads=threads),
+                       dtype=float)
+    except Exception:                       # no bundled model for this locus/species
+        return nan
+    p = p[np.isfinite(p) & (p > 0)]
+    if p.size == 0:
+        return nan
+    lp = np.log10(p)
+    out = {"mean_log10": float(lp.mean()), "sd_log10": float(lp.std())}
+    out["frac_atypical"] = (float(T.logit(float((lp < q05).mean()), p.size))
+                            if q05 is not None else np.nan)
+    return out
+
+
 def _demo() -> None:
     """Self-check on a synthetic sample: shapes, holes, and the depth-honesty property."""
     rng = np.random.default_rng(0)
