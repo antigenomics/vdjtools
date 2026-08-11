@@ -16,6 +16,7 @@ from .layout import (
     register,
     registry,
 )
+from .assemble import DEFAULT_CSTAR, vsig, vsig_cohort
 from .transform import (
     DEFAULT_CLIP,
     arcsine,
@@ -30,6 +31,7 @@ from .transform import (
 
 __all__ = [
     "DEFAULT_CLIP",
+    "DEFAULT_CSTAR",
     "LOCI",
     "NO_LOCUS",
     "TIERS",
@@ -50,4 +52,6 @@ __all__ = [
     "reference_z",
     "register",
     "robust_loc_scale",
+    "vsig",
+    "vsig_cohort",
 ]
