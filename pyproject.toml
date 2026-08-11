@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "3.2.0"
+version = "3.3.0"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,7 +36,9 @@ dependencies = [
     # its only runtime deps are polars + typer (already ours) + requests. It is imported
     # lazily inside the functions that need it, so `import vdjtools` stays light. mmseqs2 is
     # needed only for arda's alignment/annotate path, never for germline lookup or Pgen.
-    "arda-mapper>=2.5.5",
+    # >=2.19.0: the germline anchors `model.reference` reads, plus arda 2.17.0+
+    # `junction_completed_nt` / 2.19.0 `--flag-chimeras` in the annotation path.
+    "arda-mapper>=2.19.0",
     # seqtree = the fuzzy-search / e-value engine, vdjmatch = overlap + TCRnet on top of it.
     # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
     # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or

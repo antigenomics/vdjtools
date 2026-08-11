@@ -15,6 +15,7 @@ from .reference import cut_segment, load_germline, reconcile_olga, reverse_compl
 from .rescale import rescale_usage
 from .schema import Manifest
 from .stitch import stitch_contig, stitch_frame
+from .viterbi import Scenario, best_scenario
 
 __all__ = [
     "analyze",
@@ -37,4 +38,6 @@ __all__ = [
     "translate",
     "stitch_contig",
     "stitch_frame",
+    "Scenario",
+    "best_scenario",
 ]

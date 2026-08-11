@@ -3,6 +3,57 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.3.0 — 2026-08-12
+
+### Added — `vdjtools.model.viterbi`: the argmax side of the Pgen DP
+
+`pgen_nt` **sums** over every recombination that could produce a nucleotide CDR3.
+**`best_scenario(model, cdr3_nt, v=, j=)`** takes the **maximum** over the same loops and returns
+the single most likely one — which *is* the V/D/J boundary markup:
+
+```python
+from vdjtools.model import best_scenario
+sc = best_scenario(model, cdr3_nt, v=v_call, j=j_call)
+sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, CDR3-nt space
+```
+
+It re-derives nothing: every probability comes from `prepare()`'s tables, and the D placement is a
+max-product mirror of `pgen._d_middle` over the same `P(D|J)·P(delD|D)·Pins(VD)·Pins(DJ)` terms.
+
+⛔ **The D therefore obeys `P(D|J)`.** TRBD2 lies 3′ of the whole TRBJ1 cluster, so deletional
+joining can never produce a TRBD2–TRBJ1 pair and the model encodes that as a zero. An earlier draft
+here chose D by longest exact substring and ignored `j` entirely — it would have called the
+impossible pair. There is a regression test.
+
+Validated on 200–500 generated draws per locus: the V span **is** the V germline, the J span the J
+germline, the D span the D germline, `scenario_p ≤ pgen_nt` (a maximum cannot exceed the sum it is
+taken over), and `scenario_p` recomputes exactly from the reported path's own table entries.
+
+`infer_nt_bruteforce` is an exact but exponential **oracle for tests**.
+
+### Not added — `infer_nt` (amino-acid → nucleotide) raises
+
+⛔ Inferring a nucleotide CDR3 from an amino-acid one needs a max-product DP with traceback over the
+aa-constrained space; it is **not written**, and the entry point raises rather than dispatching to
+the oracle, because a silent fallback would look like a working feature.
+
+Two measurements say why the easy routes do not work:
+
+* **Enumeration cannot scale.** On VDJdb's 79,997 records the codon search space is a median
+  **5.3 × 10⁶ (TRA)** and **1.9 × 10⁷ (TRB)**; only 8.9 % / 1.6 % are ≤ 10⁵ candidates, and each
+  candidate costs a full `pgen_nt`.
+* ⛔ **Pinning the germline-templated flanks to shrink it is UNSOUND.** It excludes every sequence
+  whose germline was *trimmed*, and the true maximum can be one of them — caught against the
+  brute-force oracle (`CAVSDMRF` → `…GTGAGTGAC…`, pinned version returned `…GTGAGCGAT…`). Do not
+  reintroduce it as an optimisation.
+
+⚠ Both functions assume an **in-frame** CDR3 (`len(nt) == 3 × len(aa)`). Real productive receptors
+satisfy this; an out-of-frame draw does not (measured: 8 aa against 25 nt).
+
+### Changed
+
+- `arda-mapper` pinned to **>= 2.19.0** (was >= 2.5.5).
+
 ## 3.2.0 — 2026-08-09
 
 ### Fixed

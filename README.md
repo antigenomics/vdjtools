@@ -107,6 +107,24 @@ native.pgen_aa_batch(model, seqs, mismatches=1, threads=0)  # Pgen over many CDR
 generate(model, 1000)                           # sample a repertoire -> polars DataFrame
 ```
 
+Where Pgen *sums* over recombination scenarios, `model.viterbi` takes the **argmax** — the single
+most likely one, which is the V/D/J boundary markup:
+
+```python
+from vdjtools.model import best_scenario
+from vdjtools.model.generate import generate
+
+r = generate(model, 1, seed=2, productive_only=True).row(0, named=True)
+sc = best_scenario(model, r["junction_nt"], v=r["v_call"], j=r["j_call"])
+
+sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, in CDR3-nt space
+# -> 13, 'TRBD1*01', 19, 23, 25    -- V/J are ALLELE names, as the model's tables are
+```
+
+It reuses the same tables and the same loops as `pgen_nt`, so the chosen D obeys `P(D|J)` — a
+TRBD2–TRBJ1 pair is genomically impossible and cannot be called. ⛔ Inferring a *nucleotide* CDR3
+from an amino-acid one (`infer_nt`) is **not implemented yet** and raises rather than guessing.
+
 Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
 OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon — both escaped
 selection, which is all a generative model needs) with `model.infer.infer_native`.

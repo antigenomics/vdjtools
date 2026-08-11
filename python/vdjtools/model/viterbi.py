@@ -53,8 +53,8 @@ from dataclasses import dataclass
 from itertools import product
 
 from .model import Model
-from .pgen import (_CODON_AA, _NUM2NT, _j_candidates, _v_candidates, _Prepared,
-                   pgen_nt, prepare)
+from .pgen import (_CODON_AA, _NUM2NT, _j_candidates, _p_insert, _v_candidates,
+                   _Prepared, pgen_nt, prepare)
 
 __all__ = ["Scenario", "best_scenario", "infer_nt_bruteforce", "codon_options"]
 
@@ -144,63 +144,82 @@ def best_scenario(model_or_prep, cdr3_nt: str, v: str | None = None,
                     if len_v + len_j > len(s):
                         continue
                     middle = s[len_v:len(s) - len_j]
-                    # The middle's own probability under the shipped model. Using the SUM here (not
-                    # a max over D) is deliberate: this ranks (V, J, trims), and the D that goes
-                    # with the winner is read off afterwards.
-                    inner = (_vdj_middle_p(prep, J, middle) if vdj
-                             else _vj_middle_p(prep, middle))
+                    # ⛔ MAX throughout, including over the D placement. Ranking (V, J, trims) by the
+                    # SUM over middles and only then picking a D would answer a different question:
+                    # the most likely (V, J, trims) MARGINALLY, whose best D need not lie on the
+                    # single most likely path. This function's contract is one path.
+                    if vdj:
+                        inner, D, off, dlen = _best_vdj_middle(prep, J, middle)
+                    else:
+                        inner, D, off, dlen = _vj_middle(prep, middle), None, None, 0
+                    if inner == 0.0:
+                        continue
                     p = pv * pj * p_dv * p_dj * inner
                     if best is None or p > best[0]:
-                        best = (p, V, J, len_v, len_j, middle)
+                        best = (p, V, J, len_v, len_j, D, off, dlen)
     if best is None:
         return None
-    p, V, J, len_v, len_j, middle = best
-    d_call = d_start = d_end = None
-    if vdj:
-        d_call, off, dlen = _best_d(prep, J, middle)
-        if d_call is not None:
-            d_start, d_end = len_v + off, len_v + off + dlen
+    p, V, J, len_v, len_j, D, off, dlen = best
+    d_call = D
+    d_start = d_end = None
+    if D is not None and off is not None:
+        d_start, d_end = len_v + off, len_v + off + dlen
     return Scenario(cdr3_nt=s, v_call=V, j_call=J, v_end=len_v, j_start=len(s) - len_j,
                     d_call=d_call, d_start=d_start, d_end=d_end, scenario_p=p)
 
 
-def _vj_middle_p(prep, middle: str) -> float:
-    from .pgen import _p_insert
+def _vj_middle(prep, middle: str) -> float:
+    """P(the whole middle as VJ insertions). A VJ chain has one term, so max and sum coincide."""
     return _p_insert(middle, prep.p_ins["vj"], prep.R["vj"], prep.bias["vj"], from_right=False)
 
 
-def _vdj_middle_p(prep, J: str, middle: str) -> float:
-    from .pgen import _vdj_middle
-    return _vdj_middle(prep, J, middle)
+def _best_vdj_middle(prep, j: str, middle: str):
+    """``(p, D, offset, length)`` — the single most likely D placement inside ``middle``.
 
+    A max-product mirror of :func:`pgen._d_middle`, which sums
+    ``P(D|J)·P(delD|D)·Pins(VD)·Pins(DJ)`` over every D, both trims and every position. Same terms,
+    same tables, ``max`` instead of ``+`` — so the winner is the argmax of exactly the distribution
+    the model defines, not a heuristic standing next to it.
 
-def _best_d(prep, J: str, middle: str):
-    """``(D, offset, length)`` — the longest germline D substring of ``middle`` allowed with ``J``.
+    ⛔ ``P(D|J) == 0`` prunes the pair, which is where the GENOMIC constraint lives: TRBD2 lies 3' of
+    the whole TRBJ1 cluster, so deletional joining can never produce a TRBD2-TRBJ1 pair and the
+    model's table already encodes that as a zero. An earlier draft here picked the longest exact D
+    substring and ignored ``j`` entirely — it would have happily called an impossible pair.
 
-    ⛔ Deliberately NOT a re-ranking of D by a generative prior. That was built and measured in a
-    sibling package and changed nothing (gene accuracy 98.9 -> 97.8 % on IGH, 94.2 -> 94.5 % on
-    human TRB); with 10-18 matched nt the alignment term dominates any prior by an order of
-    magnitude. Longest exact match, ties broken deterministically by D name.
+    ⛔ Not a re-ranking of D by a generative prior over an alignment score, either. That was built
+    and measured in a sibling package and changed nothing (gene accuracy 98.9 -> 97.8 % on IGH,
+    94.2 -> 94.5 % on human TRB): with 10-18 matched nt the alignment term is 11-20 nats and the
+    prior moves it by ~3. Here the model IS the score, so the question does not arise.
+
+    Ties are broken deterministically on ``(D name, offset, length)`` so a run is reproducible.
     """
-    best = (None, None, 0)
-    dgenes = list(prep.functional_d or ())
-    for D in sorted(dgenes):
-        g = prep.cut["d"].get(D)
-        if not g:
-            continue
-        for length in range(len(g), 0, -1):
-            if length <= best[2]:
-                break
-            found = False
-            for a in range(0, len(g) - length + 1):
-                sub = g[a:a + length]
-                k = middle.find(sub)
-                if k >= 0:
-                    best = (D, k, length)
-                    found = True
-                    break
-            if found:
-                break
+    m = len(middle)
+    maxdl, maxdr = prep.maxpal["d_5"], prep.maxpal["d_3"]
+    pins_vd, R_vd, b_vd = prep.p_ins["vd"], prep.R["vd"], prep.bias["vd"]
+    pins_dj, R_dj, b_dj = prep.p_ins["dj"], prep.R["dj"], prep.bias["dj"]
+    best = (0.0, None, None, 0)
+    for d in sorted(prep.functional_d):
+        pdj = prep.p_d_given_j.get((j, d), 0.0)
+        if pdj == 0.0:
+            continue                                   # genomically impossible with this J
+        cut = prep.cut["d"][d]
+        for idx5 in range(len(cut) + 1):
+            for idx3 in range(len(cut) - idx5 + 1):
+                d_contrib = cut[idx5:len(cut) - idx3]
+                pdel = prep.p_del["d"].get((d, idx5 - maxdl, idx3 - maxdr), 0.0)
+                if pdel == 0.0:
+                    continue
+                ld = len(d_contrib)
+                for pos in range(0, m - ld + 1):
+                    if d_contrib and middle[pos:pos + ld] != d_contrib:
+                        continue
+                    w = _p_insert(middle[:pos], pins_vd, R_vd, b_vd, from_right=False)
+                    if w == 0.0:
+                        continue
+                    w *= _p_insert(middle[pos + ld:], pins_dj, R_dj, b_dj, from_right=True)
+                    p = pdj * pdel * w
+                    if p > best[0]:
+                        best = (p, d, pos, ld)
     return best
 
 

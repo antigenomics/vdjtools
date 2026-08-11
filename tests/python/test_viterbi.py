@@ -144,3 +144,58 @@ def test_infer_nt_is_honestly_unimplemented():
     """
     with pytest.raises(NotImplementedError, match="max-product DP"):
         infer_nt(None, "CASSF")
+
+
+def test_the_chosen_D_is_genomically_possible_with_the_chosen_J(preps):
+    """⛔ Regression: an earlier draft picked the longest exact D substring and IGNORED ``j``.
+
+    TRBD2 lies 3' of the entire TRBJ1 cluster, so deletional joining can never produce a
+    TRBD2-TRBJ1 pair — the model encodes that as ``p_d_given_j == 0``. Choosing D by sequence
+    similarity alone would happily call the impossible pair; choosing it by the model's own terms
+    cannot, because a zero prunes the branch.
+    """
+    m, prep = preps["TRB"]
+    g = generate(m, 200, seed=17, productive_only=True)
+    n = 0
+    for r in g.iter_rows(named=True):
+        sc = best_scenario(prep, r["junction_nt"], r["v_call"], r["j_call"])
+        if sc is None or sc.d_call is None:
+            continue
+        n += 1
+        assert prep.p_d_given_j.get((sc.j_call, sc.d_call), 0.0) > 0.0, (
+            f"chose D={sc.d_call} with J={sc.j_call}, which the model gives probability 0 — "
+            f"a genomically impossible rearrangement"
+        )
+    assert n > 50, f"only {n} D calls made — the fixture is not exercising the constraint"
+
+
+def test_the_reported_scenario_probability_is_the_product_it_claims(preps):
+    """`scenario_p` must be reconstructible from the model's own tables for the reported path.
+
+    Guards against the value drifting from the path it is supposed to describe — the failure that
+    would make every downstream probability quietly wrong while all the spans still looked right.
+    """
+    from vdjtools.model.pgen import _p_insert
+    m, prep = preps["TRA"]                                  # VJ: one insertion term, no D sum
+    g = generate(m, 120, seed=23, productive_only=True)
+    checked = 0
+    for r in g.iter_rows(named=True):
+        nt, v, j = r["junction_nt"], r["v_call"], r["j_call"]
+        sc = best_scenario(prep, nt, v, j)
+        if sc is None:
+            continue
+        cutv, cutj = prep.cut["v"][sc.v_call], prep.cut["j"][sc.j_call]
+        ndel_v = len(cutv) - sc.v_end - prep.maxpal["v_3"]
+        len_j = len(nt) - sc.j_start
+        ndel_j = len(cutj) - len_j - prep.maxpal["j_5"]
+        want = (prep.p_v.get(sc.v_call, 0.0)
+                * prep.p_j.get((sc.v_call, sc.j_call), 0.0)
+                * prep.p_del["v"].get((sc.v_call, ndel_v), 0.0)
+                * prep.p_del["j"].get((sc.j_call, ndel_j), 0.0)
+                * _p_insert(nt[sc.v_end:sc.j_start], prep.p_ins["vj"], prep.R["vj"],
+                            prep.bias["vj"], from_right=False))
+        assert abs(sc.scenario_p - want) <= 1e-12 * max(want, 1e-300), (
+            f"scenario_p={sc.scenario_p:.6e} but the reported path recomputes to {want:.6e}"
+        )
+        checked += 1
+    assert checked > 50, f"only {checked} scenarios checked"
