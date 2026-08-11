@@ -256,7 +256,7 @@ def register(block: Block) -> None:
     _BLOCKS.append(block)
 
 
-def blocks(sig: str | None = None) -> list[Block]:
+def registry(sig: str | None = None) -> list[Block]:
     """Registered blocks, optionally filtered to one signature."""
     return [b for b in _BLOCKS if sig is None or b.sig == sig]
 
@@ -279,7 +279,7 @@ def columns(tier: str = "standard", sig: str | None = None,
     """
     if tier not in _TIER_RANK:
         raise ValueError(f"tier must be one of {TIERS}; got {tier!r}")
-    sel = blocks(sig)
+    sel = registry(sig)
     if blocks_ is not None:
         known = {b.name for b in sel}
         unknown = [n for n in blocks_ if n not in known]
@@ -308,7 +308,7 @@ def describe(tier: str = "standard", sig: str | None = None):
     import polars as pl
 
     rows = []
-    for b in blocks(sig):
+    for b in registry(sig):
         for loc in b.emitted_loci:
             for f, (t, tf) in b.features.items():
                 if _TIER_RANK[t] > _TIER_RANK[tier]:

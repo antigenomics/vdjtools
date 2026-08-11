@@ -38,8 +38,8 @@ def test_signatures_do_not_collide():
     v = set(layout.columns("full", "vsig"))
     r = set(layout.columns("full", "rsig"))
     assert not v & r
-    assert {"depth", "div"} <= {b.name for b in layout.blocks("vsig")}
-    assert {"depth", "div"} <= {b.name for b in layout.blocks("rsig")}
+    assert {"depth", "div"} <= {b.name for b in layout.registry("vsig")}
+    assert {"depth", "div"} <= {b.name for b in layout.registry("rsig")}
 
 
 def test_every_column_parses():
@@ -74,7 +74,7 @@ def test_mask_is_exempt_and_contrast_is_magnitude_scaled():
     A mask is already 0/1 and must not be z-scored; the contrast block carries its meaning in
     its magnitude, so per-column centring would erase the very deficiency it encodes.
     """
-    by = {(b.sig, b.name): b for b in layout.blocks()}
+    by = {(b.sig, b.name): b for b in layout.registry()}
     assert by[("vsig", "mask")].exempt
     assert by[("rsig", "contrast")].magnitude
     assert not by[("rsig", "contrast")].exempt
@@ -82,9 +82,9 @@ def test_mask_is_exempt_and_contrast_is_magnitude_scaled():
 
 def test_attributable_is_declared_only_for_geometry():
     """Only a block with a clonotype pre-image may claim attributability."""
-    attributable = {b.name for b in layout.blocks() if b.attributable}
+    attributable = {b.name for b in layout.registry() if b.attributable}
     assert attributable == {"contrast", "phiv", "phij", "phic"}
-    assert all(b.sig == "rsig" for b in layout.blocks() if b.attributable)
+    assert all(b.sig == "rsig" for b in layout.registry() if b.attributable)
 
 
 def test_register_rejects_a_duplicate_feature():
@@ -100,7 +100,7 @@ def test_every_feature_declares_a_known_transform():
 
 def test_transform_is_per_feature_not_per_block():
     """A heterogeneous block is the normal case, not an exception."""
-    clon = next(b for b in layout.blocks("vsig") if b.name == "clon")
+    clon = next(b for b in layout.registry("vsig") if b.name == "clon")
     assert clon.transform("f1") == "clr"
     assert clon.transform("top") == "logit"
 

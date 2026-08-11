@@ -8,13 +8,13 @@ from .layout import (
     TIERS,
     TRANSFORMS,
     Block,
-    blocks,
     columns,
     describe,
     feats,
     index,
     parse,
     register,
+    registry,
 )
 from .transform import (
     DEFAULT_CLIP,
@@ -36,7 +36,7 @@ __all__ = [
     "TRANSFORMS",
     "Block",
     "arcsine",
-    "blocks",
+    "registry",
     "clr",
     "columns",
     "describe",
