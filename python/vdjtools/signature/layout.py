@@ -134,15 +134,28 @@ def _pcs(lo: int, hi: int, tier: str) -> dict[str, tuple[str, str]]:
     return feats(tier, "none", *(f"PC{i:02d}" for i in range(lo, hi + 1)))
 
 
-# Retained dimensions per prototype slot, per locus. These are the *contract*, so they live in
-# code rather than in the fitted artifact: a collaborator's column list must not move when the
-# reference coefficients are re-fit. Gate B1a re-measures whether the fit-free prototype-cloud
-# rotation actually retains its sample variance at these widths; if a locus falls short the
-# width is cut and the signature version is bumped, never silently widened.
+# Retained dimensions per prototype slot. These are the *contract*, so they live in code rather
+# than in the fitted artifact: a collaborator's column list must not move when the reference
+# coefficients are re-fit.
+#
+# Set by measurement, not by taste (gate B1a, benchmark_signature_rotation.py). The rotation is
+# the PCA of the bundled prototype cloud — fitted to no samples at all — so the question is how
+# much *sample-level* variance it retains against a rotation fitted to the samples themselves.
+# Each width below is the smallest clearing 0.98 of that ceiling on two independent cohorts with
+# room to spare:
+#
+#   slot    k   cohort A  cohort B            k   cohort A  cohort B
+#   phiv    8      0.981     0.969  fail     16      0.996     0.997  PASS
+#   phij    4      0.950     0.881  fail      6      0.996     0.994  PASS
+#   phic   16      0.959     0.974  fail     32      0.986     0.994  PASS
+#
+# The first-pass guesses (8 / 6 / 16) passed on one cohort and failed on the other, which is
+# exactly why the gate runs on two. A width that falls short is cut and the signature version
+# bumped — never silently widened, since that would redefine an already-shipped column.
 PC_DIMS: dict[str, dict[str, int]] = {
-    "phiv": {"standard": 8, "full": 16},
+    "phiv": {"standard": 16, "full": 24},
     "phij": {"standard": 6, "full": 12},
-    "phic": {"standard": 16, "full": 48},
+    "phic": {"standard": 32, "full": 48},
 }
 
 
