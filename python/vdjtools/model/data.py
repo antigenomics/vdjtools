@@ -108,8 +108,14 @@ def annotate_reads(
         r1 = out_dir / f"{prefix}.sub.fq"
         _subsample_fastq(fq_path, r1, cap)
     airr = out_dir / f"{prefix}.airr.tsv"
+    # `arda map` is stage 1 on its own, and is what we want -- see the note above on stopping
+    # before `correct`. This used to be spelled `arda rnaseq map -o ...`; arda 2.19 turned
+    # `rnaseq` into the full map->assemble->correct preset that takes NO stage positional and
+    # writes via `-p/--out-prefix` + `-d/--out-dir` rather than `-o`, so the old argv exits 2.
+    # (`arda rnaseq map --help` still exits 0 -- --help short-circuits before argument parsing --
+    # so a --help smoke test would not have caught this.)
     cmd = [
-        _arda_exe(), "rnaseq", "map", "-o", str(airr), "--r1", str(r1),
+        _arda_exe(), "map", "-o", str(airr), "--r1", str(r1),
         "--organism", organism, "--threads", str(threads),
     ]
     if reconstruct:
@@ -176,40 +182,95 @@ def prepare(
     return unique_clonotypes(reads, naive_igm_only=naive_igm_only)
 
 
+#: Directory of the arda-mapped clonotype examples shipped with the source tree.
+PREPARED_DIR = Path(__file__).resolve().parents[3] / "tests" / "python" / "fixtures" / "model_reads"
+
+#: FASTA header fields, in order, after the record id. See :func:`write_prepared`.
+_PREPARED_FIELDS = ("v_call", "j_call", "d_call", "d2_call", "count")
+
+
+def write_prepared(clones: pl.DataFrame, path: str | Path) -> Path:
+    """Write a clonotype frame as the gzipped FASTA :func:`load_prepared` reads.
+
+    FASTA rather than a table because the payload *is* a sequence set — it stays greppable,
+    readable by any bioinformatics tool, and about half the size of the equivalent TSV. The V/J/D
+    calls EM needs for its per-read masks ride in the header, pipe-separated:
+
+    ``>{id}|{v_call}|{j_call}|{d_call}|{d2_call}|{count}`` then the junction nucleotides.
+
+    Empty fields are written as empty strings and read back as nulls.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cols = [c for c in _PREPARED_FIELDS if c in clones.columns]
+    lines = []
+    for i, row in enumerate(clones.iter_rows(named=True)):
+        fields = "|".join("" if row.get(c) is None else str(row[c]) for c in cols)
+        lines.append(f">{i}|{fields}\n{row['junction']}")
+    text = "\n".join(lines) + "\n"
+    if path.suffix == ".gz":
+        import gzip
+
+        path.write_bytes(gzip.compress(text.encode()))
+    else:
+        path.write_text(text)
+    return path
+
+
 def load_prepared(group: str = "human", chain: str = "TRB", label: str = "nonfunctional", *,
-                  repo: str = MODEL_READS_REPO) -> pl.DataFrame:
-    """Load a **pre-annotated** clonotype subset from the dataset — no arda, no mmseqs2, seconds.
+                  path: str | Path | None = None) -> pl.DataFrame:
+    """Load a small **arda-mapped** clonotype example — no arda, no mmseqs2, no network, seconds.
 
     :func:`prepare` runs the full pipeline on the raw FASTQ, which needs arda + mmseqs2 and takes
-    minutes per chain. The dataset also ships small already-mapped subsets under ``prepared/`` for
-    exactly the cases where that is overkill: examples, notebooks, tests and a quick look at real
-    junctions. These are the same columns :func:`unique_clonotypes` produces.
+    minutes per chain. For examples, notebooks, tests and a quick look at real junctions that is
+    overkill, so a few already-mapped subsets ship with the source tree as gzipped FASTA (see
+    :func:`write_prepared` for the header format).
+
+    These live under ``tests/`` and are **not** packaged into the wheel — they exist for working in
+    a checkout. From an installed vdjtools, use :func:`prepare` or pass ``path=``.
 
     Args:
         group: ``human``, ``human_fetal`` or ``mouse``.
         chain: e.g. ``"TRB"``.
         label: ``"nonfunctional"`` (the EM training bucket) or ``"functional"``.
-        repo: HuggingFace dataset id.
+        path: Read this file instead of looking one up.
 
     Returns:
-        ``v_call, j_call, junction, junction_aa, locus, d_call, d2_call, count``.
+        ``junction, v_call, j_call, d_call, d2_call, count`` — the columns
+        :func:`unique_clonotypes` produces, minus the ones a FASTA cannot carry.
 
     Raises:
-        FileNotFoundError: If the dataset has no prepared subset for that combination — only a few
-            are shipped; use :func:`prepare` for the rest.
-    """
-    from huggingface_hub import hf_hub_download
-    from huggingface_hub.errors import EntryNotFoundError
+        FileNotFoundError: If no example ships for that combination. Only a couple do; build the
+            rest with :func:`prepare` (or the whole corpus with :func:`build_all`).
 
-    name = f"prepared/{group}.{chain}.{label}.tsv.gz"
-    try:
-        path = hf_hub_download(repo_id=repo, filename=name, repo_type="dataset")
-    except EntryNotFoundError as e:
+    Example:
+        >>> clones = load_prepared("human", "TRB")
+        >>> model, report = infer_frame("TRB", clones, max_iter=10)
+    """
+    from .reference import read_fasta   # arda's parser, plus gzip handling
+
+    src = Path(path) if path else PREPARED_DIR / f"{group}.{chain}.{label}.fa.gz"
+    if not src.exists():
         raise FileNotFoundError(
-            f"{repo} has no {name}; only a few prepared subsets ship. Use "
-            f"data.prepare({group!r}, {chain!r}, {label!r}, out_dir=...) to build it from the FASTQ."
-        ) from e
-    return pl.read_csv(path, separator="\t", infer_schema_length=20000)
+            f"no prepared example at {src}. Only a couple ship; build this one with "
+            f"data.prepare({group!r}, {chain!r}, {label!r}, out_dir=...), or the whole corpus "
+            f"with data.build_all()."
+        )
+    rows = []
+    for header, seq in read_fasta(src):
+        parts = header.split("|")[1:]
+        rec = {c: (parts[i] or None) if i < len(parts) else None
+               for i, c in enumerate(_PREPARED_FIELDS)}
+        rec["junction"] = seq
+        rows.append(rec)
+    if not rows:
+        raise FileNotFoundError(f"{src} holds no records")
+    # Explicit schema, not inference: d_call is null for every clonotype until the first read that
+    # actually carried a D, which is well past any inference window.
+    schema = {"junction": pl.Utf8, **{c: pl.Utf8 for c in _PREPARED_FIELDS}}
+    return (pl.DataFrame(rows, schema=schema)
+            .select(["junction", *_PREPARED_FIELDS])
+            .with_columns(pl.col("count").cast(pl.Int64, strict=False)))
 
 
 # --- full corpus build ------------------------------------------------------------------------
@@ -224,7 +285,8 @@ BUILD_DEFAULTS = {"iters": 15, "tol": 1e-4, "gene_prior": 1.0, "nd_prior": 0.0}
 def build_model(chain: str, *, group: str = "human", template=None, clones: pl.DataFrame | None = None,
                 work_dir: str | Path = "/tmp/vdjtools_build", cap: int | None = None,
                 iters: int = 15, tol: float = 1e-4, single_d: bool = False,
-                nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0):
+                nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0,
+                ambiguous: str | None = "A"):
     """Fetch, annotate and EM-fit a model for one chain — the whole corpus pipeline, end to end.
 
     Args:
@@ -245,6 +307,9 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         gene_prior: Dirichlet pseudocount over the germline's functional V/J alleles — see
             :data:`BUILD_DEFAULTS`.
         threads: E-step worker threads (``0`` = auto).
+        ambiguous: Substitute this base for any non-ACGT character in a junction (default ``"A"``),
+            or ``None`` to drop those clonotypes. See
+            :func:`~vdjtools.model.infer.sanitize_junctions`.
 
     Returns:
         ``(model, report, stats)`` — ``stats`` records ``chain, group, chain_type, n_clonotypes,
@@ -265,7 +330,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     if clones is None:
         clones = prepare(group, chain, "nonfunctional", out_dir=work_dir, cap=cap)
 
-    uniq = _filter_for_em(clones, base)
+    uniq = _filter_for_em(clones, base, ambiguous)
     n_all = uniq.height
     seqs = [s.upper() for s in uniq["junction"].to_list()]
     masks = _build_masks(uniq, base)
@@ -291,8 +356,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     return model, rep, stats
 
 
-def _filter_for_em(clones: pl.DataFrame, base) -> pl.DataFrame:
-    """Keep clonotypes the template can actually score: known V/J **gene**, unambiguous junction.
+def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A") -> pl.DataFrame:
+    """Keep clonotypes the template can actually score: known V/J **gene**, encodable junction.
 
     Filter on GENE, not allele. arda and a bootstrap model resolve alleles differently -- arda
     calls TRBV20-1*07, which OLGA's 89-allele index does not contain -- so an allele-level
@@ -300,14 +365,18 @@ def _filter_for_em(clones: pl.DataFrame, base) -> pl.DataFrame:
     TRBV20-1, the most-used human TRBV, went to zero training clonotypes and hence P(V)=0 in the
     shipped model. `gene_masks` already maps a call to every model allele of its gene, so the read
     is perfectly usable. Gene-level keeps 32,562 clonotypes and 54 V genes vs 24,980 and 51.
+
+    Ambiguous bases are substituted rather than dropped, matching `infer_frame` -- the two training
+    entry points must not disagree about what counts as usable data.
     """
+    from .infer import sanitize_junctions
+
     vgenes = {a.split("*")[0] for a in base.genomic["genes_v"]["v_allele"].to_list()}
     jgenes = {a.split("*")[0] for a in base.genomic["genes_j"]["j_allele"].to_list()}
     vg = pl.col("v_call").str.split("*").list.first()
     jg = pl.col("j_call").str.split("*").list.first()
-    return clones.filter(
-        vg.is_in(list(vgenes)) & jg.is_in(list(jgenes))
-        & pl.col("junction").str.to_uppercase().str.contains(r"^[ACGT]+$"))
+    kept = clones.filter(vg.is_in(list(vgenes)) & jg.is_in(list(jgenes)))
+    return sanitize_junctions(kept, "junction", ambiguous=ambiguous, where="build_model")
 
 
 def _build_masks(uniq: pl.DataFrame, base) -> list[tuple]:

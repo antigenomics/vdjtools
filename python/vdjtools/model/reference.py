@@ -337,6 +337,32 @@ def validate_germline(germline: pl.DataFrame) -> pl.DataFrame:
     return pl.DataFrame(rows, schema=_ISSUE_SCHEMA)
 
 
+def read_fasta(path) -> list[tuple[str, str]]:
+    """Read a FASTA into ``(header, sequence)`` pairs, transparently handling ``.gz``.
+
+    Parsing itself is delegated to arda (one FASTA parser in the stack, not two), but arda's reader
+    takes a path and plain ``open()``, so a gzipped file reaches it as mojibake and dies on the
+    first byte. Gzipped input is therefore decompressed to a temporary file first.
+    """
+    import gzip
+    import tempfile
+    from pathlib import Path
+
+    from arda.refbuild.imgt import read_fasta as _read
+
+    path = Path(path)
+    if path.suffix != ".gz":
+        return _read(path)
+    with gzip.open(path, "rt") as src, \
+            tempfile.NamedTemporaryFile("w", suffix=".fasta", delete=False) as tmp:
+        tmp.write(src.read())
+        name = tmp.name
+    try:
+        return _read(Path(name))
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 def read_germline_fasta(v, j, d=None, *, anchors=None) -> pl.DataFrame:
     """Build a germline frame from your own FASTA files — the entry point for a custom library.
 
@@ -360,8 +386,6 @@ def read_germline_fasta(v, j, d=None, *, anchors=None) -> pl.DataFrame:
         :func:`vdjtools.model.io.from_germline`.
     """
     from pathlib import Path
-
-    from arda.refbuild.imgt import read_fasta  # base dep; delegate rather than parse FASTA here
 
     from .io import _read_anchors
 

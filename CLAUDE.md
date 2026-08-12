@@ -124,11 +124,11 @@ format-conversion fixtures live there — pull them over when a phase needs them
   Hill q=1/q=2 diversity), `compare_models`/`compare_net_dot`, a persisted EM training log,
   `infer_frame`, `extend_alleles`, `data.build_all`, the `vdjtools model` CLI sub-app,
   `docs/model.rst` and `examples/model_workshop.py`.
-- **TODO — publish the prepared clonotype subsets.** `data.load_prepared` is implemented and
-  documented but `prepared/*.tsv.gz` **does not exist in `isalgo/airr_model_read` yet** (the build
-  session had no network). Produce and push through the `~/hf/airr_model_read` mirror — the exact
-  two-line recipe is in the `SOURCES.md` row. Nothing depends on it: the notebook and tests both
-  fall back to simulated sequences.
+- **arda CLI drift bit us once**: `annotate_reads` shelled out to `arda rnaseq map -o …`, but arda
+  2.19 turned `rnaseq` into the full map→assemble→correct preset with no stage positional and
+  `-p/--out-prefix` instead of `-o`, so the real invocation exited 2. It is `arda map` now, and the
+  pin is `arda-mapper>=2.19.0`. Note a `--help` smoke test would NOT have caught it (typer
+  short-circuits `--help` before argument parsing) — exercise the real argv.
 - **Findings from `check_model` on the shipped models, worth acting on**: `IGKV3-20*01` in
   `learned/IGK` puts **25%** of its deletion mass on trims its germline cannot reach (so that
   probability is lost from every Pgen through it); `olga/TRA`, `olga/IGH`, `olga/IGL` and

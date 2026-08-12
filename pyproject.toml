@@ -36,7 +36,7 @@ dependencies = [
     # its only runtime deps are polars + typer (already ours) + requests. It is imported
     # lazily inside the functions that need it, so `import vdjtools` stays light. mmseqs2 is
     # needed only for arda's alignment/annotate path, never for germline lookup or Pgen.
-    "arda-mapper>=2.5.5",
+    "arda-mapper>=2.19.0",   # 2.19 moved stage-1 mapping to `arda map`; `arda rnaseq map` now exits 2
     # seqtree = the fuzzy-search / e-value engine, vdjmatch = overlap + TCRnet on top of it.
     # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
     # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or

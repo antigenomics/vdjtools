@@ -250,9 +250,31 @@ fetch FASTQ, map with arda, collapse to unique clonotypes, run EM — is
 
    vdjtools model build --chains TRB,TRA,IGH --workers 4 -o models/
 
-It needs HuggingFace access to the source dataset and arda's mmseqs2. For examples and tests,
-:func:`~vdjtools.model.data.load_prepared` fetches a small pre-annotated clonotype subset instead,
-with no arda in the loop.
+It needs HuggingFace access to the source dataset and arda's mmseqs2.
+
+For examples and tests, two arda-mapped clonotype sets (human TRA and TRB, out-of-frame) ship in
+the source tree as gzipped FASTA and load with no network, no arda and no mmseqs2:
+
+.. code-block:: python
+
+   from vdjtools.model.data import load_prepared
+
+   clones = load_prepared("human", "TRB")     # junction, v_call, j_call, d_call, d2_call, count
+   model, report = infer_frame("TRB", clones, max_iter=10)
+
+The V/J/D calls ride in the FASTA header (``>{i}|{v_call}|{j_call}|{d_call}|{d2_call}|{count}``)
+because EM needs them for its per-read masks. These files live under ``tests/`` and are not
+packaged into the wheel; from an installed vdjtools use
+:func:`~vdjtools.model.data.prepare` or pass ``path=``.
+
+.. note::
+
+   Real annotated junctions occasionally carry an ambiguous base, and the recombination model is
+   defined over A/C/G/T only. Both training entry points substitute ``A`` by default and warn with
+   the count (``ambiguous=None`` drops the clonotype instead). Substituting keeps the clonotype —
+   one uncertain position in a junction that is otherwise good evidence — and on these reads it
+   affects ~0.01% of rows. It is a substitution, not a marginalization, so data with many ambiguous
+   positions should use ``ambiguous=None``.
 
 
 Command line

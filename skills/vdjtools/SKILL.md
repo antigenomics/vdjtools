@@ -99,9 +99,13 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   bridges different germline namespaces; `status="schema_differs"` when an event is factorized
   differently). **`compare_usage(a, b, seg)`**, **`compare_net_dot(a, b)`** (bnlearn
   `compare_networks` style), `compare_entropy`.
-- **Corpus build** `vdjtools.model.data`: `load_prepared(group, chain, label)` (small pre-annotated
-  subset, no arda needed), `build_model(chain, ...)`, **`build_all(chains, groups=, workers=)`** —
-  the full FASTQ → arda-map → EM pipeline, parallel across chains.
+- **Corpus build** `vdjtools.model.data`: `load_prepared(group, chain, label)` (arda-mapped TRA/TRB
+  examples shipped in `tests/python/fixtures/model_reads/` as gzipped FASTA with the V/J/D calls in
+  the header — offline, no arda; source tree only, not in the wheel), `write_prepared`,
+  `build_model(chain, ...)`, **`build_all(chains, groups=, workers=)`** — the full FASTQ → arda-map
+  → EM pipeline, parallel across chains. Ambiguous junction bases → `A` by default in both training
+  entry points (`infer.sanitize_junctions`; `ambiguous=None` drops instead).
+  ⚠ arda ≥2.19: stage-1 mapping is **`arda map`**, not `arda rnaseq map`.
 - Tandem-D (D-D) supported throughout (`vdjtools.model.dd`).
 
 ### `vdjtools.stats` — diversity, spectratype, usage

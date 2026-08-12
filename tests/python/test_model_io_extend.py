@@ -242,6 +242,87 @@ def test_extended_model_stays_clean_and_generates(toy_model, toy_germline_extend
     assert set(gen["v_call"]) == {"TOYV3*01"}          # the new gene is really usable
 
 
+# --- the shipped real-read examples -------------------------------------------------------------
+
+@pytest.mark.parametrize("chain,min_rows", [("TRB", 50_000), ("TRA", 20_000)])
+def test_prepared_examples_load(chain, min_rows):
+    """The arda-mapped TRA/TRB examples that ship in the tree — no network, no arda, no mmseqs2."""
+    from vdjtools.model.data import load_prepared
+
+    clones = load_prepared("human", chain)
+    assert clones.height >= min_rows
+    assert clones.columns == ["junction", "v_call", "j_call", "d_call", "d2_call", "count"]
+    assert clones["junction"].null_count() == 0
+    assert clones["v_call"].str.starts_with(f"{chain[:2]}").all()
+    assert clones["j_call"].str.contains(f"{chain}J").all()
+    assert clones["count"].min() >= 1
+
+
+def test_prepared_example_trains_a_model():
+    """The end the examples exist for: real junctions, straight into EM."""
+    from vdjtools.model.data import load_prepared
+
+    clones = load_prepared("human", "TRA").head(2000)
+    template = load_bundled("TRA", "arda", collapse=False)
+    fitted, report = infer_frame(template, clones, max_iter=2)
+    assert report.n_iter == 2
+    assert report.loglik[-1] >= report.loglik[0]
+    fitted.validate()
+
+
+def _with_ambiguous(toy_model, n=60):
+    gen = generate(toy_model, n, seed=8).rename({"junction_nt": "junction"})
+    return pl.concat([
+        gen.select(["junction", "v_call", "j_call"]),
+        pl.DataFrame({"junction": ["TGTNCCAGC"], "v_call": ["TOYV1*01"], "j_call": ["TOYJ1*01"]}),
+    ])
+
+
+def test_ambiguous_bases_are_substituted_by_default(toy_model):
+    """Real reads carry 'N' and the encoder knows only ACGT — substitute, keep the clonotype."""
+    with_n = _with_ambiguous(toy_model)
+    with pytest.warns(UserWarning, match="substituting"):
+        fitted, report = infer_frame(toy_model, with_n, max_iter=1)
+    assert report.n_scoreable[0] == with_n.height          # nothing was thrown away
+    fitted.validate()
+
+
+def test_ambiguous_bases_can_be_dropped_instead(toy_model):
+    with_n = _with_ambiguous(toy_model)
+    with pytest.warns(UserWarning, match="dropped"):
+        fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous=None)
+    assert report.n_scoreable[0] == with_n.height - 1
+    fitted.validate()
+
+
+def test_sanitize_junctions_substitutes_every_iupac_code():
+    from vdjtools.model.infer import sanitize_junctions
+
+    df = pl.DataFrame({"junction": ["acgTN", "ACGRY", "ACGT"]})
+    with pytest.warns(UserWarning, match="substituting"):
+        out = sanitize_junctions(df, "junction")
+    assert out["junction"].to_list() == ["ACGTA", "ACGAA", "ACGT"]
+    with pytest.raises(ValueError, match="ambiguous must be"):
+        sanitize_junctions(df, "junction", ambiguous="N")
+
+
+def test_prepared_fasta_round_trip(tmp_path):
+    """write_prepared -> load_prepared is exact for the fields a FASTA header carries."""
+    from vdjtools.model.data import load_prepared, write_prepared
+
+    clones = pl.DataFrame({
+        "junction": ["TGTGCCAGC", "TGTGCTTCC"],
+        "v_call": ["TRBV1*01", "TRBV2*01,TRBV3*01"],
+        "j_call": ["TRBJ1*01", "TRBJ2*01"],
+        "d_call": ["TRBD1*01", None],
+        "d2_call": [None, None],
+        "count": [7, 1],
+    })
+    path = write_prepared(clones, tmp_path / "x.fa.gz")
+    back = load_prepared(path=path)
+    assert back.to_dicts() == clones.to_dicts()
+
+
 def test_extend_a_real_model_with_the_full_arda_library():
     """The realistic case: a gene-collapsed model meeting the whole IMGT allele set."""
     m = load_bundled("TRG", "learned")

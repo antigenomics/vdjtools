@@ -52,8 +52,10 @@ scoreable and extendable. See the new [user guide](https://docs.isalgo.dev/vdjto
 - **`infer.infer_frame`** fits from a clonotype frame, building the per-read V/J masks for you, and
   **`infer.extend_alleles`** adds alleles from a larger germline library.
 - **`data.build_all`** runs the full corpus pipeline — fetch FASTQ, map with arda, collapse, EM —
-  parallel across chains, exposed as `vdjtools model build`. `data.load_prepared` fetches a small
-  pre-annotated clonotype subset for examples and tests, with no arda in the loop.
+  parallel across chains, exposed as `vdjtools model build`. Two arda-mapped clonotype examples
+  (human TRA 34,238 and TRB 100,000 out-of-frame clonotypes, 2 MB total) ship in
+  `tests/python/fixtures/model_reads/` as gzipped FASTA with the V/J/D calls in the header, and
+  load offline with `data.load_prepared` — no network, no arda, no mmseqs2.
 - **`vdjtools model` CLI sub-app** with 13 subcommands. A model is named as a directory or as
   `LOCUS[:source[:organism]]`.
 - **Table export/import**: `marginals_frame` / `set_marginals`, and `save_model(..., fmt="tsv")`
@@ -72,6 +74,18 @@ scoreable and extendable. See the new [user guide](https://docs.isalgo.dev/vdjto
 
 ### Fixed
 
+- **`annotate_reads` was calling an arda CLI that no longer exists.** It shelled out to
+  `arda rnaseq map -o …`, but arda 2.19 turned `rnaseq` into the full map→assemble→correct preset
+  with no stage positional and `-p/--out-prefix` in place of `-o`, so every real invocation exited
+  2 — i.e. the whole model-training pipeline was broken against the installed arda. Stage-1 mapping
+  is `arda map`; the pin is now `arda-mapper>=2.19.0`. Worth recording that a `--help` smoke test
+  would *not* have caught this: typer short-circuits `--help` before argument parsing, so
+  `arda rnaseq map --help` still exits 0.
+- **Ambiguous junction bases crashed EM** with a bare `KeyError: 'N'` from inside the native
+  encoder. `infer_frame` and `build_model` now substitute `A` by default and warn with the count
+  (`ambiguous=None` drops the clonotype instead) — see `infer.sanitize_junctions`.
+- `reference.read_fasta` wraps arda's FASTA parser with gzip support; arda's opens with plain
+  `open()`, so a `.gz` reached it as mojibake and died on the first byte.
 - `tests/python/test_io_hf.py::test_control_native_schema_capped` called `list_repo_files` outside
   the `hf` fixture's guard, so an offline run failed instead of skipping.
 

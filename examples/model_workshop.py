@@ -144,7 +144,7 @@ def _(mo):
 def _(mo):
     use_real = mo.ui.checkbox(
         value=False,
-        label="Use real reads instead (small pre-annotated TRB subset from HuggingFace; needs access)",
+        label="Use the shipped real TRB reads instead (arda-mapped, in the source tree, offline)",
     )
     use_real
     return (use_real,)
@@ -175,9 +175,13 @@ def _(generate, mo, pl, template, use_real):
             from vdjtools.model.data import load_prepared
 
             clones = load_prepared("human", "TRB", "nonfunctional")
-            note = mo.md(f"Using **{clones.height:,}** real TRB clonotypes.").callout("success")
-        except Exception as e:  # offline / no access / not shipped for this chain
-            note = mo.md(f"Real reads unavailable ({e}); staying on the simulated set.").callout("warn")
+            note = mo.md(
+                f"Using **{clones.height:,}** real out-of-frame TRB clonotypes — 5'RACE reads "
+                f"mapped with arda, shipped in `tests/python/fixtures/model_reads/`. There is no "
+                f"ground-truth model for these, so the recovery check below stops applying."
+            ).callout("success")
+        except FileNotFoundError as e:   # running from an installed wheel, not a checkout
+            note = mo.md(f"Shipped reads unavailable ({e}); staying on the simulated set.").callout("warn")
     mo.vstack([note, clones.head(5)])
     return clones, truth
 

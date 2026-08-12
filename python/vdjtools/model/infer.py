@@ -12,6 +12,7 @@ Phase 1f native-port candidate.
 """
 from __future__ import annotations
 
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field, fields
 from math import log
@@ -609,9 +610,49 @@ def gene_masks(model: Model, v_calls: list[str], j_calls: list[str]) -> list[tup
 _JUNCTION_COLS = ("junction", "junction_nt", "cdr3_nt", "cdr3nt", "sequence")
 
 
+def sanitize_junctions(df: pl.DataFrame, col: str, *, ambiguous: str | None = "A",
+                       where: str = "infer_frame") -> pl.DataFrame:
+    """Make a junction column safe for the native encoder, which knows only A/C/G/T.
+
+    Real annotated reads carry the occasional ambiguous base (``N``, or an IUPAC code), and an
+    unhandled one surfaces as a ``KeyError`` from deep inside the E-step.
+
+    Args:
+        df: Clonotype frame.
+        col: Junction column.
+        ambiguous: A single base to substitute for every non-ACGT character (default ``"A"``), or
+            ``None`` to drop those clonotypes instead. Substituting is the default because it keeps
+            the clonotype: an ambiguous base is one uncertain position in a junction that is
+            otherwise perfectly good evidence, and on these reads it affects ~0.01% of rows, so
+            dropping costs sample size for no gain in correctness. It is a *substitution*, not a
+            marginalization — the base is treated as read, so a run with many ambiguous positions
+            will bias the insertion model toward the substituted base and should use ``None``.
+        where: Caller name, used in the warning.
+
+    Returns:
+        A frame with the column uppercased and cleaned; rows are dropped only when
+        ``ambiguous is None``.
+    """
+    df = df.with_columns(pl.col(col).str.to_uppercase())
+    bad = df.filter(~pl.col(col).str.contains(r"^[ACGT]+$")).height
+    if not bad:
+        return df
+    if ambiguous is None:
+        warnings.warn(
+            f"{where}: dropped {bad} of {df.height} clonotypes whose {col!r} contains non-ACGT "
+            f"bases (the recombination model is defined over A/C/G/T only)", stacklevel=3)
+        return df.filter(pl.col(col).str.contains(r"^[ACGT]+$"))
+    if ambiguous not in ("A", "C", "G", "T"):
+        raise ValueError(f"ambiguous must be one of A, C, G, T or None, got {ambiguous!r}")
+    warnings.warn(
+        f"{where}: {bad} of {df.height} clonotypes have non-ACGT bases in {col!r}; substituting "
+        f"{ambiguous!r} (pass ambiguous=None to drop them instead)", stacklevel=3)
+    return df.with_columns(pl.col(col).str.replace_all(r"[^ACGT]", ambiguous))
+
+
 def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
                 v_col: str = "v_call", j_col: str = "j_call", use_calls: bool = True,
-                native: bool = True, **kw):
+                native: bool = True, ambiguous: str | None = "A", **kw):
     """Fit a model from a **clonotype frame** — the ergonomic entry point to EM.
 
     Wraps :func:`infer_native` with the two steps every caller otherwise repeats: find the
@@ -631,6 +672,8 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
         use_calls: Build per-read masks from the V/J calls. Turn off only if the frame's calls are
             untrustworthy — inference then enumerates every gene and gets much slower.
         native: Use :func:`infer_native` (default). ``False`` runs the pure-Python :func:`infer`.
+        ambiguous: What to do with a junction holding a non-ACGT base — substitute this base
+            (default ``"A"``), or ``None`` to drop the clonotype. See :func:`sanitize_junctions`.
         **kw: Passed through (``max_iter``, ``tol``, ``init``, ``single_d``, ``nd_prior``,
             ``gene_prior``, ...).
 
@@ -653,6 +696,7 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
         raise ValueError(
             f"no nucleotide junction column in {clones.columns}; pass seq_col=")
     df = clones.filter(pl.col(col).is_not_null() & (pl.col(col).str.len_bytes() > 0))
+    df = sanitize_junctions(df, col, ambiguous=ambiguous, where="infer_frame")
     if not df.height:
         raise ValueError(f"column {col!r} has no usable sequences")
     seqs = df[col].to_list()
