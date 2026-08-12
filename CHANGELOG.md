@@ -3,6 +3,82 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.4.0 — 2026-08-12
+
+Follows 3.3.0's model workshop with the defects that workshop then found, and retrains every
+bundled model.
+
+### Added
+
+- **Live EM progress, checkpointing and exact resume.** `infer`/`infer_native` take
+  `progress=callable(iter, loglik, rel_change, n_scoreable)` — `infer.print_progress()` is a
+  ready-made one — so a long fit is visibly converging rather than merely running; the relative
+  change it reports is exactly what is compared against `tol`. They also take
+  `checkpoint=DIR`/`checkpoint_every=N`, saving the model after each iteration (written to a
+  sibling directory and swapped in, so a kill mid-write leaves the previous checkpoint loadable),
+  and `infer.resume(DIR, seqs)` continues from one. **Resuming is exact**: 3 iterations plus a
+  resumed 4 give the same log-likelihood *and* the same tables as an uninterrupted 7, and the
+  training log spans every attempt. Exposed as
+  `vdjtools model learn -v --checkpoint DIR --resume DIR`; `vdjtools model build -v` additionally
+  stops swallowing arda's mapping output. This matters because IGH's EM enumerates ~1,225 D pairs
+  per read against TRB's 9 — 12 minutes per iteration on a 112-core node, and more than 110 minutes
+  without finishing one on a laptop.
+
+### Changed
+
+- **All seven bundled `learned` models retrained** on the full non-functional read corpus (every
+  available read; out-of-frame *and* stop-codon, since both escaped selection). Every one converged
+  on tolerance with a step-by-step monotone log-likelihood, and `check_model` reports zero errors:
+
+  | locus | clonotypes | iters | log-likelihood |
+  |---|---|---|---|
+  | TRA | 34,238 | 10 | −21.52 → −20.01 |
+  | TRB | 122,703 | 11 | −37.01 → −33.76 |
+  | TRG | 14,305 | 8 | −21.90 → −20.33 |
+  | TRD | 10,915 | 7 | −40.94 → −35.79 |
+  | IGH | 141,607 | 9 | −57.16 → −49.88 |
+  | IGK | 256,347 | 6 | −16.18 → −14.28 |
+  | IGL | 23,469 | 12 | −6.63 → −6.00 |
+
+  Each now ships its training log, so a model states what it was fitted on. IGH was trained on a
+  112-core cluster node; the rest fit comfortably on a laptop.
+- **Ambiguous junction bases are substituted, not dropped.** They previously crashed EM with a bare
+  `KeyError` from inside the native encoder. Both training entry points now substitute `A` by
+  default and warn with the count (`ambiguous=None` drops instead) — it affects ~0.01% of these
+  reads, so dropping cost sample size for nothing. It is a substitution, not a marginalization.
+
+### Fixed
+
+- **`collapse_alleles` could give a gene a germline it could not use — in the default path.**
+  `load_bundled(..., collapse=True)` picks one representative allele per gene and averages the
+  other alleles' conditionals onto it. The representative was chosen by usage alone, but IMGT ships
+  some alleles with a **truncated** CDR3-region germline: human `IGKV3-20*02` is 11 nt against
+  `*01`'s 30 and carried the higher learned usage, so it became the gene's germline — relabelled
+  `*01`, which was doubly misleading — and 25% of the gene's own averaged deletion distribution
+  landed on trims the 11-nt germline cannot reach. The Pgen DP never visits those, so that quarter
+  of the probability vanished from every Pgen through IGKV3-20 instead of being redistributed.
+  The representative is now chosen by **germline length first, usage second** (alleles of a gene are
+  near-identical through the CDR3 region, so a large length gap means an incomplete database entry),
+  and the collapsed deletion conditionals are **projected onto the representative's reachable
+  support and renormalized**. Every bundled model is now clean at `collapse=True`.
+- **A failed `arda` run reported nothing but an exit code.** `annotate_reads` passed
+  `capture_output=True` and let `CalledProcessError` propagate, so arda's own message was swallowed
+  — precisely how the CLI rename in 3.3.0 stayed invisible. It now raises with arda's stderr and the
+  installed `arda-mapper` version.
+- `reference.read_fasta` wraps arda's FASTA parser with gzip support; arda's opens with plain
+  `open()`, so a `.gz` reached it as mojibake and died on the first byte.
+
+### Documented
+
+- **Known quirks of the OLGA models** (`docs/model.rst`). The bundled `olga` set is a bit-faithful
+  import, and that includes its defects. Verified against OLGA's raw `model_marginals.txt` with
+  OLGA's own parser: deletion mass on unreachable trims is **OLGA's**, with identical fractions to
+  4 dp (`IGHV4-30-4*01` 100% — its Pgen is identically zero in OLGA too — `IGKJ4*02` 80.9%,
+  `TRAV20*03` 54.7%), and our Pgen matches olga-pip exactly (ratio 1.000000) on every sequence OLGA
+  will score. Correcting it would break the exact-OLGA-Pgen invariant, so `check_model` reports it
+  at `warn` rather than `error` for an OLGA-sourced model. Also covers the empty-germline ORF genes,
+  protocol-specific V/J usage, and OLGA's refusal of out-of-frame input.
+
 ## 3.3.0 — 2026-08-12
 
 The recombination model becomes a workshop: buildable on your own reference, checkable, comparable,
@@ -61,19 +137,6 @@ scoreable and extendable. See the new [user guide](https://docs.isalgo.dev/vdjto
 - **Table export/import**: `marginals_frame` / `set_marginals`, and `save_model(..., fmt="tsv")`
   with format auto-detection on load, so a hand-edited TSV directory is a first-class model input.
 
-- **Live EM progress, checkpointing and resume.** `infer`/`infer_native` take
-  `progress=callable(iter, loglik, rel_change, n_scoreable)` — `infer.print_progress()` is a
-  ready-made one — so a long fit is visibly converging rather than merely running; the relative
-  change it reports is the exact quantity compared against `tol`. They also take
-  `checkpoint=DIR`/`checkpoint_every=N`, saving the model after each iteration (swapped into place,
-  so a kill mid-write leaves the previous checkpoint loadable), and `infer.resume(DIR, seqs)`
-  continues from one. **Resuming is exact** — 3 iterations plus a resumed 4 give the same
-  log-likelihood *and* the same tables as an uninterrupted 7 — and the training log spans every
-  attempt. Exposed as `vdjtools model learn -v --checkpoint DIR --resume DIR`, and
-  `vdjtools model build -v` additionally stops swallowing arda's mapping output.
-  This matters because IGH's EM enumerates ~1,225 D pairs per read against TRB's 9: 14 minutes per
-  iteration on a 112-core node, and more than 110 minutes for a single iteration on a laptop.
-
 ### Changed
 
 - **`pgen_nt` now releases the GIL**, the one Pgen binding that still held it after the Phase-13
@@ -87,22 +150,6 @@ scoreable and extendable. See the new [user guide](https://docs.isalgo.dev/vdjto
 
 ### Fixed
 
-- **`collapse_alleles` could give a gene a germline it could not use — in the default path.**
-  `load_bundled(..., collapse=True)` picks one representative allele per gene and averages the
-  other alleles' conditionals onto it. The representative was chosen by usage alone, but IMGT ships
-  some alleles with a **truncated** CDR3-region germline: human `IGKV3-20*02` is 11 nt against
-  `*01`'s 30 and carried the higher learned usage, so it became the gene's germline — relabelled
-  `*01`, which was doubly misleading — and 25% of the gene's own averaged deletion distribution
-  landed on trims the 11-nt germline cannot reach. The Pgen DP never visits those, so that quarter
-  of the probability vanished from every Pgen through IGKV3-20 instead of being redistributed.
-  The representative is now chosen by **germline length first, usage second** (alleles of a gene are
-  near-identical through the CDR3 region, so a large length gap means an incomplete database entry),
-  and the collapsed deletion conditionals are **projected onto the representative's reachable
-  support and renormalized**. Every bundled model is now clean at `collapse=True`.
-- **A failed `arda` run reported nothing but an exit code.** `annotate_reads` passed
-  `capture_output=True` and let `CalledProcessError` propagate, so arda's own message was swallowed
-  — which is precisely how the CLI rename above stayed invisible. It now raises with arda's stderr
-  and the installed `arda-mapper` version.
 - **`annotate_reads` was calling an arda CLI that no longer exists.** It shelled out to
   `arda rnaseq map -o …`, but arda 2.19 turned `rnaseq` into the full map→assemble→correct preset
   with no stage positional and `-p/--out-prefix` in place of `-o`, so every real invocation exited
