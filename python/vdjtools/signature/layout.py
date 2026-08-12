@@ -211,8 +211,11 @@ _BLOCKS: list[Block] = [
     # ------------------------------------------------------------- recombination and sharing
     Block("vsig", "pgen", {**feats("standard", "none", "mean_log10", "sd_log10"),
                            **feats("standard", "logit", "frac_atypical")}),
-    Block("vsig", "pub", {**feats("standard", "logit", "burden", "top_frac"),
-                          **feats("standard", "log1p", "n_hits", "vdjdb_load")}),
+    # The public-clonotype burden block is NOT here. It needs a frozen public-clonotype panel
+    # built on a reference corpus, which does not exist yet; declared in a tier it contributed 28
+    # permanently-nan columns to a 4,080-sample emission, indistinguishable to anyone downstream
+    # from 28 columns their own samples were too shallow to support. A contract with dead columns
+    # in it teaches people to ignore holes. `register()` is how it arrives once the panel ships.
 
     # ------------------------------------------------------------------ composition (full only)
     Block("vsig", "aa", feats("full", "arcsine", *"ACDEFGHIKLMNPQRSTVWY")),

@@ -188,9 +188,22 @@ class TestFullTier:
         b = vsig({"TRB": frame(5000, seed=23)}, tier="full")["vsig:pgen:TRB:mean_log10"]
         assert a == b
 
-    def test_strict_refuses_a_tier_it_cannot_fully_compute(self):
-        with pytest.raises(ValueError, match="not computed yet"):
-            vsig({"TRB": frame(200, seed=24)}, tier="full", strict=True)
+    @pytest.mark.parametrize("tier", ["core", "standard", "full"])
+    def test_every_declared_block_actually_computes_something(self, tier):
+        """No tier may promise a block nothing fills in.
 
-    def test_strict_accepts_a_tier_it_can(self):
-        assert vsig({"TRB": frame(200, seed=25)}, tier="core", strict=True)
+        The `pub` block sat in `standard` through development and contributed 28 permanently-nan
+        columns to a 4,080-sample emission — which, to anyone downstream, looks exactly like 28
+        columns their own samples were too shallow to support. A hole has to mean "this sample
+        could not support it", or the masks stop meaning anything.
+        """
+        from vdjtools.signature import layout as L
+
+        v = vsig({"TRB": frame(3000, seed=24)}, tier=tier)
+        by_block = {}
+        for c, val in v.items():
+            _, block, locus, _ = L.parse(c)
+            if locus in ("TRB", L.NO_LOCUS):
+                by_block.setdefault(block, []).append(val)
+        dead = sorted(b for b, vals in by_block.items() if not any(np.isfinite(x) for x in vals))
+        assert not dead, f"tier {tier!r} declares block(s) nothing computes: {dead}"

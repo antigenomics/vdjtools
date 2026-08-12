@@ -39,17 +39,9 @@ def _locus_frames(sample) -> dict[str, pl.DataFrame]:
             for k, v in df.partition_by(LOCUS, as_dict=True).items()}
 
 
-#: Blocks the layout declares but nothing computes yet. Requested explicitly, they raise rather
-#: than returning silent holes: a column that is always nan is indistinguishable from one the
-#: sample genuinely could not support, and the difference is exactly what the masks exist to
-#: preserve. ``pub`` needs the frozen public-clonotype panel; ``usage`` needs the frozen
-#: functional-gene vocabulary.
-UNIMPLEMENTED: tuple[str, ...] = ("pub", "usage")
-
-
 def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DEFAULT_CSTAR,
          weight: str = "log2p1", pgen_q05: dict[str, float] | None = None,
-         threads: int = 0, strict: bool = False) -> dict[str, float]:
+         threads: int = 0) -> dict[str, float]:
     """The ``vsig`` half of one sample's signature, as ``{column_name: value}``.
 
     Args:
@@ -61,7 +53,6 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
             that column stays ``nan`` without it, since "atypical" is meaningless without a
             reference to be atypical against.
         threads: Worker threads for the Pgen batch; 0 = auto.
-        strict: Raise if the requested tier includes a block listed in :data:`UNIMPLEMENTED`.
             Off by default so ``tier="full"`` still runs; on when a caller needs the guarantee
             that every declared column was actually computed.
 
@@ -70,16 +61,9 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         in that order, with ``nan`` where the sample could not support one.
 
     Raises:
-        ValueError: If ``tier`` is unknown, or ``strict`` and the tier reaches an unimplemented
-            block.
+        ValueError: If ``tier`` is unknown.
     """
     want = L.columns(tier, "vsig")
-    pending = sorted({L.parse(c)[1] for c in want} & set(UNIMPLEMENTED))
-    if pending and strict:
-        raise ValueError(
-            f"tier {tier!r} includes block(s) {pending}, which are declared in the layout but "
-            "not computed yet — they would come back as silent holes. Drop strict=True to "
-            "accept that, or use a narrower tier.")
     out = dict.fromkeys(want, np.nan)
     frames = _locus_frames(sample)
     full = tier == "full"
