@@ -3,6 +3,87 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.6.0 — 2026-08-12
+
+### Added — `infer_nt`: the nucleotide CDR3 behind an amino-acid one
+
+A VDJdb record carries `(V, J, CDR3aa)` and no nucleotides, so none of the boundary markup a
+repertoire analysis wants is there. `infer_nt` reconstructs all of it:
+
+```python
+from vdjtools.model import infer_nt
+sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
+sc.cdr3_nt, sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start, sc.pgen, sc.margin
+```
+
+Two stages. A codon-constrained **max-product DP** over every scenario `pgen_aa` sums — germline
+positions pinned to their segment, each free N-region position taking the nucleotide that maximises
+`P(nt₁)·∏P(nt_k | nt_{k−1})` under the VD/DJ/VJ dinucleotide model; then a `pgen_nt` re-score of the
+survivors, because stage 1 maximises the *joint* `P(nt, scenario)` while the contract is about the
+*marginal* `P(nt)`. `pgen` on the result is a real `pgen_nt`.
+
+Stage 1 is **native**: the same Murugan/OLGA `Pi_L·Pi_R` transfer matrix `pgen_aa` already uses,
+with `max` in place of the sums and the winning `(V, delV)` / `(J, delJ)` carried through the state
+(`native.best_aa_scenarios`). It returns *scenarios*, not nucleotide paths — once the scenario is
+fixed, recovering the nt string is one cheap DP over the two insertion blocks, so the sweep carries
+no back-pointers. A first cut enumerated the scenarios in Python instead and cost 1.7 s per TRB
+CDR3; that implementation is kept as the reference the native one is tested against.
+
+Per-sequence cost, 25 generated productive draws per locus. Leaving the calls out is nearly free,
+because the DP sweeps V and J either way:
+
+| locus | ms/seq, V/J known | ms/seq, V/J free |
+|---|---|---|
+| IGK | **0.41** | **0.48** |
+| IGL | 0.46 | 0.50 |
+| TRG | 0.78 | 0.68 |
+| TRA | 0.86 | 2.43 |
+| TRB | 3.02 | 3.20 |
+| TRD | 7.07 | 7.78 |
+| IGH | 87.14 | 85.88 |
+
+So all 80k VDJdb records — TRA and TRB — take **about 2-4 minutes**. IGH is the outlier at 87 ms:
+it carries 60+ D alleles and the D placement loop scales with that library, so plan minutes per
+10k there rather than per 80k.
+
+**Measured against the exponential oracle** (generated productive draws, V/J pinned, 10 residues):
+
+| variant | TRG | TRA | ms/seq |
+|---|---|---|---|
+| one scenario, best codon per residue | 9/25 | 4/19 | 0.06 |
+| stage 1 only (`keep=1, n_best=1`) | 21/25 | 15/19 | 0.3 |
+| stage 1 + marginal re-score (defaults) | **25/25** | **19/19** | 1.2 |
+
+The cheap shortcut fails because a trim chosen before the codons pins a codon the true optimum
+would have trimmed away — the same unsoundness as pinning the germline flanks.
+
+**Three call-input modes**, because annotation tables have all three: one allele (the normal mode);
+several, as the comma-separated string an ambiguous AIRR `v_call` carries or as a list; or nothing
+at all, where the DP marginalizes over every gene — 0.26 ms against 0.23 ms with both pinned, so
+unknown calls cost essentially nothing.
+
+Tandem-D is not enumerated in stage 1 (a single D trimmed to zero length already reaches every
+middle, so D-D can only reorder candidates, not add them); the stage-2 `pgen_nt` counts it in full.
+
+### Fixed — EM could relearn a genomically impossible D–J pair
+
+A D can only recombine with a J lying 3′ of it, and in TRB the clusters interleave
+(TRBD1·TRBJ1·TRBD2·TRBJ2), so `P(TRBD2 | TRBJ1-*)` must be zero. The learned TRB model had it at
+**0.0909**, and OLGA's own TRB gives `P(TRBD2*01 | TRBJ1-6*01) = 0.333`.
+
+The constraint is now applied in **both M-steps before normalization** — a post-hoc patch would be
+undone by the very next iteration. `reference.forbidden_dj_pairs` derives the forbidden set from
+IMGT cluster numbering, `infer.enforce_dj_order` repairs an existing model, and `check_model` gains
+an `impossible_dj_pair` check (`warn` for faithful OLGA imports, which must stay byte-exact for the
+Pgen invariant; `error` otherwise).
+
+The bundled `learned` TRB is rebuilt with the constraint: **9 iterations instead of 11**, final
+log-likelihood **−33.7575** against −33.7604 — the constraint *improves* the fit.
+
+### Changed
+
+- No emoji anywhere in the repository; the `⛔`/`⚠` markers are now `WARNING:` / `NOTE:`.
+
 ## 3.5.0 — 2026-08-12
 
 ### Fixed — `generate(seed=)` was not reproducible across processes
@@ -29,7 +110,7 @@ sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, CD
 It re-derives nothing: every probability comes from `prepare()`'s tables, and the D placement is a
 max-product mirror of `pgen._d_middle` over the same `P(D|J)·P(delD|D)·Pins(VD)·Pins(DJ)` terms.
 
-⛔ **The D therefore obeys `P(D|J)`.** TRBD2 lies 3′ of the whole TRBJ1 cluster, so deletional
+WARNING: **The D therefore obeys `P(D|J)`.** TRBD2 lies 3′ of the whole TRBJ1 cluster, so deletional
 joining can never produce a TRBD2–TRBJ1 pair and the model encodes that as a zero. An earlier draft
 here chose D by longest exact substring and ignored `j` entirely — it would have called the
 impossible pair. There is a regression test.
@@ -40,23 +121,7 @@ taken over), and `scenario_p` recomputes exactly from the reported path's own ta
 
 `infer_nt_bruteforce` is an exact but exponential **oracle for tests**.
 
-### Not added — `infer_nt` (amino-acid → nucleotide) raises
-
-⛔ Inferring a nucleotide CDR3 from an amino-acid one needs a max-product DP with traceback over the
-aa-constrained space; it is **not written**, and the entry point raises rather than dispatching to
-the oracle, because a silent fallback would look like a working feature.
-
-Two measurements say why the easy routes do not work:
-
-* **Enumeration cannot scale.** On VDJdb's 79,997 records the codon search space is a median
-  **5.3 × 10⁶ (TRA)** and **1.9 × 10⁷ (TRB)**; only 8.9 % / 1.6 % are ≤ 10⁵ candidates, and each
-  candidate costs a full `pgen_nt`.
-* ⛔ **Pinning the germline-templated flanks to shrink it is UNSOUND.** It excludes every sequence
-  whose germline was *trimmed*, and the true maximum can be one of them — caught against the
-  brute-force oracle (`CAVSDMRF` → `…GTGAGTGAC…`, pinned version returned `…GTGAGCGAT…`). Do not
-  reintroduce it as an optimisation.
-
-⚠ Both functions assume an **in-frame** CDR3 (`len(nt) == 3 × len(aa)`). Real productive receptors
+NOTE: Both functions assume an **in-frame** CDR3 (`len(nt) == 3 × len(aa)`). Real productive receptors
 satisfy this; an out-of-frame draw does not (measured: 8 aa against 25 nt).
 
 ### Changed
@@ -74,14 +139,14 @@ aggregation, so the collapsed table's **row order varied per process**; `_cum` t
 same cumulative interval to a different allele, and the same `rng.random()` drew a different one.
 `_pick` and `default_rng` were correct throughout — the ordering beneath them was not.
 
-⚠ **Not hash randomisation.** `PYTHONHASHSEED=0` did not help, which is what ruled it out and
+NOTE: **Not hash randomisation.** `PYTHONHASHSEED=0` did not help, which is what ruled it out and
 pointed at the aggregation. Same class as the nondeterminism recorded against arda's `correct`
 stage.
 
 Fixed by `maintain_order=True` on all 12 `group_by` calls in `collapse.py` and all 7 in
 `generate.py`. Verified identical across 5 separate processes on TRA, TRB and IGH.
 
-⛔ **This changes generated output** for a given seed — it has to, since the old order was
+WARNING: **This changes generated output** for a given seed — it has to, since the old order was
 arbitrary. Any recorded expectation from `generate()` predating 3.3.0 must be re-derived.
 
 New tests run the sampler in a **subprocess**, because an in-process test agrees even with the bug

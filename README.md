@@ -122,8 +122,28 @@ sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, in
 ```
 
 It reuses the same tables and the same loops as `pgen_nt`, so the chosen D obeys `P(D|J)` — a
-TRBD2–TRBJ1 pair is genomically impossible and cannot be called. ⛔ Inferring a *nucleotide* CDR3
-from an amino-acid one (`infer_nt`) is **not implemented yet** and raises rather than guessing.
+TRBD2–TRBJ1 pair is genomically impossible and cannot be called.
+
+`infer_nt` goes the other way, reconstructing a **nucleotide** CDR3 from an amino-acid one — the
+VDJdb case, where a record carries `(V, J, CDR3aa)` and no nucleotides:
+
+```python
+from vdjtools.model import infer_nt
+
+sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
+sc.cdr3_nt, sc.pgen, sc.margin        # sequence, its exact Pgen, and how far ahead of the runner-up
+```
+
+Germline positions are pinned to their segment; each free N-region position takes the nucleotide the
+insertion model prefers. It reproduces the exponential brute-force oracle exactly on every record
+the oracle can resolve (25/25 TRG, 19/19 TRA) — fixing the germline trim first and then picking the
+best codon per residue only manages 9/25 and 4/19, because a trim chosen before the codons pins a
+codon the true optimum would have trimmed away.
+
+The search is native (the same Pi_L·Pi_R transfer matrix as `pgen_aa`, with `max` for the sums):
+**2.5 ms per human TRB CDR3, 0.5 ms per TRA** — all 80k VDJdb records in about 3 minutes. `v=`/`j=`
+take one allele, several (a list or the comma-separated string an ambiguous `v_call` carries), or
+nothing at all, in which case the DP marginalizes over every gene at essentially no extra cost.
 
 Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
 OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon — both escaped

@@ -35,8 +35,8 @@ mirpy made between `~/vcs/code/mirpy` and `~/vcs/projects/2026-mirpy-analysis`. 
 library + tests + docs; the **numbers of record stay in `SOURCES.md` here** (the Phase-6b tables),
 which now cite the benchmark repo's paths.
 
-⚠ **As of the move it is not a git repo** — nothing there is under version control yet.
-⚠ The scripts hardcode cluster paths (`/projects/biomarkers/{raw,results}`, `/projects/fmba_covid`)
+NOTE: **As of the move it is not a git repo** — nothing there is under version control yet.
+NOTE: The scripts hardcode cluster paths (`/projects/biomarkers/{raw,results}`, `/projects/fmba_covid`)
 and are run ad hoc; they were never importable from here, so nothing in the library broke.
 
 ## Build / test / run
@@ -267,7 +267,7 @@ each event's `given`). VJ loci degrade cleanly (no D tables). Bootstrap data: mi
   out-of-frame AND stop-codon, since both escaped selection and keeping only out-of-frame conditions
   the training set on junction length mod 3 (`appendix/build_bundled_models.py`; **no cap, no
   subsampling** — every clonotype surviving the germline filter, and the printed `n_used == n_clono`
-  is the check). ⚠ The old *"2k clonotypes/locus, held-out LL improves on every locus"* was wrong
+  is the check). NOTE: The old *"2k clonotypes/locus, held-out LL improves on every locus"* was wrong
   twice: the cap was real, and the LL was the EM's **own training objective**, which EM increases
   monotonically by construction — it validated nothing. Real held-out + oracle comparison:
   `appendix/compare_models.py`. The bundled **`olga`** models come from the repo's own
@@ -330,7 +330,7 @@ fixed two real bugs on the way:
   ("v_call","kmer"), match="exact")` is the V+k-mer test. `_feature_frame` no longer requires
   `junction_aa` for `match="exact"` (fuzzy/1mm still *search* on it and still do); a key of
   germline calls **alone** still raises — that is `stats.segment_usage`, not a biomarker.
-  ⚠ `str.len_chars()` is **UInt32** — `len - 2*flank` underflows on short junctions; cast first.
+  NOTE: `str.len_chars()` is **UInt32** — `len - 2*flank` underflows on short junctions; cast first.
 
 Findings worth not re-deriving: **B27 is 26/27 confounded with AS** in this cohort, so only the
 **B27-matched** contrast separates disease from carriage (AS/B27+ **16/26** vs HD/B27+ **1/12**,

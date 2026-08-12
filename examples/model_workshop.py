@@ -440,7 +440,7 @@ def _(held_out, learned_trb, mo, model_fit, pl, trb):
             "would put TRB's `v_3_del` at ~3,600 parameters when ~700 are real."
         ),
         fits,
-        mo.md("⚠ These sequences were drawn from `olga`, so it *should* win here. A log-likelihood "
+        mo.md("NOTE: These sequences were drawn from `olga`, so it *should* win here. A log-likelihood "
               "on a model's own training data is that model's EM objective, which EM increases by "
               "construction — it validates nothing. Always score a held-out set.").callout("warn"),
     ])

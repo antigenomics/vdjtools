@@ -23,7 +23,7 @@ numbers of record in `SOURCES.md`.
 
 **Repo split (2026-07-17)** — benchmarks live in `~/vcs/projects/2026-vdjtools-benchmark`
 (`bench/` scripts, the confound gates, `scripts/*.sbatch`). They *use* vdjtools, they aren't part of
-it. ⚠ That directory **is not a git repo yet**, and its scripts hardcode cluster paths.
+it. NOTE: That directory **is not a git repo yet**, and its scripts hardcode cluster paths.
 
 ## Build / test / run
 ```bash
@@ -77,7 +77,7 @@ format-conversion fixtures live there — pull them over when a phase needs them
 - **Pgen/gen/EM invariant: V and J each contribute ≥1 nt to the CDR3** (OLGA-compatible). Getting
   this wrong made nt Pgen up to 0.34% high on heavily-deleted sequences.
 
-## ⛔ Traps that produced silent wrong answers
+## WARNING: Traps that produced silent wrong answers
 - **`native` Pgen allele guard.** `vi.get(v, -1)` mapped an unrecognised V/J to `-1` = *marginalize
   over all V/J*. The model is keyed by **allele** and real repertoires carry **gene-level** `v_call`
   (`TRBV9`), so `pgen_aa(m, cdr3, "TRBV9", "TRBJ2-3")` silently returned the V/J-agnostic value —
@@ -142,4 +142,17 @@ format-conversion fixtures live there — pull them over when a phase needs them
      exactly (ratio 1.000000) on every sequence OLGA will score. `IGHV4-30-4*01` has Pgen ≡ 0 in
      OLGA too. **Do not "fix" this** — it would break the exact-OLGA-Pgen invariant. `check_model`
      reports it as `warn` (not `error`) when `manifest.source` starts with `olga`.
+- **`infer_nt` (aa→nt) landed in v3.6.0, natively.** Stage 1 is `native.best_aa_scenarios` — the
+  same `Pi_L·Pi_R` transfer matrix `pgen_aa` sums over, with `max` and the winning `(V,delV)`/
+  `(J,delJ)` carried in the state; stage 2 re-scores the survivors with the exact `pgen_nt`.
+  2.5 ms/TRB, 0.5 ms/TRA (all of VDJdb in ~3 min); reproduces the brute-force oracle 25/25 TRG,
+  19/19 TRA. **The Python scenario enumeration in `viterbi.py` is the reference, not the product**
+  — it is ~600× slower on TRB and is selected only when a `prepare()`-d model is passed;
+  `test_native_search_agrees_with_the_python_reference` is what makes it worth keeping.
+  NOTE: Two things measured and rejected along the way: fixing the germline trim first and then picking
+  the best codon per residue agrees with the oracle only 9/25 and 4/19 (a trim chosen before the
+  codons pins a codon the optimum would have trimmed), and bounding the codon DP by 1.0 in
+  branch-and-bound prunes nothing — the insertion chain costs ~0.4/nt, so the cutoff sits six orders
+  of magnitude too high.
+- No emoji anywhere in the repo (v3.6.0); the old `⛔`/`⚠` markers are `WARNING:` / `NOTE:`.
 - `rescale.py:63` raises a Polars-2.0 `empty_as_null` DeprecationWarning — set it when convenient.

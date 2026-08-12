@@ -394,6 +394,40 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    native.pgen_aa_batch(model, seqs, threads=0)   # many CDR3s, thread-parallel (~11x)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
 
+Reconstructing nucleotides and V/D/J markup from an amino-acid CDR3
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A VDJdb record carries ``(V, J, CDR3aa)`` and no nucleotides, so the boundary markup a repertoire
+analysis wants is simply absent. :func:`~vdjtools.model.viterbi.infer_nt` reconstructs it under the
+model: germline positions are pinned to their V/D/J segment, and each free N-region position takes
+the nucleotide maximising ``P(nt_1) * prod P(nt_k | nt_{k-1})`` under the insertion model covering
+it.
+
+.. code-block:: python
+
+   from vdjtools.model import infer_nt
+
+   sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
+   sc.cdr3_nt                       # the reconstructed nucleotide CDR3
+   sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, CDR3-nt space
+   sc.pgen, sc.margin               # exact Pgen of the result, and its lead over the runner-up
+
+``v=``/``j=`` accept one allele, several (a list, or the comma-separated string an ambiguous AIRR
+``v_call`` carries), or ``None`` — the search then marginalizes over every gene, which costs almost
+nothing because the underlying DP sweeps V and J anyway. Reported timings: 2.5 ms per human TRB
+CDR3, 0.5 ms per TRA, so all 80k VDJdb records take about three minutes.
+
+.. warning::
+
+   Report ``sc.margin``. With a long non-templated core many nucleotide sequences are near-equally
+   likely, and a bare "most likely" claim is then close to meaningless — the margin is what says so.
+
+.. note::
+
+   Pass the :class:`~vdjtools.model.model.Model`, not a :func:`~vdjtools.model.pgen.prepare` -d one.
+   A prepared model selects the pure-Python reference search, which is the implementation the native
+   one is validated against and is roughly 600x slower on a VDJ locus.
+
 Building a model on your own germline library, fitting it to your own reads, checking it, comparing
 two of them and asking how much diversity one describes are covered in
 :doc:`Recombination model workshop <model>`. Explore any model's Bayes net interactively with

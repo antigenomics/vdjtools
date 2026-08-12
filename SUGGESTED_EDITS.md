@@ -3,7 +3,7 @@
 Repo-local notes on gaps found while using vdjtools "by hand" for analyses. Each entry: what's
 missing, why, reference implementation, and a proposed API. Promote to GitHub issues as needed.
 
-## 1. V-J usage batch correction — incomplete vs Vlasova et al. 2026 — ✅ IMPLEMENTED
+## 1. V-J usage batch correction — incomplete vs Vlasova et al. 2026 — yes IMPLEMENTED
 
 **Status (2026-07-16): done.** `preprocess/batch.py` now provides both pieces:
 - `correct_vj_usage(..., transform="sigmoid", z_cap=6.0)` — the σ-standardised z-score with the
@@ -53,7 +53,7 @@ The full method is in **legacy mirpy v2**: `mir.basic.gene_usage` (`compute_batc
 
 Until this lands, the reproduction implements the rescale+resample step by hand in the analysis script.
 
-## 2. Adaptive/immunoSEQ → IMGT gene names are wrong for 100 of 161 tokens — ✅ IMPLEMENTED
+## 2. Adaptive/immunoSEQ → IMGT gene names are wrong for 100 of 161 tokens — yes IMPLEMENTED
 
 **Status (2026-08-09): done, shipped in 3.2.0.** `io/convert.py::_adaptive_to_imgt` looks the raw
 Adaptive token up in the shipped table and falls back to the legacy rewrite on a miss. Tests:

@@ -1166,4 +1166,371 @@ double estep_batch(const PackedModel& m,
     return ll;
 }
 
+
+// ---- aa argmax: the same Pi_L*Pi_R transfer matrix with `max` instead of the sums -------------
+//
+// `pgen_aa` marginalizes over every recombination AND every synonymous codon assignment. The most
+// likely nucleotide CDR3 is the maximum of the same product, so this is a faithful mirror of
+// mk_left_tm / mk_right_tm / combine_tm / pgen_aa_vdj with `+=` replaced by `max` — same states,
+// same factors, same codon masks, same pruning. Nothing here re-derives the model.
+//
+// It returns SCENARIOS rather than nucleotide paths. Once the scenario is known the free positions
+// are two short insertion blocks, and picking their best codons is a cheap per-scenario DP that
+// Python already has; carrying full back-pointers through the sweep would cost far more than the
+// handful of reconstructions the caller actually needs.
+namespace {
+
+// Which (V, delV) / (J, delJ) achieved the max at each (position, state). Parallel to Lf/Rb.
+struct ArgTM {
+    std::vector<double> w;        // [(N+1)*25]
+    std::vector<int> gene, len;   // the winning gene index and germline length
+    std::vector<char> any;        // [N+1] — is any state live at this boundary
+};
+
+inline void relax(ArgTM& t, int idx, double w, int gene, int len) {
+    if (w > t.w[idx]) { t.w[idx] = w; t.gene[idx] = gene; t.len[idx] = len; }
+}
+
+// Max counterpart of mk_left_tm: best V germline (>=1 nt) + N1 insertion filling [0,p).
+void mk_left_max(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
+                 const std::vector<double>& pins, const std::vector<double>& R,
+                 const std::vector<double>& bias, int jbind, ArgTM& L) {
+    int W = (N + 1) * 25;
+    L.w.assign(W, 0.0); L.gene.assign(W, -1); L.len.assign(W, 0);
+    ArgTM seed;
+    seed.w.assign(W, 0.0); seed.gene.assign(W, -1); seed.len.assign(W, 0);
+    std::vector<char> has_seed(N + 1, 0);
+    for (int v : mask_or_all(v_idx, m.func_v)) {
+        double pv = m.pv[v];
+        if (pv == 0.0) continue;
+        if (jbind >= 0) {                       // VJ: fold P(J|V) into the V seed
+            double pjv = m.pjv[v * m.nJ() + jbind];
+            if (pjv == 0.0) continue;
+            pv *= pjv;
+        }
+        const auto& gv = m.cut_v[v];
+        int Lv = static_cast<int>(gv.size());
+        for (int len_v = 1; len_v <= std::min(Lv, N); ++len_v) {
+            int div = Lv - len_v;
+            if (div < 0 || div >= m.nbins_v) continue;
+            double pdv = m.del_v[v * m.nbins_v + div];
+            if (pdv == 0.0) continue;
+            bool ok = true;                     // complete codons within [0,len_v) must translate
+            for (int c = 0; c < len_v / 3; ++c)
+                if (!ok_codon(allowed[c], gv[3 * c] * 16 + gv[3 * c + 1] * 4 + gv[3 * c + 2])) { ok = false; break; }
+            if (!ok) continue;
+            int a = gv[len_v - 1], b = (len_v >= 2) ? gv[len_v - 2] : -1;
+            relax(seed, len_v * 25 + sidx(a, b), pv * pdv, v, len_v);
+            has_seed[len_v] = 1;
+        }
+    }
+    std::vector<double> cur(25), ncur(25);
+    std::vector<int> cg(25), cl(25), ng(25), nl(25);
+    for (int q = 0; q <= N; ++q) {
+        if (!has_seed[q]) continue;
+        for (int s = 0; s < 25; ++s) {
+            cur[s] = seed.w[q * 25 + s]; cg[s] = seed.gene[q * 25 + s]; cl[s] = seed.len[q * 25 + s];
+        }
+        if (!pins.empty() && pins[0] != 0.0)
+            for (int s = 0; s < 25; ++s)
+                if (cur[s] > 0.0) relax(L, q * 25 + s, pins[0] * cur[s], cg[s], cl[s]);
+        for (int ell = 1; q + ell <= N && ell < static_cast<int>(pins.size()); ++ell) {
+            int mm = q + ell - 1;
+            bool ce = (mm % 3 == 2);
+            uint64_t am = allowed[mm / 3];
+            std::fill(ncur.begin(), ncur.end(), 0.0);
+            std::fill(ng.begin(), ng.end(), -1);
+            std::fill(nl.begin(), nl.end(), 0);
+            bool any = false;
+            for (int s = 0; s < 25; ++s) {
+                double w = cur[s];
+                if (w == 0.0) continue;
+                int p1 = s / 5 - 1, p2 = s % 5 - 1;
+                for (int nt = 0; nt < 4; ++nt) {
+                    double mult = (ell == 1) ? bias[nt] : R[nt * 4 + p1];
+                    if (mult == 0.0) continue;
+                    if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+                    int t = sidx(nt, p1);
+                    double nw = w * mult;
+                    if (nw > ncur[t]) { ncur[t] = nw; ng[t] = cg[s]; nl[t] = cl[s]; }
+                    any = true;
+                }
+            }
+            cur.swap(ncur); cg.swap(ng); cl.swap(nl);
+            if (!any) break;
+            if (pins[ell] != 0.0)
+                for (int s = 0; s < 25; ++s)
+                    if (cur[s] > 0.0) relax(L, (q + ell) * 25 + s, pins[ell] * cur[s], cg[s], cl[s]);
+        }
+    }
+    L.any.assign(N + 1, 0);
+    for (int p = 0; p <= N; ++p)
+        for (int s = 0; s < 25; ++s)
+            if (L.w[p * 25 + s] != 0.0) { L.any[p] = 1; break; }
+}
+
+// Max counterpart of mk_right_tm: best DJ insertion + J germline filling [p,N), weighted by
+// P(D|J)P(J)P(delJ). D<0 leaves out the P(D|J) factor (the VJ chain has none).
+void mk_right_max(const PackedModel& m, const uint64_t* allowed, int N, int D, int j_idx, ArgTM& Rt) {
+    int W = (N + 1) * 25;
+    Rt.w.assign(W, 0.0); Rt.gene.assign(W, -1); Rt.len.assign(W, 0);
+    const auto& pins = m.ins_dj; const auto& R = m.R_dj; const auto& bias = m.bias_dj;
+    int nD = m.nD();
+    ArgTM seed;
+    seed.w.assign(W, 0.0); seed.gene.assign(W, -1); seed.len.assign(W, 0);
+    std::vector<char> has_seed(N + 1, 0);
+    for (int j : mask_or_all(j_idx, m.func_j)) {
+        double pj = m.pj[j];
+        if (pj == 0.0) continue;
+        double pdg = (D < 0) ? 1.0 : m.pd_given_j[j * nD + D];
+        if (pdg == 0.0) continue;               // genomically impossible D-J pair: prune
+        const auto& gj = m.cut_j[j];
+        int Lj = static_cast<int>(gj.size());
+        for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
+            int right = N - len_j, idxj = Lj - len_j;
+            if (idxj < 0 || idxj >= m.nbins_j) continue;
+            double pdj = m.del_j[j * m.nbins_j + idxj];
+            if (pdj == 0.0) continue;
+            bool ok = true;                     // complete codons within [right,N) must translate
+            for (int c = (right + 2) / 3; c < N / 3; ++c) {
+                if (3 * c >= right) {
+                    int o = 3 * c - right;
+                    if (!ok_codon(allowed[c], gj[idxj + o] * 16 + gj[idxj + o + 1] * 4 + gj[idxj + o + 2])) { ok = false; break; }
+                }
+            }
+            if (!ok) continue;
+            int cc = gj[idxj], dd = (len_j >= 2) ? gj[idxj + 1] : -1;
+            relax(seed, right * 25 + sidx(cc, dd), pdg * pj * pdj, j, len_j);
+            has_seed[right] = 1;
+        }
+    }
+    std::vector<double> cur(25), ncur(25);
+    std::vector<int> cg(25), cl(25), ng(25), nl(25);
+    for (int right = N; right >= 0; --right) {
+        if (!has_seed[right]) continue;
+        for (int s = 0; s < 25; ++s) {
+            cur[s] = seed.w[right * 25 + s]; cg[s] = seed.gene[right * 25 + s]; cl[s] = seed.len[right * 25 + s];
+        }
+        if (!pins.empty() && pins[0] != 0.0)
+            for (int s = 0; s < 25; ++s)
+                if (cur[s] > 0.0) relax(Rt, right * 25 + s, pins[0] * cur[s], cg[s], cl[s]);
+        for (int ell = 1; right - ell >= 0 && ell < static_cast<int>(pins.size()); ++ell) {
+            int mm = right - ell;
+            bool ce = (mm % 3 == 0);
+            uint64_t am = allowed[mm / 3];
+            std::fill(ncur.begin(), ncur.end(), 0.0);
+            std::fill(ng.begin(), ng.end(), -1);
+            std::fill(nl.begin(), nl.end(), 0);
+            bool any = false;
+            for (int s = 0; s < 25; ++s) {
+                double w = cur[s];
+                if (w == 0.0) continue;
+                int c = s / 5 - 1, d = s % 5 - 1;
+                for (int nt = 0; nt < 4; ++nt) {
+                    double mult = (ell == 1) ? bias[nt] : R[nt * 4 + c];
+                    if (mult == 0.0) continue;
+                    if (ce && !ok_codon(am, nt * 16 + c * 4 + d)) continue;
+                    int t = sidx(nt, c);
+                    double nw = w * mult;
+                    if (nw > ncur[t]) { ncur[t] = nw; ng[t] = cg[s]; nl[t] = cl[s]; }
+                    any = true;
+                }
+            }
+            cur.swap(ncur); cg.swap(ng); cl.swap(nl);
+            if (!any) break;
+            if (pins[ell] != 0.0)
+                for (int s = 0; s < 25; ++s)
+                    if (cur[s] > 0.0) relax(Rt, (right - ell) * 25 + s, pins[ell] * cur[s], cg[s], cl[s]);
+        }
+    }
+    Rt.any.assign(N + 1, 0);
+    for (int p = 0; p <= N; ++p)
+        for (int s = 0; s < 25; ++s)
+            if (Rt.w[p * 25 + s] != 0.0) { Rt.any[p] = 1; break; }
+}
+
+// Max counterpart of combine_tm: best join of a left state (nt[p-1],nt[p-2]) with a right state
+// (nt[p],nt[p+1]) at boundary p, honouring the single codon that straddles p. Writes back which
+// left/right states won so the caller can read off (V,delV) and (J,delJ).
+double combine_max(const double* lw, const double* rw, int p, const uint64_t* allowed,
+                   int& bs_l, int& bs_r) {
+    double best = 0.0; bs_l = bs_r = -1;
+    int phase = p % 3;
+    uint64_t am = 0;
+    if (phase == 1) am = allowed[(p - 1) / 3];
+    else if (phase == 2) am = allowed[p / 3];
+    for (int sl = 0; sl < 25; ++sl) {
+        double a = lw[sl];
+        if (a == 0.0) continue;
+        int la = sl / 5 - 1, lb = sl % 5 - 1;
+        for (int sr = 0; sr < 25; ++sr) {
+            double b = rw[sr];
+            if (b == 0.0) continue;
+            double w = a * b;
+            if (w <= best) continue;
+            int rc = sr / 5 - 1, rd = sr % 5 - 1;
+            if (phase == 1) {                   // codon [p-1,p,p+1] = (la, rc, rd)
+                if (la < 0 || rc < 0 || rd < 0) continue;
+                if (!ok_codon(am, la * 16 + rc * 4 + rd)) continue;
+            } else if (phase == 2) {            // codon [p-2,p-1,p] = (lb, la, rc)
+                if (la < 0 || lb < 0 || rc < 0) continue;
+                if (!ok_codon(am, lb * 16 + la * 4 + rc)) continue;
+            }
+            best = w; bs_l = sl; bs_r = sr;
+        }
+    }
+    return best;
+}
+
+// Keep the k best scenarios seen, cheapest possible: k is single digits.
+void offer(std::vector<AaScenario>& top, size_t k, const AaScenario& s) {
+    if (s.w <= 0.0) return;
+    if (top.size() < k) { top.push_back(s); }
+    else {
+        size_t worst = 0;
+        for (size_t i = 1; i < top.size(); ++i) if (top[i].w < top[worst].w) worst = i;
+        if (s.w <= top[worst].w) return;
+        top[worst] = s;
+    }
+}
+
+void best_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
+              size_t k, std::vector<AaScenario>& top) {
+    int N = 3 * alen;
+    ArgTM L, Rt;
+    mk_left_max(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, L);
+    std::vector<double> dp(25), ndp(25);
+    for (int D : m.func_d) {
+        mk_right_max(m, allowed, N, D, j_idx, Rt);
+        const auto& cutd = m.cut_d[D];
+        int Ld = static_cast<int>(cutd.size());
+        for (int idx5 = 0; idx5 <= Ld && idx5 < m.nbins_d5; ++idx5) {
+            std::vector<int> vg(25), vl(25), ng(25), nl(25);
+            for (int pos = 1; pos <= N; ++pos) {
+                if (!L.any[pos]) continue;
+                for (int s = 0; s < 25; ++s) {
+                    dp[s] = L.w[pos * 25 + s];
+                    vg[s] = L.gene[pos * 25 + s];
+                    vl[s] = L.len[pos * 25 + s];
+                }
+                // Thread the D germline one nt at a time and offer a join after each prefix: the
+                // prefix of length `ld` IS the trim (idx5, Ld-idx5-ld), so every 3' trim of this
+                // (D, idx5) is covered by one forward pass instead of one pass per trim.
+                // (V, delV) rides along, because the join's winning state is only known after the
+                // D has been threaded and the identity would otherwise be lost.
+                for (int ld = 0; ld <= Ld - idx5 && pos + ld <= N; ++ld) {
+                    if (ld > 0) {
+                        int mm = pos + ld - 1, nt = cutd[idx5 + ld - 1];
+                        bool ce = (mm % 3 == 2);
+                        uint64_t am = allowed[mm / 3];
+                        std::fill(ndp.begin(), ndp.end(), 0.0);
+                        std::fill(ng.begin(), ng.end(), -1);
+                        std::fill(nl.begin(), nl.end(), 0);
+                        bool any = false;
+                        for (int s = 0; s < 25; ++s) {
+                            double w = dp[s];
+                            if (w == 0.0) continue;
+                            int p1 = s / 5 - 1, p2 = s % 5 - 1;
+                            if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+                            int t = sidx(nt, p1);
+                            if (w > ndp[t]) { ndp[t] = w; ng[t] = vg[s]; nl[t] = vl[s]; }
+                            any = true;
+                        }
+                        dp.swap(ndp); vg.swap(ng); vl.swap(nl);
+                        if (!any) break;
+                    }
+                    int idx3 = Ld - idx5 - ld;
+                    if (idx3 < 0 || idx3 >= m.nbins_d3) continue;
+                    double pdel = m.del_d[(D * m.nbins_d5 + idx5) * m.nbins_d3 + idx3];
+                    if (pdel == 0.0) continue;
+                    int p = pos + ld;
+                    if (!Rt.any[p]) continue;
+                    int sl = -1, sr = -1;
+                    double w = combine_max(&dp[0], &Rt.w[p * 25], p, allowed, sl, sr);
+                    if (w <= 0.0 || sl < 0 || sr < 0) continue;
+                    AaScenario sc;
+                    sc.w = m.p_nd1 * pdel * w;
+                    sc.d = D; sc.idx5 = idx5; sc.idx3 = idx3; sc.pos = pos;
+                    sc.v = vg[sl]; sc.len_v = vl[sl];
+                    sc.j = Rt.gene[p * 25 + sr]; sc.len_j = Rt.len[p * 25 + sr];
+                    offer(top, k, sc);
+                }
+            }
+        }
+    }
+}
+
+void best_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
+             size_t k, std::vector<AaScenario>& top) {
+    int N = 3 * alen;
+    ArgTM L;
+    std::vector<double> dp(25), ndp(25);
+    for (int j : mask_or_all(j_idx, m.func_j)) {
+        mk_left_max(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, L);
+        const auto& gj = m.cut_j[j];
+        int Lj = static_cast<int>(gj.size());
+        for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
+            int p = N - len_j, idxj = Lj - len_j;
+            if (p < 1 || !L.any[p]) continue;   // >=1 V/insertion nt before J
+            if (idxj < 0 || idxj >= m.nbins_j) continue;
+            double pdj = m.del_j[j * m.nbins_j + idxj];
+            if (pdj == 0.0) continue;
+            for (int s = 0; s < 25; ++s) dp[s] = L.w[p * 25 + s];
+            std::vector<int> vg(25), vl(25), ng(25), nl(25);
+            for (int s = 0; s < 25; ++s) { vg[s] = L.gene[p * 25 + s]; vl[s] = L.len[p * 25 + s]; }
+            bool ok = true;
+            for (int kk = 0; kk < len_j; ++kk) {   // thread the fixed J germline suffix
+                int mm = p + kk, nt = gj[idxj + kk];
+                bool ce = (mm % 3 == 2);
+                uint64_t am = allowed[mm / 3];
+                std::fill(ndp.begin(), ndp.end(), 0.0);
+                std::fill(ng.begin(), ng.end(), -1);
+                std::fill(nl.begin(), nl.end(), 0);
+                bool any = false;
+                for (int s = 0; s < 25; ++s) {
+                    double w = dp[s];
+                    if (w == 0.0) continue;
+                    int p1 = s / 5 - 1, p2 = s % 5 - 1;
+                    if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+                    int t = sidx(nt, p1);
+                    if (w > ndp[t]) { ndp[t] = w; ng[t] = vg[s]; nl[t] = vl[s]; }
+                    any = true;
+                }
+                dp.swap(ndp); vg.swap(ng); vl.swap(nl);
+                if (!any) { ok = false; break; }
+            }
+            if (!ok) continue;
+            int bs = -1;
+            double best = 0.0;
+            for (int s = 0; s < 25; ++s) if (dp[s] > best) { best = dp[s]; bs = s; }
+            if (bs < 0) continue;
+            AaScenario sc;
+            sc.w = pdj * best;
+            sc.v = vg[bs]; sc.len_v = vl[bs];
+            sc.j = j; sc.len_j = len_j;
+            offer(top, k, sc);
+        }
+    }
+}
+
+}  // namespace
+
+std::vector<AaScenario> best_aa_scenarios(const PackedModel& m, const std::string& aa,
+                                          int v_idx, int j_idx, int k) {
+    int L = static_cast<int>(aa.size());
+    std::vector<AaScenario> top;
+    if (L == 0 || k <= 0) return top;
+    std::vector<uint64_t> allowed(L);
+    for (int c = 0; c < L; ++c) {
+        allowed[c] = mask_for_aa(aa[c]);
+        if (allowed[c] == 0ULL) return top;      // an unknown residue has no codons
+    }
+    if (m.vdj) best_vdj(m, allowed.data(), L, v_idx, j_idx, static_cast<size_t>(k), top);
+    else best_vj(m, allowed.data(), L, v_idx, j_idx, static_cast<size_t>(k), top);
+    std::sort(top.begin(), top.end(),
+              [](const AaScenario& a, const AaScenario& b) { return a.w > b.w; });
+    return top;
+}
+
+
 }  // namespace vdjtools

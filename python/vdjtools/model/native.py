@@ -232,3 +232,35 @@ def pgen_aa_batch(
     if j_idxs and len(j_idxs) != len(seqs):
         raise ValueError("j must have the same length as cdr3_aas")
     return _batch(pm, seqs, v_idxs, j_idxs, mismatches, threads)
+
+
+def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str | None = None,
+                      k: int = 8) -> list[tuple]:
+    """Top-``k`` recombination scenarios for an amino-acid CDR3, best first.
+
+    The argmax counterpart of :func:`pgen_aa`, over the same Pi_L*Pi_R transfer matrix: ``max`` in
+    place of the sums, with the winning ``(V, delV)`` and ``(J, delJ)`` carried through the state.
+    Because the DP marginalizes over V and J at no extra cost, leaving both unspecified is barely
+    slower than pinning them (0.26 vs 0.23 ms on human TRB).
+
+    Args:
+        model: The recombination model.
+        cdr3_aa: CDR3 amino-acid sequence (conserved Cys -> conserved Phe/Trp inclusive).
+        v, j: Optional **allele** names to condition on. ``None`` marginalizes.
+        k: How many scenarios to return.
+
+    Returns:
+        ``[(w, v_allele, len_v, j_allele, len_j, d_allele | None, idx5, idx3, pos)]``, descending by
+        ``w``. ``len_v``/``len_j`` are the nucleotides each germline contributes to the CDR3;
+        ``idx5``/``idx3`` are the D's 5'/3' trims and ``pos`` where its contribution starts.
+    """
+    from .._core import best_aa_scenarios as _best
+
+    pm, vi, ji = pack(model)
+    d_alleles = (model.genomic["genes_d"]["d_allele"].to_list()
+                 if model.chain_type == "VDJ" else [])
+    iv = {i: a for a, i in vi.items()}
+    ij = {i: a for a, i in ji.items()}
+    got = _best(pm, cdr3_aa.upper(), _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"), k)
+    return [(s.w, iv[s.v], s.len_v, ij[s.j], s.len_j,
+             d_alleles[s.d] if s.d >= 0 else None, s.idx5, s.idx3, s.pos) for s in got]

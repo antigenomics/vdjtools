@@ -58,7 +58,7 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   threads=)`** (thread-parallel across sequences, bitwise-identical to serial, ~11× on 16 cores).
   Pure-Python reference impls in `vdjtools.model.pgen`.
 - **Generate**: `vdjtools.model.generate.generate(model, n, seed=, productive_only=)` → `pl.DataFrame`.
-  ⚠ `seed=` is reproducible **across processes** only from **3.3.0**: `collapse_alleles` used
+  NOTE: `seed=` is reproducible **across processes** only from **3.3.0**: `collapse_alleles` used
   unordered polars `group_by`, so the collapsed table's row order varied per process and the same
   seed drew a different allele. Expectations recorded from `generate()` before 3.3.0 are stale.
 - **Infer (EM)**: `vdjtools.model.infer.infer` / `infer_native(template, seqs, masks=, dd_allowed=,
@@ -102,11 +102,24 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `Scenario(cdr3_nt, v_call, j_call, v_end, j_start, d_call, d_start, d_end, scenario_p, ...)` — the
   single most likely recombination for a KNOWN nt CDR3, i.e. the V/D/J boundary markup. Max-product
   over the same loops `pgen_nt` sums, so the D obeys `p_d_given_j` (TRBD2×TRBJ1 = 0). Coordinates
-  are 0-based half-open in CDR3-nt space. `infer_nt_bruteforce(model, cdr3_aa, v=, j=)` is an exact
-  but exponential ORACLE for tests. ⛔ `infer_nt` (production aa→nt) is **not implemented and
-  raises**: enumeration is a median 5.3e6 (TRA) / 1.9e7 (TRB) candidates per VDJdb record, and
-  pinning the germline flanks to shrink it is unsound (it drops trimmed-germline sequences, and the
-  true max can be one). Needs a max-product DP with traceback over the aa-constrained space.
+  are 0-based half-open in CDR3-nt space.
+- **aa → nt** **`infer_nt(model, cdr3_aa, v=, j=, n_best=8)`** → the same `Scenario`, with `pgen`
+  the exact `pgen_nt` of the returned sequence — the VDJdb case, where a record has `(V, J, CDR3aa)`
+  and no nucleotides. Two stages: the argmax over every scenario `pgen_aa` sums (germline pinned,
+  free N-region positions scored by the VD/DJ/VJ dinucleotide model), then a `pgen_nt` re-score of
+  the survivors — stage 1 maximises the *joint*, the re-score answers about the *marginal*.
+  Reproduces `infer_nt_bruteforce` (the exact but exponential ORACLE, tests only) 25/25 TRG and
+  19/19 TRA; the one-scenario "best codon per residue" shortcut manages 9/25 and 4/19, because a
+  trim chosen before the codons pins a codon the true optimum would have trimmed away.
+  **`native.best_aa_scenarios(model, aa, v=, j=, k=8)`** is stage 1 alone (top-k scenarios as
+  `(w, v, len_v, j, len_j, d, idx5, idx3, pos)`): the same Pi_L*Pi_R transfer matrix as `pgen_aa`
+  with `max` for the sums. **2.5 ms/TRB, 0.5 ms/TRA — all of VDJdb in ~3 min.**
+  `v=`/`j=` take one allele, a list or comma-separated string (ambiguous `v_call`), or `None`
+  (marginalize — barely slower, 0.26 vs 0.23 ms). NOTE: pass a `Model`, not a `prepare()`-d one:
+  a prepared model selects the pure-Python reference search, ~600x slower on TRB (tests cross-check
+  the two). WARNING: Do not pin germline flanks to shrink the search — it drops trimmed-germline
+  sequences and the true max can be one. Tandem-D is not enumerated in stage 1 (it cannot add
+  candidates, only reorder them) but is fully counted by the stage-2 `pgen_nt`.
 - **Stitch**: `stitch_contig(model, v, j, cdr3_nt)`, `stitch_frame`.
 - **Usage re-weighting**: `rescale_usage(model, sample_or_list, v=, j=, aggregate="pool"|"mean")` —
   V/J usage is protocol-dependent (5'RACE vs DNA-multiplex), the junction model is not.
@@ -125,7 +138,7 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `build_model(chain, ...)`, **`build_all(chains, groups=, workers=)`** — the full FASTQ → arda-map
   → EM pipeline, parallel across chains. Ambiguous junction bases → `A` by default in both training
   entry points (`infer.sanitize_junctions`; `ambiguous=None` drops instead).
-  ⚠ arda ≥2.19: stage-1 mapping is **`arda map`**, not `arda rnaseq map`.
+  NOTE: arda ≥2.19: stage-1 mapping is **`arda map`**, not `arda rnaseq map`.
 - Tandem-D (D-D) supported throughout (`vdjtools.model.dd`).
 
 ### `vdjtools.stats` — diversity, spectratype, usage

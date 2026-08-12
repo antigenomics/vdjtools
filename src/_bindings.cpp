@@ -78,6 +78,22 @@ PYBIND11_MODULE(_core, m) {
           "Batch aa Pgen over many CDR3s, parallelized across sequences (mismatches=1 -> Hamming-1 "
           "ball). Bitwise-identical to per-sequence pgen_aa/pgen_aa_hamming1; threads=0 -> auto.");
 
+    py::class_<vdjtools::AaScenario>(m, "AaScenario")
+        .def_readonly("w", &vdjtools::AaScenario::w)
+        .def_readonly("v", &vdjtools::AaScenario::v)
+        .def_readonly("len_v", &vdjtools::AaScenario::len_v)
+        .def_readonly("j", &vdjtools::AaScenario::j)
+        .def_readonly("len_j", &vdjtools::AaScenario::len_j)
+        .def_readonly("d", &vdjtools::AaScenario::d)
+        .def_readonly("idx5", &vdjtools::AaScenario::idx5)
+        .def_readonly("idx3", &vdjtools::AaScenario::idx3)
+        .def_readonly("pos", &vdjtools::AaScenario::pos);
+    m.def("best_aa_scenarios", &vdjtools::best_aa_scenarios, py::arg("model"), py::arg("aa"),
+          py::arg("v_idx") = -1, py::arg("j_idx") = -1, py::arg("k") = 8,
+          py::call_guard<py::gil_scoped_release>(),
+          "Top-k recombination scenarios for an amino-acid CDR3 by joint max-product weight — the "
+          "argmax counterpart of pgen_aa, over the same Pi_L*Pi_R transfer matrix.");
+
     py::class_<Counts>(m, "Counts")
         .def_readonly("v_choice", &Counts::v_choice)
         .def_readonly("j_choice", &Counts::j_choice)
