@@ -67,7 +67,7 @@ def prepare_generation(model: Model) -> _GenPrep:
         fun = set(g.filter(g["functional"])[f"{seg}_allele"].to_list())
         col = f"{seg}_allele"
         dtab = t[{"v": "v_3_del", "j": "j_5_del", "d": "d_del"}[seg]]
-        recomb = set(dtab.group_by(col).agg(pl.col("p").sum().alias("s")).filter(pl.col("s") > 0)[col].to_list())
+        recomb = set(dtab.group_by(col, maintain_order=True).agg(pl.col("p").sum().alias("s")).filter(pl.col("s") > 0)[col].to_list())
         return fun & recomb
 
     uv, uj = usable("v"), usable("j")
@@ -82,20 +82,20 @@ def prepare_generation(model: Model) -> _GenPrep:
     j_marg, j_given_v, d_given_j = None, {}, {}
     if vdj:
         j_marg = _choice(t["j_choice"], "j_allele", uj)
-        for j, sub in t["d_gene"].filter(t["d_gene"]["d_allele"].is_in(list(ud))).group_by("j_allele"):
+        for j, sub in t["d_gene"].filter(t["d_gene"]["d_allele"].is_in(list(ud))).group_by("j_allele", maintain_order=True):
             key = j[0] if isinstance(j, tuple) else j
             if key in uj:
                 d_given_j[key] = _cum(sub["d_allele"].to_numpy(), sub["p"].to_numpy())
     else:
         jgv = t["j_choice"].filter(t["j_choice"]["j_allele"].is_in(list(uj)))
-        for vv, sub in jgv.group_by("v_allele"):
+        for vv, sub in jgv.group_by("v_allele", maintain_order=True):
             key = vv[0] if isinstance(vv, tuple) else vv
             if key in uv:
                 j_given_v[key] = _cum(sub["j_allele"].to_numpy(), sub["p"].to_numpy())
 
     def del_map(tab, allele_col):
         out = {}
-        for a, sub in tab.group_by(allele_col):
+        for a, sub in tab.group_by(allele_col, maintain_order=True):
             key = a[0] if isinstance(a, tuple) else a
             out[key] = _cum(sub["ndel"].to_numpy(), sub["p"].to_numpy())
         return out
@@ -104,7 +104,7 @@ def prepare_generation(model: Model) -> _GenPrep:
     delj = del_map(t["j_5_del"], "j_allele")
     deld, deld_pairs = {}, {}
     if vdj:
-        for d, sub in t["d_del"].group_by("d_allele"):
+        for d, sub in t["d_del"].group_by("d_allele", maintain_order=True):
             key = d[0] if isinstance(d, tuple) else d
             pairs = np.stack([sub["ndel5"].to_numpy(), sub["ndel3"].to_numpy()], axis=1)
             idx, cum = _cum(np.arange(len(pairs)), sub["p"].to_numpy())
@@ -127,11 +127,11 @@ def prepare_generation(model: Model) -> _GenPrep:
         ndf = t["n_d"].sort("n_d")
         p_nd = _cum(ndf["n_d"].to_numpy(), ndf["p"].to_numpy())
         d2t = t["d2_gene"].filter(t["d2_gene"]["d2_allele"].is_in(list(ud)))
-        for d1, sub in d2t.group_by("d_allele"):
+        for d1, sub in d2t.group_by("d_allele", maintain_order=True):
             key = d1[0] if isinstance(d1, tuple) else d1
             if key in ud:
                 d2_given_d1[key] = _cum(sub["d2_allele"].to_numpy(), sub["p"].to_numpy())
-        for d, sub in t["d2_del"].group_by("d2_allele"):
+        for d, sub in t["d2_del"].group_by("d2_allele", maintain_order=True):
             key = d[0] if isinstance(d, tuple) else d
             pairs = np.stack([sub["ndel5"].to_numpy(), sub["ndel3"].to_numpy()], axis=1)
             idx, cum = _cum(np.arange(len(pairs)), sub["p"].to_numpy())

@@ -104,8 +104,26 @@ native.pgen_nt(model, "TGTGCCAGCAGC...")        # nucleotide generation probabil
 native.pgen_aa(model, "CASSLAPGATNEKLFF")       # amino-acid Pgen (codon-marginalised)
 native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # + the whole Hamming-1 ball
 native.pgen_aa_batch(model, seqs, mismatches=1, threads=0)  # Pgen over many CDR3s, thread-parallel (~11×)
-generate(model, 1000)                           # sample a repertoire -> polars DataFrame
+generate(model, 1000, seed=1)                    # sample a repertoire -> polars DataFrame
+                                                # seed= is process-stable from 3.3.0
 ```
+
+Where Pgen *sums* over recombination scenarios, `model.viterbi` takes the **argmax** — the single
+most likely one, which is the V/D/J boundary markup:
+
+```python
+from vdjtools.model import best_scenario
+
+sc = best_scenario(model, "TGTGCCAGCAGCTTAGGGACAGGGGGCTACGAGCAGTACTTC",
+                   v="TRBV19*01", j="TRBJ2-7*01")     # ALLELE names, as the model's tables are
+
+sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, in CDR3-nt space
+# -> 8, 'TRBD1*01', 15, 24, 26
+```
+
+It reuses the same tables and the same loops as `pgen_nt`, so the chosen D obeys `P(D|J)` — a
+TRBD2–TRBJ1 pair is genomically impossible and cannot be called. ⛔ Inferring a *nucleotide* CDR3
+from an amino-acid one (`infer_nt`) is **not implemented yet** and raises rather than guessing.
 
 Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
 OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon — both escaped

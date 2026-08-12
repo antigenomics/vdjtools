@@ -58,6 +58,9 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   threads=)`** (thread-parallel across sequences, bitwise-identical to serial, ~11× on 16 cores).
   Pure-Python reference impls in `vdjtools.model.pgen`.
 - **Generate**: `vdjtools.model.generate.generate(model, n, seed=, productive_only=)` → `pl.DataFrame`.
+  ⚠ `seed=` is reproducible **across processes** only from **3.3.0**: `collapse_alleles` used
+  unordered polars `group_by`, so the collapsed table's row order varied per process and the same
+  seed drew a different allele. Expectations recorded from `generate()` before 3.3.0 are stale.
 - **Infer (EM)**: `vdjtools.model.infer.infer` / `infer_native(template, seqs, masks=, dd_allowed=,
   nd_prior=, single_d=, init="align"|"uniform"|"template")`; **`infer_frame(template_or_locus,
   clones_df)`** takes a clonotype frame and builds the V/J masks for you. `init="template"` is the
@@ -95,6 +98,15 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   organism)` (CDR3-region + anchor), **`load_full_vj_germline(organism)`** and
   **`arda_full_germline(locus, organism)`** (full-length V/J germline + stitch anchor, from arda
   scaffolds), `reconcile_olga`, `cut_segment`, `translate`, `reverse_complement`.
+- **Scenario (argmax)** `vdjtools.model.viterbi`: **`best_scenario(model, cdr3_nt, v=, j=)`** →
+  `Scenario(cdr3_nt, v_call, j_call, v_end, j_start, d_call, d_start, d_end, scenario_p, ...)` — the
+  single most likely recombination for a KNOWN nt CDR3, i.e. the V/D/J boundary markup. Max-product
+  over the same loops `pgen_nt` sums, so the D obeys `p_d_given_j` (TRBD2×TRBJ1 = 0). Coordinates
+  are 0-based half-open in CDR3-nt space. `infer_nt_bruteforce(model, cdr3_aa, v=, j=)` is an exact
+  but exponential ORACLE for tests. ⛔ `infer_nt` (production aa→nt) is **not implemented and
+  raises**: enumeration is a median 5.3e6 (TRA) / 1.9e7 (TRB) candidates per VDJdb record, and
+  pinning the germline flanks to shrink it is unsound (it drops trimmed-germline sequences, and the
+  true max can be one). Needs a max-product DP with traceback over the aa-constrained space.
 - **Stitch**: `stitch_contig(model, v, j, cdr3_nt)`, `stitch_frame`.
 - **Usage re-weighting**: `rescale_usage(model, sample_or_list, v=, j=, aggregate="pool"|"mean")` —
   V/J usage is protocol-dependent (5'RACE vs DNA-multiplex), the junction model is not.
