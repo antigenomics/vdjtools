@@ -76,6 +76,7 @@ def annotate_reads(
     cap: int | None = None,
     threads: int = 0,
     reconstruct: bool = False,
+    verbose: bool = False,
 ) -> pl.DataFrame:
     """Map a FASTQ to a per-read AIRR table with arda (``arda rnaseq map`` → ``<prefix>.airr.tsv``).
 
@@ -120,7 +121,9 @@ def annotate_reads(
     ]
     if reconstruct:
         cmd.append("--reconstruct")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    # verbose lets arda's own mapping progress through: it is the slowest stage (minutes on a full
+    # chain) and, captured, it looks identical to a hang.
+    proc = subprocess.run(cmd, capture_output=not verbose, text=True)
     if proc.returncode:
         # capture_output swallows arda's own message, so a failed run used to surface as a bare
         # CalledProcessError with an exit code and nothing else -- which is exactly how the
@@ -189,12 +192,13 @@ def prepare(
     cap: int | None = None,
     reconstruct: bool = False,
     naive_igm_only: bool = False,
+    verbose: bool = False,
 ) -> pl.DataFrame:
     """Fetch → map (arda) → unique clonotypes for one ``(group, chain, label)`` bucket."""
     fq = fetch_fastq(group, chain, label)
     reads = annotate_reads(
         fq, out_dir=out_dir, prefix=f"{group}_{chain}_{label}",
-        organism=ORGANISM[group], cap=cap, reconstruct=reconstruct,
+        organism=ORGANISM[group], cap=cap, reconstruct=reconstruct, verbose=verbose,
     )
     return unique_clonotypes(reads, naive_igm_only=naive_igm_only)
 
@@ -303,7 +307,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
                 work_dir: str | Path = "/tmp/vdjtools_build", cap: int | None = None,
                 iters: int = 15, tol: float = 1e-4, single_d: bool = False,
                 nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0,
-                ambiguous: str | None = "A"):
+                ambiguous: str | None = "A", verbose: bool = False):
     """Fetch, annotate and EM-fit a model for one chain — the whole corpus pipeline, end to end.
 
     Args:
@@ -338,14 +342,15 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     """
     import time
 
-    from .infer import infer_native
+    from .infer import infer_native, print_progress
     from .io import from_arda
 
     started = time.perf_counter()
     organism = ORGANISM[group]
     base = template if template is not None else from_arda(chain, organism)
     if clones is None:
-        clones = prepare(group, chain, "nonfunctional", out_dir=work_dir, cap=cap)
+        clones = prepare(group, chain, "nonfunctional", out_dir=work_dir, cap=cap,
+                         verbose=verbose)
 
     uniq = _filter_for_em(clones, base, ambiguous)
     n_all = uniq.height
@@ -360,7 +365,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
 
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
                               single_d=single_d, dd_allowed=dd_allowed, nd_prior=nd_prior,
-                              gene_prior=gene_prior)
+                              gene_prior=gene_prior,
+                              progress=print_progress(prefix=f"[{chain}] ") if verbose else None)
     nd = (dict(zip(model.tables["n_d"]["n_d"].to_list(), model.tables["n_d"]["p"].to_list()))
           if "n_d" in model.tables else {})
     stats = {

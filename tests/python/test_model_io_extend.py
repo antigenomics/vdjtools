@@ -348,3 +348,30 @@ def test_extend_a_real_model_with_the_full_arda_library():
     before, after = _gene_usage(m, "v"), _gene_usage(extended, "v")
     for gene, p in before.items():
         assert after[gene] == pytest.approx(p, abs=5e-3)
+
+
+def test_progress_callback_reports_every_iteration(toy_model):
+    """A long fit must be observable while it runs, not only once it returns."""
+    seen = []
+    seqs = generate(toy_model, 200, seed=6)["junction_nt"].to_list()
+    _, report = infer_native(toy_model, seqs, max_iter=3, tol=0.0,
+                             progress=lambda i, ll, rel, n: seen.append((i, ll, rel, n)))
+    assert [s[0] for s in seen] == [1, 2, 3]
+    assert [s[1] for s in seen] == report.loglik
+    assert seen[0][2] == float("inf")           # no previous iteration to compare against
+    assert all(s[3] == 200 for s in seen)
+
+
+def test_print_progress_writes_readable_lines(toy_model):
+    import io
+
+    from vdjtools.model.infer import print_progress
+
+    buf = io.StringIO()
+    seqs = generate(toy_model, 200, seed=6)["junction_nt"].to_list()
+    infer_native(toy_model, seqs, max_iter=2, tol=0.0,
+                 progress=print_progress(stream=buf, prefix="[TOY] "))
+    lines = buf.getvalue().strip().splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("[TOY] iter  1") and "rel      inf" in lines[0]
+    assert "loglik" in lines[1] and "n=200" in lines[1]

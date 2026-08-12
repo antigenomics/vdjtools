@@ -611,15 +611,19 @@ def model_learn(
     nd_prior: float = typer.Option(0.0, help="Pseudocount pushing P(n_D=2) toward 0."),
     single_d: bool = typer.Option(False, "--single-d", help="Force a strict single-D model."),
     no_calls: bool = typer.Option(False, "--no-calls", help="Ignore V/J calls (much slower)."),
+    verbose: bool = typer.Option(False, "--verbose", "-v",
+                                 help="Report each EM iteration as it happens (to stderr)."),
     out: Optional[Path] = _MODEL_OUT,
 ) -> None:
     """Fit a model's marginals from your own sequences by EM, writing the training log alongside.
 
     ``--init template`` warm-starts from the template instead of realigning, which is how you
-    fine-tune an existing model on a new sample rather than fitting from scratch.
+    fine-tune an existing model on a new sample rather than fitting from scratch. ``-v`` prints the
+    log-likelihood and its relative change per iteration, so a long fit is visibly converging
+    rather than merely running.
     """
     from vdjtools.io.batch import read as _read
-    from vdjtools.model.infer import infer_frame, training_frame
+    from vdjtools.model.infer import infer_frame, print_progress, training_frame
 
     if out is None:
         _err("give an output model directory with -o")
@@ -638,7 +642,8 @@ def model_learn(
     try:
         m, rep = infer_frame(base, clones, seq_col=column, use_calls=not no_calls,
                              max_iter=max_iter, tol=tol, init=init,
-                             gene_prior=gene_prior, nd_prior=nd_prior, single_d=single_d)
+                             gene_prior=gene_prior, nd_prior=nd_prior, single_d=single_d,
+                             progress=print_progress() if verbose else None)
     except (ValueError, KeyError) as e:
         _err(str(e))
     m.save(out)
@@ -655,12 +660,16 @@ def model_build(
     work_dir: Path = typer.Option(Path("/tmp/vdjtools_build"), help="Scratch dir for arda output."),
     cap: Optional[int] = typer.Option(None, help="Cap reads per chain (default: use every read)."),
     max_iter: int = typer.Option(15, help="EM iteration cap."),
+    verbose: bool = typer.Option(False, "--verbose", "-v",
+                                 help="Stream arda's mapping output and each EM iteration."),
     out: Optional[Path] = _MODEL_OUT,
 ) -> None:
     """Build models from the full AIRR read corpus: fetch, arda-map, then EM — several chains at once.
 
     This is the real training path (raw FASTQ from the ``isalgo/airr_model_read`` dataset), so it
-    needs HuggingFace access and arda's mmseqs2. Minutes per chain, run concurrently.
+    needs HuggingFace access and arda's mmseqs2. Mapping is minutes per chain and EM on a D-bearing
+    locus can be far longer, so **use ``-v``** — without it the whole run is silent until a chain
+    finishes, and a slow fit is indistinguishable from a stuck one.
     """
     from vdjtools.model.data import build_all
 
@@ -668,7 +677,8 @@ def model_build(
         _err("give an output directory with -o")
     res = build_all([c.strip() for c in chains.split(",") if c.strip()],
                     groups=tuple(g.strip() for g in groups.split(",") if g.strip()),
-                    workers=workers, out_dir=out, work_dir=work_dir, cap=cap, iters=max_iter)
+                    workers=workers, out_dir=out, work_dir=work_dir, cap=cap, iters=max_iter,
+                    verbose=verbose)
     ok = [r["stats"] for r in res.values() if "stats" in r]
     for key, r in res.items():
         if "error" in r:

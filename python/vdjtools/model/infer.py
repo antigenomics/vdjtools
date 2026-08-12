@@ -93,6 +93,38 @@ def _record(report: InferenceReport, model: Model, template: Model, *, started: 
                  training={"runs": runs})
 
 
+def print_progress(stream=None, prefix: str = ""):
+    """A ready-made ``progress=`` callback that reports each EM iteration as it happens.
+
+    EM on a large D-bearing locus runs for tens of minutes with nothing to show for it, and the
+    training log only becomes readable once the fit *returns* — so a long run is indistinguishable
+    from a hung one. This prints the log-likelihood and its relative change per iteration, which is
+    exactly the quantity the convergence test uses, so you can watch it approach ``tol``.
+
+    Args:
+        stream: Where to write; defaults to ``sys.stderr`` so it never pollutes piped output.
+        prefix: Prepended to each line, e.g. the locus being built.
+
+    Returns:
+        A callable suitable for ``infer(progress=...)`` / ``infer_native(progress=...)``.
+
+    Example:
+        >>> infer_native(template, seqs, progress=print_progress(prefix="[TRB] "))
+        [TRB] iter  1  loglik -37.0067  rel      inf  n=122703
+        [TRB] iter  2  loglik -33.9738  rel 8.20e-02  n=122703
+    """
+    import sys
+
+    out = stream if stream is not None else sys.stderr
+
+    def _report(iteration: int, loglik: float, rel: float, n_scoreable: int) -> None:
+        rel_s = "     inf" if rel == float("inf") else f"{rel:.2e}"
+        print(f"{prefix}iter {iteration:2d}  loglik {loglik:9.4f}  rel {rel_s}  n={n_scoreable}",
+              file=out, flush=True)
+
+    return _report
+
+
 def training_frame(obj) -> pl.DataFrame:
     """The training log of a model (or a single report) as one tidy frame across all runs.
 
@@ -479,6 +511,7 @@ def infer(
     p_nd2_init: float = 0.02,
     dd_allowed: list | None = None,
     nd_prior: float = 0.0,
+    progress=None,
 ) -> tuple[Model, InferenceReport]:
     """Re-estimate a model's marginals from nucleotide CDR3s by EM.
 
@@ -505,6 +538,8 @@ def infer(
             identifiability that inflates unregularized ``P(n_D=2)`` on real data. ``None`` = all reads.
         nd_prior: Dirichlet/Beta pseudocount added to the single-D (``n_D=1``) soft count each M-step,
             regularizing ``P(n_D=2)`` toward 0. Both anchors combine.
+        progress: Optional ``callable(iteration, loglik, rel_change, n_scoreable)`` invoked after
+            every iteration — use :func:`print_progress` to watch a long fit converge live.
 
     Returns:
         ``(fitted_model, report)``. For a tandem-D template the E-step enumerates ``n_D=2``
@@ -549,6 +584,8 @@ def infer(
         # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
         rel = _loglik_rel(report.loglik)
         report.gene_tv.append(rel)
+        if progress is not None:
+            progress(report.n_iter, report.loglik[-1], rel, report.n_scoreable[-1])
         if it > 0 and rel < tol:
             report.converged = True
             break
@@ -1111,6 +1148,7 @@ def infer_native(
     dd_allowed: list | None = None,
     nd_prior: float = 0.0,
     gene_prior: float = 0.0,
+    progress=None,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
@@ -1179,6 +1217,8 @@ def infer_native(
         # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
         rel = _loglik_rel(report.loglik)
         report.gene_tv.append(rel)
+        if progress is not None:
+            progress(report.n_iter, report.loglik[-1], rel, report.n_scoreable[-1])
         if it > 0 and rel < tol:
             report.converged = True
             break
