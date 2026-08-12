@@ -155,6 +155,36 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
 `physchem_profile` (region × property), `kmer_profile`, `v_kmer_c_profile`, `load_property_table`,
 `DEFAULT_PROPERTIES`.
 
+### `vdjtools.signature` — VSIG, the statistics half of the portable repertoire signature
+One repertoire → a fixed, **named, positional** vector a collaborator can compute from their own
+AIRR files and feed straight to a learner. The other half (geometry of the prototype-sum measure)
+is `mir.signature`; both sit in one column contract, which lives **here** because mirpy depends on
+vdjtools and not the reverse.
+
+```python
+from vdjtools.signature import vsig, vsig_cohort, columns, describe
+v = vsig({"TRB": df}, tier="standard")        # {column: value}, in layout order
+describe("standard")                          # the column dictionary
+```
+- `layout` — the contract. `LOCI`, `TIERS` (`core`/`standard`/`full`, each an exact **index
+  subset** of the next), `columns(tier, sig)`, `index()`, `describe()`, `parse()`, `register()`,
+  `Block`, `feats()`. Transforms are declared **per feature**, not per block: a clonality block
+  legitimately mixes a CLR-transformed composition with a logit-transformed proportion.
+- `transform` — the variance-stabilising layer, each choice denominator-aware because the
+  alternative silently lies about shallow samples: `logit` (Haldane–Anscombe), `arcsine`
+  (Anscombe), `clr` (multiplicative zero replacement, **capped** so a shallow composition cannot
+  consume itself), `log10`, `log1p`, `reference_z`, `robust_loc_scale`, `magnitude_scale`.
+  `clr` ships *k−1* parts: all *k* are linearly dependent and would be a guaranteed zero
+  eigenvalue in any PCA.
+- `blocks` — `sanitise`, `work_frame`, then `qc_block`, `depth_block`, `div_block`, `clon_block`,
+  `len_block`, `iso_block`, `shm_block`, `pair_block`, `aa_block`, `pchem_block`, `pgen_block`.
+  `estimable()` **refuses** rather than extrapolates: real repertoires attain Good–Turing coverage
+  0.24–0.58, so a textbook `C*=0.95` puts every sample into extrapolation, where diversity
+  inflates roughly tenfold.
+- `assemble` — `vsig`, `vsig_cohort`. Pass **`threads=1`** when running inside your own process
+  pool: the default 0 means "all cores" *per worker*.
+- CLI: `vdjtools signature *.tsv --tier standard -o vsig.parquet`, `vdjtools signature --describe`.
+
 ### `vdjtools.overlap` — overlap + TCRnet (delegates to vdjmatch/seqtree)
 `overlap_metrics`, `overlap_pair`, `DEFAULT_KEY`; `fuzzy_overlap`, `fuzzy_overlap_metrics`;
 `similarity_overlap`, `similarity_matrix`, `SimilarityMatrices` (TINA / Leinster-Cobbold);

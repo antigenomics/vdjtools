@@ -317,6 +317,43 @@ def diversity(
 
 
 @app.command()
+def signature(
+    samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
+    base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
+    fmt: str = _FMT,
+    tier: str = typer.Option("standard", help="core | standard | full — nested column sets."),
+    weight: str = typer.Option("log2p1", help="Clone-size weight g: log2p1 | duplicate_count | "
+                                              "distinct | log1p | anscombe."),
+    describe: bool = typer.Option(False, "--describe",
+                                  help="Print the column dictionary for --tier and exit."),
+    threads: int = _THREADS, out: Optional[Path] = _OUT,
+) -> None:
+    """The `vsig` half of the portable repertoire signature — one row per sample.
+
+    Statistics only. The geometry half (`rsig`) needs the prototype embedding and ships in mirpy,
+    whose `mir signature` emits both halves as one vector.
+    """
+    from vdjtools.signature import layout as L
+    from vdjtools.signature import vsig
+
+    if tier not in L.TIERS:
+        _err(f"--tier must be one of {L.TIERS}; got {tier!r}")
+    if describe:
+        _write(L.describe(tier), out)
+        return
+
+    from vdjtools.io.batch import map_samples
+
+    items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
+    fn = functools.partial(vsig, tier=tier, weight=weight, threads=1)
+    rows = [{"sample_id": sid, **res} for sid, res in
+            map_samples(fn, items, fmt=fmt, workers=threads or None)]
+    if not rows:
+        _err("no samples produced a signature")
+    _write(pl.DataFrame(rows).select(["sample_id", *L.columns(tier, "vsig")]), out)
+
+
+@app.command()
 def spectratype(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
