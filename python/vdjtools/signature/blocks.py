@@ -11,6 +11,8 @@ constants, which is what lets two people who never share a cohort produce compar
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 import polars as pl
 
@@ -354,6 +356,21 @@ def pchem_block(df: pl.DataFrame, regions=("all", "center")) -> dict[str, float]
     return out
 
 
+@lru_cache(maxsize=8)
+def _bundled_model(locus: str):
+    """The bundled recombination model for one locus, loaded once per process.
+
+    Loading and collapsing a model costs 0.4-1.8 s; Pgen over the 2,000 junctions that follow
+    costs ~0.15 s. Without this, a corpus emission spends 80-95% of its time re-reading seven
+    files it already read, and a seven-locus sample pays it seven times over. Cached on the locus
+    name, which is the whole of the model's identity here — nothing in this module mutates the
+    returned model, and the eight slots cover every human locus with room to spare.
+    """
+    from ..model.bundled import load_bundled
+
+    return load_bundled(locus)
+
+
 def pgen_block(df: pl.DataFrame, locus: str, *, q05: float | None = None,
                n_max: int = 2000, threads: int = 0) -> dict[str, float]:
     """Generation probability of the junctions under the bundled recombination model.
@@ -373,7 +390,6 @@ def pgen_block(df: pl.DataFrame, locus: str, *, q05: float | None = None,
     """
     import zlib
 
-    from ..model.bundled import load_bundled
     from ..model.native import pgen_aa_batch
 
     nan = {"mean_log10": np.nan, "sd_log10": np.nan, "frac_atypical": np.nan}
@@ -384,8 +400,8 @@ def pgen_block(df: pl.DataFrame, locus: str, *, q05: float | None = None,
         rng = np.random.default_rng(zlib.crc32(locus.encode()))
         juncs = [juncs[i] for i in rng.choice(len(juncs), n_max, replace=False)]
     try:
-        p = np.asarray(pgen_aa_batch(load_bundled(locus), juncs, v=None, j=None, threads=threads),
-                       dtype=float)
+        p = np.asarray(pgen_aa_batch(_bundled_model(locus), juncs, v=None, j=None,
+                                     threads=threads), dtype=float)
     except Exception:                       # no bundled model for this locus/species
         return nan
     p = p[np.isfinite(p) & (p > 0)]

@@ -139,8 +139,16 @@ def clr(parts, m=None, *, keys=None):
     p = v / total
     zero = p <= 0
     if zero.any():
-        delta = 0.5 / m
-        p = np.where(zero, delta, p * (1.0 - zero.sum() * delta))
+        # ``0.5/m`` is the usual replacement level — half a count on the scale the composition was
+        # observed at. It has to be capped, because on a *shallow* composition it can exceed the
+        # composition itself: three parts, one observed, ``m = 1`` gives two replacements of 0.5
+        # each and scales the one real part to exactly zero, whose log is ``-inf``. Holding the
+        # total replaced mass below half the smallest observed part keeps a replaced zero smaller
+        # than anything actually seen, which is the only property the replacement needs. The cap
+        # is inactive whenever ``m`` exceeds the number of parts, i.e. everywhere but that tail.
+        n_zero = int(zero.sum())
+        delta = min(0.5 / m, 0.5 * float(p[~zero].min()) / n_zero)
+        p = np.where(zero, delta, p * (1.0 - n_zero * delta))
 
     out = np.log(p) - np.log(p).mean()
     return dict(zip(names, out)) if names else out

@@ -100,6 +100,27 @@ class TestCLR:
         deep = T.clr({"a": 300.0, "b": 100.0, "c": 0.0}, m=400)
         assert shallow["c"] > deep["c"], "a zero seen on 400 reads is more certainly a zero"
 
+    def test_a_shallow_composition_does_not_consume_itself(self):
+        """Found emitting a real corpus: -inf coordinates from the zero replacement.
+
+        At ``m = 1`` the textbook ``delta = 0.5/m`` replaces two zeros with 0.5 each, which scales
+        the one part that *was* observed to exactly zero — and ``log(0)`` is ``-inf``, a value that
+        propagates into every downstream reduction. The replaced parts must stay below the
+        smallest observed one; that is the whole point of a replacement.
+        """
+        c = T.clr({"a": 1.0, "b": 0.0, "c": 0.0}, m=1)
+        assert all(np.isfinite(v) for v in c.values())
+        assert c["a"] > c["b"] == c["c"]
+
+    def test_the_zero_replacement_cap_is_inactive_at_normal_depth(self):
+        """The cap must not perturb a composition observed on a realistic number of reads."""
+        parts = {"a": 300.0, "b": 100.0, "c": 0.0}
+        p = np.array([300.0, 100.0, 0.0]) / 400.0
+        d = 0.5 / 400
+        expect = np.log(np.where(p <= 0, d, p * (1 - d)))
+        got = np.array(list(T.clr(parts, m=400).values()))
+        assert np.allclose(got, expect - expect.mean())
+
     def test_an_all_zero_composition_is_flat(self):
         assert all(v == 0.0 for v in T.clr({"a": 0.0, "b": 0.0, "c": 0.0}, m=10).values())
 
