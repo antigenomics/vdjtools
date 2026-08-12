@@ -394,11 +394,11 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    native.pgen_aa_batch(model, seqs, threads=0)   # many CDR3s, thread-parallel (~11x)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
 
-Learn a model from your own **non-functional** reads — out-of-frame *or* stop-codon, since both
-escaped selection — with :func:`vdjtools.model.infer.infer_native`,
-and explore any model's recombination Bayes net interactively with
-``marimo edit examples/model_explorer.py``. See the :doc:`API reference <api>` for the full
-surface.
+Building a model on your own germline library, fitting it to your own reads, checking it, comparing
+two of them and asking how much diversity one describes are covered in
+:doc:`Recombination model workshop <model>`. Explore any model's Bayes net interactively with
+``marimo edit examples/model_explorer.py``, or work through the whole workshop with
+``marimo edit examples/model_workshop.py``. See the :doc:`API reference <api>` for the full surface.
 
 Command line
 ------------

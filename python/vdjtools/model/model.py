@@ -17,11 +17,18 @@ class Model:
         manifest: Locus metadata and the recombination Bayes net.
         tables: Event name -> its long-format marginal ``pl.DataFrame``.
         genomic: ``"genes_v"`` / ``"genes_j"`` / (VDJ) ``"genes_d"`` -> germline reference frame.
+        training: Optional EM training log, ``{"runs": [...]}`` — one entry per inference run, so
+            a warm-start refit appends rather than overwrites. Set by
+            :func:`~vdjtools.model.infer.infer` / :func:`~vdjtools.model.infer.infer_native`,
+            persisted alongside the model as ``training.json``, and read back as a table by
+            :func:`~vdjtools.model.infer.training_frame`. ``None`` for a model that was never
+            fitted here (every bundled model, and anything imported from OLGA).
     """
 
     manifest: Manifest
     tables: dict[str, pl.DataFrame]
     genomic: dict[str, pl.DataFrame]
+    training: dict | None = None
 
     @property
     def locus(self) -> str:
@@ -40,11 +47,11 @@ class Model:
         validate_tables(self.manifest, self.tables, tol=tol)
         return self
 
-    def save(self, path: str | Path) -> None:
-        """Write the model to a directory (``manifest.json`` + one parquet per table)."""
+    def save(self, path: str | Path, *, fmt: str = "parquet") -> None:
+        """Write the model to a directory (``manifest.json`` + one file per table)."""
         from .io import save_model
 
-        save_model(self, path)
+        save_model(self, path, fmt=fmt)
 
     @classmethod
     def load(cls, path: str | Path) -> "Model":

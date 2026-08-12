@@ -74,7 +74,10 @@ def test_control_native_schema_capped(hf):
     # airr_control is exactly the native vdjtools schema + extra annotation columns;
     # 56M rows total, so read a capped preview and assert clean canonical mapping.
     hub = pytest.importorskip("huggingface_hub")
-    files = hub.list_repo_files(repo_id=CONTROL, repo_type="dataset")
+    try:
+        files = hub.list_repo_files(repo_id=CONTROL, repo_type="dataset")
+    except Exception as e:  # offline / network / auth — skip like the `hf` fixture does
+        pytest.skip(f"HF listing failed ({CONTROL}): {e}")
     tsv = next((f for f in files if f.endswith(".vdjtools.tsv.gz")), None)
     if tsv is None:
         pytest.skip(f"no vdjtools tsv in {CONTROL}: {files}")

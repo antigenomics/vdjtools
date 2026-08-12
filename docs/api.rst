@@ -105,10 +105,24 @@ Tandem-D (D-D) extension
    :undoc-members:
    :show-inheritance:
 
-Model diagnostics
-~~~~~~~~~~~~~~~~~~
+Model diagnostics, checking and scoring
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Entropy, mutual information and model-vs-model comparison live in ``analyze``; the consistency
+audit in ``check``; and everything that needs *sequences* — likelihood, BIC, Pgen distributions and
+diversity estimates — in ``score``. See :doc:`model` for the workflow these fit into.
 
 .. automodule:: vdjtools.model.analyze
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: vdjtools.model.check
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: vdjtools.model.score
    :members:
    :undoc-members:
    :show-inheritance:

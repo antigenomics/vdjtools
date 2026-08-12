@@ -118,4 +118,21 @@ format-conversion fixtures live there — pull them over when a phase needs them
   replication exists there, never pool.** At that n, BH cannot clear 0.05 over 273 features
   (min attainable p = 3.6e-3) — the *ranking* is the result. The VDJdb oracle for this motif is
   **partly circular** (same group). Handoff: `2026-mirpy-analysis` branch `as-b27-embedding`.
+- **Phase 15 (`feature/model-workshop`) landed in v3.3.0** — `from_germline` (custom V(D)J
+  libraries; `from_arda` is now a wrapper, output byte-identical), `check_model`, `model/score.py`
+  (nt-Pgen log-likelihood + AIC/BIC, Pgen-distribution comparison, scenario/sequence entropy and
+  Hill q=1/q=2 diversity), `compare_models`/`compare_net_dot`, a persisted EM training log,
+  `infer_frame`, `extend_alleles`, `data.build_all`, the `vdjtools model` CLI sub-app,
+  `docs/model.rst` and `examples/model_workshop.py`.
+- **TODO — publish the prepared clonotype subsets.** `data.load_prepared` is implemented and
+  documented but `prepared/*.tsv.gz` **does not exist in `isalgo/airr_model_read` yet** (the build
+  session had no network). Produce and push through the `~/hf/airr_model_read` mirror — the exact
+  two-line recipe is in the `SOURCES.md` row. Nothing depends on it: the notebook and tests both
+  fall back to simulated sequences.
+- **Findings from `check_model` on the shipped models, worth acting on**: `IGKV3-20*01` in
+  `learned/IGK` puts **25%** of its deletion mass on trims its germline cannot reach (so that
+  probability is lost from every Pgen through it); `olga/TRA`, `olga/IGH`, `olga/IGL` and
+  `learned/IGH` have smaller versions of the same. TRB (both sources) is clean. Root cause is a
+  deletion-bin grid shared across alleles of different lengths, so the fix belongs in the model
+  builder, not the checker.
 - `rescale.py:63` raises a Polars-2.0 `empty_as_null` DeprecationWarning — set it when convenient.

@@ -3,6 +3,78 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.3.0 — 2026-08-12
+
+The recombination model becomes a workshop: buildable on your own reference, checkable, comparable,
+scoreable and extendable. See the new [user guide](https://docs.isalgo.dev/vdjtools/model.html) and
+`examples/model_workshop.py`.
+
+### Added
+
+- **Custom V(D)J reference libraries.** `model.io.from_germline(germline_df, locus=...)` builds a
+  model on any germline library; `from_arda` is now a six-line wrapper over it (its output is
+  byte-identical, verified table by table on TRA/TRB/TRG). `reference.read_germline_fasta(v, j, d,
+  anchors=)` reads your own FASTA — segment comes from which argument a file is passed as, so no
+  header convention is assumed — and `reference.validate_germline` audits it. The audit includes
+  the two anchor-frame checks (V starts on a Cys codon, J ends on Phe/Trp) that catch the most
+  damaging custom-library mistake: a CDR3 anchor one codon off shifts every deletion profile by a
+  constant and nothing downstream complains.
+- **`model.check.check_model`** — a consistency audit returning a tidy issue frame
+  (`severity check event segment allele detail value`) rather than raising, so every problem in a
+  model is visible at once. Covers normalization and probability range, alleles missing from the
+  germline (or absent from the marginals), functional genes stuck at `P = 0`, unreachable deletion
+  mass, incomplete dinucleotide tables, and VDJ/VJ event-set mismatches. Deletion reachability is
+  derived from the Pgen DP (`ndel = len(cut_segment) − contributed − max_palindrome`) and reported
+  as the **fraction** of each allele's mass that is lost, ranked — up to 25% for `IGKV3-20*01` in
+  the bundled IGK model. `vdjtools model check` exits 1 on any error-severity issue.
+- **`model.score`** — likelihood and diversity. `model_fit` reports log-likelihood, free parameters,
+  AIC and BIC; it uses **nucleotide** Pgen, because `Σ Pgen_nt = 1` makes the log-likelihood proper
+  (amino-acid Pgen sums only the in-frame, stop-free fiber, so its missing normalizing constant
+  differs between models and it is a relative score only). A sequence the model cannot generate is
+  counted in `n_scoreable`, never turned into `-inf`. `free_params` counts **occupied cells**, not
+  rows, and drops undefined and unreachable conditional groups — the difference between ~700 and
+  ~3,600 parameters for human TRB's `v_3_del` alone. Also `pgen_frame`, `compare_pgen` +
+  `pgen_summary` (KS, Spearman, and the headline one-sided coverage counts), and `pgen_spectrum`.
+- **Information content and total diversity.** `analyze.total_entropy` gives each recombination
+  event's contribution to the scenario entropy (the dinucleotide term is `E[length] × H_step`), and
+  `score.diversity` adds a Monte-Carlo sequence entropy with its standard error plus both Hill
+  numbers — `2^H` and `1/E[Pgen]`. Human TRB: ~52 bits per rearrangement, ~45 bits per sequence,
+  ~3·10¹³ effective sequences.
+- **Model comparison.** `analyze.compare_models` reports per-event total variation, `tv_max` and
+  Jensen-Shannon over the union of both models' realizations with zero fill, weighted by the
+  parent's marginal; `by="gene"` bridges different germline namespaces, and an event factorized
+  differently in the two models is flagged `schema_differs` rather than joined. Plus
+  `compare_usage` and `compare_net_dot` (a bnlearn `compare_networks`-style graph).
+- **Training log.** Every EM fit now appends a run to `model.training["runs"]`, persisted beside the
+  model as a `training.json` sidecar and readable as a table with `infer.training_frame`. Both the
+  field and the sidecar are optional, so every previously-saved model still loads (with
+  `training is None`).
+- **`infer.infer_frame`** fits from a clonotype frame, building the per-read V/J masks for you, and
+  **`infer.extend_alleles`** adds alleles from a larger germline library.
+- **`data.build_all`** runs the full corpus pipeline — fetch FASTQ, map with arda, collapse, EM —
+  parallel across chains, exposed as `vdjtools model build`. `data.load_prepared` fetches a small
+  pre-annotated clonotype subset for examples and tests, with no arda in the loop.
+- **`vdjtools model` CLI sub-app** with 13 subcommands. A model is named as a directory or as
+  `LOCUS[:source[:organism]]`.
+- **Table export/import**: `marginals_frame` / `set_marginals`, and `save_model(..., fmt="tsv")`
+  with format auto-detection on load, so a hand-edited TSV directory is a first-class model input.
+
+### Changed
+
+- **`pgen_nt` now releases the GIL**, the one Pgen binding that still held it after the Phase-13
+  batch work. Threaded nucleotide Pgen is **11.7× faster** on this Mac and bitwise-identical to the
+  serial result.
+- `extend_alleles` **preserves each pre-existing gene's total usage**. Alleles of one gene are
+  alternative versions of the same gene — a diploid carries at most two — so a richer library must
+  split a gene's mass more finely, never multiply it. Seeding each new allele at its gene's average
+  without this correction moved gene-level V usage on human TRB by up to 6 percentage points,
+  silently reweighting every Pgen through those genes.
+
+### Fixed
+
+- `tests/python/test_io_hf.py::test_control_native_schema_capped` called `list_repo_files` outside
+  the `hf` fixture's guard, so an offline run failed instead of skipping.
+
 ## 3.2.0 — 2026-08-09
 
 ### Fixed

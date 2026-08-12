@@ -207,3 +207,20 @@ the Bayes-net graph, per-event entropy, mutual information, and the marginal tab
 pip install -e ".[examples]"
 marimo edit examples/model_explorer.py
 ```
+
+## `model_workshop.py` — build, fit, check, compare and score a model
+
+The full [model workshop](https://docs.isalgo.dev/vdjtools/model.html) end to end: a custom germline
+library → a model scaffold → EM with its training log → `check_model` → comparison against the
+bundled TRB models (per-event Jensen-Shannon, gene usage, the comparison graph) → Pgen
+distributions, log-likelihood and BIC on a held-out set → entropy and total diversity →
+`extend_alleles` → `rescale_usage`.
+
+Runs offline in seconds on a three-gene toy locus. A checkbox swaps in a small pre-annotated real
+TRB subset from HuggingFace (needs access; falls back to the simulated set if unavailable).
+Graphviz `dot` is optional — without it the comparison graph is skipped, nothing else changes.
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/model_workshop.py
+```

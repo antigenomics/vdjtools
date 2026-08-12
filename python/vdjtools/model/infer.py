@@ -13,7 +13,7 @@ Phase 1f native-port candidate.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from math import log
 
 import numpy as np
@@ -26,13 +26,97 @@ from .schema import normalization_keys, table_columns
 
 @dataclass(slots=True)
 class InferenceReport:
-    """Per-iteration diagnostics from :func:`infer`."""
+    """Per-iteration diagnostics from :func:`infer` — the training log.
+
+    Every field after ``converged`` is metadata recorded so a saved model can say what it was
+    fitted on and how; all are defaulted, so constructing a bare report still works.
+    """
 
     loglik: list[float] = field(default_factory=list)  # mean per-sequence log-Pgen (over scoreable reads)
     n_scoreable: list[int] = field(default_factory=list)
     gene_tv: list[float] = field(default_factory=list)  # relative log-likelihood change vs previous iter (the convergence signal)
     n_iter: int = 0
     converged: bool = False
+    n_sequences: int = 0
+    max_iter: int = 0
+    tol: float = 0.0
+    init: str = ""
+    native: bool = False
+    elapsed_s: float = 0.0
+    finished_at: str = ""
+    template_source: str = ""
+
+    def to_dict(self) -> dict:
+        """The report as a JSON-serializable dict (one entry of a model's ``training["runs"]``)."""
+        from dataclasses import asdict
+
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, obj: dict) -> "InferenceReport":
+        """Rebuild a report from :meth:`to_dict`, ignoring keys this version does not know."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in obj.items() if k in known})
+
+    def to_frame(self) -> pl.DataFrame:
+        """Per-iteration training log: ``iter, loglik, n_scoreable, rel_change``."""
+        n = len(self.loglik)
+        return pl.DataFrame({
+            "iter": list(range(1, n + 1)),
+            "loglik": self.loglik,
+            "n_scoreable": (self.n_scoreable + [None] * n)[:n],
+            "rel_change": (self.gene_tv + [None] * n)[:n],
+        })
+
+
+def _record(report: InferenceReport, model: Model, template: Model, *, started: float,
+            max_iter: int, tol: float, init: str, native: bool, n_sequences: int) -> Model:
+    """Stamp a finished run onto the report and append it to the model's training log.
+
+    Appends rather than overwrites, so a warm-start refit of an already-fitted model keeps both
+    runs and the history reads as the sequence of things that were actually done to the model.
+    """
+    import time as _time
+
+    report.n_sequences = n_sequences
+    report.max_iter = max_iter
+    report.tol = tol
+    report.init = init
+    report.native = native
+    report.elapsed_s = round(_time.monotonic() - started, 3)
+    report.finished_at = _time.strftime("%Y-%m-%dT%H:%M:%S", _time.gmtime())
+    report.template_source = template.manifest.source
+    runs = list((template.training or {}).get("runs", []))
+    runs.append(report.to_dict())
+    return Model(manifest=model.manifest, tables=model.tables, genomic=model.genomic,
+                 training={"runs": runs})
+
+
+def training_frame(obj) -> pl.DataFrame:
+    """The training log of a model (or a single report) as one tidy frame across all runs.
+
+    Args:
+        obj: A :class:`~vdjtools.model.model.Model` carrying a ``training`` log, or an
+            :class:`InferenceReport`.
+
+    Returns:
+        ``run, iter, loglik, n_scoreable, rel_change`` — empty when the model was never fitted here
+        (every bundled model, and anything imported straight from OLGA).
+
+    Example:
+        >>> m, rep = infer_native(template, seqs, max_iter=10)
+        >>> training_frame(m)     # loglik per iteration, ready to plot
+    """
+    if isinstance(obj, InferenceReport):
+        return obj.to_frame().with_columns(run=pl.lit(0, dtype=pl.Int64)).select(
+            ["run", "iter", "loglik", "n_scoreable", "rel_change"])
+    runs = (getattr(obj, "training", None) or {}).get("runs", [])
+    if not runs:
+        return pl.DataFrame(schema={"run": pl.Int64, "iter": pl.Int64, "loglik": pl.Float64,
+                                    "n_scoreable": pl.Int64, "rel_change": pl.Float64})
+    parts = [InferenceReport.from_dict(r).to_frame().with_columns(run=pl.lit(i, dtype=pl.Int64))
+             for i, r in enumerate(runs)]
+    return pl.concat(parts).select(["run", "iter", "loglik", "n_scoreable", "rel_change"])
 
 
 def _loglik_rel(loglik: list[float]) -> float:
@@ -426,6 +510,9 @@ def infer(
         scenarios and the M-step learns ``P(n_D=2)`` along with the ``d2_gene`` / ``d2_del`` / ``dd``
         events.
     """
+    import time as _time
+
+    started = _time.monotonic()
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
     upper = [s.upper() for s in sequences]
     if init == "template":
@@ -465,6 +552,8 @@ def infer(
             report.converged = True
             break
 
+    model = _record(report, model, template, started=started, max_iter=max_iter, tol=tol,
+                    init=init, native=False, n_sequences=len(upper))
     return model, report
 
 
@@ -514,6 +603,64 @@ def gene_masks(model: Model, v_calls: list[str], j_calls: list[str]) -> list[tup
     """
     va, ja = _gene_to_alleles(model, "v"), _gene_to_alleles(model, "j")
     return [(call_alleles(va, v), call_alleles(ja, j), None) for v, j in zip(v_calls, j_calls)]
+
+
+#: Columns `infer_frame` will look for as the nucleotide junction, in preference order.
+_JUNCTION_COLS = ("junction", "junction_nt", "cdr3_nt", "cdr3nt", "sequence")
+
+
+def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
+                v_col: str = "v_call", j_col: str = "j_call", use_calls: bool = True,
+                native: bool = True, **kw):
+    """Fit a model from a **clonotype frame** — the ergonomic entry point to EM.
+
+    Wraps :func:`infer_native` with the two steps every caller otherwise repeats: find the
+    nucleotide junction column, and turn the frame's V/J calls into per-read E-step masks with
+    :func:`gene_masks`. The masks matter enormously on a D-bearing locus — without them the E-step
+    enumerates every Cys-sharing V against the full D grid for every read.
+
+    Args:
+        template: A :class:`~vdjtools.model.model.Model` supplying the gene set, germline and event
+            graph, **or** a locus string (e.g. ``"TRB"``) to build one with
+            :func:`~vdjtools.model.io.from_arda`.
+        clones: Clonotype frame. Needs a nucleotide junction column and, for ``use_calls``,
+            ``v_call``/``j_call``.
+        seq_col: Explicit junction column; auto-detected from :data:`_JUNCTION_COLS` otherwise.
+        v_col: V-call column.
+        j_col: J-call column.
+        use_calls: Build per-read masks from the V/J calls. Turn off only if the frame's calls are
+            untrustworthy — inference then enumerates every gene and gets much slower.
+        native: Use :func:`infer_native` (default). ``False`` runs the pure-Python :func:`infer`.
+        **kw: Passed through (``max_iter``, ``tol``, ``init``, ``single_d``, ``nd_prior``,
+            ``gene_prior``, ...).
+
+    Returns:
+        ``(fitted_model, report)`` — the model carries the run in its ``training`` log.
+
+    Raises:
+        ValueError: If no junction column is found, or it holds no usable sequences.
+
+    Example:
+        >>> m, rep = infer_frame("TRB", clones, max_iter=10)
+        >>> training_frame(m)
+    """
+    if isinstance(template, str):
+        from .io import from_arda
+
+        template = from_arda(template)
+    col = seq_col or next((c for c in _JUNCTION_COLS if c in clones.columns), None)
+    if col is None:
+        raise ValueError(
+            f"no nucleotide junction column in {clones.columns}; pass seq_col=")
+    df = clones.filter(pl.col(col).is_not_null() & (pl.col(col).str.len_bytes() > 0))
+    if not df.height:
+        raise ValueError(f"column {col!r} has no usable sequences")
+    seqs = df[col].to_list()
+    masks = None
+    if use_calls and v_col in df.columns and j_col in df.columns:
+        masks = gene_masks(template, df[v_col].to_list(), df[j_col].to_list())
+    fn = infer_native if native else infer
+    return fn(template, seqs, masks=masks, **kw)
 
 
 def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> tuple[list[str], list[tuple]]:
@@ -608,7 +755,203 @@ def augment_from_oracle(learned: Model, oracle: Model) -> Model:
                 p=pl.when(pl.col(acol).is_in(list(proxy))).then(floor).otherwise(pl.col("p")))
         tot = pl.col("p").sum().over(nk) if nk else pl.col("p").sum()
         tables[choice_ev] = tables[choice_ev].with_columns(p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
-    return Model(manifest=learned.manifest, tables=tables, genomic=learned.genomic)
+    return Model(manifest=learned.manifest, tables=tables, genomic=learned.genomic,
+                 training=learned.training)
+
+
+def _nearest_donor(seq: str, candidates: dict[str, str]) -> str | None:
+    """The candidate allele whose germline is most similar to ``seq`` (``{allele: germline}``)."""
+    from difflib import SequenceMatcher
+
+    if not candidates or not seq:
+        return None
+    return max(candidates, key=lambda b: SequenceMatcher(None, seq, candidates[b]).ratio())
+
+
+def _renormalize(table: pl.DataFrame, keys: list[str]) -> pl.DataFrame:
+    tot = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
+    return table.with_columns(p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
+
+
+def extend_alleles(model: Model, germline: pl.DataFrame, *, weight: float = 1.0) -> Model:
+    """Add alleles from a larger germline library to an existing model, seeded from what it knows.
+
+    The use case is a model fitted against one reference meeting a richer one — a newer IMGT
+    release, a population-specific library, your own genotyped alleles. Every new allele needs a
+    germline row, a choice probability and a full set of child conditionals (its deletion profile,
+    and ``P(J|V)`` / ``P(D|J)`` where it is a parent), none of which the library supplies.
+
+    Seeding uses the strongest evidence available for each case:
+
+    - **A new allele of a gene the model already has.** Its choice mass is ``weight ×`` the mean
+      mass of that gene's existing alleles, and its child tables are copied from a gene-mate. A new
+      IMGT allele of a known gene is a polymorphism whose carriers use it about as often as the
+      ``*01``, so the gene's own level is the right prior.
+    - **A brand-new gene.** Child tables come from the germline-nearest existing allele, and the
+      choice mass is a **floor** of half the smallest non-zero mass in the model. Plausible shape,
+      deliberately tiny mass — there is no evidence at all for how often it is used.
+
+    Deletion rows copied from a donor are clipped to the new allele's own germline length, so an
+    extension can never introduce the unreachable mass
+    :func:`~vdjtools.model.check.check_model` flags.
+
+    Existing alleles are **never modified**, including their germline: silently swapping the
+    sequence under an allele the model was fitted on would invalidate every conditional that
+    references it. A library that disagrees about an existing allele is reported by
+    ``check_model``'s ``germline_source`` check, not fixed here.
+
+    Args:
+        model: The model to extend.
+        germline: A germline frame (see :func:`~vdjtools.model.io.from_germline` for the schema),
+            typically a superset of the model's own.
+        weight: Scales the seeded mass for new alleles of known genes. ``1.0`` gives a new allele
+            the gene's average; ``0.5`` is a more conservative half of it.
+
+    Returns:
+        A new, validated and renormalized :class:`Model`. Idempotent — extending twice with the
+        same library changes nothing the second time.
+
+    Note:
+        This *seeds*, it does not estimate. Follow it with
+        ``infer_native(extended, seqs, init="template")`` to let data set the new probabilities.
+
+    Example:
+        >>> bigger = extend_alleles(m, load_germline("TRB", "human"))
+        >>> bigger, rep = infer_native(bigger, seqs, init="template", max_iter=5)
+    """
+    from . import reference as ref
+    from .io import _d_genomic, _vj_genomic
+
+    gl = ref.normalize_germline(germline)
+    pal = model.manifest.palindrome_max
+    tables = dict(model.tables)
+    genomic = dict(model.genomic)
+
+    for seg in ("v", "j", "d"):
+        frame_name = f"genes_{seg}"
+        if frame_name not in genomic:
+            continue
+        acol, choice_ev = f"{seg}_allele", {"v": "v_choice", "j": "j_choice", "d": "d_gene"}[seg]
+        if choice_ev not in tables:
+            continue
+        existing = genomic[frame_name]
+        known = set(existing[acol].to_list())
+        add = gl.filter((pl.col("segment") == seg.upper()) & ~pl.col("allele").is_in(list(known)))
+        if not add.height:
+            continue
+
+        new_rows = (_vj_genomic(add, seg, pal[f"{seg}_3" if seg == "v" else "j_5"])
+                    if seg in ("v", "j") else _d_genomic(add, pal["d_5"], pal["d_3"]))
+        if not new_rows.height:
+            continue
+        genomic[frame_name] = pl.concat([existing, new_rows.select(existing.columns)])
+
+        cut = {r[acol]: r["cut_segment"] for r in existing.iter_rows(named=True) if r["cut_segment"]}
+        mass = {r[acol]: r["p"] for r in
+                tables[choice_ev].group_by(acol).agg(pl.col("p").sum()).iter_rows(named=True)}
+        by_gene: dict[str, list[str]] = defaultdict(list)
+        for allele in cut:
+            by_gene[allele.split("*")[0]].append(allele)
+        # Per-ROW floor, not per-allele: on a conditioned choice table (P(J|V), P(D|J)) every
+        # parent group sums to 1, so a single row's probability is the comparable scale. Summing
+        # over parents would be n_parents too large.
+        row_p = tables[choice_ev].filter(pl.col("p") > 0)["p"]
+        floor = float(row_p.min()) * 0.5 if row_p.len() else 1e-6
+        # Snapshot the per-gene totals BEFORE any donor rows are copied in, so step (2) below
+        # restores what the model actually had rather than what the copy just inflated it to.
+        gene_expr = pl.col(acol).str.split("*").list.first()
+        nk = normalization_keys(model.manifest.events[choice_ev])
+        old_totals = (tables[choice_ev].with_columns(_g=gene_expr)
+                      .group_by([*nk, "_g"]).agg(pl.col("p").sum().alias("_old")))
+
+        donors: dict[str, str] = {}      # new allele -> existing allele to copy conditionals from
+        new_genes: set[str] = set()      # new alleles whose GENE is also new to the model
+        for r in new_rows.iter_rows(named=True):
+            allele, gene, seq = r[acol], r["gene"], r["cut_segment"]
+            mates = [a for a in by_gene.get(gene, []) if mass.get(a, 0) > 0]
+            if mates:
+                donors[allele] = mates[0]
+            else:
+                nearest = _nearest_donor(seq, {a: s for a, s in cut.items() if mass.get(a, 0) > 0})
+                if nearest is None:
+                    continue
+                donors[allele] = nearest
+                new_genes.add(allele)
+        if not donors:
+            continue
+
+        new_cut_len = {r[acol]: len(r["cut_segment"]) for r in new_rows.iter_rows(named=True)}
+        for ev_name in list(tables):
+            if acol not in tables[ev_name].columns:
+                continue
+            parts = [tables[ev_name]]
+            for allele, donor in donors.items():
+                block = (tables[ev_name].filter(pl.col(acol) == donor)
+                         .with_columns(pl.lit(allele).alias(acol)))
+                if not block.height:
+                    continue
+                block = _clip_deletions(block, ev_name, model.manifest.events.get(ev_name),
+                                        new_cut_len[allele], pal)
+                parts.append(block)
+            tables[ev_name] = pl.concat(parts)
+
+        # Each new allele's choice rows were copied verbatim from its donor above, which already
+        # puts them on the right per-parent scale. Two corrections follow.
+        seeded = tables[choice_ev].with_columns(_g=gene_expr)
+        # (1) A brand-new GENE has no evidence for its usage at all, so it gets a floor rather
+        #     than its donor's real mass -- a plausible shape, a deliberately tiny weight.
+        #     `weight` scales a new allele of a KNOWN gene relative to its gene-mate.
+        seeded = seeded.with_columns(
+            p=pl.when(pl.col(acol).is_in(list(new_genes))).then(pl.lit(floor))
+            .when(pl.col(acol).is_in(list(donors))).then(pl.col("p") * weight)
+            .otherwise(pl.col("p")))
+        # (2) Preserve each pre-existing GENE's total usage. Alleles of one gene are alternative
+        #     versions of the same gene, not extra genes -- a diploid carries at most two -- so a
+        #     richer library must SPLIT a gene's mass more finely, never multiply it. Without this,
+        #     extending human TRB from 1 to ~3 alleles per gene inflated gene-level V usage by up
+        #     to 6 points, silently reweighting every Pgen through those genes.
+        seeded = (seeded.join(old_totals, on=[*nk, "_g"], how="left")
+                  .with_columns(_new=pl.col("p").sum().over([*nk, "_g"])))
+        seeded = seeded.with_columns(
+            p=pl.when((pl.col("_new") > 0) & (pl.col("_old") > 0))
+            .then(pl.col("p") * pl.col("_old") / pl.col("_new"))
+            .otherwise(pl.col("p"))
+        ).drop(["_g", "_old", "_new"])
+        tables[choice_ev] = _renormalize(seeded, nk)
+        # A donor's child tables were copied wholesale, so each new allele's own conditionals must
+        # be re-normalized within their own group (clipping deletions removed some of their mass).
+        for ev_name, ev_obj in model.manifest.events.items():
+            if ev_name == choice_ev or acol not in tables[ev_name].columns:
+                continue
+            nk = normalization_keys(ev_obj)
+            if acol in nk:
+                tables[ev_name] = _renormalize(tables[ev_name], nk)
+
+    return Model(manifest=model.manifest, tables=tables, genomic=genomic,
+                 training=model.training).validate()
+
+
+#: Deletion event -> the ``palindrome_max`` keys bounding it (mirrors ``check._DELETION_ENDS``).
+_DEL_ENDS = {"v_3_del": ("v_3",), "j_5_del": ("j_5",),
+             "d_del": ("d_5", "d_3"), "d2_del": ("d_5", "d_3")}
+
+
+def _clip_deletions(block: pl.DataFrame, ev_name: str, event, cut_len: int,
+                    pal: dict) -> pl.DataFrame:
+    """Drop deletion rows a new allele's own germline cannot reach (see ``check.check_model``).
+
+    Reachability matches the Pgen DP: ``ndel <= len(cut) - Σ palindrome_max - 1`` for V/J (which
+    must each leave one nt) and ``ndel5 + ndel3 <= len(cut) - Σ palindrome_max`` for D.
+    """
+    ends = _DEL_ENDS.get(ev_name)
+    if event is None or ends is None:
+        return block
+    pal_total = sum(pal.get(e, 0) for e in ends)
+    if event.kind.value == "deletion" and "ndel" in block.columns:
+        return block.filter(pl.col("ndel") <= cut_len - pal_total - 1)
+    if event.kind.value == "deletion_2d" and "ndel5" in block.columns:
+        return block.filter(pl.col("ndel5") + pl.col("ndel3") <= cut_len - pal_total)
+    return block
 
 
 def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0,
@@ -739,9 +1082,12 @@ def infer_native(
     default on the D-bearing loci: the native E-step accumulates the second-D soft counts via a
     factorized forward/backward pass, read-parallelized across cores.
     """
+    import time as _time
+
     from .._core import estep_batch, make_counts
     from .native import _encode, pack
 
+    started = _time.monotonic()
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
     ddflags = [1 if a else 0 for a in dd_allowed] if dd_allowed is not None else []
 
@@ -799,4 +1145,6 @@ def infer_native(
     # mode (``gene_prior > 0``), i.e. "keep every real gene reachable".
     if gene_prior > 0:
         model = augment_from_oracle(model, template)
+    model = _record(report, model, template, started=started, max_iter=max_iter, tol=tol,
+                    init=init, native=True, n_sequences=len(upper))
     return model, report

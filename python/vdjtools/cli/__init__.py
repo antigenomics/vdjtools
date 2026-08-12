@@ -482,3 +482,487 @@ def alice(
     except (ImportError, KeyError, ValueError) as e:
         _err(str(e))
     _write(res, out)
+
+
+# ---------------------------------------------------------------------------- model workshop
+model_app = typer.Typer(
+    no_args_is_help=True,
+    help="Recombination-model workshop: build, learn, check, compare, score, extend.\n\n"
+         "A model is named either as a directory, or as LOCUS[:source[:organism]] for a built-in "
+         "(TRB, TRB:learned, TRA:arda:mouse). The single-model commands also accept the "
+         "-m/--model + --source + --model-path flags the top-level pgen/generate use.",
+)
+app.add_typer(model_app, name="model")
+
+_MODEL_OUT = typer.Option(None, "--out", "-o", help="Output model directory.")
+
+
+def _model_arg(spec: str):
+    """Resolve ``LOCUS[:source[:organism]]`` or a model directory into a Model."""
+    from vdjtools.model import load_bundled, load_model
+
+    path = Path(spec)
+    if path.exists() and path.is_dir():
+        return load_model(path)
+    parts = spec.split(":")
+    locus = parts[0]
+    source = parts[1] if len(parts) > 1 else "olga"
+    organism = parts[2] if len(parts) > 2 else "human"
+    try:
+        return load_bundled(locus, source=source, organism=organism)
+    except (ValueError, FileNotFoundError) as e:
+        _err(f"{spec!r} is neither a model directory nor a built-in ({e})")
+
+
+def _germline_arg(v, j, d, anchors, locus, organism):
+    """A germline frame from user FASTA if given, else arda's for the locus/organism."""
+    from vdjtools.model import load_germline, read_germline_fasta
+
+    if v and j:
+        return read_germline_fasta(v, j, d, anchors=anchors)
+    if v or j:
+        _err("--germline-v and --germline-j must be given together")
+    if not locus:
+        _err("give --germline-v/--germline-j, or --locus to take the germline from arda")
+    try:
+        return load_germline(locus, organism)
+    except (ImportError, ValueError) as e:
+        _err(str(e))
+
+
+@model_app.command("list")
+def model_list() -> None:
+    """List the recombination models shipped with the package (same as ``vdjtools models``)."""
+    models()
+
+
+@model_app.command("check")
+def model_check(
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    germline: str = typer.Option("auto", help="Reference germline: auto | none | a FASTA path."),
+    organism: str = typer.Option("human", help="Organism, when --germline is auto."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """Audit a model against its manifest, its germline, and a reference library.
+
+    Writes a tidy issue frame (severity, check, event, segment, allele, detail, value) and
+    **exits 1 if any issue has severity "error"**, so it works as a gate in a build script.
+    """
+    from vdjtools.model.check import check_model
+
+    m = _model_arg(spec)
+    gl = germline
+    if germline not in ("auto", "none"):
+        from vdjtools.model import read_germline_fasta
+
+        gl = read_germline_fasta(germline, germline)
+    issues = check_model(m, germline=gl)
+    _write(issues, out)
+    n_err = issues.filter(pl.col("severity") == "error").height
+    n_warn = issues.filter(pl.col("severity") == "warn").height
+    _info(f"{n_err} error(s), {n_warn} warning(s)")
+    if n_err:
+        raise typer.Exit(1)
+
+
+@model_app.command("template")
+def model_template(
+    locus: Optional[str] = typer.Option(None, "--locus", help="Locus, e.g. TRB."),
+    organism: str = typer.Option("human", help="Organism (arda germline), when no FASTA is given."),
+    germline_v: Optional[Path] = typer.Option(None, "--germline-v", help="V-allele FASTA."),
+    germline_j: Optional[Path] = typer.Option(None, "--germline-j", help="J-allele FASTA."),
+    germline_d: Optional[Path] = typer.Option(None, "--germline-d", help="D-allele FASTA (makes it VDJ)."),
+    anchors: Optional[Path] = typer.Option(None, help="CDR3-anchor CSV, if the FASTAs are full-length."),
+    ins_max: int = typer.Option(40, help="Largest N-region insertion in the placeholder tables."),
+    out: Optional[Path] = _MODEL_OUT,
+) -> None:
+    """Build a model scaffold from a germline library — your own FASTA, or arda's.
+
+    The marginals are placeholders meant to be refit with ``model learn``; their support ranges
+    bound what EM can then learn, which is why ``--ins-max`` is here.
+    """
+    from vdjtools.model.io import from_germline
+
+    if out is None:
+        _err("give an output model directory with -o")
+    gl = _germline_arg(germline_v, germline_j, germline_d, anchors, locus, organism)
+    try:
+        m = from_germline(gl, locus=locus or "CUSTOM", organism=organism, ins_max=ins_max,
+                          strict=germline_v is not None)
+    except ValueError as e:
+        _err(str(e))
+    m.save(out)
+    _info(f"{m.chain_type} template for {m.locus}: "
+          f"{m.genomic['genes_v'].height} V, {m.genomic['genes_j'].height} J -> {out}")
+
+
+@model_app.command("learn")
+def model_learn(
+    input: Path = typer.Argument(..., help="Clonotype table (TSV/Parquet) with junction + V/J calls."),
+    template: Optional[str] = typer.Option(None, "--template", "-t",
+                                           help="Template model, or LOCUS[:source[:organism]]."),
+    locus: Optional[str] = typer.Option(None, "--locus", help="Build an arda template for this locus."),
+    organism: str = typer.Option("human", help="Organism, with --locus."),
+    column: Optional[str] = typer.Option(None, "--column", "-c", help="Junction column (auto-detected)."),
+    max_iter: int = typer.Option(15, help="EM iteration cap."),
+    tol: float = typer.Option(1e-4, help="Stop below this relative log-likelihood improvement."),
+    init: str = typer.Option("align", help="align | uniform | template (template = warm start / fine-tune)."),
+    gene_prior: float = typer.Option(1.0, help="Dirichlet pseudocount over functional V/J alleles."),
+    nd_prior: float = typer.Option(0.0, help="Pseudocount pushing P(n_D=2) toward 0."),
+    single_d: bool = typer.Option(False, "--single-d", help="Force a strict single-D model."),
+    no_calls: bool = typer.Option(False, "--no-calls", help="Ignore V/J calls (much slower)."),
+    out: Optional[Path] = _MODEL_OUT,
+) -> None:
+    """Fit a model's marginals from your own sequences by EM, writing the training log alongside.
+
+    ``--init template`` warm-starts from the template instead of realigning, which is how you
+    fine-tune an existing model on a new sample rather than fitting from scratch.
+    """
+    from vdjtools.io.batch import read as _read
+    from vdjtools.model.infer import infer_frame, training_frame
+
+    if out is None:
+        _err("give an output model directory with -o")
+    if template is None and locus is None:
+        _err("give a template with --template, or a locus with --locus")
+    base = _model_arg(template) if template else locus
+    if template is None:
+        from vdjtools.model.io import from_arda
+
+        base = from_arda(locus, organism)
+    try:
+        clones = _read(input, fmt="auto")
+    except Exception:  # noqa: BLE001 - fall back to a plain table read
+        clones = pl.read_parquet(input) if input.suffix in (".parquet", ".pq") else \
+            pl.read_csv(input, separator="\t", infer_schema_length=20000)
+    try:
+        m, rep = infer_frame(base, clones, seq_col=column, use_calls=not no_calls,
+                             max_iter=max_iter, tol=tol, init=init,
+                             gene_prior=gene_prior, nd_prior=nd_prior, single_d=single_d)
+    except (ValueError, KeyError) as e:
+        _err(str(e))
+    m.save(out)
+    log = training_frame(m)
+    _info(f"{rep.n_iter} iterations, converged={rep.converged}, "
+          f"loglik {log['loglik'][0]:.3f} -> {log['loglik'][-1]:.3f} -> {out}")
+
+
+@model_app.command("build")
+def model_build(
+    chains: str = typer.Option(",".join(("TRA", "TRB")), "--chains", help="Comma-separated chains."),
+    groups: str = typer.Option("human", "--groups", help="Comma-separated read groups."),
+    workers: Optional[int] = typer.Option(None, help="Concurrent chain builds (default: cores/2)."),
+    work_dir: Path = typer.Option(Path("/tmp/vdjtools_build"), help="Scratch dir for arda output."),
+    cap: Optional[int] = typer.Option(None, help="Cap reads per chain (default: use every read)."),
+    max_iter: int = typer.Option(15, help="EM iteration cap."),
+    out: Optional[Path] = _MODEL_OUT,
+) -> None:
+    """Build models from the full AIRR read corpus: fetch, arda-map, then EM — several chains at once.
+
+    This is the real training path (raw FASTQ from the ``isalgo/airr_model_read`` dataset), so it
+    needs HuggingFace access and arda's mmseqs2. Minutes per chain, run concurrently.
+    """
+    from vdjtools.model.data import build_all
+
+    if out is None:
+        _err("give an output directory with -o")
+    res = build_all([c.strip() for c in chains.split(",") if c.strip()],
+                    groups=tuple(g.strip() for g in groups.split(",") if g.strip()),
+                    workers=workers, out_dir=out, work_dir=work_dir, cap=cap, iters=max_iter)
+    ok = [r["stats"] for r in res.values() if "stats" in r]
+    for key, r in res.items():
+        if "error" in r:
+            typer.secho(f"{key}: FAILED {r['error']}", fg=typer.colors.RED, err=True)
+    if not ok:
+        _err("every build failed")
+    _write(pl.DataFrame(ok), None)
+    _info(f"{len(ok)}/{len(res)} chain(s) built -> {out}")
+
+
+@model_app.command("extend")
+def model_extend(
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    locus: Optional[str] = typer.Option(None, "--locus", help="Locus for the arda germline (default: the model's)."),
+    organism: str = typer.Option("human", help="Organism for the arda germline."),
+    germline_v: Optional[Path] = typer.Option(None, "--germline-v", help="V-allele FASTA."),
+    germline_j: Optional[Path] = typer.Option(None, "--germline-j", help="J-allele FASTA."),
+    germline_d: Optional[Path] = typer.Option(None, "--germline-d", help="D-allele FASTA."),
+    anchors: Optional[Path] = typer.Option(None, help="CDR3-anchor CSV, if the FASTAs are full-length."),
+    weight: float = typer.Option(1.0, help="Mass for a new allele of a known gene, relative to its gene-mate."),
+    out: Optional[Path] = _MODEL_OUT,
+) -> None:
+    """Add alleles from a larger germline library, seeded from what the model already knows.
+
+    Each pre-existing gene keeps its total usage — a richer library splits a gene's mass more
+    finely rather than multiplying it. This seeds; follow with ``model learn --init template``.
+    """
+    from vdjtools.model.infer import extend_alleles
+
+    if out is None:
+        _err("give an output model directory with -o")
+    m = _model_arg(spec)
+    gl = _germline_arg(germline_v, germline_j, germline_d, anchors, locus or m.locus, organism)
+    before = {k: v.height for k, v in m.genomic.items()}
+    try:
+        e = extend_alleles(m, gl, weight=weight)
+    except ValueError as ex:
+        _err(str(ex))
+    e.save(out)
+    _info(", ".join(f"{k}: {before[k]}->{v.height}" for k, v in e.genomic.items()) + f" -> {out}")
+
+
+@model_app.command("rescale")
+def model_rescale(
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    samples: list[Path] = typer.Argument(..., help="Clonotype sample file(s) supplying the target usage."),
+    fmt: str = _FMT,
+    no_v: bool = typer.Option(False, "--no-v", help="Leave P(V) alone."),
+    no_j: bool = typer.Option(False, "--no-j", help="Leave P(J) alone."),
+    aggregate: str = typer.Option("pool", help="Combine several samples: pool | mean."),
+    out: Optional[Path] = _MODEL_OUT,
+) -> None:
+    """Replace a model's V/J usage with your own sample's, keeping its junction model.
+
+    V/J usage is protocol-dependent (5'RACE and DNA-multiplex amplify different V genes at very
+    different rates); the recombination machinery underneath is not. Pass the repertoire you are
+    actually going to score.
+    """
+    from vdjtools.io.batch import read as _read
+    from vdjtools.model import rescale_usage
+
+    if out is None:
+        _err("give an output model directory with -o")
+    m = _model_arg(spec)
+    frames = [_read(s, fmt=fmt) for s in samples]
+    try:
+        r = rescale_usage(m, frames if len(frames) > 1 else frames[0],
+                          v=not no_v, j=not no_j, aggregate=aggregate)
+    except ValueError as e:
+        _err(str(e))
+    r.save(out)
+    _info(f"usage rescaled from {len(frames)} sample(s) -> {out}")
+
+
+@model_app.command("export")
+def model_export(
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    long: bool = typer.Option(False, "--long", help="One flat long table of every marginal."),
+    format: str = typer.Option("tsv", "--format", help="Model-directory format: tsv | csv | parquet."),
+    out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output file (--long) or directory."),
+) -> None:
+    """Export a model's probabilities as tables — a hand-editable directory, or one long frame.
+
+    Both round-trip: a TSV model directory loads straight back with ``--model-path``, and the long
+    frame goes back through ``vdjtools.model.set_marginals``.
+    """
+    from vdjtools.model.io import marginals_frame
+
+    m = _model_arg(spec)
+    if long:
+        _write(marginals_frame(m), out)
+        return
+    if out is None:
+        _err("give an output directory with -o (or use --long to write one table)")
+    try:
+        m.save(out, fmt=format)
+    except ValueError as e:
+        _err(str(e))
+    _info(f"{len(m.tables)} marginal + {len(m.genomic)} germline table(s) as {format} -> {out}")
+
+
+@model_app.command("net")
+def model_net(
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    format: str = typer.Option("dot", "--format", help="dot | svg | pdf | png (non-dot needs graphviz)."),
+    out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output file (default: stdout, dot only)."),
+) -> None:
+    """Render the model's recombination Bayes net, nodes annotated with entropy and edges with MI."""
+    from vdjtools.model.analyze import bayes_net_dot, render_dot
+
+    m = _model_arg(spec)
+    dot = bayes_net_dot(m)
+    if format == "dot":
+        if out is None:
+            typer.echo(dot)
+        else:
+            Path(out).write_text(dot)
+            _info(f"wrote {out}")
+        return
+    if out is None:
+        _err("give an output path with -o for a rendered format")
+    try:
+        _info(f"wrote {render_dot(dot, out, fmt=format)}")
+    except RuntimeError as e:
+        _err(str(e))
+
+
+@model_app.command("entropy")
+def model_entropy(
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    table: str = typer.Option("entropy", help="entropy | mi | total."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """Information content per recombination event: entropy, mutual information, or the total."""
+    from vdjtools.model.analyze import entropy_table, mutual_information, total_entropy
+
+    m = _model_arg(spec)
+    if table == "entropy":
+        _write(entropy_table(m), out)
+    elif table == "mi":
+        _write(mutual_information(m), out)
+    elif table == "total":
+        t = total_entropy(m)
+        _write(t, out)
+        _info(f"scenario entropy {t['contribution_bits'].sum():.2f} bits "
+              f"({2 ** t['contribution_bits'].sum():.3g} distinct rearrangements)")
+    else:
+        _err("--table must be entropy, mi or total")
+
+
+@model_app.command("diversity")
+def model_diversity(
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    n: int = typer.Option(5000, "--number", "-n", help="Sequences to generate for the estimate."),
+    seed: int = typer.Option(0, help="Generation seed."),
+    productive: bool = typer.Option(False, "--productive", help="Estimate over productive rearrangements only."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """Estimate total diversity: scenario entropy, sequence entropy, and effective diversity.
+
+    Reports both Hill numbers — ``2^H`` (the usual "~10^x distinct sequences" figure) and
+    ``1/E[Pgen]`` (how many draws before two coincide). Monte Carlo, so give it a seed.
+    """
+    from vdjtools.model.score import diversity as _div
+
+    m = _model_arg(spec)
+    try:
+        d = _div(m, n=n, seed=seed, productive_only=productive)
+    except ValueError as e:
+        _err(str(e))
+    _write(d, out)
+    r = d.to_dicts()[0]
+    _info(f"scenario {r['scenario_entropy_bits']:.1f} bits, sequence "
+          f"{r['sequence_entropy_bits']:.2f}+-{r['sequence_entropy_se_bits']:.2f} bits -> "
+          f"Shannon {r['diversity_shannon']:.3g}, Simpson {r['diversity_simpson']:.3g}")
+
+
+@model_app.command("compare")
+def model_compare(
+    a: str = typer.Argument(..., help="First model: a directory, or LOCUS[:source[:organism]]."),
+    b: str = typer.Argument(..., help="Second model."),
+    by: str = typer.Option("allele", help="Align on allele | gene. Use gene across germline sources."),
+    usage: Optional[str] = typer.Option(None, "--usage", help="Instead emit V/J usage side by side: v | j | d."),
+    dot: Optional[Path] = typer.Option(None, "--dot", help="Also write the comparison graph here."),
+    dot_format: str = typer.Option("dot", "--dot-format", help="dot | svg | pdf | png."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """Compare two models parameter by parameter: per-event divergence and support differences.
+
+    Jensen-Shannon is the headline (symmetric, bounded, finite when the supports differ);
+    ``tv_max`` finds the one broken gene an average hides.
+    """
+    from vdjtools.model.analyze import compare_models, compare_net_dot, compare_usage, render_dot
+
+    ma, mb = _model_arg(a), _model_arg(b)
+    labels = (a, b)
+    if usage:
+        _write(compare_usage(ma, mb, usage), out)
+    else:
+        if by not in ("allele", "gene"):
+            _err("--by must be allele or gene")
+        _write(compare_models(ma, mb, labels=labels, by=by), out)
+    if dot is not None:
+        src = compare_net_dot(ma, mb, labels=labels)
+        if dot_format == "dot":
+            Path(dot).write_text(src)
+            _info(f"wrote {dot}")
+        else:
+            try:
+                _info(f"wrote {render_dot(src, dot, fmt=dot_format)}")
+            except RuntimeError as e:
+                _err(str(e))
+
+
+@model_app.command("compare-pgen")
+def model_compare_pgen(
+    a: str = typer.Argument(..., help="First model: a directory, or LOCUS[:source[:organism]]."),
+    b: str = typer.Argument(..., help="Second model."),
+    input: Path = typer.Argument(..., help="Table (TSV) or list of CDR3 sequences."),
+    column: Optional[str] = typer.Option(None, "--column", "-c", help="Sequence column (auto-detected)."),
+    v_col: Optional[str] = typer.Option(None, "--v-col", help="V-call column to condition on."),
+    j_col: Optional[str] = typer.Option(None, "--j-col", help="J-call column to condition on."),
+    seq_type: str = typer.Option("auto", "--type", help="auto | aa | nt."),
+    summary: bool = typer.Option(False, "--summary", help="One row of distribution statistics instead."),
+    no_header: bool = typer.Option(False, "--no-header", help="Input is a bare sequence list."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """Score one sequence set under two models and compare the Pgen distributions.
+
+    ``--summary`` gives correlations, the KS statistic, and — the number that usually matters —
+    how many sequences each model can score that the other assigns Pgen 0.
+    """
+    from vdjtools.model.score import compare_pgen, pgen_summary
+
+    ma, mb = _model_arg(a), _model_arg(b)
+    df, seqcol = _read_seq_table(input, column, no_header)
+    use_calls = bool(v_col or j_col)
+    try:
+        cmp = compare_pgen(ma, mb, df, labels=("a", "b"), kind=seq_type, use_calls=use_calls,
+                           on_unknown="marginalize", seq_col=seqcol, v_col=v_col, j_col=j_col)
+    except (ValueError, KeyError) as e:
+        _err(str(e))
+    _write(pgen_summary(cmp) if summary else cmp, out)
+
+
+@model_app.command("loglik")
+def model_loglik(
+    input: Path = typer.Argument(..., help="Table (TSV) or list of CDR3 sequences."),
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    column: Optional[str] = typer.Option(None, "--column", "-c", help="Sequence column (auto-detected)."),
+    v_col: Optional[str] = typer.Option(None, "--v-col", help="V-call column to condition on."),
+    j_col: Optional[str] = typer.Option(None, "--j-col", help="J-call column to condition on."),
+    weights_col: Optional[str] = typer.Option(None, "--weights-col", help="Per-clonotype weight column."),
+    seq_type: str = typer.Option("auto", "--type", help="auto | aa | nt."),
+    per_sequence: bool = typer.Option(False, "--per-sequence", help="Emit per-sequence Pgen instead."),
+    no_header: bool = typer.Option(False, "--no-header", help="Input is a bare sequence list."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """How well a model explains a sequence set: log-likelihood, free parameters, AIC and BIC.
+
+    Nucleotide input gives a properly normalized likelihood, so BIC is meaningful; amino-acid input
+    is a relative score on one fixed sequence set only. Sequences the model cannot generate are
+    counted in ``n_scoreable``, never turned into -inf.
+    """
+    from vdjtools.model.score import model_fit, pgen_frame
+
+    m = _model_arg(spec)
+    df, seqcol = _read_seq_table(input, column, no_header)
+    use_calls = bool(v_col or j_col)
+    kw = dict(kind=seq_type, use_calls=use_calls, on_unknown="marginalize",
+              seq_col=seqcol, v_col=v_col, j_col=j_col)
+    try:
+        if per_sequence:
+            _write(pgen_frame(m, df, **kw), out)
+            return
+        fit = model_fit(m, df, weights=weights_col, **kw)
+    except (ValueError, KeyError) as e:
+        _err(str(e))
+    _write(fit, out)
+    r = fit.to_dicts()[0]
+    _info(f"loglik {r['loglik_sum']:.1f} over {r['n_scoreable']:.0f}/{r['n']:.0f} scoreable, "
+          f"k={r['k']}, AIC={r['aic']:.1f}, BIC={r['bic']:.1f}")
+
+
+@model_app.command("log")
+def model_log(
+    spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """Show a model's EM training log — log-likelihood per iteration, one block per run."""
+    from vdjtools.model.infer import training_frame
+
+    m = _model_arg(spec)
+    log = training_frame(m)
+    if not log.height:
+        _err(f"{spec!r} carries no training log (it was not fitted by this tool)")
+    _write(log, out)

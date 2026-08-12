@@ -42,21 +42,66 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   FREQ LOCUS`; helpers `normalize, add_locus, locus_of, recompute_frequency`.
 
 ### `vdjtools.model` — native V(D)J recombination engine (supersedes OLGA + IGoR)
-- **Load**: `load_bundled(locus, source="olga"|"learned")`, `list_bundled`; `from_olga`, `load_model`,
-  `save_model`. `Model`, `Manifest`, `Event`, `EventKind`.
+- **Load**: `load_bundled(locus, source="olga"|"learned"|"arda")`, `list_bundled`; `from_olga`,
+  `load_model(path, validate=False)`, `save_model(m, path, fmt="parquet"|"tsv"|"csv")`.
+  `Model` (`.manifest .tables .genomic .training`), `Manifest`, `Event`, `EventKind`.
+- **Build from any reference**: **`from_germline(germline_df, locus=, organism=, ins_max=, strict=)`**
+  — the custom-library entry point; `from_arda(locus, organism)` is a thin wrapper over it.
+  `reference.read_germline_fasta(v, j, d=None, anchors=)` builds the frame from your own FASTA;
+  `reference.validate_germline(df)` audits it (anchor frame, IUPAC, duplicate/gene-level names).
+  Required germline columns `allele segment sequence`; optional `gene functional cdr3_anchor
+  full_germline`. A D allele present ⇒ VDJ, absent ⇒ VJ.
+- **Tables in/out**: **`marginals_frame(m)`** → one long frame of every marginal;
+  **`set_marginals(m, frame)`** → back to a `Model` (a hand-edited TSV is a first-class input).
 - **Pgen (native)** `vdjtools.model.native`: `pgen_nt`, `pgen_aa(m, aa, v=None, j=None, mismatches=0)`
   (0=exact, 1=Hamming-1 ball; v/j=None marginalises), **`pgen_aa_batch(m, seqs, v=, j=, mismatches=,
   threads=)`** (thread-parallel across sequences, bitwise-identical to serial, ~11× on 16 cores).
   Pure-Python reference impls in `vdjtools.model.pgen`.
 - **Generate**: `vdjtools.model.generate.generate(model, n, seed=, productive_only=)` → `pl.DataFrame`.
 - **Infer (EM)**: `vdjtools.model.infer.infer` / `infer_native(template, seqs, masks=, dd_allowed=,
-  nd_prior=, single_d=)`.
+  nd_prior=, single_d=, init="align"|"uniform"|"template")`; **`infer_frame(template_or_locus,
+  clones_df)`** takes a clonotype frame and builds the V/J masks for you. `init="template"` is the
+  warm start = fine-tuning. **Training log**: every fit appends to `model.training["runs"]`, saved
+  as a `training.json` sidecar; read it with **`training_frame(model)`** (`run iter loglik
+  n_scoreable rel_change`). Bundled models have `training is None`.
+- **Extend the allele library**: **`extend_alleles(model, germline_df, weight=1.0)`** — seeds new
+  alleles from a gene-mate (or the germline-nearest allele for a brand-new gene, at a floor mass),
+  clipping copied deletion rows to the new germline. **Preserves each pre-existing gene's total
+  usage** — alleles of a gene are alternatives, not extra genes. Seeds only; follow with
+  `infer_native(..., init="template")`. `augment_from_oracle(learned, oracle)` fills gaps from
+  another *model* instead.
+- **Check**: **`check_model(m, germline="auto"|"none"|df, raise_on=None)`** → tidy issue frame
+  `severity check event segment allele detail value`. Catches unnormalized or out-of-range
+  probabilities, alleles missing from the germline (or vice versa), functional genes stuck at P=0,
+  mass on unreachable deletions (as a per-allele **fraction**), incomplete dinucleotide tables, and
+  VDJ/VJ event-set mismatches. `severity == "error"` means the model is broken.
+- **Score** `vdjtools.model.score`: `pgen_frame(m, seqs_or_frame, kind="auto", use_calls=)`,
+  **`model_fit(m, seqs, weights=)`** (loglik/AIC/**BIC**; uses **nt** Pgen so the likelihood is
+  normalized — aa is a relative score only; Pgen 0 is counted, never `-inf`),
+  `free_params(m, by_event=)` (support-based, drops undefined and unreachable conditionals),
+  `compare_pgen(a, b, seqs)` + `pgen_summary(cmp)` (KS, Spearman, and the headline
+  `only_a_scoreable`/`only_b_scoreable`), `pgen_spectrum(m, n=, bins=)`,
+  **`diversity(m, n=, seed=)`** (scenario entropy, Monte-Carlo sequence entropy, Hill q=1 `2^H`
+  and q=2 `1/E[Pgen]`; TRB ≈ 52 bits scenario / 45 bits sequence / ~3e13).
 - **Germline (arda = single source of truth)** `vdjtools.model.reference`: `load_germline(locus,
   organism)` (CDR3-region + anchor), **`load_full_vj_germline(organism)`** and
   **`arda_full_germline(locus, organism)`** (full-length V/J germline + stitch anchor, from arda
   scaffolds), `reconcile_olga`, `cut_segment`, `translate`, `reverse_complement`.
 - **Stitch**: `stitch_contig(model, v, j, cdr3_nt)`, `stitch_frame`.
-- **Diagnostics** `vdjtools.model.analyze`: Bayes-net→graphviz DOT, entropy / mutual-information tables.
+- **Usage re-weighting**: `rescale_usage(model, sample_or_list, v=, j=, aggregate="pool"|"mean")` —
+  V/J usage is protocol-dependent (5'RACE vs DNA-multiplex), the junction model is not.
+- **Diagnostics** `vdjtools.model.analyze`: `entropy_table`, `mutual_information`,
+  **`total_entropy`** (per-event contribution to the scenario entropy; the dinucleotide row is
+  `E[len] × H_step`), `gene_marginal`, `bayes_net_dot` / `render_bayes_net` / **`render_dot`**.
+- **Compare two models** `vdjtools.model.analyze`: **`compare_models(a, b, by="allele"|"gene")`**
+  → per-event `status n_groups support_* tv tv_max jsd_bits` (union-aligned with zero fill,
+  parent-marginal-weighted; JSD is primary because it stays finite on disjoint support; `by="gene"`
+  bridges different germline namespaces; `status="schema_differs"` when an event is factorized
+  differently). **`compare_usage(a, b, seg)`**, **`compare_net_dot(a, b)`** (bnlearn
+  `compare_networks` style), `compare_entropy`.
+- **Corpus build** `vdjtools.model.data`: `load_prepared(group, chain, label)` (small pre-annotated
+  subset, no arda needed), `build_model(chain, ...)`, **`build_all(chains, groups=, workers=)`** —
+  the full FASTQ → arda-map → EM pipeline, parallel across chains.
 - Tandem-D (D-D) supported throughout (`vdjtools.model.dd`).
 
 ### `vdjtools.stats` — diversity, spectratype, usage
@@ -145,7 +190,11 @@ Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Wi
 `q_measure`, …); `to_anndata`.
 
 ### `vdjtools.cli`
-The `vdjtools` typer app. Model: `models`, `generate`, `pgen`. Data: **`convert`** (any format →
+The `vdjtools` typer app. Model: `models`, `generate`, `pgen`, plus the **`vdjtools model <sub>`**
+workshop sub-app — `list check template learn build extend rescale export net entropy diversity
+compare compare-pgen loglik log`. A model is named as a directory **or** as
+`LOCUS[:source[:organism]]` (`TRB`, `TRB:learned`, `TRA:arda:mouse`). **`model check` exits 1 on any
+error-severity issue**, so it works as a build gate. Data: **`convert`** (any format →
 canonical), **`downsample`**, **`filter`** (`--coding`/`--noncoding`/`--min-freq`/`--v`/`--j`),
 **`pool`** (`--join`). Analytics: `diversity`, `overlap`, `segment-usage`, `spectratype`.
 Longitudinal/enrichment: `dynamics`, `tcrnet`, `alice`. Inputs auto-detected; **`-o` is
@@ -154,7 +203,8 @@ commands take **`--threads N`** (parallel over samples, `map_samples`) and **`--
 streamed pass over a pre-ingested `scan_cohort` Parquet dataset).
 
 ### Notebooks (`pip install "vdjtools[examples]"` → `marimo edit examples/<name>.py`)
-`model_explorer` (recombination Bayes net), `biomarker_explorer` (Emerson association /
+`model_explorer` (recombination Bayes net), **`model_workshop`** (custom germline → learn → check →
+compare → BIC → diversity → extend → rescale), `biomarker_explorer` (Emerson association /
 co-occurrence), **`vaccination_tracking`** (YFV/flu/TBEV clonotype dynamics + recapture model),
 **`aging`** (cohort-streaming diversity / clone-size / spectratype vs age), **`ankspond_motif`**
 (AS27 TRBV9 motif, disease-vs-B27-carriage). Local-first data (`./` → `~/hf/` → HuggingFace).

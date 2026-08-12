@@ -22,7 +22,7 @@ import polars as pl
 
 from .events import Event, EventKind
 from .model import Model
-from .schema import Manifest
+from .schema import Manifest, table_columns
 
 _NT = "ACGT"
 _ACGT = frozenset(_NT)
@@ -287,9 +287,13 @@ def _decay_p(values: np.ndarray, scale: float) -> np.ndarray:
     return w / w.sum()
 
 
-def _arda_vj_genomic(gl_seg: pl.DataFrame, full: dict, seg: str, max_pal: int) -> pl.DataFrame:
-    """genes_v / genes_j frame from arda: cut_segment via palindrome extension; full_germline +
-    anchor from arda scaffolds (``""``/``-1`` where absent); functional = F & has cut_segment."""
+def _vj_genomic(gl_seg: pl.DataFrame, seg: str, max_pal: int) -> pl.DataFrame:
+    """genes_v / genes_j frame from a germline frame: cut_segment via palindrome extension.
+
+    ``full_germline`` / ``cdr3_anchor`` are carried through when the frame has them (arda's
+    scaffolds, or a full-length FASTA sliced by anchors) and default to ``""`` / ``-1``, which
+    only disables contig stitching. ``functional = F & has a cut_segment``.
+    """
     from . import reference as ref
 
     S = seg.upper()
@@ -299,17 +303,17 @@ def _arda_vj_genomic(gl_seg: pl.DataFrame, full: dict, seg: str, max_pal: int) -
         cut = ref.cut_segment(cdr3, S, max_pal) if cdr3 else ""
         if set(cut) - set("ACGT"):  # ambiguous (N) germline — unusable in the native DP; drop
             continue
-        fg, anchor = full.get((S, allele), ("", -1))
         rows.append({
-            f"{seg}_allele": allele, "gene": r["gene"], "full_germline": fg,
-            "cdr3_segment": cdr3, "cut_segment": cut, "anchor": anchor,
+            f"{seg}_allele": allele, "gene": r["gene"], "full_germline": r.get("full_germline") or "",
+            "cdr3_segment": cdr3, "cut_segment": cut,
+            "anchor": int(r.get("cdr3_anchor") if r.get("cdr3_anchor") is not None else -1),
             "functional": bool(r["functional"]) and len(cut) > 0,
         })
     return pl.DataFrame(rows)
 
 
-def _arda_d_genomic(gl_d: pl.DataFrame, max5: int, max3: int) -> pl.DataFrame:
-    """genes_d frame from arda D germline (full = CDR3-region = D; anchor -1)."""
+def _d_genomic(gl_d: pl.DataFrame, max5: int, max3: int) -> pl.DataFrame:
+    """genes_d frame from D germline (full = CDR3-region = D; anchor -1)."""
     from . import reference as ref
 
     rows = []
@@ -382,44 +386,64 @@ def _uniform_dinucl() -> pl.DataFrame:
                          "p": np.full(16, 0.25)})
 
 
-def from_arda(locus: str, organism: str = "human", *,
-              palindrome_max: dict[str, int] | None = None, ins_max: int = 40) -> Model:
-    """Build a recombination :class:`Model` whose gene set + germline come from **arda**.
+def from_germline(germline: pl.DataFrame, *, locus: str, organism: str = "custom",
+                  palindrome_max: dict[str, int] | None = None, ins_max: int = 40,
+                  strict: bool = True, source: str | None = None) -> Model:
+    """Build a recombination :class:`Model` scaffold from **any** V(D)J germline library.
 
-    Genomic frames (names, CDR3-region germline, palindrome-extended ``cut_segment``,
-    full germline + anchor for stitching, functionality) are sourced from arda via
-    :mod:`vdjtools.model.reference` — so generated sequences carry arda's IMGT allele names
-    and germline. The marginal ``tables`` are **placeholders** (uniform gene usage; small-trim /
-    small-insert biased deletions/insertions with wide support) meant to be refit by
-    :func:`vdjtools.model.infer.infer_native`; their ``ndel`` / ``length`` support ranges bound
-    what EM can learn, so they are sized to each segment's full cut-segment length and ``ins_max``.
+    This is the entry point for a custom reference: supply your own alleles (from
+    :func:`vdjtools.model.reference.read_germline_fasta`, from arda, or assembled by hand) and
+    get back a model with the right gene set, germline geometry and event graph, whose marginal
+    ``tables`` are **placeholders** — uniform gene usage, small-trim / small-insert biased
+    deletions and insertions with wide support — meant to be refit by
+    :func:`vdjtools.model.infer.infer_native`. The placeholders' ``ndel`` / ``length`` support
+    ranges **bound what EM can learn**, so they are sized to each segment's full cut-segment
+    length and to ``ins_max``.
 
     Args:
+        germline: Germline frame in :func:`vdjtools.model.reference.load_germline`'s schema —
+            required ``allele, segment, sequence``, optional ``gene, functional, cdr3_anchor,
+            full_germline``. ``sequence`` is the **CDR3-region** germline for V/J and the full
+            germline for D. Alleles with non-ACGT bases are dropped (the native DP cannot encode
+            them); ``strict`` decides whether that and the other audit findings are fatal.
         locus: e.g. ``"TRB"``, ``"IGH"``.
-        organism: e.g. ``"human"``, ``"mouse"``.
+        organism: Free-text organism tag carried in the manifest.
         palindrome_max: Max palindromic nt per trimmable end (default matches OLGA human).
         ins_max: Maximum N-region insertion length in the placeholder tables.
+        strict: Raise if :func:`vdjtools.model.reference.validate_germline` reports an ``error``.
+            Warnings (a misplaced-looking anchor, ambiguous bases, a gene-level allele name) are
+            never fatal — call ``validate_germline`` yourself to inspect them.
+        source: Manifest provenance string; defaults to ``"germline:<locus>"``.
 
     Returns:
-        A validated :class:`Model` (VDJ if arda has D germline for the locus, else VJ).
+        A validated :class:`Model` — ``VDJ`` if the frame carries any D allele, else ``VJ``.
 
     Raises:
-        ImportError: If arda is not importable (it is a base dependency; a plain
-            ``pip install vdjtools`` ships it).
-        ValueError: If arda has no germline for ``locus`` / ``organism``.
+        ValueError: If the germline frame is unusable (missing columns, no V or no J, duplicate
+            or empty alleles) and ``strict`` is set.
     """
     from . import reference as ref
 
+    issues = ref.validate_germline(germline)
+    errors = issues.filter(pl.col("severity") == "error")
+    if strict and errors.height:
+        detail = "; ".join(errors["detail"].to_list()[:5])
+        raise ValueError(f"germline library has {errors.height} error(s): {detail}")
+
     pal = palindrome_max or _DEFAULT_PALINDROME_MAX
-    gl = ref.load_germline(locus, organism)
-    full = ref.arda_full_germline(locus, organism)
+    gl = ref.normalize_germline(germline)
     v_gl = gl.filter(pl.col("segment") == "V")
     j_gl = gl.filter(pl.col("segment") == "J")
     d_gl = gl.filter(pl.col("segment") == "D")
     chain_type = "VDJ" if d_gl.height else "VJ"
 
-    genes_v = _arda_vj_genomic(v_gl, full, "v", pal["v_3"])
-    genes_j = _arda_vj_genomic(j_gl, full, "j", pal["j_5"])
+    genes_v = _vj_genomic(v_gl, "v", pal["v_3"])
+    genes_j = _vj_genomic(j_gl, "j", pal["j_5"])
+    if not genes_v.height or not genes_j.height:
+        raise ValueError(
+            f"no usable {'V' if not genes_v.height else 'J'} alleles left after germline filtering "
+            f"(empty or non-ACGT sequences) — cannot build a {locus} model"
+        )
     v_alleles = genes_v["v_allele"].to_list()
     j_alleles = genes_j["j_allele"].to_list()
     v_cut = max((len(x) for x in genes_v["cut_segment"]), default=1)
@@ -432,7 +456,7 @@ def from_arda(locus: str, organism: str = "human", *,
     }
 
     if chain_type == "VDJ":
-        genes_d = _arda_d_genomic(d_gl, pal["d_5"], pal["d_3"])
+        genes_d = _d_genomic(d_gl, pal["d_5"], pal["d_3"])
         d_alleles = genes_d["d_allele"].to_list()
         d_cut = max((len(x) for x in genes_d["cut_segment"]), default=1)
         tables["j_choice"] = _uniform_choice(j_alleles, genes_j["functional"].to_list(), "j_allele")
@@ -474,26 +498,210 @@ def from_arda(locus: str, organism: str = "human", *,
         genomic = {"genes_v": genes_v, "genes_j": genes_j}
 
     manifest = Manifest(locus=locus, organism=organism, chain_type=chain_type, events=events,
-                        palindrome_max={k: int(v) for k, v in pal.items()}, source=f"arda:{locus}")
+                        palindrome_max={k: int(v) for k, v in pal.items()},
+                        source=source or f"germline:{locus}")
     return Model(manifest=manifest, tables=tables, genomic=genomic).validate()
 
 
-def save_model(model: Model, path: str | Path) -> None:
-    """Write a model to ``path/`` as ``manifest.json`` + one parquet per event/germline table."""
+def from_arda(locus: str, organism: str = "human", *,
+              palindrome_max: dict[str, int] | None = None, ins_max: int = 40) -> Model:
+    """Build a recombination :class:`Model` whose gene set + germline come from **arda**.
+
+    A thin wrapper over :func:`from_germline` that sources the germline library from arda — the
+    single source of germline truth — so generated sequences carry arda's IMGT allele names and
+    germline, and stitching gets the full-length V/J germline + anchor from arda's scaffolds.
+    The marginal tables are placeholders meant to be refit; see :func:`from_germline`.
+
+    Args:
+        locus: e.g. ``"TRB"``, ``"IGH"``.
+        organism: e.g. ``"human"``, ``"mouse"``.
+        palindrome_max: Max palindromic nt per trimmable end (default matches OLGA human).
+        ins_max: Maximum N-region insertion length in the placeholder tables.
+
+    Returns:
+        A validated :class:`Model` (VDJ if arda has D germline for the locus, else VJ).
+
+    Raises:
+        ImportError: If arda is not importable (it is a base dependency; a plain
+            ``pip install vdjtools`` ships it).
+        ValueError: If arda has no germline for ``locus`` / ``organism``.
+    """
+    from . import reference as ref
+
+    gl = ref.load_germline(locus, organism)
+    full = ref.arda_full_germline(locus, organism)
+    gl = gl.with_columns(
+        full_germline=pl.struct(["segment", "allele"]).map_elements(
+            lambda r: full.get((r["segment"], r["allele"]), ("", -1))[0], return_dtype=pl.Utf8),
+        cdr3_anchor=pl.struct(["segment", "allele"]).map_elements(
+            lambda r: full.get((r["segment"], r["allele"]), ("", -1))[1], return_dtype=pl.Int64),
+    )
+    # strict=False: arda's own library legitimately carries pseudogenes with empty/ambiguous
+    # germline and (for D) gene-level names; those are dropped/warned, never fatal.
+    return from_germline(gl, locus=locus, organism=organism, palindrome_max=palindrome_max,
+                         ins_max=ins_max, strict=False, source=f"arda:{locus}")
+
+
+# --- flat table export / import --------------------------------------------------------------
+
+#: Every realization column any event kind can contribute, in a stable display order.
+_REALIZATION_COLS = ("v_allele", "j_allele", "d_allele", "d2_allele",
+                     "n_d", "ndel", "ndel5", "ndel3", "length", "from_nt", "to_nt")
+
+
+def marginals_frame(model: Model) -> pl.DataFrame:
+    """Flatten every marginal into ONE long, self-describing table.
+
+    The per-event tables are already tidy polars, but they have different schemas, so inspecting a
+    whole model means juggling a dozen frames. This stacks them into a single frame with the union
+    of all realization columns (null where a column does not apply to that event), which is what
+    you want for eyeballing, diffing, spreadsheeting or shipping a model as one file.
+
+    Args:
+        model: The model to flatten.
+
+    Returns:
+        ``event, kind, given`` + :data:`_REALIZATION_COLS` + ``p``, one row per probability.
+
+    Example:
+        >>> marginals_frame(m).filter(pl.col("event") == "v_choice").head()
+    """
+    parts = []
+    for name, event in model.manifest.events.items():
+        df = model.tables[name]
+        parts.append(df.with_columns(
+            event=pl.lit(name), kind=pl.lit(event.kind.value),
+            given=pl.lit(",".join(event.given)),
+        ))
+    out = pl.concat(parts, how="diagonal")
+    cols = ["event", "kind", "given", *[c for c in _REALIZATION_COLS if c in out.columns], "p"]
+    return out.select(cols)
+
+
+def set_marginals(model: Model, frame: pl.DataFrame, *, validate: bool = True) -> Model:
+    """Rebuild a model's marginals from a :func:`marginals_frame`-shaped table.
+
+    The inverse of :func:`marginals_frame`, and the reason a hand-edited TSV is a first-class model
+    input: edit the probabilities in whatever tool you like, read the table back, and get a model.
+    The germline frames and the event graph come from ``model`` — this replaces probabilities only.
+
+    Args:
+        model: Supplies the manifest and germline; its own tables are replaced.
+        frame: Long-format marginals with at least ``event`` and ``p``, plus whichever realization
+            columns the events need. Extra columns are ignored; rows for unknown events are an error.
+        validate: Run :meth:`~vdjtools.model.model.Model.validate` on the result.
+
+    Returns:
+        A new :class:`Model`; the input is not modified.
+
+    Raises:
+        ValueError: If an event has no rows, an event name is unknown, or a required realization
+            column is missing for some event.
+    """
+    if "event" not in frame.columns or "p" not in frame.columns:
+        raise ValueError("marginals frame needs at least an 'event' and a 'p' column")
+    unknown = sorted(set(frame["event"].to_list()) - set(model.manifest.events))
+    if unknown:
+        raise ValueError(f"marginals frame names event(s) not in the manifest: {unknown}")
+
+    tables: dict[str, pl.DataFrame] = {}
+    for name, event in model.manifest.events.items():
+        want = table_columns(event)
+        sub = frame.filter(pl.col("event") == name)
+        if not sub.height:
+            raise ValueError(f"marginals frame has no rows for event {name!r}")
+        missing = [c for c in want if c not in sub.columns]
+        if missing:
+            raise ValueError(f"event {name!r} needs column(s) {missing} in the marginals frame")
+        # Casting per column rather than trusting the reader: a TSV round-trip loses every dtype,
+        # and the native packer requires the schema's exact integer widths.
+        tables[name] = sub.select([pl.col(c).cast(dt) for c, dt in want.items()])
+    out = Model(manifest=model.manifest, tables=tables, genomic=model.genomic,
+                training=model.training)
+    return out.validate() if validate else out
+
+
+# --- model directories ------------------------------------------------------------------------
+
+_TABLE_SUFFIX = {"parquet": ".parquet", "tsv": ".tsv", "csv": ".csv"}
+
+
+def _write_table(df: pl.DataFrame, path: Path, fmt: str) -> None:
+    if fmt == "parquet":
+        df.write_parquet(path)
+    else:
+        df.write_csv(path, separator="\t" if fmt == "tsv" else ",")
+
+
+def _read_table(src: Path, name: str) -> pl.DataFrame:
+    """Read one model table, whichever of the three formats it was written in."""
+    for fmt, suffix in _TABLE_SUFFIX.items():
+        path = src / f"{name}{suffix}"
+        if path.exists():
+            if fmt == "parquet":
+                return pl.read_parquet(path)
+            return pl.read_csv(path, separator="\t" if fmt == "tsv" else ",")
+    raise FileNotFoundError(f"no table {name!r} in {src} (tried {', '.join(_TABLE_SUFFIX.values())})")
+
+
+def save_model(model: Model, path: str | Path, *, fmt: str = "parquet") -> None:
+    """Write a model to ``path/`` as ``manifest.json`` + one file per event/germline table.
+
+    Args:
+        model: The model to write.
+        path: Destination directory (created if absent).
+        fmt: ``"parquet"`` (default, exact and compact), or ``"tsv"`` / ``"csv"`` for a
+            hand-editable directory. Text formats lose dtypes on the way out;
+            :func:`load_model` restores them from the manifest, so the round-trip is still exact.
+
+    Raises:
+        ValueError: On an unknown ``fmt``.
+    """
+    if fmt not in _TABLE_SUFFIX:
+        raise ValueError(f"fmt must be one of {sorted(_TABLE_SUFFIX)}, got {fmt!r}")
     out = Path(path)
     out.mkdir(parents=True, exist_ok=True)
     (out / "manifest.json").write_text(model.manifest.to_json())
-    for name, df in model.tables.items():
-        df.write_parquet(out / f"{name}.parquet")
-    for name, df in model.genomic.items():
-        df.write_parquet(out / f"{name}.parquet")
+    suffix = _TABLE_SUFFIX[fmt]
+    for name, df in {**model.tables, **model.genomic}.items():
+        _write_table(df, out / f"{name}{suffix}", fmt)
+    if model.training:
+        import json
+
+        (out / "training.json").write_text(json.dumps(model.training, indent=2))
 
 
-def load_model(path: str | Path) -> Model:
-    """Load a native model directory written by :func:`save_model`."""
+def load_model(path: str | Path, *, validate: bool = False) -> Model:
+    """Load a native model directory written by :func:`save_model`.
+
+    The on-disk format is detected per table, so parquet, TSV and CSV directories all load, and
+    text-format tables are cast back to the schema's dtypes. ``training.json`` is read when
+    present; a model written before training logs existed simply has ``training is None``.
+
+    Args:
+        path: The model directory.
+        validate: Also run :meth:`~vdjtools.model.model.Model.validate`. Off by default so a
+            deliberately-broken model can still be loaded for
+            :func:`~vdjtools.model.check.check_model` to diagnose.
+
+    Returns:
+        The loaded :class:`Model`.
+    """
     src = Path(path)
     manifest = Manifest.from_json((src / "manifest.json").read_text())
-    tables = {name: pl.read_parquet(src / f"{name}.parquet") for name in manifest.events}
+    tables = {}
+    for name, event in manifest.events.items():
+        df = _read_table(src, name)
+        want = table_columns(event)
+        tables[name] = df.select([pl.col(c).cast(dt) for c, dt in want.items()])
     genomic_names = ["genes_v", "genes_j"] + (["genes_d"] if manifest.chain_type == "VDJ" else [])
-    genomic = {name: pl.read_parquet(src / f"{name}.parquet") for name in genomic_names}
-    return Model(manifest=manifest, tables=tables, genomic=genomic)
+    genomic = {name: _read_table(src, name) for name in genomic_names}
+
+    training = None
+    training_path = src / "training.json"
+    if training_path.exists():
+        import json
+
+        training = json.loads(training_path.read_text())
+    model = Model(manifest=manifest, tables=tables, genomic=genomic, training=training)
+    return model.validate() if validate else model

@@ -229,6 +229,167 @@ def arda_full_germline(locus: str, organism: str = "human") -> dict[tuple[str, s
     return out
 
 
+# --- custom germline libraries ---------------------------------------------------------------
+
+#: Columns a germline frame must carry, and the defaults filled in for the optional ones.
+GERMLINE_REQUIRED = ("allele", "segment", "sequence")
+GERMLINE_OPTIONAL = {"gene": None, "functional": True, "cdr3_anchor": -1, "full_germline": ""}
+
+#: Column schema of the tidy issue frame shared by :func:`validate_germline` and ``check_model``.
+_ISSUE_SCHEMA = {"severity": pl.Utf8, "check": pl.Utf8, "event": pl.Utf8, "segment": pl.Utf8,
+                 "allele": pl.Utf8, "detail": pl.Utf8, "value": pl.Float64}
+
+
+def _issue(severity: str, check: str, detail: str, *, event=None, segment=None, allele=None,
+           value=None) -> dict:
+    """One row of the shared issue frame (same schema as :func:`vdjtools.model.check.check_model`)."""
+    return {"severity": severity, "check": check, "event": event, "segment": segment,
+            "allele": allele, "detail": detail, "value": value}
+
+
+def normalize_germline(germline: pl.DataFrame) -> pl.DataFrame:
+    """Fill a germline frame's optional columns with their defaults; returns a new frame.
+
+    ``gene`` defaults to ``allele.split("*")[0]``. See :data:`GERMLINE_OPTIONAL` for the rest.
+    """
+    df = germline
+    if "gene" not in df.columns:
+        df = df.with_columns(pl.col("allele").str.split("*").list.first().alias("gene"))
+    for col, default in GERMLINE_OPTIONAL.items():
+        if col not in df.columns:
+            df = df.with_columns(pl.lit(default).alias(col))
+    return df
+
+
+def validate_germline(germline: pl.DataFrame) -> pl.DataFrame:
+    """Audit a germline frame destined for :func:`vdjtools.model.io.from_germline`.
+
+    Catches the mistakes that otherwise produce a model that builds cleanly and scores wrongly —
+    above all a **misplaced CDR3 anchor**, which shifts every deletion profile by a constant and is
+    invisible downstream.
+
+    Args:
+        germline: A frame with at least ``allele, segment, sequence`` (see
+            :data:`GERMLINE_REQUIRED`); optional columns are described by :data:`GERMLINE_OPTIONAL`.
+            ``sequence`` is the **CDR3-region** germline (V: Cys104 codon → 3' end; J: 5' end →
+            through the [FW]118 codon), or the full germline for D.
+
+    Returns:
+        Tidy issue frame ``severity, check, event, segment, allele, detail, value``; empty when the
+        library is clean. ``severity == "error"`` means the frame cannot build a model.
+    """
+    rows: list[dict] = []
+    missing = [c for c in GERMLINE_REQUIRED if c not in germline.columns]
+    if missing:
+        rows.append(_issue("error", "germline_columns",
+                           f"missing required column(s): {', '.join(missing)}"))
+        return pl.DataFrame(rows, schema=_ISSUE_SCHEMA)
+
+    df = normalize_germline(germline)
+    bad_seg = sorted(set(df["segment"].to_list()) - {"V", "D", "J"})
+    if bad_seg:
+        rows.append(_issue("error", "germline_segment",
+                           f"segment must be V, D or J; got {bad_seg}"))
+    counts = {s: df.filter(pl.col("segment") == s).height for s in ("V", "D", "J")}
+    for seg in ("V", "J"):
+        if not counts[seg]:
+            rows.append(_issue("error", "germline_segment_missing",
+                               f"no {seg} alleles — a model needs at least one", segment=seg))
+
+    dup = (df.group_by("allele").len().filter(pl.col("len") > 1))
+    for r in dup.iter_rows(named=True):
+        rows.append(_issue("error", "germline_duplicate_allele",
+                           f"allele {r['allele']!r} appears {r['len']} times",
+                           allele=r["allele"], value=float(r["len"])))
+
+    for r in df.iter_rows(named=True):
+        allele, seg, seq = r["allele"], r["segment"], r["sequence"] or ""
+        if not allele:
+            rows.append(_issue("error", "germline_empty_allele", "empty allele name", segment=seg))
+            continue
+        if "*" not in allele:
+            # The model is keyed by ALLELE and `call_alleles`/`native._gene_idx` split on "*".
+            # A gene-level name here is the documented "2.38x too high" trap, surfaced at build time.
+            rows.append(_issue("warn", "germline_gene_level_name",
+                               f"{allele!r} has no '*NN' allele suffix; the model is allele-keyed",
+                               segment=seg, allele=allele))
+        if not seq:
+            rows.append(_issue("error", "germline_empty_sequence",
+                               f"{allele!r} has an empty germline sequence", segment=seg, allele=allele))
+            continue
+        if set(seq) - set("ACGT"):
+            # Dropped rather than fatal: IUPAC-ambiguous germline cannot be encoded by the native
+            # DP, and a handful of IMGT alleles carry one. Reported instead of silently vanishing.
+            rows.append(_issue("warn", "germline_ambiguous",
+                               f"{allele!r} has non-ACGT bases; it will be dropped from the model",
+                               segment=seg, allele=allele))
+            continue
+        if seg == "V" and translate(seq[:3]) != "C":
+            rows.append(_issue("warn", "germline_anchor_frame",
+                               f"{allele!r} does not start with a Cys codon ({seq[:3]!r} -> "
+                               f"{translate(seq[:3])!r}); the CDR3 anchor looks misplaced",
+                               segment=seg, allele=allele))
+        if seg == "J" and len(seq) >= 3 and translate(seq[-3:]) not in ("F", "W"):
+            rows.append(_issue("warn", "germline_anchor_frame",
+                               f"{allele!r} does not end with a Phe/Trp codon ({seq[-3:]!r} -> "
+                               f"{translate(seq[-3:])!r}); the CDR3 anchor looks misplaced",
+                               segment=seg, allele=allele))
+    return pl.DataFrame(rows, schema=_ISSUE_SCHEMA)
+
+
+def read_germline_fasta(v, j, d=None, *, anchors=None) -> pl.DataFrame:
+    """Build a germline frame from your own FASTA files — the entry point for a custom library.
+
+    The segment comes from **which argument a file was passed as**, so no header convention is
+    assumed: a header is either ``>ALLELE`` or ``>ANYTHING|ALLELE`` (arda's D convention), and
+    everything after the second ``|`` is ignored.
+
+    Args:
+        v: FASTA path for the V alleles.
+        j: FASTA path for the J alleles.
+        d: Optional FASTA path for the D alleles. Supplying it makes the model ``VDJ``; omitting
+            it makes it ``VJ``.
+        anchors: Optional CDR3-anchor CSV in OLGA's ``*_gene_CDR3_anchors.csv`` format
+            (``gene,anchor_index,function``). When given, the FASTAs are taken to hold
+            **full-length** germline and are sliced to the CDR3 region (``full[anchor:]`` for V,
+            ``full[:anchor + 3]`` for J). When omitted, the V/J sequences are taken to be
+            CDR3-region germline already — :func:`validate_germline` flags it if they are not.
+
+    Returns:
+        A germline frame in :func:`load_germline`'s schema, ready for
+        :func:`vdjtools.model.io.from_germline`.
+    """
+    from pathlib import Path
+
+    from arda.refbuild.imgt import read_fasta  # base dep; delegate rather than parse FASTA here
+
+    from .io import _read_anchors
+
+    anchor_map = _read_anchors(Path(anchors)) if anchors else {}
+    rows = []
+    for path, segment in ((v, "V"), (j, "J"), (d, "D")):
+        if path is None:
+            continue
+        for header, seq in read_fasta(Path(path)):
+            parts = header.split("|")
+            allele = (parts[1] if len(parts) > 1 else parts[0]).strip()
+            seq = seq.strip().upper()
+            anchor, functionality = anchor_map.get(allele, (-1, "F"))
+            full = ""
+            if segment in ("V", "J") and anchor >= 0:
+                full, seq = seq, (seq[anchor:] if segment == "V" else seq[:anchor + 3])
+            rows.append({
+                "allele": allele, "gene": allele.split("*")[0], "segment": segment,
+                "sequence": seq, "cdr3_anchor": anchor, "full_germline": full,
+                "functionality": functionality,
+                "functional": segment == "D" or functionality == "F",
+                "status": "ok",
+            })
+    if not rows:
+        raise ValueError("no FASTA records read — check the paths and that the files are not empty")
+    return pl.DataFrame(rows)
+
+
 def reconcile_olga(model) -> pl.DataFrame:
     """Catalog how an OLGA-loaded model's germline relates to arda's (the shared-frame audit).
 

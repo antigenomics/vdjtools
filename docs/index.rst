@@ -106,4 +106,5 @@ Capabilities (see the :doc:`API reference <api>` and the project ROADMAP):
 
    self
    usage
+   model
    api

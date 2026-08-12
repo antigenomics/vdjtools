@@ -138,6 +138,17 @@ vdjtools generate -m TRB -n 1000 -o gen.tsv    # sample sequences   (cf. olga-ge
 vdjtools pgen seqs.tsv -m TRB -o pgen.tsv      # Pgen per CDR3       (cf. olga-compute_pgen)
 vdjtools pgen seqs.tsv -m TRB --mismatches 1   # + the Hamming-1 ball; --v-col/--j-col to condition
 
+# model workshop — a model is a directory, or LOCUS[:source[:organism]]
+vdjtools model check TRB:learned                     # audit vs its germline; exits 1 on an error
+vdjtools model template --locus TRB -o tmpl/         # scaffold from arda, or your own --germline-v/-j
+vdjtools model learn clones.tsv -t tmpl/ -o fitted/  # EM on your sequences (--init template = fine-tune)
+vdjtools model log fitted/                           # log-likelihood per iteration
+vdjtools model diversity TRB:olga                    # entropy + total diversity estimate
+vdjtools model compare TRB:olga TRB:learned --by gene --dot diff.pdf
+vdjtools model loglik seqs.tsv TRB:learned           # log-likelihood, free parameters, AIC, BIC
+vdjtools model extend fitted/ --locus TRB -o bigger/ # add a larger allele library
+vdjtools model export TRB:olga --long -o marginals.tsv
+
 # data — convert any format to the canonical table (TSV, or Parquet by extension), preprocess
 vdjtools convert mixcr.txt.gz -o clones.parquet   # MiXcr/immunoSEQ/AIRR/… → canonical Parquet
 vdjtools downsample clones.parquet 100000 -o ds.tsv
@@ -264,6 +275,16 @@ suites (`RUN_BENCHMARK=1`).
   native (pybind11) core. Supersedes OLGA and IGoR: arda-driven scenario enumeration, polars marginal
   tables, read-parallelised EM, and **tandem-D (D-D)** support. Concordant with OLGA across all 7 loci;
   precomputed OLGA + real-data-learned models bundled ([`load_bundled`](python/vdjtools/model/bundled.py)).
+- **Model workshop** ([user guide](https://docs.isalgo.dev/vdjtools/model.html)) — build a model on
+  **your own V(D)J germline library** (`from_germline`, FASTA + anchors) and fit it to **your own
+  sequences**; export and re-import every marginal as tables; **check** a model against its germline
+  (`check_model` — functional genes stuck at P=0, unreachable deletion mass, incomplete conditionals);
+  read the **EM training log** and per-iteration likelihood; **compare two models** (per-event
+  Jensen-Shannon / total variation, gene usage, a bnlearn-style comparison graph) and their **Pgen
+  distributions**; compute **log-likelihood, AIC and BIC** of a clonotype set under a model;
+  **fine-tune** it, **extend** it with a larger allele library, and **re-weight V/J usage** for
+  protocol bias. Plus information content per recombination event and a **total diversity estimate**
+  (human TRB: ~52 bits per rearrangement, ~45 bits per sequence, ~3·10¹³ effective sequences).
 - **Stats** — diversity (Chao1/Shannon/Simpson/…), spectratype, V/J/VJ usage.
 - **Features** — CDR physicochemical profiles, k-mer / V+k-mer summaries.
 - **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree), similarity-aware overlap, clustering.
