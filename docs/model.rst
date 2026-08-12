@@ -75,6 +75,33 @@ Fine-tuning is the same call with a warm start:
 
    tuned, report = infer_frame(model, new_clones, init="template", max_iter=5)
 
+Watching, and surviving, a long fit
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+EM on a D-bearing locus runs for a long time — IGH enumerates roughly 1,225 D pairs per read
+against TRB's 9 — and the training log only becomes readable once the fit *returns*, so a slow run
+and a stuck one look identical. Two things fix that:
+
+.. code-block:: python
+
+   from vdjtools.model.infer import infer_native, print_progress, resume
+
+   model, rep = infer_native(template, seqs, progress=print_progress(), checkpoint="ckpt/IGH")
+   # ...interrupted...
+   model, rep = resume("ckpt/IGH", seqs, max_iter=10)
+
+``progress`` reports the log-likelihood and its relative change after every iteration — the exact
+quantity compared against ``tol``, so you can watch it approach. ``checkpoint`` saves the model
+after each iteration (swapped into place, so a kill mid-write leaves the previous checkpoint
+loadable), and :func:`~vdjtools.model.infer.resume` picks it up.
+
+Resuming is **exact**: three iterations plus a resumed four reach the same log-likelihood, and the
+same tables, as an uninterrupted seven. The checkpoint carries its training log and the resumed run
+appends to it, so ``training_frame`` spans every attempt.
+
+From the CLI: ``vdjtools model learn ... -v --checkpoint DIR``, then
+``vdjtools model learn ... --resume DIR``.
+
 Each fit appends a run to ``model.training["runs"]``, which
 :func:`~vdjtools.model.io.save_model` writes beside the model as ``training.json``. Models that were
 never fitted here — every bundled one — simply have ``training is None``.

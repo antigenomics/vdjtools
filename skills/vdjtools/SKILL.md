@@ -61,7 +61,11 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
 - **Infer (EM)**: `vdjtools.model.infer.infer` / `infer_native(template, seqs, masks=, dd_allowed=,
   nd_prior=, single_d=, init="align"|"uniform"|"template")`; **`infer_frame(template_or_locus,
   clones_df)`** takes a clonotype frame and builds the V/J masks for you. `init="template"` is the
-  warm start = fine-tuning. **Training log**: every fit appends to `model.training["runs"]`, saved
+  warm start = fine-tuning. **Long fits**: `progress=print_progress()` reports per-iteration loglik
+  + rel_change; `checkpoint=DIR`/`checkpoint_every=N` saves each iteration and `resume(DIR, seqs)`
+  continues (exact — a resumed run matches an uninterrupted one, tables and all). CLI:
+  `model learn -v --checkpoint DIR --resume DIR`. **Training log**: every fit appends to
+  `model.training["runs"]`, saved
   as a `training.json` sidecar; read it with **`training_frame(model)`** (`run iter loglik
   n_scoreable rel_change`). Bundled models have `training is None`.
 - **Extend the allele library**: **`extend_alleles(model, germline_df, weight=1.0)`** — seeds new

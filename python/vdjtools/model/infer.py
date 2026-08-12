@@ -93,6 +93,60 @@ def _record(report: InferenceReport, model: Model, template: Model, *, started: 
                  training={"runs": runs})
 
 
+def _write_checkpoint(path, model: Model, template: Model, report: InferenceReport,
+                      meta: dict) -> None:
+    """Save the model as it stands, with the training log up to this iteration.
+
+    Written atomically-ish (to a sibling directory, then swapped) so a job killed mid-write leaves
+    the previous checkpoint intact rather than a half-written model.
+    """
+    import shutil
+    from pathlib import Path
+
+    from .io import save_model
+
+    path = Path(path)
+    snapshot = _record(report, model, template, **meta)
+    tmp = path.with_name(path.name + ".partial")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    save_model(snapshot, tmp)
+    if path.exists():
+        shutil.rmtree(path)
+    tmp.rename(path)
+
+
+def resume(path, sequences, **kw):
+    """Continue EM from a checkpoint written by ``infer_native(checkpoint=...)``.
+
+    A warm start from the saved marginals, so the fit picks up where it stopped rather than
+    realigning from scratch. The checkpoint carries its own training log and this run **appends**
+    to it, so the full history survives across as many interruptions as it takes — which is what
+    makes a multi-hour fit on a time-limited queue practical.
+
+    Args:
+        path: The checkpoint directory (or an already-loaded :class:`Model`).
+        sequences: The same sequences the interrupted run was fitting.
+        **kw: Passed to :func:`infer_native`. ``init`` is forced to ``"template"``, and
+            ``checkpoint`` defaults to ``path`` so the continued run keeps saving to the same
+            place — pass ``checkpoint=None`` to stop checkpointing.
+
+    Returns:
+        ``(model, report)`` — ``report`` covers this run only; ``training_frame(model)`` shows
+        every run.
+
+    Example:
+        >>> model, rep = resume("ckpt/IGH", seqs, max_iter=10)
+    """
+    from .io import load_model
+
+    base = path if isinstance(path, Model) else load_model(path)
+    if not isinstance(path, Model):
+        kw.setdefault("checkpoint", path)
+    kw["init"] = "template"
+    return infer_native(base, sequences, **kw)
+
+
 def print_progress(stream=None, prefix: str = ""):
     """A ready-made ``progress=`` callback that reports each EM iteration as it happens.
 
@@ -512,6 +566,8 @@ def infer(
     dd_allowed: list | None = None,
     nd_prior: float = 0.0,
     progress=None,
+    checkpoint=None,
+    checkpoint_every: int = 1,
 ) -> tuple[Model, InferenceReport]:
     """Re-estimate a model's marginals from nucleotide CDR3s by EM.
 
@@ -540,6 +596,10 @@ def infer(
             regularizing ``P(n_D=2)`` toward 0. Both anchors combine.
         progress: Optional ``callable(iteration, loglik, rel_change, n_scoreable)`` invoked after
             every iteration — use :func:`print_progress` to watch a long fit converge live.
+        checkpoint: Directory to save the model into after each iteration, so a long fit survives
+            being interrupted. Continue it with :func:`resume`. The checkpoint carries the training
+            log so far, and the resumed run appends to it.
+        checkpoint_every: Write a checkpoint every N iterations (default every one).
 
     Returns:
         ``(fitted_model, report)``. For a tandem-D template the E-step enumerates ``n_D=2``
@@ -559,6 +619,8 @@ def infer(
         tables = _uniform_init(template)
     model = Model(manifest=template.manifest, tables=tables, genomic=template.genomic)
     report = InferenceReport()
+    meta = dict(started=started, max_iter=max_iter, tol=tol, init=init, native=False,
+                n_sequences=len(upper))
     fit = _fit_events(template.manifest)
     seq_masks = masks if masks is not None else [None] * len(upper)
     dd_gate = dd_allowed if dd_allowed is not None else [True] * len(upper)
@@ -586,12 +648,13 @@ def infer(
         report.gene_tv.append(rel)
         if progress is not None:
             progress(report.n_iter, report.loglik[-1], rel, report.n_scoreable[-1])
+        if checkpoint is not None and report.n_iter % checkpoint_every == 0:
+            _write_checkpoint(checkpoint, model, template, report, meta)
         if it > 0 and rel < tol:
             report.converged = True
             break
 
-    model = _record(report, model, template, started=started, max_iter=max_iter, tol=tol,
-                    init=init, native=False, n_sequences=len(upper))
+    model = _record(report, model, template, **meta)
     return model, report
 
 
@@ -1149,6 +1212,8 @@ def infer_native(
     nd_prior: float = 0.0,
     gene_prior: float = 0.0,
     progress=None,
+    checkpoint=None,
+    checkpoint_every: int = 1,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
@@ -1197,6 +1262,8 @@ def infer_native(
         vmasks = jmasks = dmasks = []
 
     report = InferenceReport()
+    meta = dict(started=started, max_iter=max_iter, tol=tol, init=init, native=True,
+                n_sequences=len(upper))
     for it in range(max_iter):
         pm, _, _ = pack(model)
         counts = make_counts(pm)
@@ -1219,6 +1286,8 @@ def infer_native(
         report.gene_tv.append(rel)
         if progress is not None:
             progress(report.n_iter, report.loglik[-1], rel, report.n_scoreable[-1])
+        if checkpoint is not None and report.n_iter % checkpoint_every == 0:
+            _write_checkpoint(checkpoint, model, template, report, meta)
         if it > 0 and rel < tol:
             report.converged = True
             break
@@ -1229,6 +1298,5 @@ def infer_native(
     # mode (``gene_prior > 0``), i.e. "keep every real gene reachable".
     if gene_prior > 0:
         model = augment_from_oracle(model, template)
-    model = _record(report, model, template, started=started, max_iter=max_iter, tol=tol,
-                    init=init, native=True, n_sequences=len(upper))
+    model = _record(report, model, template, **meta)
     return model, report

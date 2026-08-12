@@ -375,3 +375,62 @@ def test_print_progress_writes_readable_lines(toy_model):
     assert len(lines) == 2
     assert lines[0].startswith("[TOY] iter  1") and "rel      inf" in lines[0]
     assert "loglik" in lines[1] and "n=200" in lines[1]
+
+
+# --- checkpoint / resume ------------------------------------------------------------------------
+
+def test_checkpoint_resume_matches_an_uninterrupted_run(tmp_path, toy_model):
+    """Resuming must be exact, not approximate: 3 + 4 iterations == one run of 7."""
+    from vdjtools.model.infer import resume
+
+    seqs = generate(toy_model, 400, seed=10)["junction_nt"].to_list()
+    ckpt = tmp_path / "ckpt"
+    _, first = infer_native(toy_model, seqs, max_iter=3, tol=0.0, checkpoint=ckpt)
+    assert first.n_iter == 3 and (ckpt / "manifest.json").exists()
+
+    continued, second = resume(ckpt, seqs, max_iter=4, tol=0.0)
+    straight, _ = infer_native(toy_model, seqs, max_iter=7, tol=0.0)
+
+    assert second.n_iter == 4
+    assert continued.training["runs"][-1]["loglik"][-1] == pytest.approx(
+        straight.training["runs"][-1]["loglik"][-1])
+    for name, table in straight.tables.items():
+        assert continued.tables[name].equals(table), name
+
+
+def test_checkpoint_carries_the_partial_training_log(tmp_path, toy_model):
+    seqs = generate(toy_model, 200, seed=11)["junction_nt"].to_list()
+    ckpt = tmp_path / "ckpt"
+    infer_native(toy_model, seqs, max_iter=3, tol=0.0, checkpoint=ckpt)
+    saved = load_model(ckpt)
+    assert training_frame(saved).height == 3
+
+
+def test_resume_appends_a_run_to_the_log(tmp_path, toy_model):
+    from vdjtools.model.infer import resume
+
+    seqs = generate(toy_model, 200, seed=12)["junction_nt"].to_list()
+    ckpt = tmp_path / "ckpt"
+    infer_native(toy_model, seqs, max_iter=2, tol=0.0, checkpoint=ckpt)
+    continued, _ = resume(ckpt, seqs, max_iter=2, tol=0.0)
+    log = training_frame(continued)
+    assert sorted(set(log["run"])) == [0, 1]
+    assert log.height == 4
+    # and it keeps checkpointing to the same place by default
+    assert training_frame(load_model(ckpt)).height == 4
+
+
+def test_checkpoint_every_n(tmp_path, toy_model):
+    seqs = generate(toy_model, 200, seed=13)["junction_nt"].to_list()
+    ckpt = tmp_path / "ckpt"
+    infer_native(toy_model, seqs, max_iter=5, tol=0.0, checkpoint=ckpt, checkpoint_every=2)
+    assert training_frame(load_model(ckpt)).height == 4      # written after iterations 2 and 4
+
+
+def test_interrupted_checkpoint_is_not_left_half_written(tmp_path, toy_model):
+    """A checkpoint is swapped into place, so a kill mid-write keeps the previous one loadable."""
+    seqs = generate(toy_model, 200, seed=14)["junction_nt"].to_list()
+    ckpt = tmp_path / "ckpt"
+    infer_native(toy_model, seqs, max_iter=2, tol=0.0, checkpoint=ckpt)
+    assert not (tmp_path / "ckpt.partial").exists()
+    load_model(ckpt, validate=True)

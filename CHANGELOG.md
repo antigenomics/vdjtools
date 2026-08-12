@@ -61,6 +61,19 @@ scoreable and extendable. See the new [user guide](https://docs.isalgo.dev/vdjto
 - **Table export/import**: `marginals_frame` / `set_marginals`, and `save_model(..., fmt="tsv")`
   with format auto-detection on load, so a hand-edited TSV directory is a first-class model input.
 
+- **Live EM progress, checkpointing and resume.** `infer`/`infer_native` take
+  `progress=callable(iter, loglik, rel_change, n_scoreable)` — `infer.print_progress()` is a
+  ready-made one — so a long fit is visibly converging rather than merely running; the relative
+  change it reports is the exact quantity compared against `tol`. They also take
+  `checkpoint=DIR`/`checkpoint_every=N`, saving the model after each iteration (swapped into place,
+  so a kill mid-write leaves the previous checkpoint loadable), and `infer.resume(DIR, seqs)`
+  continues from one. **Resuming is exact** — 3 iterations plus a resumed 4 give the same
+  log-likelihood *and* the same tables as an uninterrupted 7 — and the training log spans every
+  attempt. Exposed as `vdjtools model learn -v --checkpoint DIR --resume DIR`, and
+  `vdjtools model build -v` additionally stops swallowing arda's mapping output.
+  This matters because IGH's EM enumerates ~1,225 D pairs per read against TRB's 9: 14 minutes per
+  iteration on a 112-core node, and more than 110 minutes for a single iteration on a laptop.
+
 ### Changed
 
 - **`pgen_nt` now releases the GIL**, the one Pgen binding that still held it after the Phase-13

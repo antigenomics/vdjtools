@@ -613,6 +613,12 @@ def model_learn(
     no_calls: bool = typer.Option(False, "--no-calls", help="Ignore V/J calls (much slower)."),
     verbose: bool = typer.Option(False, "--verbose", "-v",
                                  help="Report each EM iteration as it happens (to stderr)."),
+    checkpoint: Optional[Path] = typer.Option(
+        None, "--checkpoint", help="Save the model after each iteration, so a long fit survives "
+                                   "being interrupted (resume with --resume)."),
+    checkpoint_every: int = typer.Option(1, help="Checkpoint every N iterations."),
+    resume_from: Optional[Path] = typer.Option(
+        None, "--resume", help="Continue a fit from a checkpoint instead of starting over."),
     out: Optional[Path] = _MODEL_OUT,
 ) -> None:
     """Fit a model's marginals from your own sequences by EM, writing the training log alongside.
@@ -621,16 +627,27 @@ def model_learn(
     fine-tune an existing model on a new sample rather than fitting from scratch. ``-v`` prints the
     log-likelihood and its relative change per iteration, so a long fit is visibly converging
     rather than merely running.
+
+    For a fit that will not finish in one sitting, ``--checkpoint DIR`` saves the model after every
+    iteration and ``--resume DIR`` picks it back up — resuming reaches the same log-likelihood as an
+    uninterrupted run, and the training log spans every attempt.
     """
     from vdjtools.io.batch import read as _read
     from vdjtools.model.infer import infer_frame, print_progress, training_frame
 
     if out is None:
         _err("give an output model directory with -o")
-    if template is None and locus is None:
-        _err("give a template with --template, or a locus with --locus")
-    base = _model_arg(template) if template else locus
-    if template is None:
+    if resume_from is not None:
+        base = _model_arg(str(resume_from))
+        init = "template"
+        if checkpoint is None:
+            checkpoint = resume_from
+        _info(f"resuming from {resume_from}")
+    elif template is None and locus is None:
+        _err("give a template with --template, a locus with --locus, or --resume a checkpoint")
+    elif template is not None:
+        base = _model_arg(template)
+    else:
         from vdjtools.model.io import from_arda
 
         base = from_arda(locus, organism)
@@ -643,7 +660,8 @@ def model_learn(
         m, rep = infer_frame(base, clones, seq_col=column, use_calls=not no_calls,
                              max_iter=max_iter, tol=tol, init=init,
                              gene_prior=gene_prior, nd_prior=nd_prior, single_d=single_d,
-                             progress=print_progress() if verbose else None)
+                             progress=print_progress() if verbose else None,
+                             checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     except (ValueError, KeyError) as e:
         _err(str(e))
     m.save(out)

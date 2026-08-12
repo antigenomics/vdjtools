@@ -307,7 +307,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
                 work_dir: str | Path = "/tmp/vdjtools_build", cap: int | None = None,
                 iters: int = 15, tol: float = 1e-4, single_d: bool = False,
                 nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0,
-                ambiguous: str | None = "A", verbose: bool = False):
+                ambiguous: str | None = "A", verbose: bool = False,
+                checkpoint=None, checkpoint_every: int = 1):
     """Fetch, annotate and EM-fit a model for one chain — the whole corpus pipeline, end to end.
 
     Args:
@@ -366,7 +367,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
                               single_d=single_d, dd_allowed=dd_allowed, nd_prior=nd_prior,
                               gene_prior=gene_prior,
-                              progress=print_progress(prefix=f"[{chain}] ") if verbose else None)
+                              progress=print_progress(prefix=f"[{chain}] ") if verbose else None,
+                              checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     nd = (dict(zip(model.tables["n_d"]["n_d"].to_list(), model.tables["n_d"]["p"].to_list()))
           if "n_d" in model.tables else {})
     stats = {
