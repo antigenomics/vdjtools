@@ -14,13 +14,25 @@ from ..io.schema import JUNCTION_AA, COUNT, J_CALL, V_CALL
 #: Default exact match key (legacy "Strict" overlap: CDR3 aa + V + J).
 DEFAULT_KEY = (JUNCTION_AA, V_CALL, J_CALL)
 
+#: CDR3s outside this alphabet (``*``, ``_``, ``X``) are not scoreable by the similarity kernels.
+STANDARD_AA = r"^[ACDEFGHIKLMNPQRSTVWY]+$"
 
-def _aggregate(df: pl.DataFrame, key: list[str]) -> pl.DataFrame:
-    """Collapse to unique clonotype keys, summing counts and recomputing frequency."""
+
+def _aggregate(df: pl.DataFrame, key: list[str], *,
+               index: bool = False, standard_aa: bool = False) -> pl.DataFrame:
+    """Collapse to unique clonotype keys, summing counts and recomputing frequency.
+
+    ``standard_aa`` first drops CDR3s with non-standard amino acids; ``index`` adds a
+    0-based ``_idx`` row index (the positional key vdjmatch/seqtree return).
+    """
     agg = df.group_by(key, maintain_order=True).agg(pl.col(COUNT).sum().alias("_count"))
-    total = agg["_count"].sum()
-    total = total if total else 1
-    return agg.with_columns((pl.col("_count") / total).alias("_freq"))
+    if standard_aa:
+        agg = agg.filter(pl.col(JUNCTION_AA).str.contains(STANDARD_AA))
+    total = agg["_count"].sum() or 1
+    out = [(pl.col("_count") / total).alias("_freq")]
+    if index:
+        out.append(pl.int_range(pl.len(), dtype=pl.Int64).alias("_idx"))
+    return agg.with_columns(out)
 
 
 def _overlap_from_agg(a_agg: pl.DataFrame, b_agg: pl.DataFrame,

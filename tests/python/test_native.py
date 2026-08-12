@@ -138,7 +138,6 @@ def test_native_estep_matches_python():
     pyc = {k: defaultdict(float) for k in m.tables if k != "n_d"}
     for s in seqs:
         _estep_seq(prep, s.upper(), pyc)
-    nJ = len(ji)
     nat = np.array(counts.v_choice)
     py = np.zeros(len(nat))
     for (v,), w in pyc["v_choice"].items():

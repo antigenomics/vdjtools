@@ -21,7 +21,6 @@ sample before scoring it.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
 
 import polars as pl
 
@@ -60,7 +59,7 @@ def _vote_counts(sample, call_col: str) -> dict[str, float]:
     g = (lf.filter(pl.col(call_col).is_not_null())
            .select(genes.alias("g"))
            .with_columns(w=pl.lit(1.0) / pl.col("g").list.len())
-           .explode("g").group_by("g").agg(pl.col("w").sum())
+           .explode("g", empty_as_null=False).group_by("g").agg(pl.col("w").sum())
            .collect())
     return {r["g"]: r["w"] for r in g.iter_rows(named=True)}
 

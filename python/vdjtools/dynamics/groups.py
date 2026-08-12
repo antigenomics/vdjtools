@@ -73,13 +73,6 @@ def _demo() -> None:
 
     from ..io.schema import COUNT
 
-    try:
-        from ..biomarker.metaclonotype import _require_vdjmatch
-        _require_vdjmatch()
-    except ImportError:
-        print("groups._demo skipped: vdjmatch not importable")
-        return
-
     rng = np.random.default_rng(0)
     AA = np.array(list("ACDEFGHIKLMNPQRSTVWY"))
     # A metaclonotype family: CASSLxPGATNEKLFF, one substitution apart at position x.

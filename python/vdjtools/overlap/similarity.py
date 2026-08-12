@@ -45,28 +45,11 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from ..io.schema import JUNCTION_AA, COUNT
-
-_SEQTREE_HINT = (
-    "seqtree is required for vdjtools.overlap.similarity; install the extra with "
-    "seqtree is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
-)
-
-#: Standard 20 amino acids; CDR3s with any other symbol (``*``, ``X``, digits) are dropped
-#: before indexing (seqtree's ``"aa"`` alphabet rejects them).
-_STANDARD_AA = r"^[ACDEFGHIKLMNPQRSTVWY]+$"
+from ..io.schema import JUNCTION_AA
+from .metrics import _aggregate as _agg
 
 #: Above this clonotype count the dense ``O(N²)`` path auto-switches to the sparse path.
 _DENSE_MAX_N = 1500
-
-
-def _require_seqtree():
-    """Import and return the ``seqtree`` module; raise a helpful error if missing."""
-    try:
-        import seqtree  # noqa: F401
-    except ImportError as exc:  # pragma: no cover - exercised only without seqtree
-        raise ImportError(_SEQTREE_HINT) from exc
-    return seqtree
 
 
 @dataclass
@@ -100,18 +83,11 @@ class SimilarityMatrices:
 
 
 def _aggregate(df: pl.DataFrame, key: list[str]) -> pl.DataFrame:
-    """Collapse to unique clonotype keys (summing counts), drop non-standard-AA CDR3s,
-    recompute within-sample frequency, and attach a 0-based row index."""
+    """:func:`vdjtools.overlap.metrics._aggregate` with the similarity-specific key check."""
     if JUNCTION_AA not in key:
         raise ValueError(f"key must contain {JUNCTION_AA!r} (the similarity match unit); "
                          f"got {tuple(key)!r}")
-    agg = df.group_by(key, maintain_order=True).agg(pl.col(COUNT).sum().alias("_count"))
-    agg = agg.filter(pl.col(JUNCTION_AA).str.contains(_STANDARD_AA))
-    total = agg["_count"].sum() or 1
-    return agg.with_columns(
-        (pl.col("_count") / total).alias("_freq"),
-        pl.int_range(pl.len(), dtype=pl.Int64).alias("_idx"),
-    )
+    return _agg(df, key, index=True, standard_aa=True)
 
 
 def _keys(agg: pl.DataFrame, key: list[str]) -> list[tuple]:
@@ -314,7 +290,8 @@ def similarity_matrix(a: pl.DataFrame, b: pl.DataFrame, *,
         return SimilarityMatrices(z_ab, z_aa, z_bb, keys_a, keys_b,
                                   freq_a, freq_b, kernel, None, use_sparse)
 
-    seqtree = _require_seqtree()
+    import seqtree
+
     sub_matrix = _resolve_matrix(seqtree, matrix, kernel)
     if tau is None:
         tau = float(sub_matrix.scale()) if sub_matrix is not None else 14.0

@@ -48,23 +48,8 @@ from scipy.stats import poisson
 from ..biomarker.stats import fdr_bh
 from ..io.schema import JUNCTION_AA, COUNT, J_CALL, LOCUS, V_CALL, add_locus
 
-_VDJMATCH_HINT = (
-    "vdjmatch is required for vdjtools.overlap.tcrnet; install the extra with "
-    "vdjmatch is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
-)
-
 _COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_control", "E",
          "p_enrichment", "q_value", "p_any", LOCUS]
-
-
-def _require_vdjmatch():
-    """Import the vdjmatch pieces used by :func:`tcrnet`; raise a helpful error if missing."""
-    try:
-        import vdjmatch.evalue as evalue  # noqa: F401
-        from vdjmatch.match.scope import search_params  # noqa: F401
-    except ImportError as exc:  # pragma: no cover - exercised only without vdjmatch
-        raise ImportError(_VDJMATCH_HINT) from exc
-    return evalue, search_params
 
 
 def _collapse(sample: pl.DataFrame) -> pl.DataFrame:
@@ -156,7 +141,9 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
         ValueError: If ``control`` and ``locus`` are ``None`` and no clonotype has a
             resolvable locus.
     """
-    evalue, search_params = _require_vdjmatch()
+    import vdjmatch.evalue as evalue
+    from vdjmatch.match.scope import search_params
+
     import seqtree
     params = search_params(scope)
 

@@ -22,7 +22,6 @@ import olga.load_model as olm
 
 from vdjtools.model import from_olga, native
 from vdjtools.model.generate import generate
-from vdjtools.model.pgen import pgen_aa, pgen_nt, prepare
 from vdjtools.model.reference import _CODON_TABLE
 
 # longer exists on disk, so this script could not run at all. NB pip olga has no TRG/TRD.
@@ -69,7 +68,6 @@ def run_locus(locus: str) -> dict:
     name, chain = LOCI[locus]
     sub = OLGA / name
     m = from_olga(sub, locus=locus)
-    prep = prepare(m)
     po = olga_pg(sub, chain)
     df = generate(m, N_NT, seed=1, productive_only=True)  # in-frame: OLGA's nt Pgen rejects out-of-frame
     rows = df.to_dicts()

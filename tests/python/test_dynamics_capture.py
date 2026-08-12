@@ -106,11 +106,6 @@ def test_capture_test_null_when_groups_equal():
 @pytest.fixture
 def _vdjmatch():
     pytest.importorskip("vdjmatch")
-    try:
-        from vdjtools.biomarker.metaclonotype import _require_vdjmatch
-        _require_vdjmatch()
-    except ImportError:
-        pytest.skip("vdjmatch not importable")
 
 
 def test_metaclonotypes_collapses_1mm_family(_vdjmatch):

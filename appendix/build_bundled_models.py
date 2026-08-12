@@ -28,7 +28,6 @@ import polars as pl
 from vdjtools.model import data, from_olga
 from vdjtools.model.infer import _gene_to_alleles, gene_masks, infer_native
 
-import olga as _olga
 # The OLGA models shipped in THIS repo, not pip olga's: pip ships only 5 human loci (no
 # TRG/TRD) plus mouse, while tests/python/fixtures/olga/default_models carries all 7 human loci.
 # The TRG/TRD marginals originate from mirpy's legacy-v2 branch (commit aeccd75) and are verified

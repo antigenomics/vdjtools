@@ -35,13 +35,6 @@ class InferenceReport:
     converged: bool = False
 
 
-def _tv(a: pl.DataFrame, b: pl.DataFrame, keycols: list[str]) -> float:
-    """Total-variation distance between two tables' ``p``, aligned by ``keycols``."""
-    da = {tuple(r[:-1]): r[-1] for r in a.select([*keycols, "p"]).iter_rows()}
-    db = {tuple(r[:-1]): r[-1] for r in b.select([*keycols, "p"]).iter_rows()}
-    return 0.5 * sum(abs(da.get(k, 0.0) - db.get(k, 0.0)) for k in set(da) | set(db))
-
-
 def _loglik_rel(loglik: list[float]) -> float:
     """Relative change in mean log-likelihood between the last two iterations (``inf`` before iter 1).
 

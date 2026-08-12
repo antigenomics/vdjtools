@@ -19,32 +19,8 @@ from __future__ import annotations
 import numpy as np
 import polars as pl
 
-from ..io.schema import JUNCTION_AA, COUNT
-
-_VDJMATCH_HINT = (
-    "vdjmatch is required for vdjtools.overlap.fuzzy; install the extra with "
-    "vdjmatch is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
-)
-
-
-def _require_vdjmatch():
-    """Import and return ``vdjmatch.cluster``; raise a helpful error if missing."""
-    try:
-        import vdjmatch.cluster as cluster  # noqa: F401
-    except ImportError as exc:  # pragma: no cover - exercised only without vdjmatch
-        raise ImportError(_VDJMATCH_HINT) from exc
-    return cluster
-
-
-def _aggregate(df: pl.DataFrame) -> pl.DataFrame:
-    """Collapse to unique ``junction_aa`` with summed count, within-sample frequency,
-    and a 0-based row index (the positional key vdjmatch returns)."""
-    agg = df.group_by(JUNCTION_AA, maintain_order=True).agg(pl.col(COUNT).sum().alias("_count"))
-    total = agg["_count"].sum() or 1
-    return agg.with_columns(
-        (pl.col("_count") / total).alias("_freq"),
-        pl.int_range(pl.len(), dtype=pl.Int64).alias("_idx"),
-    )
+from ..io.schema import JUNCTION_AA
+from .metrics import _aggregate
 
 
 def fuzzy_overlap(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
@@ -71,9 +47,10 @@ def fuzzy_overlap(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
     Raises:
         ImportError: If vdjmatch is not importable (it is a base dependency).
     """
-    cluster = _require_vdjmatch()
-    a_agg = _aggregate(a)
-    b_agg = _aggregate(b)
+    import vdjmatch.cluster as cluster
+
+    a_agg = _aggregate(a, [JUNCTION_AA], index=True)
+    b_agg = _aggregate(b, [JUNCTION_AA], index=True)
     pairs = cluster.overlap(a_agg[JUNCTION_AA].to_list(), b_agg[JUNCTION_AA].to_list(),
                             scope=scope, threads=threads)
 

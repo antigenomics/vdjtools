@@ -200,7 +200,8 @@ def test_immunoseq_count_falls_back_when_templates_zero(tmp_path):
 
 def test_read_vidjil_raises_on_out_of_range_sample(tmp_path):
     """An out-of-range sample_id must raise, not silently return sample 0's counts."""
-    import json, pytest
+    import json
+    import pytest
     from vdjtools.io.convert import read_vidjil
     doc = {"clones": [{"seg": {"5": "TRBV19*01", "3": "TRBJ2-7*01",
                                "junction": {"aa": "CASSF", "start": 1, "stop": 15}},
