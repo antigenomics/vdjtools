@@ -129,10 +129,17 @@ format-conversion fixtures live there — pull them over when a phase needs them
   `-p/--out-prefix` instead of `-o`, so the real invocation exited 2. It is `arda map` now, and the
   pin is `arda-mapper>=2.19.0`. Note a `--help` smoke test would NOT have caught it (typer
   short-circuits `--help` before argument parsing) — exercise the real argv.
-- **Findings from `check_model` on the shipped models, worth acting on**: `IGKV3-20*01` in
-  `learned/IGK` puts **25%** of its deletion mass on trims its germline cannot reach (so that
-  probability is lost from every Pgen through it); `olga/TRA`, `olga/IGH`, `olga/IGL` and
-  `learned/IGH` have smaller versions of the same. TRB (both sources) is clean. Root cause is a
-  deletion-bin grid shared across alleles of different lengths, so the fix belongs in the model
-  builder, not the checker.
+- **Unreachable deletion mass — diagnosed, and it was two separate things.**
+  1. *Ours, fixed*: `collapse_alleles` chose each gene's representative germline by **usage**, and
+     IMGT ships some truncated alleles — `IGKV3-20*02` is 11 nt against `*01`'s 30 and had the
+     higher learned usage, so the collapsed gene got an 11-nt germline (relabelled `*01`) and
+     stranded 25% of its own deletion distribution. Now: longest germline first, usage second, then
+     the conditionals are projected onto that germline's reachable support. `collapse=True` (the
+     default) is clean on every bundled model; `test_collapse.py` pins it.
+  2. *OLGA's, deliberately kept*: the **uncollapsed** `olga` models carry it because OLGA's own
+     `model_marginals.txt` does — verified against OLGA's raw arrays, same fractions to 4 dp
+     (`IGHV4-30-4*01` 100%, `IGKJ4*02` 80.9%, `TRAV20*03` 54.7%), and our Pgen matches olga-pip
+     exactly (ratio 1.000000) on every sequence OLGA will score. `IGHV4-30-4*01` has Pgen ≡ 0 in
+     OLGA too. **Do not "fix" this** — it would break the exact-OLGA-Pgen invariant. `check_model`
+     reports it as `warn` (not `error`) when `manifest.source` starts with `olga`.
 - `rescale.py:63` raises a Polars-2.0 `empty_as_null` DeprecationWarning — set it when convenient.

@@ -70,6 +70,10 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   usage** — alleles of a gene are alternatives, not extra genes. Seeds only; follow with
   `infer_native(..., init="template")`. `augment_from_oracle(learned, oracle)` fills gaps from
   another *model* instead.
+- **Collapse to gene level** (`load_bundled(..., collapse=True)`, the default): representative
+  germline = **longest CDR3-region germline first, usage second** (a truncated IMGT allele must
+  never define the gene's trim range — see IGKV3-20), then the deletion conditionals are projected
+  onto that germline's reachable support and renormalized. `collapse=False` for exact-OLGA fidelity.
 - **Check**: **`check_model(m, germline="auto"|"none"|df, raise_on=None)`** → tidy issue frame
   `severity check event segment allele detail value`. Catches unnormalized or out-of-range
   probabilities, alleles missing from the germline (or vice versa), functional genes stuck at P=0,

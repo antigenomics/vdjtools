@@ -86,3 +86,64 @@ def test_collapse_guards_unknown_allele_table():
     m.tables["bogus"] = pl.DataFrame({"v_allele": ["TRBV20-1*02"], "p": [1.0]})
     with pytest.raises(NotImplementedError, match="allele-keyed"):
         ca(m)
+
+
+# --- the collapsed model must be scoreable with the germline it kept ---------------------------
+
+@pytest.mark.parametrize("locus", LOCI)
+@pytest.mark.parametrize("source", ["olga", "learned"])
+def test_collapsed_deletions_fit_the_representative_germline(locus, source):
+    """No collapsed gene may carry deletion mass its own germline cannot reach.
+
+    Averaging a conditional over alleles of differing CDR3-region length can strand mass on trims
+    the representative does not support; the Pgen DP never visits those, so the probability would
+    vanish from every Pgen through that gene instead of being redistributed.
+    """
+    from vdjtools.model.check import max_reachable_trim
+
+    m = load_bundled(locus, source, collapse=True)
+    for name, event in m.manifest.events.items():
+        seg = name.split("_")[0]
+        frame = m.genomic.get(f"genes_{'d' if seg.startswith('d') else seg}")
+        acol = f"{seg}_allele"
+        if frame is None or acol not in m.tables[name].columns or "ndel" not in str(m.tables[name].columns):
+            continue
+        gcol = f"{'d' if seg.startswith('d') else seg}_allele"
+        limits = {r[gcol]: max_reachable_trim(name, event.kind, len(r["cut_segment"] or ""),
+                                              m.manifest.palindrome_max)
+                  for r in frame.iter_rows(named=True)}
+        if any(v is None for v in limits.values()):
+            continue
+        t = m.tables[name]
+        total = (pl.col("ndel") if "ndel" in t.columns else pl.col("ndel5") + pl.col("ndel3"))
+        over = t.with_columns(
+            _lim=pl.col(acol).replace_strict(limits, default=10**6, return_dtype=pl.Int64)
+        ).filter((pl.col("p") > 0) & (total > pl.col("_lim")))
+        assert over.is_empty(), f"{source}/{locus} {name}: unreachable mass on {over[acol].to_list()[:3]}"
+
+
+def test_representative_is_the_longest_germline_not_the_most_used():
+    """IGKV3-20*02 is 11 nt against *01's 30 and had the higher learned usage.
+
+    Picking by usage alone made the truncated allele the gene's germline (relabelled *01, which was
+    doubly misleading) and stranded 25% of the gene's own deletion distribution.
+    """
+    raw = load_bundled("IGK", "learned", collapse=False)
+    alleles = raw.genomic["genes_v"].filter(pl.col("gene") == "IGKV3-20")
+    lengths = {r["v_allele"]: len(r["cut_segment"]) for r in alleles.iter_rows(named=True)}
+    assert lengths["IGKV3-20*02"] < lengths["IGKV3-20*01"], "fixture assumption changed"
+
+    c = load_bundled("IGK", "learned", collapse=True)
+    rep = c.genomic["genes_v"].filter(pl.col("gene") == "IGKV3-20")
+    assert rep.height == 1
+    assert len(rep["cut_segment"][0]) == max(lengths.values())
+
+
+@pytest.mark.parametrize("locus", ["TRB", "IGK"])
+def test_collapse_still_preserves_gene_usage_exactly(locus):
+    """Projecting deletions onto the germline must not disturb the choice marginals."""
+    m = load_bundled(locus, "learned", collapse=False)
+    c = collapse_alleles(m)
+    before, after = _gene_mass(m, "v_choice"), _gene_mass(c, "v_choice")
+    for gene, p in before.items():
+        assert after[gene] == pytest.approx(p, abs=1e-12)

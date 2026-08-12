@@ -30,8 +30,30 @@ _ALLELE_GENOMIC = {"v_allele": "genes_v", "j_allele": "genes_j",
                    "d_allele": "genes_d", "d2_allele": "genes_d"}
 
 #: Deletion event -> the ``palindrome_max`` key(s) bounding its most-negative (palindromic) ndel.
-_DELETION_ENDS = {"v_3_del": ("v_3",), "j_5_del": ("j_5",),
-                  "d_del": ("d_5", "d_3"), "d2_del": ("d_5", "d_3")}
+DELETION_ENDS = {"v_3_del": ("v_3",), "j_5_del": ("j_5",),
+                 "d_del": ("d_5", "d_3"), "d2_del": ("d_5", "d_3")}
+_DELETION_ENDS = DELETION_ENDS   # back-compat alias
+
+
+def max_reachable_trim(event_name: str, kind, cut_len: int, palindrome_max: dict) -> int | None:
+    """Largest trim the Pgen DP can actually reach for a segment of ``cut_len`` nt.
+
+    The single definition of deletion reachability, shared by the checker, the collapse and the
+    allele extension so the three cannot drift apart. Taken from ``pgen._v_options`` /
+    ``pgen._d_middle`` rather than assumed: a trim consumes the **palindrome-extended**
+    ``cut_segment`` and ``ndel = len(cut) - contributed - max_palindrome``, so
+
+    - **V/J**: ``ndel <= cut_len - Σ palindrome_max - 1`` — the ``-1`` is the invariant that V and
+      J each contribute at least one nt to the CDR3;
+    - **D**: ``ndel5 + ndel3 <= cut_len - Σ palindrome_max`` — a D may legally be deleted away.
+
+    Returns ``None`` for an event that is not a deletion, or one whose ends are not declared.
+    """
+    ends = DELETION_ENDS.get(event_name)
+    if ends is None or any(e not in palindrome_max for e in ends):
+        return None
+    slack = 1 if getattr(kind, "value", kind) == "deletion" else 0
+    return cut_len - sum(palindrome_max[e] for e in ends) - slack
 
 _REQUIRED_EVENTS = {
     "VJ": {"v_choice", "j_choice", "v_3_del", "j_5_del", "vj_ins", "vj_dinucl"},
@@ -226,14 +248,13 @@ def _check_deletion(model: Model, name, event, df: pl.DataFrame, pal: dict) -> l
     if not cuts or parent_allele_col not in df.columns:
         return rows
 
-    ends = _DELETION_ENDS.get(name, ())
+    ends = DELETION_ENDS.get(name, ())
     missing_end = [e for e in ends if e not in pal]
     if missing_end:
         rows.append(_issue("error", "palindrome_max",
                            f"event {name!r} trims end(s) {missing_end} with no declared "
                            f"palindrome_max entry", event=name))
         return rows
-    pal_total = sum(pal[e] for e in ends)
 
     # Alleles with NO germline at all are reported once each by `unscoreable_gene_mass`; letting
     # them through here would bury a real over-long deletion under a hundred rows of one known cause.
@@ -243,9 +264,8 @@ def _check_deletion(model: Model, name, event, df: pl.DataFrame, pal: dict) -> l
         _total=total,
         _cut=pl.col(parent_allele_col).replace_strict(cuts, default=-1, return_dtype=pl.Int64),
     ).filter(pl.col("_cut") > 0)
-    # Largest reachable trim: V/J must leave >=1 nt, a D need not.
-    slack = 1 if event.kind is EventKind.DELETION else 0
-    used = used.with_columns(_max=pl.col("_cut") - pal_total - slack)
+    used = used.with_columns(_max=pl.col("_cut").map_elements(
+        lambda n: max_reachable_trim(name, event.kind, n, pal), return_dtype=pl.Int64))
 
     # Report the FRACTION of each allele's deletion mass that is unreachable, not one row per cell.
     # A shared deletion-bin grid across alleles of different lengths (OLGA's array layout, and the
@@ -259,13 +279,23 @@ def _check_deletion(model: Model, name, event, df: pl.DataFrame, pal: dict) -> l
         frac=pl.col("lost") / pl.col("tot")
     ).filter(pl.col("frac") > _LOST_INFO).sort("frac", descending=True)
 
+    # A faithful OLGA import INHERITS this from OLGA's own marginals -- verified against OLGA's raw
+    # arrays, which carry exactly the same fractions (IGHV4-30-4*01 100%, IGKJ4*02 80.9%), and our
+    # Pgen matches olga-pip to machine precision on every sequence OLGA will score. It is real (that
+    # gene's Pgen is 0 in OLGA too) but it cannot be corrected here without breaking the exact-Pgen
+    # invariant, so it is reported as a property of the source model, not as a defect of ours.
+    inherited = model.manifest.source.startswith("olga")
+    note = (" — inherited from the OLGA model this was imported from, which carries the same mass; "
+            "correcting it here would break exact-OLGA-Pgen fidelity" if inherited else "")
     for r in per_allele.head(10).iter_rows(named=True):
         frac = r["frac"]
         sev = ("error" if frac > _LOST_ERROR else "warn" if frac > _LOST_WARN else "info")
+        if inherited and sev == "error":
+            sev = "warn"
         rows.append(_issue(sev, "deletion_unreachable",
                            f"{r[parent_allele_col]}: {frac:.1%} of its deletion mass lands on "
                            f"trims longer than its germline allows, so that probability is lost "
-                           f"from every Pgen",
+                           f"from every Pgen{note}",
                            event=name, allele=r[parent_allele_col], value=float(frac)))
     if per_allele.height > 10:
         rows.append(_issue("info", "deletion_unreachable",

@@ -166,11 +166,27 @@ def test_infer_frame_needs_a_junction_column(toy_model):
         infer_frame(toy_model, pl.DataFrame({"nope": ["A"]}))
 
 
-def test_em_improves_the_log_likelihood(toy_model):
-    """Sanity on the training log itself: EM must not go backwards on its own objective."""
+def test_em_log_likelihood_is_monotone(toy_model):
+    """EM must never go backwards on its own objective — the property `rel_change` assumes.
+
+    The convergence test is a *relative log-likelihood improvement*, which is only a sound stopping
+    rule if the sequence is monotone; a dip would let it stop early on a spurious small change.
+    Checked step by step, not just first-vs-last.
+    """
     seqs = generate(toy_model, 400, seed=5)["junction_nt"].to_list()
-    _, report = infer_native(toy_model, seqs, max_iter=4, tol=0.0)
-    assert report.loglik[-1] >= report.loglik[0]
+    _, report = infer_native(toy_model, seqs, max_iter=6, tol=0.0)
+    assert len(report.loglik) == 6
+    for prev, cur in zip(report.loglik, report.loglik[1:]):
+        assert cur >= prev - 1e-12, f"log-likelihood decreased: {report.loglik}"
+
+
+def test_converged_flag_and_iteration_cap(toy_model):
+    """`converged` must mean "the tolerance was met", not "the cap was hit"."""
+    seqs = generate(toy_model, 400, seed=5)["junction_nt"].to_list()
+    _, loose = infer_native(toy_model, seqs, max_iter=20, tol=1e-2)
+    assert loose.converged and loose.n_iter < 20
+    _, capped = infer_native(toy_model, seqs, max_iter=2, tol=0.0)
+    assert not capped.converged and capped.n_iter == 2
 
 
 # --- extending the allele library ---------------------------------------------------------------

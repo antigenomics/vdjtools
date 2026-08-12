@@ -74,6 +74,22 @@ scoreable and extendable. See the new [user guide](https://docs.isalgo.dev/vdjto
 
 ### Fixed
 
+- **`collapse_alleles` could give a gene a germline it could not use — in the default path.**
+  `load_bundled(..., collapse=True)` picks one representative allele per gene and averages the
+  other alleles' conditionals onto it. The representative was chosen by usage alone, but IMGT ships
+  some alleles with a **truncated** CDR3-region germline: human `IGKV3-20*02` is 11 nt against
+  `*01`'s 30 and carried the higher learned usage, so it became the gene's germline — relabelled
+  `*01`, which was doubly misleading — and 25% of the gene's own averaged deletion distribution
+  landed on trims the 11-nt germline cannot reach. The Pgen DP never visits those, so that quarter
+  of the probability vanished from every Pgen through IGKV3-20 instead of being redistributed.
+  The representative is now chosen by **germline length first, usage second** (alleles of a gene are
+  near-identical through the CDR3 region, so a large length gap means an incomplete database entry),
+  and the collapsed deletion conditionals are **projected onto the representative's reachable
+  support and renormalized**. Every bundled model is now clean at `collapse=True`.
+- **A failed `arda` run reported nothing but an exit code.** `annotate_reads` passed
+  `capture_output=True` and let `CalledProcessError` propagate, so arda's own message was swallowed
+  — which is precisely how the CLI rename above stayed invisible. It now raises with arda's stderr
+  and the installed `arda-mapper` version.
 - **`annotate_reads` was calling an arda CLI that no longer exists.** It shelled out to
   `arda rnaseq map -o …`, but arda 2.19 turned `rnaseq` into the full map→assemble→correct preset
   with no stage positional and `-p/--out-prefix` in place of `-o`, so every real invocation exited

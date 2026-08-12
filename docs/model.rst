@@ -103,6 +103,14 @@ Unreachable deletion mass is reported as a **fraction per allele**, ranked, rath
 cell: a shared deletion-bin grid across alleles of different lengths always strands a little mass on
 the short ones, so what matters is how much.
 
+.. note::
+
+   On a model imported from OLGA this particular finding is **inherited**, and is reported at
+   ``warn`` rather than ``error``. OLGA's own marginals carry the same mass — ``IGHV4-30-4*01``
+   has ``Pgen`` identically zero in OLGA too — and vdjtools reproduces those arrays bit-faithfully
+   on purpose, so correcting it would break the exact-OLGA-Pgen invariant. The gene-collapsed
+   models (the default) are clean.
+
 From the command line, ``vdjtools model check`` exits 1 on any error-severity issue, which makes it
 usable as a build gate.
 
@@ -186,6 +194,94 @@ way, which is the case for any two compared through this function.
 
    A log-likelihood computed on the sequences a model was **trained** on is that model's own EM
    objective, which EM increases by construction. It validates nothing. Score a held-out set.
+
+
+.. _olga-caveats:
+
+Known quirks of the OLGA models
+-------------------------------
+
+The bundled ``olga`` model set is a **bit-faithful import** of OLGA's published models: vdjtools
+reproduces their marginals exactly, and native Pgen matches ``olga``'s own to machine precision
+across all seven loci. Faithful means faithful to the defects too. These are properties of the
+source models, verified against OLGA's raw ``model_marginals.txt`` with OLGA's own parser — not
+import bugs, and **not** things to "correct" here, because doing so would break the exact-Pgen
+invariant that makes the import checkable in the first place.
+
+Deletion mass on trims that cannot be reached
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+OLGA stores ``P(delV | V)`` on one deletion-bin grid per locus, sized for the longest allele. An
+allele whose CDR3-region germline is shorter than that grid can carry probability on trims longer
+than it has nucleotides. The Pgen DP never visits those, so the probability is not redistributed —
+it is simply absent from every Pgen through that allele.
+
+Measured on the shipped models (fraction of each allele's own deletion distribution that is
+unreachable; identical in OLGA's arrays and in ours):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 15 60
+
+   * - allele
+     - unreachable
+     - consequence
+   * - ``IGHV4-30-4*01``
+     - 100 %
+     - ``Pgen`` is **identically zero** — in OLGA too
+   * - ``IGKJ4*02``
+     - 80.9 %
+     - Pgen through this J is roughly 5x too low
+   * - ``TRAV20*03``
+     - 54.7 %
+     - Pgen through this V is roughly 2x too low
+   * - ``IGHV3-30-3*01``
+     - 52.0 %
+     -
+   * - ``TRAV36/DV7*03``
+     - 14.0 %
+     -
+   * - ``IGLJ3*01``
+     - 10.6 %
+     -
+
+Across the whole set this affects a minority of alleles per locus (IGH V is the worst: 60 of 62
+alleles carry some, most of it small). :func:`~vdjtools.model.check.check_model` reports it as
+``deletion_unreachable`` at ``warn`` severity for an OLGA-sourced model, with the fraction, so you
+can see whether a gene you care about is affected.
+
+**What to do about it.** Use the gene-collapsed models — the default — where the effect is absorbed
+by the collapse, or use the ``learned`` set, which is refit from data on arda germline and does not
+inherit the grid. If you need allele resolution *and* an affected gene, be aware Pgen through it is
+an underestimate.
+
+Genes with no CDR3-region germline
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+OLGA leaves the CDR3-region germline empty for a handful of ORF alleles while still giving them
+usage. They can be drawn by the generator but score ``Pgen = 0``, and human ``TRBV23-1`` — 8.6 % of
+a real TRB repertoire — is one of them. ``check_model`` reports these as ``unscoreable_gene_mass``.
+:func:`~vdjtools.model.io.from_olga` accepts ``derive_orf=True`` to reconstruct the missing germline
+from the full germline and the anchor; the ``learned`` models are built that way, while the ``olga``
+set keeps it off so it stays an exact Pgen oracle.
+
+V/J usage is protocol-specific
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Not a defect, but the most common way to get a wrong answer with these models. OLGA's were fit to
+DNA-multiplex data; the ``learned`` set to 5'RACE reads. The two amplify different V genes at very
+different rates — TRBV19 is 3.1 % of OLGA's usage and 37 % of these 5'RACE reads — so neither
+marginal is right for *your* library. The junction model (trims, insertions, dinucleotides) is the
+shared, transferable part. Use :func:`~vdjtools.model.rescale.rescale_usage` before scoring.
+
+Out-of-frame input
+~~~~~~~~~~~~~~~~~~~
+
+``olga``'s own ``compute_nt_CDR3_pgen`` rejects an out-of-frame junction outright ("Invalid
+nucleotide CDR3 sequence"). vdjtools scores it, because the generation model is defined before
+selection and out-of-frame rearrangements are exactly what it is trained on. This is a deliberate
+difference in input validation, not in the probability: on any sequence OLGA accepts, the two agree
+exactly.
 
 
 Extending the allele library

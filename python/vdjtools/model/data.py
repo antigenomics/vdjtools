@@ -120,7 +120,24 @@ def annotate_reads(
     ]
     if reconstruct:
         cmd.append("--reconstruct")
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode:
+        # capture_output swallows arda's own message, so a failed run used to surface as a bare
+        # CalledProcessError with an exit code and nothing else -- which is exactly how the
+        # `arda rnaseq map` -> `arda map` rename stayed invisible. Say what arda said, and name
+        # the version, since a usage error here is almost always a CLI-version mismatch.
+        try:
+            from importlib.metadata import version
+
+            installed = version("arda-mapper")
+        except Exception:  # noqa: BLE001
+            installed = "unknown"
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(
+            f"arda exited {proc.returncode} (arda-mapper {installed}; vdjtools needs >= 2.19, "
+            f"where stage-1 mapping is `arda map`):\n"
+            f"  {' '.join(cmd)}\n{detail}"
+        )
     return pl.read_csv(airr, separator="\t", infer_schema_length=20000)
 
 

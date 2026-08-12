@@ -13,10 +13,23 @@ The collapse is a proper marginalisation, not a truncation:
 * a **choice** probability (``P(V=a)``) becomes the plain sum over the gene's alleles — exact;
 * a **conditional** (``P(delV | V=a)``, ``P(D | J=ja)``) becomes the usage-weighted average over
   the gene's alleles, ``P(x | gene) = Σ_a [P(a)/P(gene)] · P(x | a)`` — the correct allele-marginal;
-* the **germline** of the highest-usage allele is kept as the gene's representative and relabelled
-  ``gene*01``. This is the one lossy step: where alleles differ *inside* the CDR3 region the mixture
-  cannot be reproduced by a single germline, so collapsed Pgen is approximate there (exact wherever
-  the CDR3-region germline is allele-invariant, which is the common case).
+* the **germline** of one representative allele is kept and relabelled ``gene*01``. This is the one
+  lossy step: where alleles differ *inside* the CDR3 region the mixture cannot be reproduced by a
+  single germline, so collapsed Pgen is approximate there (exact wherever the CDR3-region germline
+  is allele-invariant, which is the common case).
+
+The representative is chosen by **CDR3-region germline length first, usage second**. Usage alone is
+wrong: IMGT ships some alleles with a truncated CDR3-region germline, and if such an allele happens
+to carry the gene's highest learned usage it becomes the gene's germline and shortens every trim the
+gene can support. Human IGKV3-20 is exactly that case — ``*02`` is 11 nt against ``*01``'s 30 and
+had the higher learned usage, so the collapsed gene inherited an 11-nt germline (labelled ``*01``,
+which was doubly misleading) and stranded 25% of its own deletion distribution on trims it could no
+longer reach. Alleles of one gene are near-identical through the CDR3 region, so a large length gap
+means an incomplete database entry, not biology.
+
+Having fixed the representative, the collapsed deletion conditionals are then **projected onto what
+that germline supports** and renormalized: the collapsed model is a single-germline model, so any
+residual mass on unreachable trims would leak straight out of Pgen.
 """
 from __future__ import annotations
 
@@ -173,24 +186,63 @@ def collapse_alleles(model: Model) -> Model:
             )
         new[name] = t[name]
 
-    # ---- germline: keep the top-usage allele per gene, relabel *01 ----
+    # ---- germline: keep one representative allele per gene, relabel *01 ----
     pv_all = dict(zip(t["v_choice"]["v_allele"].to_list(), t["v_choice"]["p"].to_list()))
     genomic = {}
     for gname, g in model.genomic.items():
         seg = gname.split("_")[1][0]                    # genes_v -> 'v'
         acol = f"{seg}_allele"
-        usage = pv_all if seg == "v" else None
+        usage = pv_all if seg == "v" else {}
         rows = []
         for gene, sub in g.group_by(_gene(acol).alias("_g"), maintain_order=True):
             key = gene[0] if isinstance(gene, tuple) else gene
-            # representative = highest-usage allele (V), else the first (stable) — usually *01
-            if usage is not None:
-                best = max(sub[acol].to_list(), key=lambda a: usage.get(a, 0.0))
-            else:
-                best = sorted(sub[acol].to_list())[0]
+            cut = dict(zip(sub[acol].to_list(), sub["cut_segment"].to_list()))
+            # Longest CDR3-region germline first, then usage, then name — see the module docstring
+            # on IGKV3-20. A truncated allele must never define the gene's trim range just because
+            # it won a usage vote.
+            best = max(sub[acol].to_list(),
+                       key=lambda a: (len(cut.get(a) or ""), usage.get(a, 0.0), a))
             rep = sub.filter(pl.col(acol) == best).with_columns(pl.lit(_rep(key)).alias(acol),
                                                                 pl.lit(key).alias("gene"))
             rows.append(rep)
         genomic[gname] = pl.concat(rows)
 
-    return Model(manifest=model.manifest, tables=new, genomic=genomic)
+    new = _project_onto_germline(new, genomic, model.manifest)
+    return Model(manifest=model.manifest, tables=new, genomic=genomic,
+                 training=model.training)
+
+
+def _project_onto_germline(tables: dict[str, pl.DataFrame], genomic: dict[str, pl.DataFrame],
+                           manifest) -> dict[str, pl.DataFrame]:
+    """Drop deletion mass the representative germline cannot reach, and renormalize.
+
+    Averaging a conditional over alleles that differ in CDR3-region length can leave mass on trims
+    longer than the representative supports. The Pgen DP simply never visits those, so the
+    probability would vanish from every Pgen through that gene rather than being redistributed.
+    """
+    from .check import DELETION_ENDS, max_reachable_trim
+
+    out = dict(tables)
+    for name, event in manifest.events.items():
+        if name not in DELETION_ENDS or name not in out:
+            continue
+        seg = name.split("_")[0]                                  # v_3_del -> v, d2_del -> d2
+        frame = genomic.get(f"genes_{'d' if seg.startswith('d') else seg}")
+        acol = f"{seg}_allele"
+        if frame is None or acol not in out[name].columns:
+            continue
+        gcol = f"{'d' if seg.startswith('d') else seg}_allele"
+        limits = {r[gcol]: max_reachable_trim(name, event.kind, len(r["cut_segment"] or ""),
+                                              manifest.palindrome_max)
+                  for r in frame.iter_rows(named=True)}
+        if any(v is None for v in limits.values()):
+            continue
+        total = (pl.col("ndel") if "ndel" in out[name].columns
+                 else pl.col("ndel5") + pl.col("ndel3"))
+        keep = out[name].with_columns(
+            _lim=pl.col(acol).replace_strict(limits, default=10**6, return_dtype=pl.Int64))
+        keep = keep.filter(total <= pl.col("_lim")).drop("_lim")
+        tot = pl.col("p").sum().over(acol)
+        out[name] = keep.with_columns(
+            p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
+    return out
