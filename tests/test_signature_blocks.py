@@ -219,3 +219,31 @@ class TestClonality:
     def test_ships_two_of_three_composition_parts(self):
         out = B.clon_block(stats_of(zipf_repertoire(500)))
         assert set(out) == {"f1", "f2", "top"}
+
+
+class TestIsotypeNomenclature:
+    """The isotype classes are gene names matched by equality, so the allele has to come off first.
+
+    A frame calling ``IGHG1*01`` would otherwise match nothing at all and come back 100%
+    uncalled — which is a perfectly plausible composition (some cohorts really are mostly
+    uncalled), so nobody downstream would ever see that the block had silently emptied.
+    """
+
+    @staticmethod
+    def _frame(call: str, n: int = 60):
+        return pl.DataFrame({
+            "v_call": ["IGHV1-2"] * n, "j_call": ["IGHJ4"] * n, "c_call": [call] * n,
+            "junction_aa": ["CASSLGQAYEQYF"] * n, "duplicate_count": [5] * n,
+        })
+
+    def test_an_allele_suffixed_call_reads_the_same_as_a_gene_call(self):
+        bare = B.iso_block(B.work_frame(self._frame("IGHG1")))
+        allele = B.iso_block(B.work_frame(self._frame("IGHG1*01")))
+        assert bare == allele
+        assert bare["IgG"] > bare["IgM"], "the IgG-only repertoire did not read as IgG"
+
+    def test_a_null_c_call_column_still_computes(self):
+        """An all-null ``c_call`` arrives as a Null-dtype column, which no string op accepts."""
+        df = self._frame("IGHM").with_columns(pl.lit(None).alias("c_call"))
+        out = B.iso_block(B.work_frame(df))
+        assert set(out) == {"IgM", "IgD", "IgG", "IgA"}

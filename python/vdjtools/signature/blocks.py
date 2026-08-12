@@ -274,7 +274,11 @@ def iso_block(df: pl.DataFrame, tier_full: bool = False) -> dict[str, float]:
     if df.height == 0:
         return dict.fromkeys(keys, np.nan)
     w = _weights(df)
-    calls = df[C_CALL].to_list() if C_CALL in df.columns else [None] * df.height
+    # Strip the allele first. The classes below are gene names, matched by equality, so a frame
+    # calling ``IGHG1*01`` would match nothing at all and come back 100% uncalled — a plausible
+    # composition (some cohorts really are mostly uncalled) rather than an error anybody sees.
+    calls = (df.select(strip_allele(pl.col(C_CALL).cast(pl.Utf8)).alias("c"))["c"].to_list()
+             if C_CALL in df.columns else [None] * df.height)
     parts = dict.fromkeys(ISOTYPES, 0.0)
     for c, wi in zip(calls, w):
         for iso, prefixes in ISOTYPES.items():
