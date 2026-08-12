@@ -182,9 +182,17 @@ def _best_vdj_middle(prep, j: str, middle: str):
     the model defines, not a heuristic standing next to it.
 
     ⛔ ``P(D|J) == 0`` prunes the pair, which is where the GENOMIC constraint lives: TRBD2 lies 3' of
-    the whole TRBJ1 cluster, so deletional joining can never produce a TRBD2-TRBJ1 pair and the
-    model's table already encodes that as a zero. An earlier draft here picked the longest exact D
-    substring and ignored ``j`` entirely — it would have happily called an impossible pair.
+    the whole TRBJ1 cluster, so deletional joining can never produce a TRBD2-TRBJ1 pair. An earlier
+    draft here picked the longest exact D substring and ignored ``j`` entirely — it would have
+    happily called an impossible pair.
+
+    ⚠ This inherits the constraint, it does not impose one: it is only as good as the table. An
+    earlier revision of this note claimed the model "already encodes that as a zero", and that was
+    **not true** — OLGA's own TRB model gives ``P(TRBD2*01 | TRBJ1-6*01) = 0.333``, and EM relearned
+    the pair from noisy short-read D calls until the constraint was added to the M-step. Models
+    fitted from :mod:`vdjtools.model.infer` now carry the zeros;
+    :func:`~vdjtools.model.infer.enforce_dj_order` repairs one that does not, and
+    :func:`~vdjtools.model.check.check_model` reports any survivor.
 
     ⛔ Not a re-ranking of D by a generative prior over an alignment score, either. That was built
     and measured in a sibling package and changed nothing (gene accuracy 98.9 -> 97.8 % on IGH,

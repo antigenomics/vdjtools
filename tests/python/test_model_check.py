@@ -163,3 +163,61 @@ def test_every_bundled_model_is_loadable_and_checkable():
         for locus in LOCI:
             issues = check_model(load_bundled(locus, source))
             assert issues.columns[0] == "severity"
+
+
+# --- the D->J locus-order constraint ------------------------------------------------------------
+
+def test_forbidden_dj_pairs_only_constrains_trb():
+    """Deletional joining cannot reach a J 5' of the D. Only TRB interleaves its clusters."""
+    from vdjtools.model.reference import forbidden_dj_pairs
+
+    d, j = ["TRBD1*01", "TRBD2*01"], ["TRBJ1-1*01", "TRBJ1-6*01", "TRBJ2-1*01"]
+    bad = forbidden_dj_pairs(d, j, "TRB")
+    assert bad == {("TRBD2*01", "TRBJ1-1*01"), ("TRBD2*01", "TRBJ1-6*01")}
+    # TRBD1 sits 5' of both clusters, so it reaches either.
+    assert not any(p[0] == "TRBD1*01" for p in bad)
+    # Every other locus puts all D 5' of all J — the rule must not invent constraints.
+    assert forbidden_dj_pairs(["IGHD1-1*01"], ["IGHJ1*01"], "IGH") == set()
+    assert forbidden_dj_pairs(["TRDD2*01"], ["TRDJ1*01"], "TRD") == set()
+
+
+def test_impossible_dj_pair_is_reported():
+    from vdjtools.model import load_bundled
+    from vdjtools.model.check import check_model as _check
+
+    m = load_bundled("TRB", "olga", collapse=False)
+    hit = _check(m).filter(pl.col("check") == "impossible_dj_pair")
+    assert hit.height > 0
+    # OLGA's own model carries these, so a faithful import is warned about, not failed.
+    assert set(hit["severity"]) == {"warn"}
+
+
+def test_enforce_dj_order_removes_them_and_renormalizes():
+    from vdjtools.model import load_bundled
+    from vdjtools.model.check import check_model as _check
+    from vdjtools.model.infer import enforce_dj_order
+
+    m = load_bundled("TRB", "olga", collapse=False)
+    fixed = enforce_dj_order(m)
+    assert _check(fixed).filter(pl.col("check") == "impossible_dj_pair").is_empty()
+    fixed.validate()
+    # Mass is redistributed within each J, not lost.
+    sums = fixed.tables["d_gene"].group_by("j_allele").agg(pl.col("p").sum())
+    assert ((sums["p"] - 1.0).abs() < 1e-9).all()
+    # A J in the TRBJ2 cluster is untouched: nothing about it was impossible.
+    def j2(model):
+        return (model.tables["d_gene"].filter(pl.col("j_allele") == "TRBJ2-1*01")
+                .sort("d_allele")["p"].to_list())
+    assert j2(fixed) == pytest.approx(j2(m))
+
+
+def test_em_cannot_relearn_an_impossible_pair(toy_model_vdj):
+    """The mask lives in the M-step, so a fit cannot put the mass back."""
+    from vdjtools.model.generate import generate
+    from vdjtools.model.infer import infer_native
+
+    seqs = generate(toy_model_vdj, 150, seed=1)["junction_nt"].to_list()
+    fitted, _ = infer_native(toy_model_vdj, seqs, max_iter=2)
+    # The toy locus is not TRB, so nothing is forbidden and the fit is unconstrained.
+    assert check_model(fitted, germline="none").filter(
+        pl.col("check") == "impossible_dj_pair").is_empty()

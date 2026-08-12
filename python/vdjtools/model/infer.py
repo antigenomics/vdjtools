@@ -462,10 +462,32 @@ def _mstep(template: Model, counts: dict, nd_prior: float = 0.0) -> dict[str, pl
                 data[c].append(val)
             data["p"].append(cnt)
         df = pl.DataFrame(data, schema=table_columns(event))
+        if name in ("d_gene", "d2_gene"):
+            df = _mask_dj(df, template.locus)   # see _mask_dj: a hard genomic fact, not a parameter
         keys = normalization_keys(event)
         total = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
         tables[name] = df.with_columns(p=pl.col("p") / total)
     return tables
+
+
+def _mask_dj(df: pl.DataFrame, locus: str) -> pl.DataFrame:
+    """Zero the ``(D, J)`` cells deletional recombination cannot produce.
+
+    See :func:`~vdjtools.model.reference.forbidden_dj_pairs`. Applied to the soft counts *before*
+    normalization so the surviving pairs absorb the mass, and applied inside the M-step so EM
+    cannot relearn the impossible pair on the next iteration.
+    """
+    from .reference import forbidden_dj_pairs
+
+    dcol = "d2_allele" if "d2_allele" in df.columns else "d_allele"
+    if "j_allele" not in df.columns or dcol not in df.columns:
+        return df
+    bad = forbidden_dj_pairs(df[dcol].unique().to_list(), df["j_allele"].unique().to_list(), locus)
+    if not bad:
+        return df
+    key = pl.concat_str([pl.col(dcol), pl.lit("|"), pl.col("j_allele")])
+    return df.with_columns(
+        p=pl.when(key.is_in([f"{d}|{j}" for d, j in bad])).then(0.0).otherwise(pl.col("p")))
 
 
 def _uniform_init(template: Model) -> dict[str, pl.DataFrame]:
@@ -903,6 +925,34 @@ def augment_from_oracle(learned: Model, oracle: Model) -> Model:
                  training=learned.training)
 
 
+def enforce_dj_order(model: Model) -> Model:
+    """Zero the genomically impossible ``(D, J)`` pairs in an existing model and renormalize.
+
+    The repair for a model fitted before this constraint existed — see
+    :func:`~vdjtools.model.reference.forbidden_dj_pairs` for why TRBD2 cannot reach the TRBJ1
+    cluster. New fits get it from the M-step and need no repair.
+
+    Args:
+        model: A VDJ :class:`~vdjtools.model.model.Model`.
+
+    Returns:
+        A new model with ``P(D|J)`` (and ``P(D2|D)``'s parent table, where applicable) masked and
+        renormalized within each J. Unchanged for a VJ model or a locus with no interleaving.
+
+    Example:
+        >>> fixed = enforce_dj_order(load_bundled("TRB", "learned", collapse=False))
+    """
+    if model.chain_type != "VDJ" or "d_gene" not in model.tables:
+        return model
+    tables = dict(model.tables)
+    masked = _mask_dj(tables["d_gene"], model.locus)
+    tot = pl.col("p").sum().over("j_allele")
+    tables["d_gene"] = masked.with_columns(
+        p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
+    return Model(manifest=model.manifest, tables=tables, genomic=model.genomic,
+                 training=model.training)
+
+
 def _nearest_donor(seq: str, candidates: dict[str, str]) -> str | None:
     """The candidate allele whose germline is most similar to ``seq`` (``{allele: germline}``)."""
     from difflib import SequenceMatcher
@@ -1158,9 +1208,11 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
     t["j_5_del"] = deletion(counts.j_5_del, j_alleles, "j_allele", nbins["j"], mp["j_5"])
     if vdj:
         t["j_choice"] = gene_choice(pl.DataFrame({"j_allele": j_alleles, "p": list(counts.j_choice)}), "j_allele", "j", [])
-        t["d_gene"] = norm(pl.DataFrame({
+        # Zero the genomically impossible D-J pairs BEFORE normalizing, so EM cannot relearn them
+        # on the next iteration -- a post-hoc patch would be undone by the very next M-step.
+        t["d_gene"] = norm(_mask_dj(pl.DataFrame({
             "j_allele": np.repeat(j_alleles, nD), "d_allele": np.tile(d_alleles, nJ),
-            "p": list(counts.d_gene)}), ["j_allele"])
+            "p": list(counts.d_gene)}), template.locus), ["j_allele"])
         n5, n3 = nbins["d5"], nbins["d3"]
         t["d_del"] = norm(pl.DataFrame({
             "d_allele": np.repeat(d_alleles, n5 * n3),

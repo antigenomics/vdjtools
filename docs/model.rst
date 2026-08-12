@@ -282,6 +282,32 @@ by the collapse, or use the ``learned`` set, which is refit from data on arda ge
 inherit the grid. If you need allele resolution *and* an affected gene, be aware Pgen through it is
 an underestimate.
 
+Genomically impossible D–J pairs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+V(D)J recombination is **deletional** — it excises the DNA between the segments it joins — so a D
+can only be joined to a J lying 3' of it. Almost every locus puts all D genes 5' of all J genes, so
+this constrains nothing. **TRB interleaves**:
+
+.. code-block:: text
+
+   5' — TRBV… — TRBD1 — TRBJ1 cluster — TRBD2 — TRBJ2 cluster — TRBC2 — 3'
+
+so a TRBD2–TRBJ1 join is physically impossible. OLGA's model does **not** encode that: it gives
+``P(TRBD2*01 | TRBJ1-6*01) = 0.333``, a third of that J's D mass on a pair that cannot occur. The
+bundled ``olga`` set reproduces it faithfully and :func:`~vdjtools.model.check.check_model` reports
+it as ``impossible_dj_pair`` at ``warn``.
+
+For models vdjtools fits, this is a hard genomic fact rather than a parameter, and the mask is
+applied **inside the M-step**, so EM cannot relearn the pair on the next iteration. It needed to be:
+a D match is only 10–18 nt — weak evidence on short reads — and an earlier build of the human TRB
+model had reached ``P(TRBD2 | TRBJ1-1) = 0.091`` before the constraint existed. Enforcing it also
+*improved* the fit, converging in 9 iterations instead of 11 to a slightly better log-likelihood,
+because mass that had been leaking onto impossible pairs went to the D that actually generated the
+read.
+
+:func:`~vdjtools.model.infer.enforce_dj_order` repairs a model fitted before the constraint existed.
+
 Genes with no CDR3-region germline
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

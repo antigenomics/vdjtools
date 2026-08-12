@@ -337,6 +337,61 @@ def validate_germline(germline: pl.DataFrame) -> pl.DataFrame:
     return pl.DataFrame(rows, schema=_ISSUE_SCHEMA)
 
 
+def _cluster_number(allele: str, segment: str) -> int | None:
+    """The D or J **cluster** index from an IMGT name: ``TRBD2*01`` → 2, ``TRBJ1-3*01`` → 1."""
+    import re
+
+    gene = allele.split("*")[0]
+    m = re.search(rf"{segment}(\d+)", gene)
+    return int(m.group(1)) if m else None
+
+
+def forbidden_dj_pairs(d_alleles, j_alleles, locus: str) -> set[tuple[str, str]]:
+    """(D, J) pairs that deletional V(D)J recombination **cannot** produce, for this locus.
+
+    Recombination excises the DNA between the two segments it joins, so a D can only be joined to a
+    J that lies **3' of it**. In almost every locus that is vacuous — all D genes sit 5' of all J
+    genes — but **TRB interleaves**:
+
+        5' ─ TRBV… ─ TRBD1 ─ TRBJ1 cluster ─ TRBD2 ─ TRBJ2 cluster ─ TRBC2 ─ 3'
+
+    so TRBD2 can only reach the TRBJ2 cluster; a TRBD2–TRBJ1 join is physically impossible. TRBD1,
+    sitting 5' of both clusters, can reach either.
+
+    This is a **hard genomic fact, not a probability the data gets to inform**, and EM will happily
+    learn the impossible pair from noise if nothing forbids it: a D match is only 10–18 nt, which is
+    weak evidence on short reads. Before this constraint existed the retrained human TRB model
+    assigned ``0.091`` to that pair, and OLGA's own model assigns ``0.333``. Ambiguous ``d_call``
+    values in the training data concentrate exactly there, so the error is systematic, not random.
+
+    Args:
+        d_alleles: D allele names, e.g. ``["TRBD1*01", "TRBD2*01"]``.
+        j_alleles: J allele names.
+        locus: e.g. ``"TRB"``. Loci with no interleaving return an empty set.
+
+    Returns:
+        The set of impossible ``(d_allele, j_allele)`` pairs.
+
+    Example:
+        >>> forbidden_dj_pairs(["TRBD2*01"], ["TRBJ1-1*01", "TRBJ2-1*01"], "TRB")
+        {('TRBD2*01', 'TRBJ1-1*01')}
+    """
+    # Only TRB interleaves its D and J clusters (human and mouse alike). IGH, TRD and the rest put
+    # every D 5' of every J, so ordering forbids nothing and the rule must not invent constraints.
+    if not locus.upper().startswith("TRB"):
+        return set()
+    out: set[tuple[str, str]] = set()
+    for d in d_alleles:
+        dn = _cluster_number(d, "D")
+        if dn is None:
+            continue
+        for j in j_alleles:
+            jn = _cluster_number(j, "J")
+            if jn is not None and jn < dn:      # the J cluster lies 5' of this D
+                out.add((d, j))
+    return out
+
+
 def read_fasta(path) -> list[tuple[str, str]]:
     """Read a FASTA into ``(header, sequence)`` pairs, transparently handling ``.gz``.
 
