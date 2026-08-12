@@ -19,21 +19,6 @@ import polars as pl
 
 from ..io.schema import JUNCTION_AA, J_CALL, V_CALL
 
-_VDJMATCH_HINT = (
-    "vdjmatch is required for vdjtools.biomarker.metaclonotype; install the extra with "
-    "vdjmatch is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
-)
-
-
-def _require_vdjmatch():
-    """Import and return ``vdjmatch.cluster``; raise a helpful error if missing."""
-    try:
-        import vdjmatch.cluster as cluster  # noqa: F401
-    except ImportError as exc:  # pragma: no cover - exercised only without vdjmatch
-        raise ImportError(_VDJMATCH_HINT) from exc
-    return cluster
-
-
 def metaclonotypes(clonotypes: pl.DataFrame, *, scope: str = "1,0,0,1",
                    match_v: bool = True, match_j: bool = True,
                    threads: int = 0) -> pl.DataFrame:
@@ -59,7 +44,8 @@ def metaclonotypes(clonotypes: pl.DataFrame, *, scope: str = "1,0,0,1",
     Raises:
         ImportError: If vdjmatch is not importable (it is a base dependency).
     """
-    cluster = _require_vdjmatch()
+    import vdjmatch.cluster as cluster
+
 
     group_cols = []
     if match_v and V_CALL in clonotypes.columns:

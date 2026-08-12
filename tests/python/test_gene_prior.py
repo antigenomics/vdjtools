@@ -7,7 +7,6 @@ for good — which is how the shipped TRB model came to carry 21 of 89 V alleles
 """
 from __future__ import annotations
 
-import numpy as np
 import polars as pl
 import pytest
 

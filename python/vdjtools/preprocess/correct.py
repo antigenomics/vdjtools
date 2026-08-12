@@ -25,11 +25,6 @@ from ..io.schema import (
     recompute_frequency,
 )
 
-_SEQTREE_HINT = (
-    "seqtree is required for vdjtools.preprocess.correct; install the extra with "
-    "seqtree is a base dependency of vdjtools -- reinstall with `pip install --force-reinstall vdjtools`."
-)
-
 
 def _corrected_counts(counts: np.ndarray, neighbours: "list[list[tuple[int, int]]]",
                       log_ratio_threshold: float) -> np.ndarray:
@@ -122,10 +117,7 @@ def correct(df: pl.DataFrame, max_mismatches: int = 2, ratio: float = 0.05,
     Raises:
         ImportError: If seqtree is not importable (it is a base dependency).
     """
-    try:
-        import seqtree  # noqa: F401
-    except ImportError as exc:  # pragma: no cover - exercised only without seqtree
-        raise ImportError(_SEQTREE_HINT) from exc
+    import seqtree  # noqa: F401
 
     log_ratio_threshold = -math.log10(ratio)
     d = normalize(df)

@@ -33,7 +33,6 @@ import os
 from pathlib import Path
 
 import numpy as np
-import olga as _olga
 import olga.generation_probability as ogp
 import olga.load_model as olm
 import polars as pl
@@ -186,11 +185,11 @@ def run(locus: str, name: str, chain: str) -> None:
           f"    -> {'EXACT' if rel.max() < 1e-9 else 'MISMATCH — BUG'}")
 
     # ---- 2. THE JUNCTION MODEL: where learned and olga are genuinely comparable ----
-    print(f"\n[2] JUNCTION MODEL — mean per-parent total-variation distance, learned vs olga")
-    print(f"    (these describe how a junction is BUILT; both models estimate the same machinery)")
-    print(f"    TV is in [0,1]: 0 = identical, 1 = disjoint. Conditional events are averaged over")
-    print(f"    their conditioning value, and ONLY over parents where BOTH models have mass --")
-    print(f"    a parent OLGA never uses is a usage difference (section 3), not a junction one.")
+    print("\n[2] JUNCTION MODEL — mean per-parent total-variation distance, learned vs olga")
+    print("    (these describe how a junction is BUILT; both models estimate the same machinery)")
+    print("    TV is in [0,1]: 0 = identical, 1 = disjoint. Conditional events are averaged over")
+    print("    their conditioning value, and ONLY over parents where BOTH models have mass --")
+    print("    a parent OLGA never uses is a usage difference (section 3), not a junction one.")
     print(f"    {'event':14s} {'mean TV':>8s} {'n parents':>10s} {'H(olga)':>9s} {'H(learned)':>11s}")
     for ev in ("v_3_del", "j_5_del", "d_del", "vd_ins", "dj_ins", "vd_dinucl", "dj_dinucl",
                "d_gene", "j_choice", "vj_ins", "vj_dinucl"):
@@ -206,8 +205,8 @@ def run(locus: str, name: str, chain: str) -> None:
         print(f"    {ev:14s} {np.mean(tvs):>8.4f} {len(tvs):>10d} {ha:>9.3f} {hb:>11.3f}")
 
     # ---- 3. V/J USAGE: protocol-dependent, reported per GENE ----
-    print(f"\n[3] V-GENE USAGE — protocol-dependent (5'RACE here vs DNA-multiplex for OLGA).")
-    print(f"    Divergence is EXPECTED and is rescaled per-sample; P(V)=0 on a real gene is NOT.")
+    print("\n[3] V-GENE USAGE — protocol-dependent (5'RACE here vs DNA-multiplex for OLGA).")
+    print("    Divergence is EXPECTED and is rescaled per-sample; P(V)=0 on a real gene is NOT.")
     print(f"    {'model':10s} {'V genes':>9s} {'nonzero':>8s} {'top gene':>12s} {'top mass':>9s}")
     for lbl, mm in (("olga", m_olga), ("learned", m_learn)):
         s = v_support(mm)
@@ -217,8 +216,8 @@ def run(locus: str, name: str, chain: str) -> None:
     if oof_p.exists():
         oof = pl.read_parquet(oof_p)
         print(f"\n[4] HELD-OUT LOG-LIKELIHOOD on {oof.height:,} out-of-frame junctions the EM never saw")
-        print(f"    NB this is confounded by (3): the learned model has this protocol's V usage and")
-        print(f"    the held-out set is from the same protocol, so it is favoured on usage alone.")
+        print("    NB this is confounded by (3): the learned model has this protocol's V usage and")
+        print("    the held-out set is from the same protocol, so it is favoured on usage alone.")
         print(f"    {'model':10s} {'mean log10 Pgen':>16s} {'Pgen==0':>9s} {'n':>7s}")
         for lbl, mm in (("olga", m_olga), ("learned", m_learn)):
             ll, nz, n = held_out_loglik(mm, oof["junction"].to_list(), oof["v_call"].to_list(),

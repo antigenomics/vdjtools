@@ -6,7 +6,6 @@ fill_null(1) / recompute_frequency that follow then silently invert the clonal h
 """
 from __future__ import annotations
 
-import polars as pl
 import pytest
 
 from vdjtools import io as vio
