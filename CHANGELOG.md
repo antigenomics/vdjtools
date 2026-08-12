@@ -3,7 +3,16 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## Unreleased
+## 3.5.0 — 2026-08-12
+
+### Fixed — `generate(seed=)` was not reproducible across processes
+
+`collapse_alleles` used unordered polars `group_by`, so a collapsed model's table row order varied
+between processes and the *same* seed drew a different allele. `collapse=True` is the default load
+path, so this affected ordinary use. The collapse now maintains order throughout. Expectations
+recorded from `generate()` before this release are stale; the bundled models are unaffected, since
+they ship uncollapsed and are collapsed at load.
+
 
 ### Added — `vdjtools.model.viterbi`: the argmax side of the Pgen DP
 
