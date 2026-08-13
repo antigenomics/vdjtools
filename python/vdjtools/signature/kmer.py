@@ -35,10 +35,11 @@ def kmer_block(df, locus: str, space: KmerSpace | None, *, weight: str = "freq")
     if space is None or space.n_components == 0:
         n = 0 if space is None else space.n_columns
         return {f"PC{i + 1:02d}": np.nan for i in range(n)}
-    names = [f"PC{i + 1:02d}" for i in range(space.n_components)]
+    names = [f"PC{i + 1:02d}" for i in range(space.n_components)] + ["resid"]
     if df is None or df.height == 0:
         return dict.fromkeys(names, np.nan)
-    return dict(zip(names, (float(v) for v in space.transform(df, weight=weight))))
+    vals = space.transform(df, weight=weight, residual=True)
+    return dict(zip(names, (float(v) for v in vals)))
 
 
 def kmer_spec(spaces: dict[str, KmerSpace], *, tier: str = "full") -> L.Block:
@@ -59,8 +60,10 @@ def kmer_spec(spaces: dict[str, KmerSpace], *, tier: str = "full") -> L.Block:
     d = next(iter(ranks.values()))
     if d < 1:
         raise ValueError("fitted spaces carry no components; fit with n_components > 0")
+    # `resid` rides with the components because it is what they discarded -- see
+    # KmerSpace.transform. Same transform: it is already a norm of an L2-normalised vector.
     return L.Block("vsig", "kmer",
-                   L.feats(tier, "none", *(f"PC{i + 1:02d}" for i in range(d))),
+                   L.feats(tier, "none", *[f"PC{i + 1:02d}" for i in range(d)], "resid"),
                    loci=tuple(sorted(spaces)), attributable=True)
 
 

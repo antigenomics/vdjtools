@@ -227,7 +227,7 @@ class TestTheBlockIsHeldOutUntilFitted:
         sp = fit_kmer_space(cohort, n_groups=8, n_components=6, threads=2)
         spec = kmer_spec({"TRA": sp, "TRB": sp}, tier="full")
         assert spec.sig == "vsig" and spec.name == "kmer" and spec.attributable
-        assert list(spec.features) == [f"PC0{i}" for i in range(1, 7)]
+        assert list(spec.features) == [f"PC0{i}" for i in range(1, 7)] + ["resid"]
         out = kmer_block(cohort[0], "TRB", sp)
         assert set(out) == set(spec.features)
         assert np.isfinite(list(out.values())).all()
@@ -356,3 +356,37 @@ class TestAmbiguousVCallsResolveToOneGene:
         clean = cohort[0].with_columns(pl.lit("TRBV5").alias("v_call"))
         amb = cohort[0].with_columns(pl.lit("TRBV5*01,TRBV19*03").alias("v_call"))
         assert np.allclose(sp.transform(clean), sp.transform(amb))
+
+
+class TestTheResidualCarriesWhatTheBasisDiscards:
+    def test_pythagoras_holds(self, cohort):
+        """||x||^2 = ||Vx||^2 + resid^2 for an orthonormal basis of an L2-normalised vector."""
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=8, threads=2)
+        z = sp.transform(cohort[0], residual=True)
+        comp, resid = z[:-1], z[-1]
+        assert np.isclose(np.dot(comp, comp) + resid ** 2, 1.0, atol=1e-6)
+
+    def test_a_full_rank_basis_leaves_no_residual(self, cohort):
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=8, threads=2)
+        sp.components = np.eye(sp.n_columns)
+        assert sp.transform(cohort[0], residual=True)[-1] == pytest.approx(0.0, abs=1e-6)
+
+    def test_the_residual_moves_when_a_rare_motif_is_planted(self, cohort):
+        """The point of keeping it: a rare feature is orthogonal to the leading components."""
+        sp = fit_kmer_space(cohort, n_groups=20, n_components=8, threads=2)
+        plain = cohort[-1]
+        spiked = plain.with_columns(
+            pl.when(pl.int_range(pl.len()) < 40)
+            .then(pl.lit("CWWWHWWWHWWWHWWF"))
+            .otherwise(pl.col("junction_aa")).alias("junction_aa"))
+        assert (sp.transform(spiked, residual=True)[-1]
+                > sp.transform(plain, residual=True)[-1])
+
+    def test_the_block_ships_it_alongside_the_components(self, cohort):
+        from vdjtools.signature.kmer import kmer_block, kmer_spec
+
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=4, threads=2)
+        assert list(kmer_spec({"TRB": sp}).features) == ["PC01", "PC02", "PC03", "PC04", "resid"]
+        out = kmer_block(cohort[0], "TRB", sp)
+        assert set(out) == {"PC01", "PC02", "PC03", "PC04", "resid"}
+        assert np.isfinite(list(out.values())).all()
