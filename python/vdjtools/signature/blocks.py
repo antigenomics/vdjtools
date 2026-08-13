@@ -43,6 +43,23 @@ ISOTYPES: dict[str, tuple[str, ...]] = {
     "IgA": ("IGHA1", "IGHA2"), "IgE": ("IGHE",),
 }
 
+#: Clone-size weights ``g``, the **one** definition both halves of the signature use. Concave by
+#: default: raw read weighting lets a single dominant clone be the entire profile, presence
+#: weighting throws the expansion signal away, and ``log2(1+a)`` sits between.
+#:
+#: It lives here, in the shared dependency, because ``vsig`` and ``rsig`` must weight the same
+#: repertoire identically or they are not describing one measure — and a second copy that drifts
+#: would not raise anywhere, it would just quietly make the two halves disagree.
+#: (``mir.density._WEIGHTS`` is the same ladder for a different subsystem and is deliberately left
+#: alone: importing a signature module into the density code would be worse layering, not better.)
+WEIGHTS = {
+    "log2p1": lambda a: np.log2(1.0 + a),
+    "log1p": np.log1p,
+    "anscombe": lambda a: np.sqrt(a + 0.375),
+    "duplicate_count": lambda a: np.asarray(a, dtype=float),
+    "distinct": lambda a: np.ones(np.shape(a), dtype=float),
+}
+
 #: Locus pairs whose read-count ratio is a compartment read-out: T-vs-B balance, the
 #: gamma-delta share, the light-chain balance. A ratio rather than two counts, because the
 #: sequencing depth that drives both cancels.
@@ -81,12 +98,10 @@ def work_frame(df: pl.DataFrame, weight: str = "log2p1") -> pl.DataFrame:
     ``downsample`` or ``select_top`` afterwards — each recomputes ``frequency`` from the counts
     and would silently restore read weighting.
     """
+    if weight not in WEIGHTS:
+        raise ValueError(f"unknown weight {weight!r}; known: {sorted(WEIGHTS)}")
     a = df[COUNT].to_numpy().astype(float)
-    g = {"log2p1": lambda x: np.log2(1.0 + x),
-         "log1p": np.log1p,
-         "anscombe": lambda x: np.sqrt(x + 0.375),
-         "duplicate_count": lambda x: x,
-         "distinct": np.ones_like}[weight](a)
+    g = WEIGHTS[weight](a)
     s = g.sum()
     return df.with_columns(pl.Series(FREQ, g / s if s > 0 else g))
 
