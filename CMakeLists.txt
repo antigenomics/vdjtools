@@ -30,6 +30,7 @@ option(VDJTOOLS_PYTHON "Build the pybind11 module" OFF)
 add_library(vdjtools_core STATIC
   src/core.cpp
   src/inext.cpp
+  src/kmer.cpp
   src/pgen.cpp
 )
 target_include_directories(vdjtools_core PUBLIC include PRIVATE src)
