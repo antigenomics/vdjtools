@@ -390,6 +390,31 @@ def _bundled_model(locus: str):
     return load_bundled(locus)
 
 
+def pgen_junctions(df: pl.DataFrame, locus: str, n_max: int = 2000) -> list[str]:
+    """The junctions Pgen is measured on: ``n_max`` of them, drawn deterministically at random.
+
+    Random, not the first ``n_max`` rows. AIRR frames arrive sorted by ``duplicate_count``
+    descending (measured: 98.7% of adjacent pairs on the ankspond cohort), so a head slice is the
+    most-expanded clones rather than the repertoire, and expanded clones sit measurably lower in
+    Pgen -- pooled q05 -15.17 head vs -14.98 random, median -9.48 vs -9.39.
+
+    Exposed rather than inlined because both sides of the comparison have to use it. The frozen
+    ``pgen_q05`` reference and the ``frac_atypical`` measured against it are the same quantity on
+    two different draws; when they diverge the fraction is wrong by a fixed offset in every sample
+    and still lands in a plausible range, which is exactly the failure that hides.
+
+    Seeded from the locus name via CRC32 rather than :func:`hash`, whose string hashing is
+    randomised per process and would make the column irreproducible across runs.
+    """
+    import zlib
+
+    juncs = df[JUNCTION_AA].to_list()
+    if len(juncs) <= n_max:
+        return juncs
+    rng = np.random.default_rng(zlib.crc32(locus.encode()))
+    return [juncs[i] for i in rng.choice(len(juncs), n_max, replace=False)]
+
+
 def pgen_block(df: pl.DataFrame, locus: str, *, q05: float | None = None,
                n_max: int = 2000, threads: int = 0) -> dict[str, float]:
     """Generation probability of the junctions under the bundled recombination model.
@@ -403,21 +428,15 @@ def pgen_block(df: pl.DataFrame, locus: str, *, q05: float | None = None,
     are gene-level after allele stripping — so conditioning here would either crash or, worse,
     silently condition on whichever alleles happened to survive.
 
-    Subsampled deterministically to ``n_max`` junctions, seeded from the locus name via CRC32
-    rather than :func:`hash`, whose string hashing is randomised per process and would make the
-    column irreproducible across runs.
+    Subsampled deterministically to ``n_max`` junctions by :func:`pgen_junctions`, which the
+    frozen ``q05`` reference must also use.
     """
-    import zlib
-
     from ..model.native import pgen_aa_batch
 
     nan = {"mean_log10": np.nan, "sd_log10": np.nan, "frac_atypical": np.nan}
     if df.height == 0:
         return nan
-    juncs = df[JUNCTION_AA].to_list()
-    if len(juncs) > n_max:
-        rng = np.random.default_rng(zlib.crc32(locus.encode()))
-        juncs = [juncs[i] for i in rng.choice(len(juncs), n_max, replace=False)]
+    juncs = pgen_junctions(df, locus, n_max)
     try:
         p = np.asarray(pgen_aa_batch(_bundled_model(locus), juncs, v=None, j=None,
                                      threads=threads), dtype=float)

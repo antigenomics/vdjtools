@@ -247,3 +247,45 @@ class TestIsotypeNomenclature:
         df = self._frame("IGHM").with_columns(pl.lit(None).alias("c_call"))
         out = B.iso_block(B.work_frame(df))
         assert set(out) == {"IgM", "IgD", "IgG", "IgA"}
+
+
+class TestPgenJunctionDraw:
+    """The frozen ``pgen_q05`` and the ``frac_atypical`` measured against it share one draw."""
+
+    @staticmethod
+    def _frame(n: int) -> pl.DataFrame:
+        # duplicate_count descending, junction length tracking rank: what a real AIRR file looks
+        # like, and enough for a head slice to be distinguishable from a random one.
+        return pl.DataFrame({
+            "junction_aa": ["C" + "A" * (1 + i % 15) + "F" for i in range(n)],
+            "duplicate_count": list(range(n, 0, -1)),
+            "v_call": ["TRBV20-1"] * n, "j_call": ["TRBJ2-2"] * n,
+        })
+
+    def test_the_draw_is_not_the_head_of_a_sorted_frame(self):
+        df = self._frame(5000)
+        assert B.pgen_junctions(df, "TRB", 2000) != df["junction_aa"].to_list()[:2000]
+
+    def test_the_draw_is_deterministic_across_calls(self):
+        df = self._frame(5000)
+        assert B.pgen_junctions(df, "TRB", 2000) == B.pgen_junctions(df, "TRB", 2000)
+
+    def test_a_short_frame_is_taken_whole(self):
+        df = self._frame(100)
+        assert B.pgen_junctions(df, "TRB", 2000) == df["junction_aa"].to_list()
+
+    def test_measure_constants_pools_the_same_draw_the_block_scores(self):
+        """The reference and the statistic compared to it must come off one distribution.
+
+        Head-slicing the reference shifted pooled q05 by -0.185 log10 against the random draw
+        ``pgen_block`` uses -- a fixed offset in every sample's ``frac_atypical``, landing in a
+        wholly plausible range. This asserts the two call the same function, not merely that each
+        looks sane on its own.
+        """
+        import inspect
+
+        from mir.signature import scale
+
+        src = inspect.getsource(scale.measure_constants)
+        assert "pgen_junctions(df, locus, n_pgen)" in src
+        assert "to_list()[:n_pgen]" not in src
