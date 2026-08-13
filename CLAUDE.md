@@ -155,4 +155,7 @@ format-conversion fixtures live there — pull them over when a phase needs them
   branch-and-bound prunes nothing — the insertion chain costs ~0.4/nt, so the cutoff sits six orders
   of magnitude too high.
 - No emoji anywhere in the repo (v3.6.0); the old `⛔`/`⚠` markers are `WARNING:` / `NOTE:`.
-- `rescale.py:63` raises a Polars-2.0 `empty_as_null` DeprecationWarning — set it when convenient.
+- `ruff check .` is green as of v3.6.1, with `[tool.ruff.lint]` ignoring only `E702`/`E741`/`E731`
+  (house style). Keep it green so a real finding is not buried in style hits. `ruff format` is NOT
+  the house style — it would rewrite 171 files; do not run it.
+  (The old `rescale.py` `empty_as_null` note is resolved: it is set explicitly at `model/rescale.py:62`.)

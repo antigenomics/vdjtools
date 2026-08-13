@@ -91,7 +91,10 @@ def _():
             for name in ("vdjdb.slim.txt", "vdjdb.slim.txt.gz"):
                 if (root / "data_dump" / name).exists():
                     return root / "data_dump" / name
-        import io as _io, json, urllib.request, zipfile
+        import io as _io
+        import json
+        import urllib.request
+        import zipfile
         dd = (_nb.parent if _nb.name == "examples" else Path.cwd()) / "data_dump"
         try:
             dd.mkdir(parents=True, exist_ok=True)

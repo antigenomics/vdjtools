@@ -3,6 +3,25 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.6.1 — 2026-08-14
+
+Audit pass. No library behaviour changes.
+
+- **`examples/emerson_cmv_hla.py` did not parse on Python 3.10/3.11.** A backslash inside an
+  f-string *expression* (`f"…{meta['hla'].str.contains(r'HLA-A\*02').sum()}…"`) is 3.12-only syntax,
+  but the package declares `requires-python = ">=3.10"`. The regex is hoisted to a local.
+- Unused imports and multi-import lines cleaned out of `examples/` (`ruff --fix`).
+- `[tool.ruff.lint]` now ignores `E702`/`E741`/`E731` — the paired-short-statement style and `l`/`O`
+  loop scalars are deliberate throughout the examples and OLGA oracle shims. `ruff check .` is
+  green, so a real finding is visible again instead of being buried in 30 style hits.
+- Repo cleanup: 1.7 GB of regenerable artifacts removed (`examples/.data` notebook caches,
+  `docs/_build`, `examples/__marimo__`, tool caches, `.DS_Store`), plus four worktrees whose
+  branches were already fully merged into `master` (`feature/biomarker-cooccurrence`,
+  `feature/dynamics`, `chore/vdjmatch-pin`, `claude/trusting-torvalds-65e7b7`). `feature/cdr3-viterbi`
+  and `signature` still carry unmerged commits and were left in place.
+
+Verified at this commit: `pytest tests/python` 783 passed / 6 skipped; `sphinx-build -W` clean.
+
 ## 3.6.0 — 2026-08-12
 
 ### Added — `infer_nt`: the nucleotide CDR3 behind an amino-acid one

@@ -43,7 +43,6 @@ def _():
     # --- imports, config & helpers (single cell so every name is defined once) ---
     import resource
     import sys
-    import time
     from pathlib import Path
 
     import marimo as mo
@@ -88,7 +87,10 @@ def _():
             for name in ("vdjdb.slim.txt", "vdjdb.slim.txt.gz"):
                 if (root / "data_dump" / name).exists():
                     return root / "data_dump" / name
-        import io as _io, json, urllib.request, zipfile
+        import io as _io
+        import json
+        import urllib.request
+        import zipfile
         dd = (nb.parent if nb.name == "examples" else Path.cwd()) / "data_dump"
         try:
             dd.mkdir(parents=True, exist_ok=True)
@@ -182,8 +184,9 @@ def _(Path, REPO, hip_local, max_samples, mo, phenotypes, pl, vio):
         vio.ingest_cohort(meta.select("sample_id", "cmv", "hla", "age", "sex"), corr_dir, cohort,
                           sample_col="sample_id", file_template="{sample}.txt.gz", fmt="vdjtools")
     lf = vio.scan_cohort(cohort, join_metadata=False)
+    n_a02 = meta["hla"].str.contains(r"HLA-A\*02").sum()   # backslash out of the f-string: py<3.12
     mo.md(f"**{meta.height} subjects** — {(meta['cmv']=='+').sum()} CMV+, "
-          f"{(meta['cmv']=='-').sum()} CMV−; {meta['hla'].str.contains(r'HLA-A\*02').sum()} "
+          f"{(meta['cmv']=='-').sum()} CMV−; {n_a02} "
           f"HLA-A\\*02 carriers. Cohort scanned from `{cohort.name}`.")
     return a02_ph, cmv_ph, lf, meta
 
