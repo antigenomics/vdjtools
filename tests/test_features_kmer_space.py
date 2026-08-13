@@ -210,3 +210,39 @@ class TestItFindsAPlantedMotif:
                              n_components=0, threads=4)
         assert red.meta["code_space"] < full.meta["code_space"]
         assert red.n_columns > full.n_columns
+
+
+class TestTheBlockIsHeldOutUntilFitted:
+    """Same rule as `pub`: no dead columns in the contract."""
+
+    def test_the_layout_does_not_declare_kmer_before_a_space_exists(self):
+        from vdjtools.signature import layout as L
+
+        assert not any(b.name == "kmer" for b in L.registry()), \
+            "a block whose artifact does not exist must not be in the contract"
+
+    def test_a_fitted_set_of_spaces_produces_a_well_formed_block(self, cohort):
+        from vdjtools.signature.kmer import kmer_block, kmer_spec
+
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=6, threads=2)
+        spec = kmer_spec({"TRA": sp, "TRB": sp}, tier="full")
+        assert spec.sig == "vsig" and spec.name == "kmer" and spec.attributable
+        assert list(spec.features) == [f"PC0{i}" for i in range(1, 7)]
+        out = kmer_block(cohort[0], "TRB", sp)
+        assert set(out) == set(spec.features)
+        assert np.isfinite(list(out.values())).all()
+
+    def test_ragged_ranks_are_refused(self, cohort):
+        from vdjtools.signature.kmer import kmer_spec
+
+        a = fit_kmer_space(cohort, n_groups=8, n_components=6, threads=2)
+        b = fit_kmer_space(cohort, n_groups=8, n_components=4, threads=2)
+        with pytest.raises(ValueError, match="same rank"):
+            kmer_spec({"TRA": a, "TRB": b})
+
+    def test_a_missing_space_is_a_hole_not_a_zero(self, cohort):
+        from vdjtools.signature.kmer import kmer_block
+
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=6, threads=2)
+        empty = cohort[0].clear()
+        assert all(np.isnan(v) for v in kmer_block(empty, "TRB", sp).values())

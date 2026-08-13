@@ -217,6 +217,12 @@ _BLOCKS: list[Block] = [
     # from 28 columns their own samples were too shallow to support. A contract with dead columns
     # in it teaches people to ignore holes. `register()` is how it arrives once the panel ships.
 
+    # The V+k-mer block is NOT here either, for the same reason and by the same rule: it needs a
+    # frozen KmerSpace (vocabulary + IDF + SVD basis) fitted on a reference corpus. See
+    # :func:`vdjtools.signature.kmer.register_kmer`, which builds and registers it from fitted
+    # spaces. Unlike `pub` this one is per-locus and its width is whatever rank was fitted, so it
+    # cannot even be *declared* at a fixed size before the artifact exists.
+
     # ------------------------------------------------------------------ composition (full only)
     Block("vsig", "aa", feats("full", "arcsine", *"ACDEFGHIKLMNPQRSTVWY")),
     # Two regions only. The legacy five-region x four-quantile expansion emitted 100 numbers per
