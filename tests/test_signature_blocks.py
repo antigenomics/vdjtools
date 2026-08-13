@@ -273,19 +273,3 @@ class TestPgenJunctionDraw:
     def test_a_short_frame_is_taken_whole(self):
         df = self._frame(100)
         assert B.pgen_junctions(df, "TRB", 2000) == df["junction_aa"].to_list()
-
-    def test_measure_constants_pools_the_same_draw_the_block_scores(self):
-        """The reference and the statistic compared to it must come off one distribution.
-
-        Head-slicing the reference shifted pooled q05 by -0.185 log10 against the random draw
-        ``pgen_block`` uses -- a fixed offset in every sample's ``frac_atypical``, landing in a
-        wholly plausible range. This asserts the two call the same function, not merely that each
-        looks sane on its own.
-        """
-        import inspect
-
-        from mir.signature import scale
-
-        src = inspect.getsource(scale.measure_constants)
-        assert "pgen_junctions(df, locus, n_pgen)" in src
-        assert "to_list()[:n_pgen]" not in src

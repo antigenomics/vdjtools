@@ -114,22 +114,26 @@ def recompute_frequency(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns((pl.col(COUNT) / pl.lit(total)).cast(pl.Float64).alias(FREQ))
 
 
-def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame:
+def normalize(df: pl.DataFrame, *, recompute_freq: bool = False,
+              keep: tuple[str, ...] = ()) -> pl.DataFrame:
     """Coerce an arbitrary frame to the canonical clonotype schema.
 
     Missing canonical columns are added as nulls, present ones are cast to their
     declared dtype (non-strict — unparseable values become null). The result is
-    exactly the canonical columns in canonical order; any non-canonical columns
-    (e.g. native vdjtools markup like ``VEnd``/``DStart``) are dropped.
+    the canonical columns in canonical order, followed by any ``keep`` columns;
+    every other non-canonical column (e.g. native vdjtools markup like
+    ``VEnd``/``DStart``) is dropped.
 
     Args:
         df: A frame that already uses canonical column names for whatever columns
             it carries.
         recompute_freq: If ``True``, recompute ``frequency`` from ``duplicate_count``
             after coercion (use when the source lacks a trustworthy frequency).
+        keep: Non-canonical columns to preserve, e.g. ``("v_identity",)``. Dtypes
+            are left alone — the canonical schema has nothing to say about them.
 
     Returns:
-        A frame with exactly the canonical columns, correctly typed and ordered.
+        A frame with the canonical columns, correctly typed and ordered, plus ``keep``.
     """
     exprs = []
     for col, dtype in SCHEMA.items():
@@ -146,7 +150,11 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame
     df = df.with_columns(exprs)
     if recompute_freq:
         df = recompute_frequency(df)
-    return df.select(COLUMNS)
+    # Canonical columns first, then whatever the reader was asked to keep. Without the second
+    # part a `keep=` upstream is silently undone here, which is worse than never offering one:
+    # the caller gets a frame with no v_identity and no error to explain it.
+    extra = [c for c in keep if c in df.columns and c not in COLUMNS]
+    return df.select(list(COLUMNS) + extra)
 
 
 def weight_expr(weight: str) -> pl.Expr:
