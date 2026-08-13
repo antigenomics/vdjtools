@@ -41,7 +41,7 @@ def _locus_frames(sample) -> dict[str, pl.DataFrame]:
 
 def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DEFAULT_CSTAR,
          weight: str = "log2p1", pgen_q05: dict[str, float] | None = None,
-         threads: int = 0) -> dict[str, float]:
+         kmer_spaces: dict | None = None, threads: int = 0) -> dict[str, float]:
     """The ``vsig`` half of one sample's signature, as ``{column_name: value}``.
 
     Args:
@@ -52,6 +52,11 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         pgen_q05: Per-locus frozen 5th-percentile ``log10 Pgen`` for ``pgen:*:frac_atypical``;
             that column stays ``nan`` without it, since "atypical" is meaningless without a
             reference to be atypical against.
+        kmer_spaces: Per-locus frozen :class:`~vdjtools.features.kmer_space.KmerSpace`. The
+            ``kmer`` block is emitted only for loci present here AND only if the block has been
+            registered (see :func:`vdjtools.signature.kmer.register_kmer`) -- the columns do not
+            exist in the layout otherwise, so passing spaces without registering them is a no-op
+            rather than a silent width change.
         threads: Worker threads for the Pgen batch; 0 = auto.
             Off by default so ``tier="full"`` still runs; on when a caller needs the guarantee
             that every declared column was actually computed.
@@ -105,6 +110,12 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         if full:
             _put(out, f"vsig:aa:{locus}", B.aa_block(work))
             _put(out, f"vsig:pchem:{locus}", B.pchem_block(work))
+
+        if kmer_spaces and f"vsig:kmer:{locus}:PC01" in out:
+            from .kmer import kmer_block
+
+            _put(out, f"vsig:kmer:{locus}",
+                 kmer_block(work, locus, kmer_spaces.get(locus), weight="freq"))
 
         if locus == "IGH":
             _put(out, "vsig:iso:IGH", B.iso_block(work, tier_full=full))

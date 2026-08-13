@@ -246,3 +246,74 @@ class TestTheBlockIsHeldOutUntilFitted:
         sp = fit_kmer_space(cohort, n_groups=8, n_components=6, threads=2)
         empty = cohort[0].clear()
         assert all(np.isnan(v) for v in kmer_block(empty, "TRB", sp).values())
+
+
+class TestTheSpaceCanBeFrozen:
+    def test_round_trip_reproduces_the_vector_exactly(self, cohort, tmp_path):
+        from vdjtools.features.kmer_space import load_kmer_spaces, save_kmer_spaces
+
+        a = fit_kmer_space(cohort, pattern="xx.x", n_groups=8, n_components=6, threads=2)
+        b = fit_kmer_space(cohort, pattern="xxxx", n_groups=12, n_components=6, threads=2)
+        p = tmp_path / "spaces.npz"
+        save_kmer_spaces({"TRA": a, "TRB": b}, p)
+        back = load_kmer_spaces(p)
+
+        assert set(back) == {"TRA", "TRB"}
+        for name, orig in (("TRA", a), ("TRB", b)):
+            got = back[name]
+            assert got.pattern == orig.pattern
+            assert got.groups == orig.groups
+            assert got.v_genes == orig.v_genes
+            assert got.flank == orig.flank
+            assert np.array_equal(got.codes, orig.codes)
+            assert np.allclose(got.idf, orig.idf)
+            # The point of freezing: the same repertoire must give the same numbers.
+            assert np.allclose(got.transform(cohort[0]), orig.transform(cohort[0]))
+
+    def test_the_alphabet_travels_as_a_partition_not_a_group_count(self, cohort, tmp_path):
+        """A later change to the clustering must not re-partition an already-frozen space."""
+        from vdjtools.features.kmer_space import load_kmer_spaces, save_kmer_spaces
+
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=4, threads=2)
+        p = tmp_path / "s.npz"
+        save_kmer_spaces({"TRB": sp}, p)
+        z = np.load(p, allow_pickle=True)
+        assert z["TRB/groups"].shape == (20,), "the partition itself must be stored"
+
+    def test_an_unprojected_space_round_trips_too(self, cohort, tmp_path):
+        from vdjtools.features.kmer_space import load_kmer_spaces, save_kmer_spaces
+
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=0, threads=2)
+        p = tmp_path / "s.npz"
+        save_kmer_spaces({"TRB": sp}, p)
+        assert load_kmer_spaces(p)["TRB"].components is None
+
+
+class TestTheAssemblerEmitsTheBlockOnceRegistered:
+    def test_registered_columns_appear_and_are_finite(self, cohort):
+        import importlib
+
+        from vdjtools.signature import assemble, layout
+        from vdjtools.signature.kmer import register_kmer
+
+        # register_kmer mutates the process-wide registry, so reload it afterwards rather than
+        # leaking a `kmer` block into every other test in the session.
+        try:
+            sp = fit_kmer_space(cohort, n_groups=8, n_components=4, threads=2)
+            register_kmer({"TRB": sp}, tier="full")
+            cols = layout.columns("full", "vsig")
+            assert "vsig:kmer:TRB:PC01" in cols
+            out = assemble.vsig({"TRB": cohort[0]}, tier="full", weight="log2p1",
+                                kmer_spaces={"TRB": sp})
+            vals = [out[f"vsig:kmer:TRB:PC{i:02d}"] for i in range(1, 5)]
+            assert np.isfinite(vals).all(), vals
+        finally:
+            importlib.reload(layout)
+
+    def test_without_registration_passing_spaces_is_a_no_op(self, cohort):
+        from vdjtools.signature import assemble, layout
+
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=4, threads=2)
+        assert not any(c.startswith("vsig:kmer") for c in layout.columns("full", "vsig"))
+        out = assemble.vsig({"TRB": cohort[0]}, tier="full", kmer_spaces={"TRB": sp})
+        assert not any(k.startswith("vsig:kmer") for k in out), "width must not change silently"

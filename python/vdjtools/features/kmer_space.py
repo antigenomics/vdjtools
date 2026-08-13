@@ -361,3 +361,50 @@ def _corpus_matrix(rows, space: KmerSpace, sublinear: bool):
     from scipy.sparse import diags
 
     return diags(1.0 / norms) @ X
+
+
+def save_kmer_spaces(spaces: dict[str, KmerSpace], path) -> None:
+    """Freeze a per-locus set of spaces to one ``.npz``.
+
+    A space that cannot be written down is not frozen, whatever the docstring says: the whole
+    claim is that a collaborator recomputes the same columns, which requires the vocabulary, the
+    IDF and the basis to travel. Stored per locus with the locus in the key.
+
+    The alphabet is stored as the group id of each of the 20 residues in :data:`AMINO_ACIDS`
+    order, not as the ``n_groups`` that produced it -- a future change to the clustering must not
+    silently re-partition an already-frozen space.
+    """
+    import numpy as np
+
+    out: dict[str, np.ndarray] = {"loci": np.array(sorted(spaces), dtype=object)}
+    for locus, sp in sorted(spaces.items()):
+        out[f"{locus}/pattern"] = np.asarray(sp.pattern, dtype=np.int8)
+        out[f"{locus}/groups"] = np.asarray([sp.groups[a] for a in AMINO_ACIDS], dtype=np.int8)
+        out[f"{locus}/v_genes"] = np.array(sp.v_genes, dtype=object)
+        out[f"{locus}/flank"] = np.asarray(sp.flank, dtype=np.int32)
+        out[f"{locus}/codes"] = sp.codes.astype(np.int64)
+        out[f"{locus}/idf"] = sp.idf.astype(np.float64)
+        if sp.components is not None:
+            out[f"{locus}/components"] = sp.components.astype(np.float64)
+    np.savez_compressed(path, **out)
+
+
+def load_kmer_spaces(path) -> dict[str, KmerSpace]:
+    """Read back what :func:`save_kmer_spaces` wrote."""
+    import numpy as np
+
+    z = np.load(path, allow_pickle=True)
+    spaces: dict[str, KmerSpace] = {}
+    for locus in [str(x) for x in z["loci"]]:
+        groups = {a: int(g) for a, g in zip(AMINO_ACIDS, z[f"{locus}/groups"])}
+        comp = z[f"{locus}/components"] if f"{locus}/components" in z.files else None
+        spaces[locus] = KmerSpace(
+            pattern=[int(x) for x in z[f"{locus}/pattern"]],
+            groups=groups,
+            v_genes=[str(v) for v in z[f"{locus}/v_genes"]],
+            flank=int(z[f"{locus}/flank"]),
+            codes=z[f"{locus}/codes"],
+            idf=z[f"{locus}/idf"],
+            components=comp,
+        )
+    return spaces
