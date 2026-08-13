@@ -185,6 +185,29 @@ describe("standard")                          # the column dictionary
   pool: the default 0 means "all cores" *per worker*.
 - CLI: `vdjtools signature *.tsv --tier standard -o vsig.parquet`, `vdjtools signature --describe`.
 
+**Feature presets — the entry point to recommend to a collaborator.** `vdjtools.signature.presets` names
+and ranks the useful column subsets so nobody picks columns by hand:
+
+| preset | rank | columns | use it for |
+|---|---|---|---|
+| `compact` | recommended | 152 | first look; small cohorts; features must stay well under n |
+| `transfer` | recommended | 550 | the model must run on another lab's samples |
+| `classify` | recommended | 615 | general supervised work when train/test share a protocol |
+| `statistics` | specific | 101 | no embedding available; textbook-defined features only |
+| `bcell` | specific | 286 | BCR work — Ig loci with SHM and isotype |
+| `geometry` | specific | 514 | batch is the adversary; blood↔tissue comparisons |
+| `full` | specific | 1403 | feature selection, NOT fitting — measured worse than a good subset |
+| `nuisance` | **avoid** | 73 | a control: depth/mask/QC only. If your model matches it, it reads library prep |
+
+```bash
+vdjtools presets                 # the table, with rankings
+vdjtools presets transfer        # one preset in full: features, how computed, use cases, caveats
+```
+
+Presets resolve from the frozen layout alone — no corpus, no fitted artifact — so two people
+selecting the same preset get identical columns in identical order.
+
+
 ### `vdjtools.overlap` — overlap + TCRnet (delegates to vdjmatch/seqtree)
 `overlap_metrics`, `overlap_pair`, `DEFAULT_KEY`; `fuzzy_overlap`, `fuzzy_overlap_metrics`;
 `similarity_overlap`, `similarity_matrix`, `SimilarityMatrices` (TINA / Leinster-Cobbold);

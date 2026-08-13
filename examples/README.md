@@ -239,3 +239,17 @@ selected by explained variance.
 pip install -e ".[examples]"
 marimo edit examples/signature_features.py
 ```
+
+## `signature_features.py` — see also: feature presets
+
+`vdjtools presets` lists the named, ranked feature sets and `vdjtools presets <name>` explains one
+in full (what it contains, how it is computed, when to use it, and its caveats). To produce a table
+over a whole dataset in parallel:
+
+```bash
+vdjtools presets                                                    # the ranked table
+vdjtools signature *.tsv --preset statistics --threads 0 --out vsig.parquet
+```
+
+For the full vector — statistics **and** embedding geometry — use mirpy's `mir signature
+--preset ...`, and see its `examples/feature_vectors.py` notebook.

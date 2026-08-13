@@ -306,6 +306,105 @@ trusted:
 
 *Measurements on this page were last taken 2026-08-13.*
 
+Feature presets — pick by intent, not by column
+-----------------------------------------------
+
+The signature is over 1,400 columns. Almost nobody wants all of them, and which subset is right
+depends on the question — a model that must run on another lab's samples wants different columns
+from one scoring samples inside a single study. :mod:`vdjtools.signature.presets` names those
+choices, documents each, and **ranks** it:
+
+**recommended**
+   Use this unless you have a reason not to.
+
+*specific*
+   Correct for a stated purpose and wrong outside it.
+
+``avoid``
+   A control, a baseline, or a measured dead end. Named so that choosing it is deliberate.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 14 10 62
+
+   * - preset
+     - rank
+     - columns
+     - what it is
+   * - ``compact``
+     - **recommended**
+     - 152
+     - The smallest vector that still describes a repertoire. Start here.
+   * - ``transfer``
+     - **recommended**
+     - 550
+     - For models that must work on another lab's samples. Drops the columns whose level moves most between studies.
+   * - ``classify``
+     - **recommended**
+     - 615
+     - The general-purpose set. Best measured task performance when train and test come from comparable cohorts.
+   * - ``statistics``
+     - *specific*
+     - 101
+     - Classical repertoire statistics only. Needs no embedding, so vdjtools alone suffices.
+   * - ``bcell``
+     - *specific*
+     - 286
+     - B-cell receptor work: the immunoglobulin loci with somatic hypermutation and isotype.
+   * - ``geometry``
+     - *specific*
+     - 514
+     - Embedding coordinates only — no count statistics at all.
+   * - ``full``
+     - *specific*
+     - 1403
+     - Every contract column. For feature selection, not for fitting.
+   * - ``nuisance``
+     - ``avoid``
+     - 73
+     - Sequencing protocol only. A control, not a feature set.
+
+Every preset resolves to a column list from the frozen layout alone — block names, loci, tier. No
+corpus, no fitted artifact and no private data is involved, so two people selecting the same preset
+get the same columns in the same order.
+
+.. code-block:: bash
+
+   vdjtools presets                      # the table above
+   vdjtools presets transfer             # one preset in full: features, how, use cases, caveats
+   vdjtools signature *.tsv --preset transfer --describe    # the exact columns it selects
+
+.. code-block:: python
+
+   from vdjtools.signature import presets
+
+   presets.get("transfer").rank        # 'recommended'
+   cols = presets.columns("compact")   # a concrete, ordered column list
+   presets.table()                     # the whole registry as a DataFrame
+
+Where the rankings come from
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A benchmark over a public multi-study AIRR corpus — several hundred study groups, tens of thousands
+of samples — scored with **study-disjoint folds**: fit on some studies, predict on studies the fit
+never saw. Under that split a column that merely encodes sequencing protocol scores at chance, which
+is the point. Three findings shaped the presets:
+
+* **A nuisance floor of depth + presence masks + call quality is a surprisingly strong predictor**
+  on many contrasts. Any feature set worth using has to beat its own floor, which is why
+  ``nuisance`` ships as a named control rather than being hidden.
+* **Projection did not help.** Plain robust or ``asinh`` scaling beat PCA at every rank tested, so
+  no preset projects by default and ``full`` is documented as a feature-selection tool rather than a
+  model input.
+* **The two halves have opposite nuisance profiles.** The embedding geometry carries several times
+  less study-to-study variance than the count statistics and the most donor-to-donor variance, and
+  is nearly unaffected by whether a sample is blood or tissue — but wins fewer supervised tasks
+  outright. Hence ``transfer`` and ``geometry`` for robustness, ``classify`` and ``statistics`` for
+  raw accuracy.
+
+Anyone with a comparable SRA/AIRR corpus can reproduce this; none of it depends on a private
+dataset.
+
 API
 ---
 

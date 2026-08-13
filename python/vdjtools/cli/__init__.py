@@ -324,6 +324,9 @@ def signature(
     tier: str = typer.Option("standard", help="core | standard | full — nested column sets."),
     weight: str = typer.Option("log2p1", help="Clone-size weight g: log2p1 | duplicate_count | "
                                               "distinct | log1p | anscombe."),
+    preset: Optional[str] = typer.Option(None, "--preset",
+                                         help="Named feature set (see `vdjtools presets`). "
+                                              "Overrides --tier and selects the columns."),
     describe: bool = typer.Option(False, "--describe",
                                   help="Print the column dictionary for --tier and exit."),
     threads: int = _THREADS, out: Optional[Path] = _OUT,
@@ -332,14 +335,37 @@ def signature(
 
     Statistics only. The geometry half (`rsig`) needs the prototype embedding and ships in mirpy,
     whose `mir signature` emits both halves as one vector.
+
+    Pick columns with --preset rather than by hand; `vdjtools presets` lists them with their
+    rankings. A preset that spans both halves keeps only its `vsig:` columns here, and the command
+    says so, because silently returning half of what was asked for is worse than saying it.
     """
     from vdjtools.signature import layout as L
+    from vdjtools.signature import presets as P
     from vdjtools.signature import vsig
+
+    keep = None
+    if preset is not None:
+        try:
+            spec = P.get(preset)
+        except KeyError as e:
+            _err(str(e))
+        tier = spec.tier
+        keep = [c for c in spec.columns() if c.startswith("vsig:")]
+        if not keep:
+            _err(f"preset {preset!r} selects no vsig columns (it is {'+'.join(spec.sig)}); "
+                 f"use `mir signature --preset {preset}` for the geometry half")
+        dropped = spec.n_columns - len(keep)
+        if dropped:
+            typer.echo(f"preset {preset!r}: {len(keep)} vsig columns "
+                       f"({dropped} rsig columns need `mir signature`)", err=True)
 
     if tier not in L.TIERS:
         _err(f"--tier must be one of {L.TIERS}; got {tier!r}")
     if describe:
-        _write(L.describe(tier), out)
+        # The column dictionary for what will actually be emitted, preset or tier.
+        d = L.describe(tier)
+        _write(d.filter(pl.col('column').is_in(keep)) if keep else d, out)
         return
 
     from vdjtools.io.batch import map_samples
@@ -350,7 +376,37 @@ def signature(
             map_samples(fn, items, fmt=fmt, workers=threads or None)]
     if not rows:
         _err("no samples produced a signature")
-    _write(pl.DataFrame(rows).select(["sample_id", *L.columns(tier, "vsig")]), out)
+    cols = keep if keep is not None else L.columns(tier, "vsig")
+    _write(pl.DataFrame(rows).select(["sample_id", *cols]), out)
+
+
+@app.command()
+def presets(
+    name: Optional[str] = typer.Argument(None, help="Show one preset in full."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """List the named feature sets, with their rankings.
+
+    `recommended` — use unless you have a reason not to. `specific` — correct for a stated purpose
+    and wrong outside it. `avoid` — a control or a measured dead end, named so that picking it is
+    deliberate.
+    """
+    from vdjtools.signature import presets as P
+
+    if name is None:
+        _write(P.table().select("preset", "rank", "columns", "halves", "scaling", "summary"), out)
+        return
+    try:
+        spec = P.get(name)
+    except KeyError as e:
+        _err(str(e))
+    typer.echo(f"{spec.name}  [{spec.rank}]  {spec.n_columns} columns  "
+               f"tier={spec.tier}  halves={'+'.join(spec.sig)}  scaling={spec.scaling}\n")
+    for label, text in (("summary", spec.summary), ("features", spec.features),
+                        ("how it is computed", spec.how), ("use cases", spec.use_cases),
+                        ("notes", spec.notes)):
+        if text:
+            typer.echo(f"{label}:\n  {text}\n")
 
 
 @app.command()
