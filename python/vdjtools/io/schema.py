@@ -194,3 +194,48 @@ def strip_allele(expr: pl.Expr) -> pl.Expr:
     return (expr.str.split(",")
             .list.eval(pl.element().str.strip_chars().str.replace(r"\*.*$", ""))
             .list.unique().list.sort().list.join(","))
+
+
+def resolve_gene(expr: pl.Expr) -> pl.Expr:
+    """Reduce a segment call to exactly ONE gene: allele stripped, ambiguity resolved to the first.
+
+    The companion to :func:`strip_allele`, and the distinction matters:
+
+    - :func:`strip_allele` keeps a genuine cross-gene tie as ``IGHV3-23,IGHV3-23D``, because when
+      you are *reporting* usage you must not invent certainty the aligner did not have.
+    - :func:`resolve_gene` collapses it to ``IGHV3-23``, because when the gene is a **feature
+      axis** every distinct ambiguity string otherwise becomes its own category.
+
+    That second failure is not hypothetical. Fitting a V+k-mer vocabulary on 200 HIP samples
+    produced **1,296 V "genes", 1,235 of them comma-strings** such as
+    ``TRBV1,TRBV23-1,TRBV4-1,TRBV4-2,TRBV4-3``. The cost is not the 21x wider axis: it is that the
+    real ``TRBV9`` bucket gets *drained*, since every TRBV9 clone that happened to be called
+    ambiguously was filed elsewhere. Its features then fall below any incidence floor and vanish,
+    so a cohort with clean calls is scored against columns nobody populated.
+
+    Where the ambiguity comes from matters, because it is not a parsing artifact and will not go
+    away: that cohort is Adaptive/immunoSEQ **realigned with MiXCR against IMGT from the junction
+    plus short flanks**. The realignment is the better call -- MiXCR/IMGT is a sounder reference
+    than Adaptive's own -- and the ambiguity is what honest calling looks like when V genes differ
+    only outside the sequenced window. So first-listed is a resolution, not a correction.
+
+    Two things it cannot fix, and which belong to the assay rather than the reference: the window
+    still bounds what is resolvable, and Adaptive's multiplex V primers distort V usage
+    frequencies. A V-conditioned feature axis *fitted* on such a cohort inherits both, which makes
+    it a poor donor for a 5'RACE cohort whatever this function does.
+
+    First-listed rather than dropped: an ambiguous call still carries a clonotype, and the
+    aligner lists its best call first. Note this takes the first call **as written**, not
+    ``strip_allele(...).list.first()`` -- ``strip_allele`` sorts, so composing the two silently
+    returns the alphabetically-first gene instead (``TRBV5*01,TRBV19*03`` -> ``TRBV19``, not
+    ``TRBV5``).
+
+    Args:
+        expr: A polars string expression over segment calls.
+
+    Returns:
+        One gene per row (``TRBV12-3*01`` -> ``TRBV12-3``; ``A*01,B*01`` -> ``A``); nulls pass
+        through unchanged.
+    """
+    return (expr.str.split(",").list.first()
+            .str.strip_chars().str.replace(r"\*.*$", ""))

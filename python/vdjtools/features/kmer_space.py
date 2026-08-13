@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import polars as pl
 
-from ..io.schema import JUNCTION_AA, V_CALL, strip_allele, weight_expr
+from ..io.schema import JUNCTION_AA, V_CALL, resolve_gene, weight_expr
 
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -183,7 +183,7 @@ class KmerSpace:
 
     def _encode(self, df: pl.DataFrame, weight: str):
         vidx = {v: i for i, v in enumerate(self.v_genes)}
-        d = df.with_columns(strip_allele(pl.col(V_CALL).cast(pl.Utf8)).alias("_v"),
+        d = df.with_columns(resolve_gene(pl.col(V_CALL).cast(pl.Utf8)).alias("_v"),
                             weight_expr(weight).alias("_w"))
         junctions = d[JUNCTION_AA].to_list()
         # An unmapped V gene becomes -1, which the kernel folds into its own bucket rather than
@@ -265,7 +265,7 @@ def fit_kmer_space(frames, *, pattern: str = "xxxx", n_groups: int = 8, flank: i
     if v_genes is None:
         seen = set()
         for df in frames:
-            seen |= set(df.select(strip_allele(pl.col(V_CALL).cast(pl.Utf8)).alias("v"))["v"]
+            seen |= set(df.select(resolve_gene(pl.col(V_CALL).cast(pl.Utf8)).alias("v"))["v"]
                         .drop_nulls().to_list())
         v_genes = sorted(seen)
     v_genes = list(v_genes)
@@ -276,7 +276,7 @@ def fit_kmer_space(frames, *, pattern: str = "xxxx", n_groups: int = 8, flank: i
 
     junctions, v_codes, weights = [], [], []
     for df in frames:
-        d = df.with_columns(strip_allele(pl.col(V_CALL).cast(pl.Utf8)).alias("_v"),
+        d = df.with_columns(resolve_gene(pl.col(V_CALL).cast(pl.Utf8)).alias("_v"),
                             weight_expr(weight).alias("_w"))
         junctions.append(d[JUNCTION_AA].to_list())
         v_codes.append([vidx.get(v, -1) for v in d["_v"]])

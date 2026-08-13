@@ -317,3 +317,42 @@ class TestTheAssemblerEmitsTheBlockOnceRegistered:
         assert not any(c.startswith("vsig:kmer") for c in layout.columns("full", "vsig"))
         out = assemble.vsig({"TRB": cohort[0]}, tier="full", kmer_spaces={"TRB": sp})
         assert not any(k.startswith("vsig:kmer") for k in out), "width must not change silently"
+
+
+class TestAmbiguousVCallsResolveToOneGene:
+    """A comma-ambiguous call must not become its own V bucket."""
+
+    def test_resolve_gene_takes_the_first_after_stripping(self):
+        from vdjtools.io.schema import resolve_gene, strip_allele
+
+        s = pl.DataFrame({"v": ["TRBV9*01", "TRBV10-1,TRBV10-2", "TRBV1*01,TRBV23-1*02",
+                                "TRBV1-2*02,TRBV1-2*04", None]})
+        got = s.select(resolve_gene(pl.col("v")).alias("g"))["g"].to_list()
+        assert got == ["TRBV9", "TRBV10-1", "TRBV1", "TRBV1-2", None]
+
+        # strip_allele must still keep the tie -- the two serve different purposes
+        kept = s.select(strip_allele(pl.col("v")).alias("g"))["g"].to_list()
+        assert kept[2] == "TRBV1,TRBV23-1"
+
+    def test_first_listed_means_first_as_written_not_alphabetically_first(self):
+        """strip_allele sorts, so composing it with .list.first() picks the wrong gene."""
+        from vdjtools.io.schema import resolve_gene
+
+        s = pl.DataFrame({"v": ["TRBV5*01,TRBV19*03", "TRBV19*03,TRBV5*01"]})
+        assert s.select(resolve_gene(pl.col("v")).alias("g"))["g"].to_list() == ["TRBV5", "TRBV19"]
+
+    def test_the_fitted_v_vocabulary_has_no_comma_strings(self, cohort):
+        amb = cohort[0].with_columns(
+            pl.when(pl.int_range(pl.len()) % 3 == 0)
+            .then(pl.col("v_call") + pl.lit(",TRBV30") )
+            .otherwise(pl.col("v_call")).alias("v_call"))
+        sp = fit_kmer_space([amb] + cohort[1:6], n_groups=8, n_components=0, threads=2)
+        assert not any("," in v for v in sp.v_genes), \
+            "each ambiguity string would otherwise be its own V bucket, draining the real one"
+
+    def test_an_ambiguous_call_scores_as_its_first_gene(self, cohort):
+        sp = fit_kmer_space(cohort, n_groups=8, n_components=0, threads=2)
+        assert "TRBV5" in sp.v_genes
+        clean = cohort[0].with_columns(pl.lit("TRBV5").alias("v_call"))
+        amb = cohort[0].with_columns(pl.lit("TRBV5*01,TRBV19*03").alias("v_call"))
+        assert np.allclose(sp.transform(clean), sp.transform(amb))
