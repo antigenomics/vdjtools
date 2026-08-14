@@ -82,7 +82,7 @@ cores, bitwise-identical to serial); the EM E-step parallelises over reads (~6.7
 diversity / rarefaction run on a native iNEXT kernel (bootstrap + parallel batch). Memory stays light —
 **~63 MB** resident for ``import vdjtools`` plus one model, **~123 MB** with all seven bundled models.
 
-Capabilities (see the :doc:`API reference <api>` and the project ROADMAP):
+Capabilities (see the :doc:`API reference <api>`):
 
 - **IO** — canonical AIRR **junction** clonotype frame (``junction_nt`` / ``junction_aa``); readers
   for native vdjtools, AIRR TSV, Parquet, and converters for MiXcr (incl. C-gene / isotype),

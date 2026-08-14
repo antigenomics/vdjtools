@@ -3,6 +3,40 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.7.3 — 2026-08-15
+
+Housekeeping. The first PyPI release since 3.7.0, so it carries 3.7.1 and 3.7.2 with it.
+
+### Fixed — the iNEXT bootstrap carried a fallback that could never be taken
+
+`stats/inext.py` guarded its `_core` import in a `try/except` and dispatched between the native
+bootstrap and the numpy reference at call time. `_core` is a build-time dependency — an install
+without it does not exist — so the `except` branch and `_bootstrap_se_dispatch` were dead, and
+`inext_batch` raised its own "requires the native _core extension" for a state that cannot occur.
+Both are gone; the import is now local to the two functions that need it, which keeps
+`import vdjtools.stats` as light as the guard made it. The numpy `_bootstrap_se` stays, unchanged
+— it is the reference the tests compare the native kernel against.
+
+### Removed — three dev-notes files the changelog had already absorbed
+
+`NOTES.md`, `ROADMAP.md` and `SUGGESTED_EDITS.md` recorded the phase narrative from before the
+changelog existed, and had been drifting from it since. `CHANGELOG.md` is the release-by-release
+record; `CLAUDE.md`'s "Open loops" is what is in flight. `CLAUDE.md`, `README.md`,
+`docs/index.rst` and the sdist exclude list no longer point at the deleted files.
+
+## 3.7.2 — 2026-08-14
+
+Documentation accuracy. No code change.
+
+### Fixed — the preset-ranking corpus was described as larger than it is
+
+`vdjtools.signature.presets` and `docs/signature.rst` both said the rankings come from "several
+hundred study groups, tens of thousands of samples". Counted, the sweep panel is **182 study
+groups over 198 accessions, 14,553 samples** — which the same page already stated correctly two
+sections earlier ("14,553 samples × 1,369 columns, 182 studies"), so the file disagreed with
+itself. Both places now carry the counted figure. The accession list is published in the analysis
+repo's `heldout/signature_studies.tsv`, so a reader can check the claim rather than take it.
+
 ## 3.7.1 — 2026-08-14
 
 Audit pass. Two fixes, both cases where a feature was reachable from Python and not from the

@@ -430,10 +430,10 @@ get the same columns in the same order.
 Where the rankings come from
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A benchmark over a public multi-study AIRR corpus — several hundred study groups, tens of thousands
-of samples — scored with **study-disjoint folds**: fit on some studies, predict on studies the fit
-never saw. Under that split a column that merely encodes sequencing protocol scores at chance, which
-is the point. Three findings shaped the presets:
+A benchmark over a public multi-study AIRR corpus — **182 study groups over 198 accessions,
+14,553 samples** — scored with **study-disjoint folds**: fit on some studies, predict on studies the
+fit never saw. Under that split a column that merely encodes sequencing protocol scores at chance,
+which is the point. Three findings shaped the presets:
 
 * **A nuisance floor of depth + presence masks + call quality is a surprisingly strong predictor**
   on many contrasts. Any feature set worth using has to beat its own floor, which is why

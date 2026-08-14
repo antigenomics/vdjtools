@@ -327,7 +327,7 @@ stays light — **~63 MB** resident for `import vdjtools` plus one loaded model,
 seven bundled models resident. Reproduce with `~/vcs/projects/2026-vdjtools-benchmark/bench/bench_pgen.py` and the `test_*_benchmark.py`
 suites (`RUN_BENCHMARK=1`).
 
-## Capabilities (see the [User guide](https://docs.isalgo.dev/vdjtools/usage.html), the [API reference](https://docs.isalgo.dev/vdjtools/), and [ROADMAP.md](ROADMAP.md))
+## Capabilities (see the [User guide](https://docs.isalgo.dev/vdjtools/usage.html) and the [API reference](https://docs.isalgo.dev/vdjtools/))
 
 - **IO** — canonical clonotype frame on AIRR **junction** columns (`junction_nt` / `junction_aa`);
   readers for native vdjtools, AIRR Rearrangement TSV, and Parquet, plus format-detecting converters

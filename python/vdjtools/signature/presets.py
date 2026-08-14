@@ -19,11 +19,12 @@ The ranking is the useful part:
     Present because it is a control, a baseline, or a measured dead end. Named so that choosing it
     is deliberate rather than accidental.
 
-The rankings come from a benchmark over a public multi-study AIRR corpus: several hundred study
-groups, tens of thousands of samples, scored with **study-disjoint folds** — fit on some studies,
+The rankings come from a benchmark over a public multi-study AIRR corpus: **182 study groups /
+198 accessions, 14,553 samples**, scored with **study-disjoint folds** — fit on some studies,
 predict on studies the fit never saw — so a column that merely encodes sequencing protocol scores
 at chance. Anyone with a comparable SRA/AIRR corpus can reproduce the ranking; nothing here depends
-on a private dataset.
+on a private dataset. (An earlier revision said "several hundred study groups"; the counted figure
+is 182, and the accession list is published in the analysis repo's ``heldout/``.)
 
 Example:
     >>> from vdjtools.signature import presets
