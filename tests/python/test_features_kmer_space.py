@@ -272,7 +272,7 @@ class TestTheSpaceCanBeFrozen:
 
     def test_the_alphabet_travels_as_a_partition_not_a_group_count(self, cohort, tmp_path):
         """A later change to the clustering must not re-partition an already-frozen space."""
-        from vdjtools.features.kmer_space import load_kmer_spaces, save_kmer_spaces
+        from vdjtools.features.kmer_space import save_kmer_spaces
 
         sp = fit_kmer_space(cohort, n_groups=8, n_components=4, threads=2)
         p = tmp_path / "s.npz"

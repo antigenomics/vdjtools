@@ -7,6 +7,49 @@ embedding geometry; the two are namespaced so they concatenate on ``sample_id`` 
 and the shared contract machinery (column layout, transform registry, frozen-reference rescaling)
 lives here, in vdjtools, because mirpy depends on vdjtools and not the reverse.
 
+Quickstart — one command
+------------------------
+
+No Python needed. Point ``vdjtools signature`` at your samples, pick a preset, get one row per
+sample:
+
+.. code-block:: bash
+
+   # a metadata sheet plus a directory of samples
+   vdjtools signature --preset classify -m metadata.txt --base-dir samples/ -o sig.tsv
+
+   # or just pass files (AIRR, native vdjtools, Parquet, third-party — auto-detected)
+   vdjtools signature --preset compact sampleA.tsv sampleB.tsv.gz -o sig.tsv
+
+   # which columns am I about to get? reads no input at all
+   vdjtools signature --preset classify --describe
+
+   # the named feature sets, ranked, and what each one is for
+   vdjtools presets
+   vdjtools presets classify
+
+Three presets are marked ``recommended``: **compact** (the smallest vector that still describes a
+repertoire, usable at *n* = 50), **classify** (general-purpose, the usual random-forest / boosting
+input), and **transfer** (for a model that must work on another lab's samples). See
+:ref:`signature-presets` for the full table.
+
+.. important::
+
+   This command emits the ``vsig`` half only. For a classifier you usually want **both** halves —
+   run ``mir signature --preset classify ...`` in mirpy, which emits ``vsig`` and ``rsig`` as one
+   vector. A preset spanning both halves keeps only its ``vsig:`` columns here and says so on
+   stderr.
+
+.. warning::
+
+   **CDR3 vs junction.** The reader prefers AIRR ``junction_aa`` (conserved anchors *included*) and
+   falls back to IMGT ``cdr3_aa`` (anchors *excluded*). A file carrying only ``cdr3_aa`` is two
+   residues short everywhere, which shifts the length, k-mer and Pgen features. Check your headers
+   before you trust a matrix.
+
+The Python API
+--------------
+
 .. code-block:: python
 
    from vdjtools.signature import vsig, vsig_cohort
@@ -305,6 +348,8 @@ trusted:
      - the fitted per-locus spaces and their vocabulary sizes
 
 *Measurements on this page were last taken 2026-08-13.*
+
+.. _signature-presets:
 
 Feature presets — pick by intent, not by column
 -----------------------------------------------

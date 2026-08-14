@@ -608,4 +608,12 @@ The ``vdjtools`` command-line application.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: signature, presets
+
+.. note::
+
+   ``signature`` and ``presets`` are excluded above on purpose. Their help text is written for the
+   terminal — worked examples in indented blocks, which are not valid reStructuredText — and it is
+   the primary documentation for those two commands. Read it with ``vdjtools signature --help`` /
+   ``vdjtools presets --help``, or see :doc:`signature`.
 

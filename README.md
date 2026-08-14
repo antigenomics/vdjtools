@@ -202,11 +202,11 @@ vdjtools diversity      -m metadata.txt --base-dir samples/ --threads 8 -o div.t
 vdjtools spectratype    --cohort cohort_parquet/ -o spectra.tsv                       # one streamed pass
 
 # the portable signature — one fixed, named, positional feature vector per sample
+vdjtools signature      --preset classify -m metadata.txt --base-dir samples/ -o sig.tsv
+vdjtools signature      --preset compact *.tsv -t 0 -o vsig.parquet      # -t 0 = every core
 vdjtools presets                                          # the named feature sets, ranked
-vdjtools presets transfer                                 # what one preset is, and when to use it
-vdjtools signature      *.tsv --preset statistics -t 0 -o vsig.parquet   # -t 0 = every core
-vdjtools signature      *.tsv --tier standard -o vsig.parquet
-vdjtools signature      --describe --tier standard        # the column dictionary; reads no input
+vdjtools presets classify                                 # what one preset is, and when to use it
+vdjtools signature      --describe --preset classify      # the column dictionary; reads no input
 
 # longitudinal — paired within-donor expansion test between two timepoints
 vdjtools dynamics day0.tsv day15.tsv -o tracked.tsv

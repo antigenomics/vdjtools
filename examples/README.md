@@ -248,7 +248,7 @@ over a whole dataset in parallel:
 
 ```bash
 vdjtools presets                                                    # the ranked table
-vdjtools signature *.tsv --preset statistics --threads 0 --out vsig.parquet
+vdjtools signature *.tsv --preset classify --threads 0 --out vsig.parquet
 ```
 
 For the full vector — statistics **and** embedding geometry — use mirpy's `mir signature

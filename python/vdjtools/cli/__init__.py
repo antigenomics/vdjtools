@@ -331,14 +331,52 @@ def signature(
                                   help="Print the column dictionary for --tier and exit."),
     threads: int = _THREADS, out: Optional[Path] = _OUT,
 ) -> None:
-    """The `vsig` half of the portable repertoire signature — one row per sample.
+    """One repertoire in, one row of named features out — ready for a classifier.
 
-    Statistics only. The geometry half (`rsig`) needs the prototype embedding and ships in mirpy,
-    whose `mir signature` emits both halves as one vector.
+    Emits the `vsig` (statistics) half of the portable repertoire
+    signature: a fixed, named, positional feature vector, so your matrix
+    and a collaborator's are the same coordinate system. Reads AIRR
+    Rearrangement, native vdjtools, Parquet and the usual third-party
+    exports, auto-detected. Writes TSV, or Parquet if -o ends in .parquet.
 
-    Pick columns with --preset rather than by hand; `vdjtools presets` lists them with their
-    rankings. A preset that spans both halves keeps only its `vsig:` columns here, and the command
-    says so, because silently returning half of what was asked for is worse than saying it.
+    \b
+    START HERE
+      # a metadata sheet plus a directory of samples
+      vdjtools signature --preset classify \\
+          -m metadata.txt --base-dir samples/ -o sig.tsv
+    \b
+      # or just pass files
+      vdjtools signature --preset compact a.tsv b.tsv.gz -o sig.tsv
+    \b
+      # the exact columns you will get, reading no input at all
+      vdjtools signature --preset classify --describe
+
+    \b
+    PICK A PRESET rather than columns by hand (`vdjtools presets` lists all):
+      compact    smallest vector that still describes a repertoire (n >= 50)
+      classify   general-purpose; the usual random-forest / boosting input
+      transfer   for a model that must work on ANOTHER LAB's samples
+    \b
+    --preset overrides --tier; with neither you get all of --tier (standard).
+
+    THE OTHER HALF: this command is statistics only. The geometry half
+    (`rsig`) needs the prototype embedding and ships in mirpy --
+    `mir signature --preset classify ...` emits both halves as one vector,
+    which is what you usually want for a classifier. A preset spanning both
+    halves keeps only its `vsig:` columns here and says so on stderr,
+    because silently returning half of what was asked for is worse than
+    saying it.
+
+    \b
+    GOTCHAS
+      * CDR3 vs junction. The reader prefers AIRR `junction_aa` (anchors
+        INCLUDED) and falls back to IMGT `cdr3_aa` (anchors excluded), so a
+        file carrying only `cdr3_aa` is two residues short everywhere --
+        shifting length, k-mer and Pgen features. Check your headers first.
+      * Do not PCA-project the result. Plain scaling beat projection at
+        every rank tested.
+      * -t/--threads defaults to all cores. Inside your own process pool,
+        pass -t 1 per worker.
     """
     from vdjtools.signature import layout as L
     from vdjtools.signature import presets as P
@@ -385,11 +423,21 @@ def presets(
     name: Optional[str] = typer.Argument(None, help="Show one preset in full."),
     out: Optional[Path] = _OUT,
 ) -> None:
-    """List the named feature sets, with their rankings.
+    """List the named feature sets for `signature`, with their rankings.
 
-    `recommended` — use unless you have a reason not to. `specific` — correct for a stated purpose
-    and wrong outside it. `avoid` — a control or a measured dead end, named so that picking it is
-    deliberate.
+    \b
+      vdjtools presets            # the table: name, rank, width, halves, scaling, summary
+      vdjtools presets classify   # one preset in full — what is in it, how, and when to use it
+
+    \b
+    Ranks tell you how much to trust a choice:
+      recommended  use one of these unless you have a reason not to
+      specific     correct for a stated purpose and wrong outside it
+      avoid        a control or a measured dead end, named so that picking it is deliberate
+
+    The `halves` column says whether a preset needs `vsig` (this package), `rsig` (the geometry
+    half, in mirpy), or both. `vdjtools signature` emits only the `vsig:` columns; use
+    `mir signature` for a preset spanning both.
     """
     from vdjtools.signature import presets as P
 

@@ -5,6 +5,33 @@ Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git ta
 
 ## 3.7.0 — 2026-08-14
 
+### Added — `vdjtools signature` on the CLI, with the help text as the primary documentation
+
+The command a collaborator actually runs. No Python:
+
+```bash
+vdjtools signature --preset classify -m metadata.txt --base-dir samples/ -o sig.tsv
+vdjtools signature --preset compact a.tsv b.tsv.gz -o sig.tsv
+vdjtools signature --preset classify --describe     # the columns, reading no input
+vdjtools presets                                    # the named feature sets, ranked
+```
+
+`--help` on both commands carries worked examples, the three `recommended` presets and when each
+applies, the pointer to `mir signature` for the geometry half, and the CDR3-vs-junction trap
+(a file carrying only IMGT `cdr3_aa` is two residues short everywhere, which shifts the length,
+k-mer and Pgen features). `docs/signature.rst` opens with the same quickstart, and the README and
+`examples/README.md` lead with `--preset classify` rather than a `specific`-ranked set.
+
+Because that help text is written for a terminal — indented example blocks, which are not valid
+reStructuredText — `signature` and `presets` are excluded from the `vdjtools.cli` autodoc, with a
+note on the API page saying where to read them instead.
+
+### Fixed — 221 signature tests were invisible to CI
+
+The seven new test files landed in `tests/` while `testpaths = ["tests/python"]`, so a plain
+`pytest` collected 789 of 1010 and the CI job (`pytest tests/python -q`) never ran one of them.
+Moved into `tests/python/` with the rest; default collection is 1004 passed / 6 skipped.
+
 ### Added — `vdjtools.signature`: VSIG, the statistics half of a portable repertoire signature
 
 One repertoire in, a **fixed, named, positional** feature vector out — the object you hand a
