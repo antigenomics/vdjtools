@@ -3,6 +3,32 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.7.1 — 2026-08-14
+
+Audit pass. Two fixes, both cases where a feature was reachable from Python and not from the
+command line that ships it.
+
+### Fixed — `keep=` stopped at the readers, so the SHM block could never be computed from the CLI
+
+3.7.0 added `keep=` to `read_airr` / `read_vdjtools` / `read_parquet` so `v_identity` — the one
+field the signature needs that the canonical eight columns do not carry — could reach
+`vsig:shm:IGH:mean_v_identity`. The dispatcher `io.read` and the batch mapper `io.map_samples`
+did not take the argument, and those are what the CLI uses: `vdjtools signature` on a file
+carrying `v_identity` reported `mask:IGH:shm = 0` and `mean_v_identity = nan`. Both now take
+`keep=`, and the `signature` command passes `("v_identity",)`.
+
+The column now populates on any input that has the field. Nothing else changes: `keep=()` is the
+default everywhere, and the legacy converters, which narrow to the canonical schema, ignore it.
+
+### Fixed — a coverage level of exactly 1.0 warned its way to the right answer
+
+`mir.signature` passes `cstar = 1.0` deliberately, as an "unreachable" sentinel, for a locus
+where no coverage level could be established — the diversity block is then supposed to fail its
+own estimability check and mask out. It did, but `_invert_coverage` got there by evaluating
+`log(1 - 1.0)` and doing inf arithmetic, emitting three `RuntimeWarning: divide by zero` per
+call into the user's terminal. It now returns `inf` directly. Same `m`, same method, same mask —
+without the noise.
+
 ## 3.7.0 — 2026-08-14
 
 ### Added — `vdjtools signature` on the CLI, with the help text as the primary documentation

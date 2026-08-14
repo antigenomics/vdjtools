@@ -410,8 +410,11 @@ def signature(
 
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
     fn = functools.partial(vsig, tier=tier, weight=weight, threads=1)
+    # `v_identity` is the one field the signature needs that the canonical schema does not
+    # carry, so it has to be asked for by name. Without it the SHM block is not merely absent
+    # but uncomputable, and ships as a permanently-nan column on files that do have it.
     rows = [{"sample_id": sid, **res} for sid, res in
-            map_samples(fn, items, fmt=fmt, workers=threads or None)]
+            map_samples(fn, items, fmt=fmt, workers=threads or None, keep=("v_identity",))]
     if not rows:
         _err("no samples produced a signature")
     cols = keep if keep is not None else L.columns(tier, "vsig")

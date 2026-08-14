@@ -73,3 +73,25 @@ def test_read_samples_metadata_does_not_clobber_clonotype_columns(tmp_path):
     assert long["locus"].to_list() == ["TRB"]          # clonotype-derived locus survives
     assert long["frequency"].dtype == pl.Float64        # numeric frequency, not the string "hi"
     assert long["cohort"].to_list() == ["c1"]           # non-colliding metadata still attaches
+
+
+def test_read_and_map_samples_honour_keep(tmp_path):
+    """``keep=`` has to survive the dispatcher and the batch mapper, not just the readers.
+
+    The signature's SHM block is a weighted mean of ``v_identity``, which no canonical column
+    holds. Until this was plumbed the CLI path (``read`` -> ``map_samples``) dropped it before
+    the block ever saw it, so ``vsig:shm:IGH:mean_v_identity`` was nan on files that carried it.
+    """
+    path = tmp_path / "S1.tsv"
+    path.write_text(
+        "v_call\tj_call\tjunction_aa\tduplicate_count\tv_identity\n"
+        "IGHV1-2*01\tIGHJ4*02\tCARDYW\t7\t0.90\n"
+        "IGHV1-2*01\tIGHJ4*02\tCARDFW\t3\t0.98\n"
+    )
+    assert "v_identity" not in vio.read(path).columns
+    df = vio.read(path, keep=("v_identity",))
+    assert df["v_identity"].to_list() == [0.90, 0.98]
+
+    got = dict(vio.batch.map_samples(lambda d: d.columns, [("S1", path)],
+                                     keep=("v_identity",)))
+    assert "v_identity" in got["S1"]
