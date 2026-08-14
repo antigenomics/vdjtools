@@ -1,8 +1,10 @@
 #include "vdjtools/core.hpp"
 #include "vdjtools/inext.hpp"
+#include "vdjtools/kmer.hpp"
 #include "vdjtools/model.hpp"
 
 #include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 namespace py = pybind11;
@@ -153,4 +155,63 @@ PYBIND11_MODULE(_core, m) {
           py::call_guard<py::gil_scoped_release>(),
           "Point curve + bootstrap SE for many samples, parallelized across samples. "
           "Returns a list of InextSample (one per input sample).");
+
+    // --- (V gene x k-mer) sparse profile kernel ---
+    py::class_<KmerRow>(m, "KmerRow")
+        .def_readonly("codes", &vdjtools::KmerRow::codes)
+        .def_readonly("weights", &vdjtools::KmerRow::weights);
+
+    m.def("kmer_code_space", &vdjtools::kmer_code_space,
+          py::arg("pattern"), py::arg("n_alphabet"), py::arg("n_v"),
+          "Size of the (V x k-mer) code space for a pattern/alphabet/V configuration. Raises "
+          "rather than wrapping: an overflow would alias distinct k-mers onto one code.");
+
+    m.def("kmer_row", &vdjtools::kmer_row,
+          py::arg("junctions"), py::arg("v_codes"), py::arg("weights"), py::arg("pattern"),
+          py::arg("alphabet"), py::arg("n_alphabet"), py::arg("n_v"), py::arg("flank"),
+          py::call_guard<py::gil_scoped_release>(),
+          "Aggregated sparse (V, k-mer) profile of one repertoire, without materialising the "
+          "k-mer explosion. Returns a KmerRow with sorted unique .codes and aligned .weights.");
+
+    m.def("kmer_rows", &vdjtools::kmer_rows,
+          py::arg("junctions"), py::arg("v_codes"), py::arg("weights"), py::arg("pattern"),
+          py::arg("alphabet"), py::arg("n_alphabet"), py::arg("n_v"), py::arg("flank"),
+          py::arg("threads"),
+          py::call_guard<py::gil_scoped_release>(),
+          "kmer_row over many repertoires, parallelized across samples; input order preserved.");
+
+    // `lookup`, `v_codes` and `weights` come in as numpy buffers and are read in place. Bound as
+    // std::vector pybind11 would copy them on every call; for an 8.16M-entry lookup that alone
+    // was 5x the kernel's own cost.
+    m.def("kmer_gather",
+          [](const std::vector<std::string>& junctions,
+             py::array_t<int32_t, py::array::c_style | py::array::forcecast> v_codes,
+             py::array_t<double, py::array::c_style | py::array::forcecast> weights,
+             const std::vector<uint8_t>& pattern, const std::vector<int8_t>& alphabet,
+             py::array_t<int32_t, py::array::c_style | py::array::forcecast> lookup,
+             int32_t n_alphabet, int32_t n_v, int32_t flank, int32_t n_columns) {
+              if (v_codes.ndim() != 1 || weights.ndim() != 1 || lookup.ndim() != 1)
+                  throw std::invalid_argument("v_codes, weights and lookup must be 1-D");
+              if (v_codes.shape(0) != weights.shape(0))
+                  throw std::invalid_argument("v_codes and weights must be the same length");
+              const int32_t* vptr = v_codes.data();
+              const double* wptr = weights.data();
+              const int32_t* lptr = lookup.data();
+              const auto n = static_cast<std::size_t>(v_codes.shape(0));
+              const auto lsize = static_cast<int64_t>(lookup.shape(0));
+              py::gil_scoped_release release;
+              return vdjtools::kmer_gather(junctions, vptr, wptr, n, pattern, alphabet, lptr,
+                                           lsize, n_alphabet, n_v, flank, n_columns);
+          },
+          py::arg("junctions"), py::arg("v_codes"), py::arg("weights"), py::arg("pattern"),
+          py::arg("alphabet"), py::arg("lookup"), py::arg("n_alphabet"), py::arg("n_v"),
+          py::arg("flank"), py::arg("n_columns"),
+          "Accumulate one repertoire directly onto a frozen vocabulary: one array lookup and "
+          "one add per k-mer occurrence, no sort. The scoring hot path.");
+
+    m.def("kmer_document_frequency", &vdjtools::kmer_document_frequency,
+          py::arg("rows"), py::arg("n_codes"),
+          py::call_guard<py::gil_scoped_release>(),
+          "Per-code count of how many rows contain it -- the corpus statistic a vocabulary cut "
+          "and an IDF are built from.");
 }

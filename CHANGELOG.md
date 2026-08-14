@@ -3,6 +3,61 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.7.0 — 2026-08-14
+
+### Added — `vdjtools.signature`: VSIG, the statistics half of a portable repertoire signature
+
+One repertoire in, a **fixed, named, positional** feature vector out — the object you hand a
+collaborator so their matrix and yours are the same coordinate system. The geometry half lives in
+`mir.signature`; the shared column contract lives here, because mirpy depends on vdjtools and not
+the reverse, and two copies of a contract are not a contract.
+
+```python
+from vdjtools.signature import vsig, vsig_cohort, columns, describe
+v = vsig({"TRB": df}, tier="standard")
+describe("standard")            # column, sig, block, locus, feature, tier, transform, flags
+```
+
+Four modules. `layout` is the contract — loci, the `core ⊂ standard ⊂ full` tiers as exact
+**index subsets** of one frozen column order, and a per-feature (not per-block) transform
+declaration, because a clonality block legitimately mixes a CLR-transformed composition with a
+logit-transformed proportion. `transform` is the variance-stabilising layer. `blocks` computes.
+`assemble` puts them in order.
+
+Every transform choice is **denominator-aware**, because the alternative silently lies about
+shallow samples: Haldane–Anscombe `logit` so `0/3` and `0/500` are different numbers, Anscombe
+`arcsine` so a share is defined at exactly zero, and `clr` over the *whole* composition before any
+coordinate is selected — shipping *k−1* parts, since all *k* are linearly dependent and would put
+a guaranteed zero eigenvalue in any PCA.
+
+Diversity is compared at a **frozen coverage level**, and `estimable()` **refuses** rather than
+extrapolates. Real repertoires attain Good–Turing coverage 0.24–0.58, so a textbook `C* = 0.95`
+puts every sample into extrapolation, where the same statistic inflates roughly tenfold. A hole a
+model can see beats a confident wrong number. For the same reason `clonality` is rebuilt from the
+coverage-standardised Hill numbers, `1 − ln(¹D)/ln(⁰D)`: the observed Pielou evenness it replaced
+drifted 0.510 over a 667× depth range, against 0.023 for the standardised form.
+
+### Fixed — the CLR zero replacement could consume the composition it was correcting
+
+The textbook multiplicative replacement puts `delta = 0.5/m` on each zero part and scales the rest
+by `1 − n_zero·delta`. On a *shallow* composition that is bigger than the composition: three
+parts, one observed, `m = 1` gives two replacements of 0.5 and scales the one real part to exactly
+zero, whose log is `-inf` — a value that then propagates through every downstream reduction. Found
+while emitting a real 4,000-sample corpus. The replaced mass is now capped below half the smallest
+*observed* part, which is the only property a replacement needs; the cap is inactive whenever `m`
+exceeds the number of parts, i.e. everywhere outside that tail.
+
+### Fixed — `pgen_block` reloaded the recombination model on every call
+
+Loading and collapsing a bundled model costs 0.4–1.8 s; the Pgen batch that follows costs ~0.15 s.
+A corpus emission therefore spent 80–95% of its time re-reading seven files it had already read,
+and a seven-locus sample paid it seven times over. Memoised per locus: **1.54 s → 0.01 s** on the
+second call.
+
+Also worth knowing when emitting a corpus: `pgen_block`/`vsig` default to `threads=0`, meaning
+*all cores*, which inside your own process pool means every worker claims the whole machine. On a
+16-core box, 14 workers took the load average to 227. Pass `threads=1` there.
+
 ## 3.6.1 — 2026-08-14
 
 Audit pass. No library behaviour changes.

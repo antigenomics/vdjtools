@@ -201,6 +201,13 @@ vdjtools spectratype    *.tsv -o spectra.tsv
 vdjtools diversity      -m metadata.txt --base-dir samples/ --threads 8 -o div.tsv   # parallel cohort
 vdjtools spectratype    --cohort cohort_parquet/ -o spectra.tsv                       # one streamed pass
 
+# the portable signature — one fixed, named, positional feature vector per sample
+vdjtools presets                                          # the named feature sets, ranked
+vdjtools presets transfer                                 # what one preset is, and when to use it
+vdjtools signature      *.tsv --preset statistics -t 0 -o vsig.parquet   # -t 0 = every core
+vdjtools signature      *.tsv --tier standard -o vsig.parquet
+vdjtools signature      --describe --tier standard        # the column dictionary; reads no input
+
 # longitudinal — paired within-donor expansion test between two timepoints
 vdjtools dynamics day0.tsv day15.tsv -o tracked.tsv
 ```
@@ -244,6 +251,25 @@ preprocess.correct(preprocess.filter_functional(sample))
 usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")  # Vlasova 2026
 fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")
 ```
+
+The **portable signature** — one repertoire in, a fixed named positional feature vector out, on a
+scale a downstream model can consume without fitting a scaler of its own. This is the statistics
+half (`vsig`); the geometry half (`rsig`, features of the prototype-sum embedding) is
+[mirpy](https://github.com/antigenomics/mirpy)'s `mir.signature`, and the two concatenate on
+`sample_id` into one contract:
+
+```python
+from vdjtools.signature import vsig, vsig_cohort, columns, describe
+
+v = vsig({"TRB": sample}, tier="standard")    # {column: value}, in frozen layout order
+describe("standard")                          # the column dictionary
+```
+
+Every feature carries a variance-stabilising transform chosen from its support — Haldane–Anscombe
+logit for a proportion, Anscombe arcsine for a share, CLR (*k−1* parts) for a composition, log for
+a count — so that a read count, an isotype fraction and a principal component can sit in one
+matrix. `core ⊂ standard ⊂ full` are exact **index subsets** of one frozen column order. A locus
+that was not sequenced is `nan` plus a `mask:` column, never a zero.
 
 Longitudinal tracking — which clonotypes changed between two timepoints, and the VDJtrack recapture
 model (Pavlova, Zvyagin & Shugay 2024):

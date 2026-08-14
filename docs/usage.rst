@@ -112,6 +112,56 @@ and CDR3 region; ``kmer_profile`` counts k-mers:
    features.kmer_profile(sample, k=3)       # locus, kmer, weight
    features.v_kmer_c_profile(sample, k=3)   # V-anchored k-mer occurrences
 
+Somatic hypermutation (B cells)
+-------------------------------
+
+A T cell's V gene is germline for life; a B cell's is rewritten in the germinal centre, and the
+*pattern* of that rewriting is the read-out. :mod:`vdjtools.stats.shm` summarises it.
+
+``v_identity`` is **not** a canonical column — most repertoire formats do not carry it — so ask the
+reader to keep it:
+
+.. code-block:: python
+
+   from vdjtools.io.read import read_airr
+   from vdjtools.stats import shm_summary, shm_spectrum
+
+   df = read_airr("sample.tsv", keep=("v_identity",))
+   shm_summary(df)      # flat dict: mutation load, switching, the germinal-centre marks
+   shm_spectrum(df)     # the mutation-level distribution, 20 bins
+
+Without ``keep=`` every SHM field is ``nan``, which is the point: a repertoire whose aligner never
+reported identity is not an unmutated repertoire, and the two must not produce the same number.
+
+The motivating application is **tertiary lymphoid structure** detection in tumours — a TLS is an
+ectopic germinal centre. A GC leaves three joint marks and none is sufficient alone:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 34 40
+
+   * - mark
+     - field
+     - what scores falsely without it
+   * - mutated V genes
+     - ``frac_mutated``, ``mean_shm``
+     - naive B-cell infiltrate scores 0
+   * - class switching
+     - ``frac_switched``
+     - an IgM-only infiltrate scores 0
+   * - *active* diversification
+     - ``switch_shm_gap``, ``shm_entropy``
+     - a **resident plasma-cell clone** scores high on both of the above
+
+That last row is why these are reported separately rather than folded into one index. A clone that
+switched and hypermutated somewhere else arrives finished — high load, high switching, no ongoing
+diversification — and a composite score cannot tell it from an active germinal centre. Which of the
+three carries the signal is usually the interesting part, so the composite is yours to make.
+
+``weight="freq"`` answers "what fraction of the *cells* are mutated"; ``weight="unique"`` answers
+"what fraction of the *lineages*". In a repertoire with one dominant plasma-cell clone these differ
+enormously, and which you want depends on the question.
+
 Overlap and TCRnet
 ------------------
 

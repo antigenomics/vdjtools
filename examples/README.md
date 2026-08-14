@@ -224,3 +224,32 @@ Graphviz `dot` is optional — without it the comparison graph is skipped, nothi
 pip install -e ".[examples]"
 marimo edit examples/model_workshop.py
 ```
+
+## `signature_features.py` — signature transforms, V-call resolution, the V+k-mer space
+
+A [marimo](https://marimo.io) notebook on the three feature choices that are easy to get wrong,
+each measurable in seconds on repertoires sampled from the bundled models (no download):
+why the amino-acid block is **Anscombe arcsine** and not `log1p` of counts (`log1p` moves ~7.5×
+across a depth change that leaves arcsine at 1.04×), why an ambiguous V call must go through
+`resolve_gene` rather than `strip_allele`, and what `fit_kmer_space` builds — gapped/ungapped
+patterns, BLOSUM62-clustered alphabets, TF-IDF, truncated SVD, and why its components must not be
+selected by explained variance.
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/signature_features.py
+```
+
+## `signature_features.py` — see also: feature presets
+
+`vdjtools presets` lists the named, ranked feature sets and `vdjtools presets <name>` explains one
+in full (what it contains, how it is computed, when to use it, and its caveats). To produce a table
+over a whole dataset in parallel:
+
+```bash
+vdjtools presets                                                    # the ranked table
+vdjtools signature *.tsv --preset statistics --threads 0 --out vsig.parquet
+```
+
+For the full vector — statistics **and** embedding geometry — use mirpy's `mir signature
+--preset ...`, and see its `examples/feature_vectors.py` notebook.
