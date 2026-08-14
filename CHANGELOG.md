@@ -3,6 +3,19 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.7.2 — 2026-08-14
+
+Documentation accuracy. No code change.
+
+### Fixed — the preset-ranking corpus was described as larger than it is
+
+`vdjtools.signature.presets` and `docs/signature.rst` both said the rankings come from "several
+hundred study groups, tens of thousands of samples". Counted, the sweep panel is **182 study
+groups over 198 accessions, 14,553 samples** — which the same page already stated correctly two
+sections earlier ("14,553 samples × 1,369 columns, 182 studies"), so the file disagreed with
+itself. Both places now carry the counted figure. The accession list is published in the analysis
+repo's `heldout/signature_studies.tsv`, so a reader can check the claim rather than take it.
+
 ## 3.7.1 — 2026-08-14
 
 Audit pass. Two fixes, both cases where a feature was reachable from Python and not from the
