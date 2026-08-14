@@ -6,9 +6,8 @@ repertoire analysis on the **AIRR schema + polars**, minimal OO, built on the an
 **seqtree** (fuzzy search / e-values), **vdjmatch** (overlap + TCRnet), **arda** (AIRR annotation +
 markup repair; brings conda/mmseqs2).
 
-API surface is in [`skills/vdjtools/SKILL.md`](skills/vdjtools/SKILL.md); the completed Phase-1 /
-campaign narrative is in [NOTES.md](NOTES.md); phases in `ROADMAP.md`; data provenance and the
-numbers of record in `SOURCES.md`.
+API surface is in [`skills/vdjtools/SKILL.md`](skills/vdjtools/SKILL.md); the release-by-release
+narrative in `CHANGELOG.md`; data provenance and the numbers of record in `SOURCES.md`.
 
 ## Layout
 - `python/vdjtools/` — package (src-layout). Subpackages `io model stats features overlap preprocess
@@ -102,7 +101,7 @@ format-conversion fixtures live there — pull them over when a phase needs them
 - **Phase 1 (`feature/model-engine`) is functionally complete** — native nt/aa Pgen via the
   Murugan/OLGA `Pi_L·Pi_R` transfer matrix (single-D and D-D), batch-parallel Pgen, threaded EM
   E-step, D-D learning with arda anchoring, 7-locus concordance `r(log10 Pgen)=1.00000`, bundled
-  `olga` + `learned` models shipped in **v2.9.0**. Per-item detail in [NOTES.md](NOTES.md).
+  `olga` + `learned` models shipped in **v2.9.0**.
 - **TODO — arda full-length V/J germline helper** for arda-native stitching (the P1c residual).
   `derive_orf` covers the ORF-usage case but not full-length stitching.
 - **TODO — native perf gaps**: (a) VJ / Hamming-1 codon-boundary sweep is **set aside** — the V/J

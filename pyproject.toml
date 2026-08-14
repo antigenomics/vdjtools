@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "3.7.2"
+version = "3.7.3"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -91,7 +91,7 @@ editable.rebuild = false
 # just the package + compiled _core.
 sdist.exclude = [
     "/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples", "/assets",
-    "/appendix", "/CLAUDE.md", "/ROADMAP.md", "/SOURCES.md", "/arda-ref.md",
+    "/appendix", "/CLAUDE.md", "/SOURCES.md", "/arda-ref.md",
     "/notebooks", "/scripts",
 ]
 
