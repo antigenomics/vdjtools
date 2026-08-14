@@ -239,3 +239,19 @@ def test_dataframe_input_uses_duplicate_count(girdled):
     a = stats.inext(girdled, q=0, sizes=[100], se=False)["qD"][0]
     b = stats.inext(frame, q=0, sizes=[100], se=False)["qD"][0]
     assert math.isclose(a, b, rel_tol=1e-12)
+
+
+def test_coverage_level_one_is_unreachable_and_quiet(girdled):
+    """Coverage 1 is attained only in the limit, and callers use it as an "unreachable" sentinel.
+
+    It must come back as an extrapolation to infinite depth — which the estimability check then
+    rejects — without evaluating log(0) and emitting a RuntimeWarning on the way.
+    """
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        df = stats.estimate_d(girdled, base="coverage", level=1.0, q=(1,), se=False)
+    assert df["method"].to_list() == ["extrapolation"]
+    assert math.isinf(df["m"][0])
+    assert not [w for w in caught if issubclass(w.category, RuntimeWarning)]

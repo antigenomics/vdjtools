@@ -97,7 +97,7 @@ def sniff_format(path: str | os.PathLike) -> str:
 
 
 def read(path: str | os.PathLike, fmt: str = "auto",
-         n_rows: int | None = None) -> pl.DataFrame:
+         n_rows: int | None = None, *, keep: tuple[str, ...] = ()) -> pl.DataFrame:
     """Read a clonotype table, auto-detecting the format by default.
 
     Args:
@@ -110,6 +110,9 @@ def read(path: str | os.PathLike, fmt: str = "auto",
             ``"immunoseq"``, ``"imgt"``, ``"vidjil"``, ``"rtcr"``, ``"trust4"``,
             ``"arda"``).
         n_rows: If given, read at most this many data rows (preview huge files).
+        keep: Non-canonical columns to preserve if present, e.g. ``("v_identity",)`` for
+            the signature's SHM block. Honoured by the three native readers; the legacy
+            converters narrow to the canonical schema and ignore it.
 
     Returns:
         Canonical clonotype frame.
@@ -120,11 +123,11 @@ def read(path: str | os.PathLike, fmt: str = "auto",
     if fmt == "auto":
         fmt = sniff_format(path)
     if fmt == "vdjtools":
-        return read_vdjtools(path, n_rows=n_rows)
+        return read_vdjtools(path, n_rows=n_rows, keep=keep)
     if fmt == "airr":
-        return read_airr(path, n_rows=n_rows)
+        return read_airr(path, n_rows=n_rows, keep=keep)
     if fmt == "parquet":
-        return read_parquet(path, n_rows=n_rows)
+        return read_parquet(path, n_rows=n_rows, keep=keep)
     if fmt == "vidjil":
         return convert.read_vidjil(path)  # whole-JSON reader (no row cap)
     if fmt in _CONVERTERS:
@@ -238,7 +241,8 @@ def read_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
     return pl.concat(list(frames.values()), how="vertical_relaxed")
 
 
-def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None):
+def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
+                keep: tuple[str, ...] = ()):
     """Read each sample and apply ``fn`` to it, in parallel, low peak memory.
 
     The parallel, streaming replacement for "load the whole cohort, then loop over it":
@@ -256,6 +260,10 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None):
         workers: Max worker threads. ``None`` uses the pool default
             (``min(32, os.cpu_count() + 4)``); pass a smaller value if ``fn`` is
             compute-bound, to avoid oversubscribing polars' own thread pool.
+        keep: Non-canonical columns to preserve, passed to :func:`read`. Without it a
+            reduction needing a field outside the canonical eight — ``v_identity`` for
+            the SHM block — gets a frame that never carried it, and reports a hole
+            rather than a number.
 
     Returns:
         A list of ``(sample_id, fn(frame))`` in the **same order as** ``items``
@@ -265,7 +273,7 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None):
 
     def work(item):
         sid, path = item
-        return sid, fn(read(path, fmt=fmt))
+        return sid, fn(read(path, fmt=fmt, keep=keep))
 
     # ThreadPoolExecutor.map yields results in input order, so output order is
     # deterministic (metadata order) no matter the completion order.

@@ -261,6 +261,13 @@ def _invert_coverage(x: np.ndarray, cvrg: float) -> float:
         return float(n)
     if cvrg < ref:
         return float(brentq(lambda m: _chat(x, m) - cvrg, 1e-9, n))
+    if cvrg >= 1.0:
+        # Coverage 1 is attained only in the limit, so the inversion below evaluates log(0) and
+        # gets there through inf arithmetic plus a RuntimeWarning. Callers use exactly 1.0 as a
+        # deliberate "no coverage level could be established" sentinel (mir.signature's
+        # _UNREACHABLE_COVERAGE), so say inf directly: the estimate then fails its own
+        # estimability check and masks out, which is the same answer without the noise.
+        return float("inf")
     f1 = float(np.count_nonzero(x == 1))
     f2 = float(np.count_nonzero(x == 2))
     if f1 > 0 and f2 > 0:
