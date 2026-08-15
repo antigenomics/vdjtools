@@ -63,3 +63,38 @@ def test_paired_pgen_unscoreable_junction_is_null():
     out = sc.paired_pgen(df)
     assert out["pgen_beta"].to_list() == [None] * 4
     assert out["pgen_paired"].to_list() == [None] * 4
+
+
+def _strip_alleles(df):
+    """Gene-level V/J calls, as CellRanger reports them (TRBV10-3, not TRBV10-3*01)."""
+    return df.with_columns(
+        pl.col(c).str.split("*").list.first()
+        for c in ("alpha_v_call", "alpha_j_call", "beta_v_call", "beta_j_call")
+    )
+
+
+def test_gene_level_calls_are_scored_not_silently_nulled():
+    """Regression: CellRanger emits GENE-level calls, and every row used to score null.
+
+    `native.pgen_aa` deliberately raises on a gene name (marginalising silently once gave a
+    Pgen 2.38x too high), and paired_pgen swallowed that -- so on the single most common
+    real input, all three columns came back null with no error. The gene is now resolved to
+    a representative allele before scoring.
+    """
+    out = sc.paired_pgen(_strip_alleles(_paired_frame()))
+    assert out["pgen_paired"].null_count() == 0
+    assert all(p > 0 for p in out["pgen_paired"])
+
+
+def test_resolve_genes_false_refuses_gene_level_calls():
+    """Opting out must give nulls, never a silently marginalised (larger) Pgen."""
+    out = sc.paired_pgen(_strip_alleles(_paired_frame()), resolve_genes=False)
+    assert out["pgen_paired"].null_count() == out.height
+
+
+def test_an_all_null_locus_warns_rather_than_shipping_a_silent_column():
+    import pytest
+
+    bogus = _paired_frame(4).with_columns(pl.lit("TRBV9000").alias("beta_v_call"))
+    with pytest.warns(UserWarning, match="every TRB chain scored null"):
+        sc.paired_pgen(bogus, resolve_genes=False)

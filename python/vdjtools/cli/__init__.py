@@ -1138,3 +1138,135 @@ def model_log(
     if not log.height:
         _err(f"{spec!r} carries no training log (it was not fitted by this tool)")
     _write(log, out)
+
+
+# ------------------------------------------------------------------------------ single-cell
+sc_app = typer.Typer(
+    no_args_is_help=True,
+    help="Single-cell (10x / AIRR Cell) ingestion, pairing QC, paired Pgen, and interop.\n\n"
+         "Inputs are auto-detected: a 10x contig-annotation CSV (all_/filtered_"
+         "contig_annotations.csv) or any AIRR Rearrangement TSV carrying a cell_id column "
+         "(CellRanger's airr_rearrangement.tsv, arda's barcoded output, our own).",
+)
+app.add_typer(sc_app, name="sc")
+
+
+def _read_sc(path: Path) -> pl.DataFrame:
+    """Read any supported single-cell input into the canonical long frame."""
+    from vdjtools import sc as _sc
+
+    try:
+        if path.suffix.lower() in (".csv", ".gz") and "contig" in path.name.lower():
+            return _sc.read_10x(path)
+        return _sc.read_airr_cell(path)
+    except ValueError as e:
+        _err(f"{path}: {e}")
+
+
+@sc_app.command("convert")
+def sc_convert(
+    contigs: Path = typer.Argument(..., help="10x contig CSV or AIRR TSV with cell_id."),
+    out: Optional[Path] = _OUT,
+    airr: bool = typer.Option(False, "--airr", help="Emit the AIRR Rearrangement spelling "
+                                                    "(junction, consensus_count) instead of "
+                                                    "the canonical vdjtools columns."),
+) -> None:
+    """Read a single-cell contig table into the canonical (or AIRR) long frame."""
+    from vdjtools import sc as _sc
+
+    cells = _read_sc(contigs)
+    _write(_sc.to_airr(cells) if airr else cells, out)
+
+
+@sc_app.command("pair")
+def sc_pair(
+    contigs: Path = typer.Argument(..., help="10x contig CSV or AIRR TSV with cell_id."),
+    out: Optional[Path] = _OUT,
+    locus_pair: str = typer.Option("TRA_TRB", "--locus-pair",
+                                   help="TRA_TRB, TRG_TRD, IGH_IGK or IGH_IGL."),
+    flag_mispairing: bool = typer.Option(False, "--flag-mispairing",
+                                         help="Add mispairing_flag / mispairing_reason."),
+) -> None:
+    """Resolve each cell's chains and emit one row per paired receptor."""
+    from vdjtools import sc as _sc
+
+    try:
+        paired = _sc.pair_chains(_read_sc(contigs), locus_pair=locus_pair)
+    except ValueError as e:
+        _err(str(e))
+    if flag_mispairing:
+        paired = _sc.flag_mispairing(paired)
+    _write(paired, out)
+
+
+@sc_app.command("qc")
+def sc_qc(
+    contigs: Path = typer.Argument(..., help="10x contig CSV or AIRR TSV with cell_id."),
+    out: Optional[Path] = _OUT,
+    locus_pair: str = typer.Option("TRA_TRB", "--locus-pair",
+                                   help="TRA_TRB, TRG_TRD, IGH_IGK or IGH_IGL."),
+) -> None:
+    """Chain-multiplicity quadrants: how many cells carry n light x n heavy chains."""
+    from vdjtools import sc as _sc
+
+    cells = _read_sc(contigs)
+    try:
+        mult = _sc.chain_multiplicity(cells, locus_pair=locus_pair)
+    except ValueError as e:
+        _err(str(e))
+    _info(f"{cells['cell_id'].n_unique()} cells, {cells.height} contigs")
+    _write(mult, out)
+
+
+@sc_app.command("pgen")
+def sc_pgen(
+    contigs: Path = typer.Argument(..., help="10x contig CSV or AIRR TSV with cell_id."),
+    out: Optional[Path] = _OUT,
+    locus_pair: str = typer.Option("TRA_TRB", "--locus-pair",
+                                   help="TRA_TRB, TRG_TRD, IGH_IGK or IGH_IGL."),
+    source: str = typer.Option("olga", "--source", help="Bundled model source."),
+    condition_vj: bool = typer.Option(True, "--condition-vj/--no-condition-vj",
+                                      help="Condition on the V/J calls (needs allele-level "
+                                           "calls; gene-level marginalises)."),
+) -> None:
+    """Paired generation probability per cell: Pgen(alpha) * Pgen(beta)."""
+    from vdjtools import sc as _sc
+
+    try:
+        paired = _sc.pair_chains(_read_sc(contigs), locus_pair=locus_pair)
+        scored = _sc.paired_pgen(paired, source=source, condition_vj=condition_vj)
+    except (ImportError, KeyError, ValueError) as e:
+        _err(str(e))
+    _write(scored, out)
+
+
+@sc_app.command("export")
+def sc_export(
+    contigs: Path = typer.Argument(..., help="10x contig CSV or AIRR TSV with cell_id."),
+    to: str = typer.Option(..., "--to", help="airr | screpertoire | screpertoire-10x | "
+                                             "scirpy | dandelion | airr-cell."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output file."),
+) -> None:
+    """Export for a downstream tool (scirpy / dandelion / scRepertoire / AIRR)."""
+    from vdjtools import sc as _sc
+
+    cells = _read_sc(contigs)
+    try:
+        if to == "airr":
+            _sc.write_airr(cells, out)
+        elif to == "screpertoire":
+            _sc.write_screpertoire(cells, out)
+        elif to == "screpertoire-10x":
+            _sc.write_screpertoire(cells, out, format="10x")
+        elif to == "airr-cell":
+            _sc.write_airr_cell(cells, out)
+        elif to == "scirpy":
+            _sc.to_scirpy(cells).write_h5ad(out)
+        elif to == "dandelion":
+            _sc.to_dandelion(cells).write_h5ddl(out)
+        else:
+            _err(f"--to must be airr, screpertoire, screpertoire-10x, scirpy, dandelion "
+                 f"or airr-cell; got {to!r}")
+    except (ImportError, ValueError) as e:
+        _err(str(e))
+    _info(f"wrote {cells.height} contigs ({cells['cell_id'].n_unique()} cells) -> {out}")
