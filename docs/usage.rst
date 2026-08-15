@@ -112,6 +112,56 @@ and CDR3 region; ``kmer_profile`` counts k-mers:
    features.kmer_profile(sample, k=3)       # locus, kmer, weight
    features.v_kmer_c_profile(sample, k=3)   # V-anchored k-mer occurrences
 
+Somatic hypermutation (B cells)
+-------------------------------
+
+A T cell's V gene is germline for life; a B cell's is rewritten in the germinal centre, and the
+*pattern* of that rewriting is the read-out. :mod:`vdjtools.stats.shm` summarises it.
+
+``v_identity`` is **not** a canonical column — most repertoire formats do not carry it — so ask the
+reader to keep it:
+
+.. code-block:: python
+
+   from vdjtools.io.read import read_airr
+   from vdjtools.stats import shm_summary, shm_spectrum
+
+   df = read_airr("sample.tsv", keep=("v_identity",))
+   shm_summary(df)      # flat dict: mutation load, switching, the germinal-centre marks
+   shm_spectrum(df)     # the mutation-level distribution, 20 bins
+
+Without ``keep=`` every SHM field is ``nan``, which is the point: a repertoire whose aligner never
+reported identity is not an unmutated repertoire, and the two must not produce the same number.
+
+The motivating application is **tertiary lymphoid structure** detection in tumours — a TLS is an
+ectopic germinal centre. A GC leaves three joint marks and none is sufficient alone:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 34 40
+
+   * - mark
+     - field
+     - what scores falsely without it
+   * - mutated V genes
+     - ``frac_mutated``, ``mean_shm``
+     - naive B-cell infiltrate scores 0
+   * - class switching
+     - ``frac_switched``
+     - an IgM-only infiltrate scores 0
+   * - *active* diversification
+     - ``switch_shm_gap``, ``shm_entropy``
+     - a **resident plasma-cell clone** scores high on both of the above
+
+That last row is why these are reported separately rather than folded into one index. A clone that
+switched and hypermutated somewhere else arrives finished — high load, high switching, no ongoing
+diversification — and a composite score cannot tell it from an active germinal centre. Which of the
+three carries the signal is usually the interesting part, so the composite is yours to make.
+
+``weight="freq"`` answers "what fraction of the *cells* are mutated"; ``weight="unique"`` answers
+"what fraction of the *lineages*". In a repertoire with one dominant plasma-cell clone these differ
+enormously, and which you want depends on the question.
+
 Overlap and TCRnet
 ------------------
 
@@ -360,22 +410,26 @@ local ``./data_dump/`` copy (gitignored; symlink your data there), else fetches 
 Single-cell
 -----------
 
-:mod:`vdjtools.sc` ingests 10x / AIRR-Cell contigs into a flat ``cell_id``-keyed frame,
-resolves and pairs chains with doublet / mispairing QC, and scores paired α/β generation
-probability:
+:mod:`vdjtools.sc` ingests 10x / AIRR-Cell / arda contigs into a flat ``cell_id``-keyed
+frame, resolves and pairs chains with doublet / mispairing QC, and scores paired α/β
+generation probability:
 
 .. code-block:: python
 
    from vdjtools import sc
 
-   cells = sc.read_10x("filtered_contig_annotations.csv")   # -> cell_id-keyed Rearrangement frame
-   cells = sc.resolve_chains(cells)                         # pick the productive chain per locus
-   paired = sc.pair_chains(cells, locus_pair="TRA_TRB")     # one row per α/β cell
+   cells = sc.read_airr_cell("outs/airr_rearrangement.tsv")  # -> cell_id-keyed frame
+   cells = sc.resolve_chains(cells)                          # pick the productive chain per locus
+   paired = sc.pair_chains(cells, locus_pair="TRA_TRB")      # one row per α/β cell
 
    sc.paired_pgen(paired)                 # adds pgen_alpha, pgen_beta, pgen_paired (= product)
 
-``write_airr_cell`` exports the AIRR Cell / Receptor format; ``to_anndata`` bridges to the
-scverse ecosystem.
+   adata = sc.to_scirpy(cells)            # scverse-native AnnData (obsm["airr"])
+   vdj   = sc.to_dandelion(cells)         # dandelion
+   sc.write_screpertoire(cells, "airr_rearrangement.tsv")    # scRepertoire (R)
+
+See :doc:`singlecell` for the full ingestion matrix, the interop round-trips, and the
+``vdjtools sc`` command line.
 
 Recombination model
 -------------------
@@ -393,6 +447,40 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)     # + the Hamming-1 ball
    native.pgen_aa_batch(model, seqs, threads=0)   # many CDR3s, thread-parallel (~11x)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
+
+Reconstructing nucleotides and V/D/J markup from an amino-acid CDR3
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A VDJdb record carries ``(V, J, CDR3aa)`` and no nucleotides, so the boundary markup a repertoire
+analysis wants is simply absent. :func:`~vdjtools.model.viterbi.infer_nt` reconstructs it under the
+model: germline positions are pinned to their V/D/J segment, and each free N-region position takes
+the nucleotide maximising ``P(nt_1) * prod P(nt_k | nt_{k-1})`` under the insertion model covering
+it.
+
+.. code-block:: python
+
+   from vdjtools.model import infer_nt
+
+   sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
+   sc.cdr3_nt                       # the reconstructed nucleotide CDR3
+   sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, CDR3-nt space
+   sc.pgen, sc.margin               # exact Pgen of the result, and its lead over the runner-up
+
+``v=``/``j=`` accept one allele, several (a list, or the comma-separated string an ambiguous AIRR
+``v_call`` carries), or ``None`` — the search then marginalizes over every gene, which costs almost
+nothing because the underlying DP sweeps V and J anyway. Reported timings: 2.5 ms per human TRB
+CDR3, 0.5 ms per TRA, so all 80k VDJdb records take about three minutes.
+
+.. warning::
+
+   Report ``sc.margin``. With a long non-templated core many nucleotide sequences are near-equally
+   likely, and a bare "most likely" claim is then close to meaningless — the margin is what says so.
+
+.. note::
+
+   Pass the :class:`~vdjtools.model.model.Model`, not a :func:`~vdjtools.model.pgen.prepare` -d one.
+   A prepared model selects the pure-Python reference search, which is the implementation the native
+   one is validated against and is roughly 600x slower on a VDJ locus.
 
 Building a model on your own germline library, fitting it to your own reads, checking it, comparing
 two of them and asking how much diversity one describes are covered in

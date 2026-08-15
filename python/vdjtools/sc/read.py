@@ -35,12 +35,17 @@ CELL_ID = "cell_id"
 SEQUENCE_ID = "sequence_id"
 UMI_COUNT = "umi_count"
 CLONE_ID = "clone_id"
+PRODUCTIVE = "productive"
 
 #: Canonical single-cell long-frame columns, in order.
+#:
+#: ``productive`` is a mandatory AIRR Rearrangement field and is carried so
+#: :func:`vdjtools.sc.to_airr` can emit a schema-valid table; the readers here keep only
+#: productive contigs, so it is ``True`` wherever the source stated productivity at all.
 SC_COLUMNS: list[str] = [
     CELL_ID, SEQUENCE_ID, LOCUS,
     V_CALL, D_CALL, J_CALL, C_CALL,
-    JUNCTION_AA, JUNCTION_NT, COUNT, UMI_COUNT, CLONE_ID,
+    JUNCTION_AA, JUNCTION_NT, COUNT, UMI_COUNT, CLONE_ID, PRODUCTIVE,
 ]
 
 _TRUTHY = ("1", "true", "t", "yes", "y")
@@ -76,7 +81,12 @@ def read_10x(
     require_cell: bool = True,
     require_high_conf: bool = True,
 ) -> pl.DataFrame:
-    """Read 10x ``all_contig_annotations.csv[.gz]`` into the canonical sc long frame.
+    """Read a 10x contig-annotation CSV into the canonical sc long frame.
+
+    Accepts both ``all_contig_annotations.csv[.gz]`` and
+    ``filtered_contig_annotations.csv[.gz]`` — the two share one writer in CellRanger and
+    so one column layout; ``filtered_`` is simply pre-restricted to
+    ``is_cell && high_confidence``, which this reader applies anyway.
 
     Keeps only productive, cell-associated, high-confidence contigs on a real receptor
     locus (:data:`VALID_LOCI`) with a resolved consensus id, one row per contig. When a
@@ -84,9 +94,18 @@ def read_10x(
     replaced by the matched consensus calls (joined on
     ``(raw_clonotype_id, raw_consensus_id) == (clonotype_id, consensus_id)``).
 
+    Column drift across CellRanger versions is tolerated: the ``fwr*``/``cdr1``/``cdr2``
+    region columns exist only from CR6, ``exact_subclonotype_id`` from CR4+, and ``sample``
+    only in ``cellranger multi`` output — none is required here. ``raw_consensus_id`` is
+    used when present and skipped when absent.
+
+    NOTE: For CellRanger 4.0+, prefer :func:`read_airr_cell` on ``airr_rearrangement.tsv``
+    — it is the same file the downstream tools read, so ingestion and interop agree.
+
     Args:
-        all_contig: Path to ``all_contig_annotations.csv`` (``.gz`` accepted). Columns
-            follow CellRanger VDJ (``barcode, is_cell, contig_id, high_confidence,
+        all_contig: Path to ``all_contig_annotations.csv`` or
+            ``filtered_contig_annotations.csv`` (``.gz`` accepted). Columns follow
+            CellRanger VDJ (``barcode, is_cell, contig_id, high_confidence,
             chain, v_gene, d_gene, j_gene, c_gene, productive, cdr3, cdr3_nt, reads,
             umis, raw_clonotype_id, raw_consensus_id``). ``*_call`` spellings are also
             accepted in place of ``*_gene``.
@@ -97,17 +116,16 @@ def read_10x(
             (default ``True``).
 
     Returns:
-        A ``pl.DataFrame`` with columns ``cell_id, sequence_id, locus, v_call, d_call,
-        j_call, c_call, junction_aa, junction_nt, duplicate_count, umi_count, clone_id`` — one
+        A ``pl.DataFrame`` in the canonical sc long-frame layout (:data:`SC_COLUMNS`) — one
         row per surviving productive contig.
 
     Raises:
         ValueError: If a required column (``barcode``, ``contig_id``, ``chain``,
-            ``cdr3``, ``raw_consensus_id``) is missing from ``all_contig``.
+            ``cdr3``) is missing from ``all_contig``.
     """
     df = _read_csv_str(all_contig)
     cols = df.columns
-    for required in ("barcode", "contig_id", "chain", "cdr3", "raw_consensus_id"):
+    for required in ("barcode", "contig_id", "chain", "cdr3"):
         if required not in cols:
             raise ValueError(f"read_10x: {all_contig!r} missing required column {required!r}")
 
@@ -118,10 +136,11 @@ def read_10x(
         df = df.filter(_truthy_expr("high_confidence"))
     if "productive" in cols:
         df = df.filter(_truthy_expr("productive"))
-    df = df.filter(
-        pl.col("chain").is_in(list(VALID_LOCI))
-        & pl.col("raw_consensus_id").is_not_null()
-    )
+    df = df.filter(pl.col("chain").is_in(list(VALID_LOCI)))
+    # `raw_consensus_id` is absent from some CellRanger versions/outputs; only gate on it
+    # when it is actually there (an unassigned contig has no consensus call to trust).
+    if "raw_consensus_id" in cols:
+        df = df.filter(pl.col("raw_consensus_id").is_not_null())
 
     v_col = _pick(cols, "v_gene", "v_call")
     d_col = _pick(cols, "d_gene", "d_call")
@@ -152,7 +171,11 @@ def read_10x(
         _count(reads_col).alias(COUNT),
         _count(umis_col).alias(UMI_COUNT),
         (pl.col(clone_col) if clone_col else pl.lit(None, dtype=pl.Utf8)).alias(CLONE_ID),
-        (pl.col("raw_consensus_id")).alias("_consensus_id"),
+        # Non-productive contigs were filtered out above, so this is True by construction
+        # (null only when the file never stated productivity).
+        pl.lit(True if "productive" in cols else None, dtype=pl.Boolean).alias(PRODUCTIVE),
+        (pl.col("raw_consensus_id") if "raw_consensus_id" in cols
+         else pl.lit(None, dtype=pl.Utf8)).alias("_consensus_id"),
     )
 
     if consensus is not None:
@@ -193,6 +216,13 @@ def _join_consensus(contigs: pl.DataFrame, consensus: str | Path) -> pl.DataFram
 def read_airr_cell(path: str | Path) -> pl.DataFrame:
     """Read an AIRR Rearrangement TSV carrying a ``cell_id`` column into the sc frame.
 
+    This is also the reader for **CellRanger's ``airr_rearrangement.tsv``** (emitted since
+    Cell Ranger 4.0, and under ``per_sample_outs/<sample>/vdj_t/`` for ``cellranger multi``)
+    and for **arda's** barcoded output — both are plain AIRR Rearrangement tables with a
+    ``cell_id`` column. Prefer it over :func:`read_10x`: it is the same file scirpy,
+    dandelion and scRepertoire read, so the ingestion and interop paths agree by
+    construction.
+
     Args:
         path: Path to an AIRR Rearrangement TSV (``.gz`` accepted) with at least a
             ``cell_id`` column plus the usual AIRR fields.
@@ -207,9 +237,18 @@ def read_airr_cell(path: str | Path) -> pl.DataFrame:
     """
     df = pl.read_csv(Path(path), separator="\t", infer_schema_length=0,
                      null_values=["", "NA", "None"], truncate_ragged_lines=True)
-    cols = df.columns
-    if CELL_ID not in cols:
+    if CELL_ID not in df.columns:
         raise ValueError(f"read_airr_cell: {path!r} has no 'cell_id' column")
+    return _airr_frame_to_sc(df)
+
+
+def _airr_frame_to_sc(df: pl.DataFrame) -> pl.DataFrame:
+    """Map an already-loaded AIRR Rearrangement frame onto :data:`SC_COLUMNS`.
+
+    Shared by :func:`read_airr_cell` and :func:`read_arda_cells`, which differ only in how
+    they get the frame off disk.
+    """
+    cols = df.columns
 
     def _str(name, *alts, alias=None) -> pl.Expr:
         src = _pick(cols, name, *alts)
@@ -235,9 +274,90 @@ def read_airr_cell(path: str | Path) -> pl.DataFrame:
         # matching io/read.py and the canonical junction_aa=junction convention.
         _str("junction_aa", "cdr3_aa", alias=JUNCTION_AA),
         _str("junction_nt", "junction", "cdr3_nt", "cdr3", alias=JUNCTION_NT),
-        _int(COUNT, "reads"), _int(UMI_COUNT, "umis"),
+        _int(COUNT, "reads", "consensus_count"), _int(UMI_COUNT, "umis"),
         _str(CLONE_ID, "raw_clonotype_id", "clonotype_id"),
+        (_truthy_expr(PRODUCTIVE) if PRODUCTIVE in cols
+         else pl.lit(None, dtype=pl.Boolean)).alias(PRODUCTIVE),
     )
+
+
+#: Cell-level QC columns lifted from arda's ``.chains.tsv``, namespaced so they cannot be
+#: confused with :func:`vdjtools.sc.resolve_chains`' own verdict.
+ARDA_STATUS = "arda_status"
+ARDA_MOLECULES = "arda_molecules"
+
+
+def read_arda_cells(prefix: str | Path, *, chains: bool = True) -> pl.DataFrame:
+    """Read the output of arda's single-cell pipeline (``arda cells``).
+
+    ``arda cells`` writes ``<prefix>.contigs.airr.tsv`` — an AIRR Rearrangement table with
+    ``cell_id``, ``molecules`` and ``reads`` — plus a cell-level ``<prefix>.chains.tsv``
+    carrying arda's own per-chain verdict (``status`` is one of ``primary``, ``secondary``,
+    ``doublet_candidate``, ``extra``).
+
+    NOTE: arda's ``status`` and :func:`~vdjtools.sc.resolve_chains`' verdict are
+    **independent** calls on the same question. This reader surfaces arda's as
+    ``arda_status`` rather than acting on it, so running ``resolve_chains`` afterwards does
+    not silently discard the upstream judgement -- compare them, don't assume they agree.
+
+    Reading goes through arda's own ``read_airr``, not a plain CSV read: arda has written
+    two TSV dialects and that reader is what normalises them. It matters because
+    ``junction_quality`` is Phred+33 and character 34 is a double quote.
+
+    Args:
+        prefix: The ``arda cells`` output prefix (``<prefix>.contigs.airr.tsv`` is read), or
+            a direct path to a ``*.airr.tsv`` file.
+        chains: Join arda's per-chain ``status`` / ``molecules`` from ``<prefix>.chains.tsv``
+            when that file exists (default ``True``).
+
+    Returns:
+        A ``pl.DataFrame`` in the canonical layout (:data:`SC_COLUMNS`), plus
+        ``arda_status`` / ``arda_molecules`` when the chains table was joined.
+
+    Raises:
+        FileNotFoundError: If no contigs AIRR table is found for ``prefix``.
+    """
+    from arda.annotate.airr_out import read_airr as _arda_read_airr
+
+    p = Path(prefix)
+    contigs = p if p.name.endswith(".airr.tsv") else Path(f"{p}.contigs.airr.tsv")
+    if not contigs.exists():
+        raise FileNotFoundError(
+            f"no arda contigs table at {contigs} -- expected `arda cells -p {prefix}` output"
+        )
+
+    df = _arda_read_airr(contigs)
+    if CELL_ID not in df.columns:
+        raise ValueError(
+            f"{contigs} has no 'cell_id' column; for arda's BULK output use "
+            "vdjtools.io.read_arda, or re-run with `arda map --cell-from/--cell-regex`"
+        )
+    # arda names the per-contig molecule count `molecules`; the canonical frame wants it as
+    # umi_count (one molecule == one UMI-tagged consensus).
+    if "molecules" in df.columns and UMI_COUNT not in df.columns:
+        df = df.rename({"molecules": UMI_COUNT})
+    out = _airr_frame_to_sc(df)
+
+    chains_tsv = Path(f"{p}.chains.tsv")
+    if chains and chains_tsv.exists():
+        out = _join_arda_chains(out, chains_tsv)
+    return out
+
+
+def _join_arda_chains(cells: pl.DataFrame, chains_tsv: Path) -> pl.DataFrame:
+    """Attach arda's per-chain ``status`` / ``molecules`` on (cell_id, locus, junction_aa)."""
+    ch = pl.read_csv(chains_tsv, separator="\t", infer_schema_length=0,
+                     null_values=["", "NA", "None"], truncate_ragged_lines=True)
+    key = [CELL_ID, LOCUS, JUNCTION_AA]
+    if not set(key) <= set(ch.columns) or "status" not in ch.columns:
+        return cells
+    keep = ch.select(
+        *key,
+        pl.col("status").alias(ARDA_STATUS),
+        (pl.col("molecules").cast(pl.Int64, strict=False) if "molecules" in ch.columns
+         else pl.lit(None, dtype=pl.Int64)).alias(ARDA_MOLECULES),
+    ).unique(subset=key, keep="first")
+    return cells.join(keep, on=key, how="left")
 
 
 def _receptor_hash(dom1_aa: str, dom2_aa: str) -> str:

@@ -64,7 +64,8 @@ Two things are still optional, because each has a working alternative or is a si
 ```bash
 pip install "vdjtools[overlap]"   # scikit-learn — only for cluster_samples(method="mds");
                                   # method="hclust" works out of the box (scipy)
-pip install "vdjtools[sc]"        # single-cell extras: anndata (scverse bridge), pyyaml
+pip install "vdjtools[sc]"        # single-cell: anndata + awkward + mudata (scverse
+                                  # bridges), pyyaml (AIRR Cell export)
 ```
 
 MMseqs2 is needed **only** for arda's alignment/annotation path (`model.stitch.annotate`) — never
@@ -122,8 +123,28 @@ sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, in
 ```
 
 It reuses the same tables and the same loops as `pgen_nt`, so the chosen D obeys `P(D|J)` — a
-TRBD2–TRBJ1 pair is genomically impossible and cannot be called. ⛔ Inferring a *nucleotide* CDR3
-from an amino-acid one (`infer_nt`) is **not implemented yet** and raises rather than guessing.
+TRBD2–TRBJ1 pair is genomically impossible and cannot be called.
+
+`infer_nt` goes the other way, reconstructing a **nucleotide** CDR3 from an amino-acid one — the
+VDJdb case, where a record carries `(V, J, CDR3aa)` and no nucleotides:
+
+```python
+from vdjtools.model import infer_nt
+
+sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
+sc.cdr3_nt, sc.pgen, sc.margin        # sequence, its exact Pgen, and how far ahead of the runner-up
+```
+
+Germline positions are pinned to their segment; each free N-region position takes the nucleotide the
+insertion model prefers. It reproduces the exponential brute-force oracle exactly on every record
+the oracle can resolve (25/25 TRG, 19/19 TRA) — fixing the germline trim first and then picking the
+best codon per residue only manages 9/25 and 4/19, because a trim chosen before the codons pins a
+codon the true optimum would have trimmed away.
+
+The search is native (the same Pi_L·Pi_R transfer matrix as `pgen_aa`, with `max` for the sums):
+**2.5 ms per human TRB CDR3, 0.5 ms per TRA** — all 80k VDJdb records in about 3 minutes. `v=`/`j=`
+take one allele, several (a list or the comma-separated string an ambiguous `v_call` carries), or
+nothing at all, in which case the DP marginalizes over every gene at essentially no extra cost.
 
 Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
 OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon — both escaped
@@ -181,6 +202,13 @@ vdjtools spectratype    *.tsv -o spectra.tsv
 vdjtools diversity      -m metadata.txt --base-dir samples/ --threads 8 -o div.tsv   # parallel cohort
 vdjtools spectratype    --cohort cohort_parquet/ -o spectra.tsv                       # one streamed pass
 
+# the portable signature — one fixed, named, positional feature vector per sample
+vdjtools signature      --preset classify -m metadata.txt --base-dir samples/ -o sig.tsv
+vdjtools signature      --preset compact *.tsv -t 0 -o vsig.parquet      # -t 0 = every core
+vdjtools presets                                          # the named feature sets, ranked
+vdjtools presets classify                                 # what one preset is, and when to use it
+vdjtools signature      --describe --preset classify      # the column dictionary; reads no input
+
 # longitudinal — paired within-donor expansion test between two timepoints
 vdjtools dynamics day0.tsv day15.tsv -o tracked.tsv
 ```
@@ -224,6 +252,25 @@ preprocess.correct(preprocess.filter_functional(sample))
 usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")  # Vlasova 2026
 fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")
 ```
+
+The **portable signature** — one repertoire in, a fixed named positional feature vector out, on a
+scale a downstream model can consume without fitting a scaler of its own. This is the statistics
+half (`vsig`); the geometry half (`rsig`, features of the prototype-sum embedding) is
+[mirpy](https://github.com/antigenomics/mirpy)'s `mir.signature`, and the two concatenate on
+`sample_id` into one contract:
+
+```python
+from vdjtools.signature import vsig, vsig_cohort, columns, describe
+
+v = vsig({"TRB": sample}, tier="standard")    # {column: value}, in frozen layout order
+describe("standard")                          # the column dictionary
+```
+
+Every feature carries a variance-stabilising transform chosen from its support — Haldane–Anscombe
+logit for a proportion, Anscombe arcsine for a share, CLR (*k−1* parts) for a composition, log for
+a count — so that a read count, an isotype fraction and a principal component can sit in one
+matrix. `core ⊂ standard ⊂ full` are exact **index subsets** of one frozen column order. A locus
+that was not sequenced is `nan` plus a `mask:` column, never a zero.
 
 Longitudinal tracking — which clonotypes changed between two timepoints, and the VDJtrack recapture
 model (Pavlova, Zvyagin & Shugay 2024):
@@ -281,7 +328,7 @@ stays light — **~63 MB** resident for `import vdjtools` plus one loaded model,
 seven bundled models resident. Reproduce with `~/vcs/projects/2026-vdjtools-benchmark/bench/bench_pgen.py` and the `test_*_benchmark.py`
 suites (`RUN_BENCHMARK=1`).
 
-## Capabilities (see the [User guide](https://docs.isalgo.dev/vdjtools/usage.html), the [API reference](https://docs.isalgo.dev/vdjtools/), and [ROADMAP.md](ROADMAP.md))
+## Capabilities (see the [User guide](https://docs.isalgo.dev/vdjtools/usage.html) and the [API reference](https://docs.isalgo.dev/vdjtools/))
 
 - **IO** — canonical clonotype frame on AIRR **junction** columns (`junction_nt` / `junction_aa`);
   readers for native vdjtools, AIRR Rearrangement TSV, and Parquet, plus format-detecting converters
@@ -312,8 +359,23 @@ suites (`RUN_BENCHMARK=1`).
   expansion test (emergent / expanded / persistent / contracted / vanishing), the VDJtrack
   size-bucket **recapture model**, metaclonotype-grouped testing, and an edgeR NB-exact caller
   ([`vdjtools.dynamics`](python/vdjtools/dynamics)).
-- **Single-cell** — AIRR Cell / 10x interoperability, chain pairing + QC, paired α/β Pgen, and a
-  `to_anndata` bridge into the scverse ecosystem (writes `.h5ad` / `.zarr` via AnnData).
+- **Single-cell** — CellRanger / AIRR Cell / arda ingestion, chain pairing + doublet & mispairing
+  QC, paired α/β Pgen, clustering evaluation, and **round-trip interop** with the downstream
+  single-cell stack ([`vdjtools.sc`](python/vdjtools/sc), [guide](docs/singlecell.rst)).
+
+  | Ecosystem | Out | Back in | Needs |
+  |---|---|---|---|
+  | [scirpy](https://github.com/scverse/scirpy) / scverse | `to_scirpy` (scirpy's `obsm["airr"]`, or a `MuData` with GEX) | `from_scirpy` | `scirpy` out; only `awkward` back |
+  | [dandelion](https://github.com/tuonglab/dandelion) | `to_dandelion` | `from_dandelion`, `read_h5ddl` | `sc-dandelion` out; only `h5py` back |
+  | [scRepertoire](https://github.com/BorchLab/scRepertoire) (R) | `write_screpertoire` (AIRR or 10x shaped) | — | nothing |
+  | Any AIRR consumer | `to_airr` / `write_airr` | `from_airr`, `read_airr_cell` | nothing |
+
+  All four read the same thing — a flat AIRR Rearrangement table with `sequence_id` + `cell_id` —
+  so there is one emitter and one inverse, and each bridge is a thin adapter. Writing a container
+  delegates to the library that owns it (no stale copy of someone else's schema to drift); reading
+  one is ours, so a result handed to you is always openable. `push_obs` pushes a vdjtools-computed
+  column (`pgen_paired`, mispairing flags) onto an `AnnData.obs` or `Dandelion.metadata` you did
+  not build. CLI: `vdjtools sc convert|pair|qc|pgen|export`.
 
 ## License
 

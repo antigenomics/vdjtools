@@ -58,7 +58,7 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   threads=)`** (thread-parallel across sequences, bitwise-identical to serial, ~11× on 16 cores).
   Pure-Python reference impls in `vdjtools.model.pgen`.
 - **Generate**: `vdjtools.model.generate.generate(model, n, seed=, productive_only=)` → `pl.DataFrame`.
-  ⚠ `seed=` is reproducible **across processes** only from **3.3.0**: `collapse_alleles` used
+  NOTE: `seed=` is reproducible **across processes** only from **3.3.0**: `collapse_alleles` used
   unordered polars `group_by`, so the collapsed table's row order varied per process and the same
   seed drew a different allele. Expectations recorded from `generate()` before 3.3.0 are stale.
 - **Infer (EM)**: `vdjtools.model.infer.infer` / `infer_native(template, seqs, masks=, dd_allowed=,
@@ -102,11 +102,24 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `Scenario(cdr3_nt, v_call, j_call, v_end, j_start, d_call, d_start, d_end, scenario_p, ...)` — the
   single most likely recombination for a KNOWN nt CDR3, i.e. the V/D/J boundary markup. Max-product
   over the same loops `pgen_nt` sums, so the D obeys `p_d_given_j` (TRBD2×TRBJ1 = 0). Coordinates
-  are 0-based half-open in CDR3-nt space. `infer_nt_bruteforce(model, cdr3_aa, v=, j=)` is an exact
-  but exponential ORACLE for tests. ⛔ `infer_nt` (production aa→nt) is **not implemented and
-  raises**: enumeration is a median 5.3e6 (TRA) / 1.9e7 (TRB) candidates per VDJdb record, and
-  pinning the germline flanks to shrink it is unsound (it drops trimmed-germline sequences, and the
-  true max can be one). Needs a max-product DP with traceback over the aa-constrained space.
+  are 0-based half-open in CDR3-nt space.
+- **aa → nt** **`infer_nt(model, cdr3_aa, v=, j=, n_best=8)`** → the same `Scenario`, with `pgen`
+  the exact `pgen_nt` of the returned sequence — the VDJdb case, where a record has `(V, J, CDR3aa)`
+  and no nucleotides. Two stages: the argmax over every scenario `pgen_aa` sums (germline pinned,
+  free N-region positions scored by the VD/DJ/VJ dinucleotide model), then a `pgen_nt` re-score of
+  the survivors — stage 1 maximises the *joint*, the re-score answers about the *marginal*.
+  Reproduces `infer_nt_bruteforce` (the exact but exponential ORACLE, tests only) 25/25 TRG and
+  19/19 TRA; the one-scenario "best codon per residue" shortcut manages 9/25 and 4/19, because a
+  trim chosen before the codons pins a codon the true optimum would have trimmed away.
+  **`native.best_aa_scenarios(model, aa, v=, j=, k=8)`** is stage 1 alone (top-k scenarios as
+  `(w, v, len_v, j, len_j, d, idx5, idx3, pos)`): the same Pi_L*Pi_R transfer matrix as `pgen_aa`
+  with `max` for the sums. **2.5 ms/TRB, 0.5 ms/TRA — all of VDJdb in ~3 min.**
+  `v=`/`j=` take one allele, a list or comma-separated string (ambiguous `v_call`), or `None`
+  (marginalize — barely slower, 0.26 vs 0.23 ms). NOTE: pass a `Model`, not a `prepare()`-d one:
+  a prepared model selects the pure-Python reference search, ~600x slower on TRB (tests cross-check
+  the two). WARNING: Do not pin germline flanks to shrink the search — it drops trimmed-germline
+  sequences and the true max can be one. Tandem-D is not enumerated in stage 1 (it cannot add
+  candidates, only reorder them) but is fully counted by the stage-2 `pgen_nt`.
 - **Stitch**: `stitch_contig(model, v, j, cdr3_nt)`, `stitch_frame`.
 - **Usage re-weighting**: `rescale_usage(model, sample_or_list, v=, j=, aggregate="pool"|"mean")` —
   V/J usage is protocol-dependent (5'RACE vs DNA-multiplex), the junction model is not.
@@ -125,7 +138,7 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `build_model(chain, ...)`, **`build_all(chains, groups=, workers=)`** — the full FASTQ → arda-map
   → EM pipeline, parallel across chains. Ambiguous junction bases → `A` by default in both training
   entry points (`infer.sanitize_junctions`; `ambiguous=None` drops instead).
-  ⚠ arda ≥2.19: stage-1 mapping is **`arda map`**, not `arda rnaseq map`.
+  NOTE: arda ≥2.19: stage-1 mapping is **`arda map`**, not `arda rnaseq map`.
 - Tandem-D (D-D) supported throughout (`vdjtools.model.dd`).
 
 ### `vdjtools.stats` — diversity, spectratype, usage
@@ -141,6 +154,59 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
 ### `vdjtools.features` — CDR features
 `physchem_profile` (region × property), `kmer_profile`, `v_kmer_c_profile`, `load_property_table`,
 `DEFAULT_PROPERTIES`.
+
+### `vdjtools.signature` — VSIG, the statistics half of the portable repertoire signature
+One repertoire → a fixed, **named, positional** vector a collaborator can compute from their own
+AIRR files and feed straight to a learner. The other half (geometry of the prototype-sum measure)
+is `mir.signature`; both sit in one column contract, which lives **here** because mirpy depends on
+vdjtools and not the reverse.
+
+```python
+from vdjtools.signature import vsig, vsig_cohort, columns, describe
+v = vsig({"TRB": df}, tier="standard")        # {column: value}, in layout order
+describe("standard")                          # the column dictionary
+```
+- `layout` — the contract. `LOCI`, `TIERS` (`core`/`standard`/`full`, each an exact **index
+  subset** of the next), `columns(tier, sig)`, `index()`, `describe()`, `parse()`, `register()`,
+  `Block`, `feats()`. Transforms are declared **per feature**, not per block: a clonality block
+  legitimately mixes a CLR-transformed composition with a logit-transformed proportion.
+- `transform` — the variance-stabilising layer, each choice denominator-aware because the
+  alternative silently lies about shallow samples: `logit` (Haldane–Anscombe), `arcsine`
+  (Anscombe), `clr` (multiplicative zero replacement, **capped** so a shallow composition cannot
+  consume itself), `log10`, `log1p`, `reference_z`, `robust_loc_scale`, `magnitude_scale`.
+  `clr` ships *k−1* parts: all *k* are linearly dependent and would be a guaranteed zero
+  eigenvalue in any PCA.
+- `blocks` — `sanitise`, `work_frame`, then `qc_block`, `depth_block`, `div_block`, `clon_block`,
+  `len_block`, `iso_block`, `shm_block`, `pair_block`, `aa_block`, `pchem_block`, `pgen_block`.
+  `estimable()` **refuses** rather than extrapolates: real repertoires attain Good–Turing coverage
+  0.24–0.58, so a textbook `C*=0.95` puts every sample into extrapolation, where diversity
+  inflates roughly tenfold.
+- `assemble` — `vsig`, `vsig_cohort`. Pass **`threads=1`** when running inside your own process
+  pool: the default 0 means "all cores" *per worker*.
+- CLI: `vdjtools signature *.tsv --tier standard -o vsig.parquet`, `vdjtools signature --describe`.
+
+**Feature presets — the entry point to recommend to a collaborator.** `vdjtools.signature.presets` names
+and ranks the useful column subsets so nobody picks columns by hand:
+
+| preset | rank | columns | use it for |
+|---|---|---|---|
+| `compact` | recommended | 152 | first look; small cohorts; features must stay well under n |
+| `transfer` | recommended | 550 | the model must run on another lab's samples |
+| `classify` | recommended | 615 | general supervised work when train/test share a protocol |
+| `statistics` | specific | 101 | no embedding available; textbook-defined features only |
+| `bcell` | specific | 286 | BCR work — Ig loci with SHM and isotype |
+| `geometry` | specific | 514 | batch is the adversary; blood↔tissue comparisons |
+| `full` | specific | 1403 | feature selection, NOT fitting — measured worse than a good subset |
+| `nuisance` | **avoid** | 73 | a control: depth/mask/QC only. If your model matches it, it reads library prep |
+
+```bash
+vdjtools presets                 # the table, with rankings
+vdjtools presets transfer        # one preset in full: features, how computed, use cases, caveats
+```
+
+Presets resolve from the frozen layout alone — no corpus, no fitted artifact — so two people
+selecting the same preset get identical columns in identical order.
+
 
 ### `vdjtools.overlap` — overlap + TCRnet (delegates to vdjmatch/seqtree)
 `overlap_metrics`, `overlap_pair`, `DEFAULT_KEY`; `fuzzy_overlap`, `fuzzy_overlap_metrics`;
@@ -207,11 +273,34 @@ Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Wi
 - `select_candidates` (public features over incidence count/fraction), `stats` (vectorised 2×2 kernels),
   `fisher_association` (Emerson Fisher shortcut, legacy schema), `metaclonotypes` (1mm grouping).
 
-### `vdjtools.sc` — single-cell (AIRR Cell / 10x)
-`read_10x`, `read_airr_cell`, `write_airr_cell`; `resolve_chains`, `pair_chains`,
-`chain_multiplicity`, `flag_mispairing`; **`paired_pgen(paired, source=, condition_vj=)`**
-(`Pgen(α)·Pgen(β)` via the native model); `cluster_eval` (+ `purity`, `homogeneity`, `parsimony`,
-`q_measure`, …); `to_anndata`.
+### `vdjtools.sc` — single-cell (CellRanger / AIRR Cell / arda) + ecosystem interop
+**Ingest**: `read_airr_cell` (any AIRR Rearrangement TSV with `cell_id` — incl. CellRanger's
+`airr_rearrangement.tsv`, CR≥4.0, the **preferred** input), `read_10x`
+(`all_`/`filtered_contig_annotations.csv`, tolerates CR3→CR7 column drift), `read_arda_cells`
+(`arda cells` output; surfaces arda's verdict as `arda_status` **without acting on it**),
+`write_airr_cell` (AIRR Cell Data File).
+**QC/analysis**: `resolve_chains`, `pair_chains`, `chain_multiplicity`, `flag_mispairing`;
+**`paired_pgen(paired, source=, condition_vj=)`** (`Pgen(α)·Pgen(β)`, native model);
+`cluster_eval` (+ `purity`, `homogeneity`, `parsimony`, `q_measure`, …).
+**Interop** — everything routes through ONE flat AIRR Rearrangement table (`sequence_id` +
+`cell_id`), which is what scirpy/dandelion/scRepertoire all read: `to_airr` / `from_airr` /
+`write_airr` is the contract; `to_scirpy(cells, gex=)` → scirpy's `obsm["airr"]` awkward layout
+(or a `MuData`) / `from_scirpy`; `to_dandelion` / `from_dandelion` / `read_h5ddl`;
+`write_screpertoire(..., format="airr"|"10x")`; `push_obs(target, df)` augments an existing
+`AnnData.obs` or `Dandelion.metadata`; `to_anndata` is the older FLAT one-row-per-pair container
+(kept, but scirpy does not read it — use `to_scirpy`).
+**Asymmetry by design**: writing a container delegates to the library that owns it; reading one
+is ours, so `from_scirpy` needs only `awkward` and `read_h5ddl` only `h5py`.
+NOTE: `io.read` REFUSES a `cell_id`-bearing AIRR table (it would collapse reads across cells and
+drop the barcode); it raises and points at `sc.read_airr_cell`. `fmt="airr"` forces pooling.
+CLI: **`vdjtools sc`** — input format sniffed from the **header** (not the filename);
+`--fmt auto|10x|airr|arda` forces it, and `--require-cell/--require-high-conf/--consensus` apply
+to 10x input. `convert` (`--airr`), `pair` (`--locus-pair --resolve/--no-resolve
+--flag-mispairing --max-slaves-per-master --drop-mispaired`), `qc` (`--locus-pair`), `pgen`
+(`--source --condition-vj/--no-condition-vj --resolve-genes/--no-resolve-genes --alpha-locus
+--beta-locus`; prints `scored N/M receptors`), `export --to
+airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell` (`--gex` → MuData,
+`--index-chains/--no-index-chains`, `--repertoire-id`).
 
 ### `vdjtools.cli`
 The `vdjtools` typer app. Model: `models`, `generate`, `pgen`, plus the **`vdjtools model <sub>`**

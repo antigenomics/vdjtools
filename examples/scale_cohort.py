@@ -163,7 +163,7 @@ def _(S, cohort, mo, vio):
     _first = next(cohort.glob("sample_id=*/part.parquet"))
     _df = vio.read_parquet(_first)
     ok = _df.columns == S.COLUMNS + [S.LOCUS] and abs(_df[S.FREQ].sum() - 1.0) < 1e-6
-    mo.md(f"**Single-partition `read_parquet`** → canonical schema round-trips ✓ = **{ok}** "
+    mo.md(f"**Single-partition `read_parquet`** → canonical schema round-trips yes = **{ok}** "
           f"(typed columns, `frequency` sums to 1 for that sample).")
     return
 

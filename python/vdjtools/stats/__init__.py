@@ -1,4 +1,4 @@
-"""vdjtools.stats — Repertoire statistics: diversity, rarefaction, spectratype, V/J/VJ usage."""
+"""vdjtools.stats — Repertoire statistics: diversity, rarefaction, spectratype, V/J/VJ usage, SHM."""
 from .diversity import (
     chao1,
     chao_e,
@@ -23,10 +23,14 @@ from .inext import (
     sample_coverage,
 )
 from .rarefaction import rarefaction
+from .shm import shm_entropy, shm_spectrum, shm_summary
 from .spectratype import spectratype, vj_spectratype
 from .usage import segment_usage, vj_usage
 
 __all__ = [
+    "shm_summary",
+    "shm_spectrum",
+    "shm_entropy",
     "diversity_stats",
     "diversity_cohort",
     "observed_richness",

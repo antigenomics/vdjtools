@@ -63,6 +63,25 @@ pip install -e ".[examples,sc,overlap]"
 marimo edit examples/single_cell.py
 ```
 
+## `single_cell_interop.py` — CellRanger in, scirpy / dandelion / scRepertoire out
+
+A [marimo](https://marimo.io) notebook on the same dCODE data, showing vdjtools sitting in the
+middle of the single-cell ecosystem rather than replacing any of it: ingest 10x contigs, QC
+(`chain_multiplicity`, `flag_mispairing`) and score (`paired_pgen`), then hand the result to each
+downstream container and read it back — `to_scirpy`/`from_scirpy` (scirpy's `obsm["airr"]`
+awkward layout), `to_dandelion`/`read_h5ddl`, `write_screpertoire` for R — and finally `push_obs`
+to attach `pgen_paired` to an AnnData you did not build. The seam throughout is one flat AIRR
+Rearrangement table (`to_airr`).
+
+scirpy and dandelion are **optional**: each section degrades to a note if its library is missing,
+and the reading directions need only `awkward` / `h5py`.
+
+```bash
+pip install -e ".[examples,sc]"
+pip install -e ".[interop]"            # optional: scirpy + sc-dandelion, to run those sections
+marimo edit examples/single_cell_interop.py
+```
+
 ## `cdr_features.py` — CDR3 physicochemistry & k-mer features
 
 A [marimo](https://marimo.io) notebook computing CDR3 amino-acid features with
@@ -224,3 +243,32 @@ Graphviz `dot` is optional — without it the comparison graph is skipped, nothi
 pip install -e ".[examples]"
 marimo edit examples/model_workshop.py
 ```
+
+## `signature_features.py` — signature transforms, V-call resolution, the V+k-mer space
+
+A [marimo](https://marimo.io) notebook on the three feature choices that are easy to get wrong,
+each measurable in seconds on repertoires sampled from the bundled models (no download):
+why the amino-acid block is **Anscombe arcsine** and not `log1p` of counts (`log1p` moves ~7.5×
+across a depth change that leaves arcsine at 1.04×), why an ambiguous V call must go through
+`resolve_gene` rather than `strip_allele`, and what `fit_kmer_space` builds — gapped/ungapped
+patterns, BLOSUM62-clustered alphabets, TF-IDF, truncated SVD, and why its components must not be
+selected by explained variance.
+
+```bash
+pip install -e ".[examples]"
+marimo edit examples/signature_features.py
+```
+
+## `signature_features.py` — see also: feature presets
+
+`vdjtools presets` lists the named, ranked feature sets and `vdjtools presets <name>` explains one
+in full (what it contains, how it is computed, when to use it, and its caveats). To produce a table
+over a whole dataset in parallel:
+
+```bash
+vdjtools presets                                                    # the ranked table
+vdjtools signature *.tsv --preset classify --threads 0 --out vsig.parquet
+```
+
+For the full vector — statistics **and** embedding geometry — use mirpy's `mir signature
+--preset ...`, and see its `examples/feature_vectors.py` notebook.

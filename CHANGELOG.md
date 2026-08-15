@@ -3,6 +3,326 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.8.0 — unreleased
+
+Single-cell interop: vdjtools now sits inside the downstream single-cell ecosystem instead of
+ending at its own frame.
+
+### Fixed — `paired_pgen` returned nothing but nulls on real CellRanger data
+
+The bug that mattered most here, and it was silent. CellRanger reports **gene**-level V/J calls
+(`TRBV10-3`); the model is keyed by **allele**. `native.pgen_aa` raises on a gene name on
+purpose — the old `-1` fallback meant *marginalise over every allele* and once returned a Pgen
+**2.38x too high** with no error — but `sc.pgen._chain_pgen` caught that with a bare
+`except Exception: return None`. Net effect: on the single most common real input, `pgen_alpha`,
+`pgen_beta` and `pgen_paired` were **100% null**, with nothing to indicate why. Measured on the
+public dCODE donor-4 run: **27,268 of 27,268 receptors null**.
+
+`paired_pgen` now resolves a gene to its representative allele (`*01` where the model has it)
+before scoring — deliberately and documented, *not* by falling back to marginalising. Same
+dataset: **24,325 of 27,268 now scored** (median paired Pgen 2.1e-19). `resolve_genes=False`
+restores exact-allele-only matching, and an all-null locus now emits a `UserWarning` instead of
+shipping a silent column. The `except` is narrowed to `(KeyError, ValueError)` with a
+non-`str` junction guard, so unrelated failures stop being swallowed.
+
+### Fixed — a barcoded AIRR table was silently collapsed into a bulk repertoire
+
+`io.sniff_format` had no `cell_id` branch, so CellRanger's `airr_rearrangement.tsv` (or any
+barcoded AIRR table) sniffed as `"airr"`/`"arda"` and `read_airr` pooled reads **across cells**,
+dropping the barcode with no error. It now sniffs as `"airr_cell"` and `io.read` refuses it,
+naming `sc.read_airr_cell` instead; `fmt="airr"` still pools on purpose.
+
+### Added — one interchange format, four ecosystems
+
+scirpy, dandelion and scRepertoire all read the same thing: a flat AIRR Rearrangement table with
+`sequence_id` + `cell_id`. So `vdjtools/sc/airr.py` is one emitter (`to_airr`) and one inverse
+(`from_airr`), and each bridge is a thin adapter — `write_airr`, plus `write_screpertoire`
+(`format="airr"|"10x"`). It reconciles the two spellings that otherwise bite: AIRR says
+`junction` where vdjtools says `junction_nt`, and scRepertoire's parser reads `consensus_count`
+where scirpy and dandelion prefer `umi_count`, so both are emitted.
+
+- **scirpy / scverse** — `to_scirpy` (scirpy's `obsm["airr"]` awkward layout, `index_chains` run
+  by default; `gex=` gives a `MuData`) and `from_scirpy`. Writing **delegates** to
+  `scirpy.io.read_airr` so no copy of their schema can drift here; reading is ours and needs only
+  `awkward`, so consuming someone else's AnnData costs no scirpy install.
+- **dandelion** — `to_dandelion` / `from_dandelion`, plus `read_h5ddl`: `.h5ddl` is plain HDF5, so
+  a dandelion result opens with `h5py` alone.
+- **`push_obs`** — attach vdjtools-computed columns (`pgen_paired`, mispairing flags) to an
+  `AnnData.obs` or `Dandelion.metadata` you did not build. Refuses a multi-pair frame rather than
+  silently picking one row per cell.
+
+### Added — ingestion
+
+`read_10x` now accepts `filtered_contig_annotations.csv` as well as `all_contig_annotations.csv`
+(one CellRanger writer, one layout) and tolerates version drift — `fwr*`/`cdr1`/`cdr2` are CR6+,
+`exact_subclonotype_id` CR4+, `sample` only under `cellranger multi`, and `raw_consensus_id` is
+used when present rather than required. `read_arda_cells` reads `arda cells` output
+(`.contigs.airr.tsv` + `.chains.tsv`), surfacing arda's own per-chain verdict as `arda_status`
+**without acting on it** — arda's call and `resolve_chains`' call are independent answers to the
+same question. `productive` joins `SC_COLUMNS` so the emitted AIRR table is schema-valid.
+
+### Added — CLI, docs, example
+
+`vdjtools sc` — `convert`, `pair`, `qc`, `pgen`, and
+`export --to airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell`, each exposing the
+matching library options: `--fmt`, `--require-cell`, `--require-high-conf`, `--consensus`,
+`--locus-pair`, `--resolve`, `--flag-mispairing`, `--max-slaves-per-master`, `--drop-mispaired`,
+`--source`, `--condition-vj`, `--resolve-genes`, `--alpha-locus`, `--beta-locus`, `--gex`
+(scirpy MuData), `--index-chains`, `--repertoire-id`. The input format is sniffed from the
+**header**, not the filename — a renamed export still works and a bulk table is refused by name
+rather than mis-parsed. `sc pgen` reports `scored N/M receptors`, so a naming mismatch is a
+number on screen rather than a column of nulls to notice later. A dedicated
+`docs/singlecell.rst` (the `usage.rst` section is now a pointer), and
+`examples/single_cell_interop.py`, a marimo notebook running the whole path on dCODE donor 4 —
+which is what surfaced the Pgen bug above.
+
+`[sc]` gains `awkward` + `mudata`; a new **test-only** `[interop]` extra carries `scirpy` and
+`sc-dandelion` (PyPI name; imports as `dandelion`). CI installs it best-effort and reports
+whether the round-trip tests ran or skipped, since their dep chains break on new matplotlib.
+The format contract itself (`test_sc_airr.py`) has no optional deps and never skips.
+
+## 3.7.3 — 2026-08-15
+
+Housekeeping. The first PyPI release since 3.7.0, so it carries 3.7.1 and 3.7.2 with it.
+
+### Fixed — the iNEXT bootstrap carried a fallback that could never be taken
+
+`stats/inext.py` guarded its `_core` import in a `try/except` and dispatched between the native
+bootstrap and the numpy reference at call time. `_core` is a build-time dependency — an install
+without it does not exist — so the `except` branch and `_bootstrap_se_dispatch` were dead, and
+`inext_batch` raised its own "requires the native _core extension" for a state that cannot occur.
+Both are gone; the import is now local to the two functions that need it, which keeps
+`import vdjtools.stats` as light as the guard made it. The numpy `_bootstrap_se` stays, unchanged
+— it is the reference the tests compare the native kernel against.
+
+### Removed — three dev-notes files the changelog had already absorbed
+
+`NOTES.md`, `ROADMAP.md` and `SUGGESTED_EDITS.md` recorded the phase narrative from before the
+changelog existed, and had been drifting from it since. `CHANGELOG.md` is the release-by-release
+record; `CLAUDE.md`'s "Open loops" is what is in flight. `CLAUDE.md`, `README.md`,
+`docs/index.rst` and the sdist exclude list no longer point at the deleted files.
+
+## 3.7.2 — 2026-08-14
+
+Documentation accuracy. No code change.
+
+### Fixed — the preset-ranking corpus was described as larger than it is
+
+`vdjtools.signature.presets` and `docs/signature.rst` both said the rankings come from "several
+hundred study groups, tens of thousands of samples". Counted, the sweep panel is **182 study
+groups over 198 accessions, 14,553 samples** — which the same page already stated correctly two
+sections earlier ("14,553 samples × 1,369 columns, 182 studies"), so the file disagreed with
+itself. Both places now carry the counted figure. The accession list is published in the analysis
+repo's `heldout/signature_studies.tsv`, so a reader can check the claim rather than take it.
+
+## 3.7.1 — 2026-08-14
+
+Audit pass. Two fixes, both cases where a feature was reachable from Python and not from the
+command line that ships it.
+
+### Fixed — `keep=` stopped at the readers, so the SHM block could never be computed from the CLI
+
+3.7.0 added `keep=` to `read_airr` / `read_vdjtools` / `read_parquet` so `v_identity` — the one
+field the signature needs that the canonical eight columns do not carry — could reach
+`vsig:shm:IGH:mean_v_identity`. The dispatcher `io.read` and the batch mapper `io.map_samples`
+did not take the argument, and those are what the CLI uses: `vdjtools signature` on a file
+carrying `v_identity` reported `mask:IGH:shm = 0` and `mean_v_identity = nan`. Both now take
+`keep=`, and the `signature` command passes `("v_identity",)`.
+
+The column now populates on any input that has the field. Nothing else changes: `keep=()` is the
+default everywhere, and the legacy converters, which narrow to the canonical schema, ignore it.
+
+### Fixed — a coverage level of exactly 1.0 warned its way to the right answer
+
+`mir.signature` passes `cstar = 1.0` deliberately, as an "unreachable" sentinel, for a locus
+where no coverage level could be established — the diversity block is then supposed to fail its
+own estimability check and mask out. It did, but `_invert_coverage` got there by evaluating
+`log(1 - 1.0)` and doing inf arithmetic, emitting three `RuntimeWarning: divide by zero` per
+call into the user's terminal. It now returns `inf` directly. Same `m`, same method, same mask —
+without the noise.
+
+## 3.7.0 — 2026-08-14
+
+### Added — `vdjtools signature` on the CLI, with the help text as the primary documentation
+
+The command a collaborator actually runs. No Python:
+
+```bash
+vdjtools signature --preset classify -m metadata.txt --base-dir samples/ -o sig.tsv
+vdjtools signature --preset compact a.tsv b.tsv.gz -o sig.tsv
+vdjtools signature --preset classify --describe     # the columns, reading no input
+vdjtools presets                                    # the named feature sets, ranked
+```
+
+`--help` on both commands carries worked examples, the three `recommended` presets and when each
+applies, the pointer to `mir signature` for the geometry half, and the CDR3-vs-junction trap
+(a file carrying only IMGT `cdr3_aa` is two residues short everywhere, which shifts the length,
+k-mer and Pgen features). `docs/signature.rst` opens with the same quickstart, and the README and
+`examples/README.md` lead with `--preset classify` rather than a `specific`-ranked set.
+
+Because that help text is written for a terminal — indented example blocks, which are not valid
+reStructuredText — `signature` and `presets` are excluded from the `vdjtools.cli` autodoc, with a
+note on the API page saying where to read them instead.
+
+### Fixed — 221 signature tests were invisible to CI
+
+The seven new test files landed in `tests/` while `testpaths = ["tests/python"]`, so a plain
+`pytest` collected 789 of 1010 and the CI job (`pytest tests/python -q`) never ran one of them.
+Moved into `tests/python/` with the rest; default collection is 1004 passed / 6 skipped.
+
+### Added — `vdjtools.signature`: VSIG, the statistics half of a portable repertoire signature
+
+One repertoire in, a **fixed, named, positional** feature vector out — the object you hand a
+collaborator so their matrix and yours are the same coordinate system. The geometry half lives in
+`mir.signature`; the shared column contract lives here, because mirpy depends on vdjtools and not
+the reverse, and two copies of a contract are not a contract.
+
+```python
+from vdjtools.signature import vsig, vsig_cohort, columns, describe
+v = vsig({"TRB": df}, tier="standard")
+describe("standard")            # column, sig, block, locus, feature, tier, transform, flags
+```
+
+Four modules. `layout` is the contract — loci, the `core ⊂ standard ⊂ full` tiers as exact
+**index subsets** of one frozen column order, and a per-feature (not per-block) transform
+declaration, because a clonality block legitimately mixes a CLR-transformed composition with a
+logit-transformed proportion. `transform` is the variance-stabilising layer. `blocks` computes.
+`assemble` puts them in order.
+
+Every transform choice is **denominator-aware**, because the alternative silently lies about
+shallow samples: Haldane–Anscombe `logit` so `0/3` and `0/500` are different numbers, Anscombe
+`arcsine` so a share is defined at exactly zero, and `clr` over the *whole* composition before any
+coordinate is selected — shipping *k−1* parts, since all *k* are linearly dependent and would put
+a guaranteed zero eigenvalue in any PCA.
+
+Diversity is compared at a **frozen coverage level**, and `estimable()` **refuses** rather than
+extrapolates. Real repertoires attain Good–Turing coverage 0.24–0.58, so a textbook `C* = 0.95`
+puts every sample into extrapolation, where the same statistic inflates roughly tenfold. A hole a
+model can see beats a confident wrong number. For the same reason `clonality` is rebuilt from the
+coverage-standardised Hill numbers, `1 − ln(¹D)/ln(⁰D)`: the observed Pielou evenness it replaced
+drifted 0.510 over a 667× depth range, against 0.023 for the standardised form.
+
+### Fixed — the CLR zero replacement could consume the composition it was correcting
+
+The textbook multiplicative replacement puts `delta = 0.5/m` on each zero part and scales the rest
+by `1 − n_zero·delta`. On a *shallow* composition that is bigger than the composition: three
+parts, one observed, `m = 1` gives two replacements of 0.5 and scales the one real part to exactly
+zero, whose log is `-inf` — a value that then propagates through every downstream reduction. Found
+while emitting a real 4,000-sample corpus. The replaced mass is now capped below half the smallest
+*observed* part, which is the only property a replacement needs; the cap is inactive whenever `m`
+exceeds the number of parts, i.e. everywhere outside that tail.
+
+### Fixed — `pgen_block` reloaded the recombination model on every call
+
+Loading and collapsing a bundled model costs 0.4–1.8 s; the Pgen batch that follows costs ~0.15 s.
+A corpus emission therefore spent 80–95% of its time re-reading seven files it had already read,
+and a seven-locus sample paid it seven times over. Memoised per locus: **1.54 s → 0.01 s** on the
+second call.
+
+Also worth knowing when emitting a corpus: `pgen_block`/`vsig` default to `threads=0`, meaning
+*all cores*, which inside your own process pool means every worker claims the whole machine. On a
+16-core box, 14 workers took the load average to 227. Pass `threads=1` there.
+
+## 3.6.1 — 2026-08-14
+
+Audit pass. No library behaviour changes.
+
+- **`examples/emerson_cmv_hla.py` did not parse on Python 3.10/3.11.** A backslash inside an
+  f-string *expression* (`f"…{meta['hla'].str.contains(r'HLA-A\*02').sum()}…"`) is 3.12-only syntax,
+  but the package declares `requires-python = ">=3.10"`. The regex is hoisted to a local.
+- Unused imports and multi-import lines cleaned out of `examples/` (`ruff --fix`).
+- `[tool.ruff.lint]` now ignores `E702`/`E741`/`E731` — the paired-short-statement style and `l`/`O`
+  loop scalars are deliberate throughout the examples and OLGA oracle shims. `ruff check .` is
+  green, so a real finding is visible again instead of being buried in 30 style hits.
+- Repo cleanup: 1.7 GB of regenerable artifacts removed (`examples/.data` notebook caches,
+  `docs/_build`, `examples/__marimo__`, tool caches, `.DS_Store`), plus four worktrees whose
+  branches were already fully merged into `master` (`feature/biomarker-cooccurrence`,
+  `feature/dynamics`, `chore/vdjmatch-pin`, `claude/trusting-torvalds-65e7b7`). `feature/cdr3-viterbi`
+  and `signature` still carry unmerged commits and were left in place.
+
+Verified at this commit: `pytest tests/python` 783 passed / 6 skipped; `sphinx-build -W` clean.
+
+## 3.6.0 — 2026-08-12
+
+### Added — `infer_nt`: the nucleotide CDR3 behind an amino-acid one
+
+A VDJdb record carries `(V, J, CDR3aa)` and no nucleotides, so none of the boundary markup a
+repertoire analysis wants is there. `infer_nt` reconstructs all of it:
+
+```python
+from vdjtools.model import infer_nt
+sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
+sc.cdr3_nt, sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start, sc.pgen, sc.margin
+```
+
+Two stages. A codon-constrained **max-product DP** over every scenario `pgen_aa` sums — germline
+positions pinned to their segment, each free N-region position taking the nucleotide that maximises
+`P(nt₁)·∏P(nt_k | nt_{k−1})` under the VD/DJ/VJ dinucleotide model; then a `pgen_nt` re-score of the
+survivors, because stage 1 maximises the *joint* `P(nt, scenario)` while the contract is about the
+*marginal* `P(nt)`. `pgen` on the result is a real `pgen_nt`.
+
+Stage 1 is **native**: the same Murugan/OLGA `Pi_L·Pi_R` transfer matrix `pgen_aa` already uses,
+with `max` in place of the sums and the winning `(V, delV)` / `(J, delJ)` carried through the state
+(`native.best_aa_scenarios`). It returns *scenarios*, not nucleotide paths — once the scenario is
+fixed, recovering the nt string is one cheap DP over the two insertion blocks, so the sweep carries
+no back-pointers. A first cut enumerated the scenarios in Python instead and cost 1.7 s per TRB
+CDR3; that implementation is kept as the reference the native one is tested against.
+
+Per-sequence cost, 25 generated productive draws per locus. Leaving the calls out is nearly free,
+because the DP sweeps V and J either way:
+
+| locus | ms/seq, V/J known | ms/seq, V/J free |
+|---|---|---|
+| IGK | **0.41** | **0.48** |
+| IGL | 0.46 | 0.50 |
+| TRG | 0.78 | 0.68 |
+| TRA | 0.86 | 2.43 |
+| TRB | 3.02 | 3.20 |
+| TRD | 7.07 | 7.78 |
+| IGH | 87.14 | 85.88 |
+
+So all 80k VDJdb records — TRA and TRB — take **about 2-4 minutes**. IGH is the outlier at 87 ms:
+it carries 60+ D alleles and the D placement loop scales with that library, so plan minutes per
+10k there rather than per 80k.
+
+**Measured against the exponential oracle** (generated productive draws, V/J pinned, 10 residues):
+
+| variant | TRG | TRA | ms/seq |
+|---|---|---|---|
+| one scenario, best codon per residue | 9/25 | 4/19 | 0.06 |
+| stage 1 only (`keep=1, n_best=1`) | 21/25 | 15/19 | 0.3 |
+| stage 1 + marginal re-score (defaults) | **25/25** | **19/19** | 1.2 |
+
+The cheap shortcut fails because a trim chosen before the codons pins a codon the true optimum
+would have trimmed away — the same unsoundness as pinning the germline flanks.
+
+**Three call-input modes**, because annotation tables have all three: one allele (the normal mode);
+several, as the comma-separated string an ambiguous AIRR `v_call` carries or as a list; or nothing
+at all, where the DP marginalizes over every gene — 0.26 ms against 0.23 ms with both pinned, so
+unknown calls cost essentially nothing.
+
+Tandem-D is not enumerated in stage 1 (a single D trimmed to zero length already reaches every
+middle, so D-D can only reorder candidates, not add them); the stage-2 `pgen_nt` counts it in full.
+
+### Fixed — EM could relearn a genomically impossible D–J pair
+
+A D can only recombine with a J lying 3′ of it, and in TRB the clusters interleave
+(TRBD1·TRBJ1·TRBD2·TRBJ2), so `P(TRBD2 | TRBJ1-*)` must be zero. The learned TRB model had it at
+**0.0909**, and OLGA's own TRB gives `P(TRBD2*01 | TRBJ1-6*01) = 0.333`.
+
+The constraint is now applied in **both M-steps before normalization** — a post-hoc patch would be
+undone by the very next iteration. `reference.forbidden_dj_pairs` derives the forbidden set from
+IMGT cluster numbering, `infer.enforce_dj_order` repairs an existing model, and `check_model` gains
+an `impossible_dj_pair` check (`warn` for faithful OLGA imports, which must stay byte-exact for the
+Pgen invariant; `error` otherwise).
+
+The bundled `learned` TRB is rebuilt with the constraint: **9 iterations instead of 11**, final
+log-likelihood **−33.7575** against −33.7604 — the constraint *improves* the fit.
+
+### Changed
+
+- No emoji anywhere in the repository; the `⛔`/`⚠` markers are now `WARNING:` / `NOTE:`.
+
 ## 3.5.0 — 2026-08-12
 
 ### Fixed — `generate(seed=)` was not reproducible across processes
@@ -29,7 +349,7 @@ sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, CD
 It re-derives nothing: every probability comes from `prepare()`'s tables, and the D placement is a
 max-product mirror of `pgen._d_middle` over the same `P(D|J)·P(delD|D)·Pins(VD)·Pins(DJ)` terms.
 
-⛔ **The D therefore obeys `P(D|J)`.** TRBD2 lies 3′ of the whole TRBJ1 cluster, so deletional
+WARNING: **The D therefore obeys `P(D|J)`.** TRBD2 lies 3′ of the whole TRBJ1 cluster, so deletional
 joining can never produce a TRBD2–TRBJ1 pair and the model encodes that as a zero. An earlier draft
 here chose D by longest exact substring and ignored `j` entirely — it would have called the
 impossible pair. There is a regression test.
@@ -40,23 +360,7 @@ taken over), and `scenario_p` recomputes exactly from the reported path's own ta
 
 `infer_nt_bruteforce` is an exact but exponential **oracle for tests**.
 
-### Not added — `infer_nt` (amino-acid → nucleotide) raises
-
-⛔ Inferring a nucleotide CDR3 from an amino-acid one needs a max-product DP with traceback over the
-aa-constrained space; it is **not written**, and the entry point raises rather than dispatching to
-the oracle, because a silent fallback would look like a working feature.
-
-Two measurements say why the easy routes do not work:
-
-* **Enumeration cannot scale.** On VDJdb's 79,997 records the codon search space is a median
-  **5.3 × 10⁶ (TRA)** and **1.9 × 10⁷ (TRB)**; only 8.9 % / 1.6 % are ≤ 10⁵ candidates, and each
-  candidate costs a full `pgen_nt`.
-* ⛔ **Pinning the germline-templated flanks to shrink it is UNSOUND.** It excludes every sequence
-  whose germline was *trimmed*, and the true maximum can be one of them — caught against the
-  brute-force oracle (`CAVSDMRF` → `…GTGAGTGAC…`, pinned version returned `…GTGAGCGAT…`). Do not
-  reintroduce it as an optimisation.
-
-⚠ Both functions assume an **in-frame** CDR3 (`len(nt) == 3 × len(aa)`). Real productive receptors
+NOTE: Both functions assume an **in-frame** CDR3 (`len(nt) == 3 × len(aa)`). Real productive receptors
 satisfy this; an out-of-frame draw does not (measured: 8 aa against 25 nt).
 
 ### Changed
@@ -74,14 +378,14 @@ aggregation, so the collapsed table's **row order varied per process**; `_cum` t
 same cumulative interval to a different allele, and the same `rng.random()` drew a different one.
 `_pick` and `default_rng` were correct throughout — the ordering beneath them was not.
 
-⚠ **Not hash randomisation.** `PYTHONHASHSEED=0` did not help, which is what ruled it out and
+NOTE: **Not hash randomisation.** `PYTHONHASHSEED=0` did not help, which is what ruled it out and
 pointed at the aggregation. Same class as the nondeterminism recorded against arda's `correct`
 stage.
 
 Fixed by `maintain_order=True` on all 12 `group_by` calls in `collapse.py` and all 7 in
 `generate.py`. Verified identical across 5 separate processes on TRA, TRB and IGH.
 
-⛔ **This changes generated output** for a given seed — it has to, since the old order was
+WARNING: **This changes generated output** for a given seed — it has to, since the old order was
 arbitrary. Any recorded expectation from `generate()` predating 3.3.0 must be re-derived.
 
 New tests run the sampler in a **subprocess**, because an in-process test agrees even with the bug

@@ -4,6 +4,9 @@ Ingest 10x / AIRR-Cell contigs into a flat, ``cell_id``-keyed Rearrangement fram
 (:mod:`~vdjtools.sc.read`), clean and pair chains with doublet / mispairing QC
 (:mod:`~vdjtools.sc.pair`), and grade clonotype clusterings against a ground truth
 (:mod:`~vdjtools.sc.cluster_eval`).
+
+Interop with the downstream single-cell stack goes through one flat AIRR Rearrangement
+table (:mod:`~vdjtools.sc.airr`) — the format scirpy, dandelion and scRepertoire all read.
 """
 from .cluster_eval import (
     assign_singleton_ids,
@@ -23,12 +26,16 @@ from .pair import (
     resolve_chains,
 )
 from .pgen import paired_pgen
-from .anndata import to_anndata
-from .read import read_10x, read_airr_cell, write_airr_cell
+from .airr import from_airr, to_airr, write_airr, write_screpertoire
+from .anndata import from_scirpy, push_obs, to_anndata, to_scirpy
+from .dandelion import from_dandelion, read_h5ddl, to_dandelion
+from .read import read_10x, read_airr_cell, read_arda_cells, write_airr_cell
 
 __all__ = [
     # ingestion
-    "read_10x", "read_airr_cell", "write_airr_cell",
+    "read_10x", "read_airr_cell", "read_arda_cells", "write_airr_cell",
+    # AIRR Rearrangement interchange (what every downstream bridge is built on)
+    "to_airr", "from_airr", "write_airr", "write_screpertoire",
     # pairing / QC
     "resolve_chains", "pair_chains", "chain_multiplicity", "flag_mispairing",
     # paired-chain generation probability
@@ -38,5 +45,7 @@ __all__ = [
     "normalized_inverse_purity", "homogeneity", "parsimony", "q_measure",
     "assign_singleton_ids",
     # scverse bridge
-    "to_anndata",
+    "to_anndata", "to_scirpy", "from_scirpy", "push_obs",
+    # dandelion bridge
+    "to_dandelion", "from_dandelion", "read_h5ddl",
 ]

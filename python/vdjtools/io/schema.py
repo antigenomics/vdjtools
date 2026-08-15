@@ -114,22 +114,26 @@ def recompute_frequency(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns((pl.col(COUNT) / pl.lit(total)).cast(pl.Float64).alias(FREQ))
 
 
-def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame:
+def normalize(df: pl.DataFrame, *, recompute_freq: bool = False,
+              keep: tuple[str, ...] = ()) -> pl.DataFrame:
     """Coerce an arbitrary frame to the canonical clonotype schema.
 
     Missing canonical columns are added as nulls, present ones are cast to their
     declared dtype (non-strict — unparseable values become null). The result is
-    exactly the canonical columns in canonical order; any non-canonical columns
-    (e.g. native vdjtools markup like ``VEnd``/``DStart``) are dropped.
+    the canonical columns in canonical order, followed by any ``keep`` columns;
+    every other non-canonical column (e.g. native vdjtools markup like
+    ``VEnd``/``DStart``) is dropped.
 
     Args:
         df: A frame that already uses canonical column names for whatever columns
             it carries.
         recompute_freq: If ``True``, recompute ``frequency`` from ``duplicate_count``
             after coercion (use when the source lacks a trustworthy frequency).
+        keep: Non-canonical columns to preserve, e.g. ``("v_identity",)``. Dtypes
+            are left alone — the canonical schema has nothing to say about them.
 
     Returns:
-        A frame with exactly the canonical columns, correctly typed and ordered.
+        A frame with the canonical columns, correctly typed and ordered, plus ``keep``.
     """
     exprs = []
     for col, dtype in SCHEMA.items():
@@ -146,7 +150,11 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False) -> pl.DataFrame
     df = df.with_columns(exprs)
     if recompute_freq:
         df = recompute_frequency(df)
-    return df.select(COLUMNS)
+    # Canonical columns first, then whatever the reader was asked to keep. Without the second
+    # part a `keep=` upstream is silently undone here, which is worse than never offering one:
+    # the caller gets a frame with no v_identity and no error to explain it.
+    extra = [c for c in keep if c in df.columns and c not in COLUMNS]
+    return df.select(list(COLUMNS) + extra)
 
 
 def weight_expr(weight: str) -> pl.Expr:
@@ -194,3 +202,48 @@ def strip_allele(expr: pl.Expr) -> pl.Expr:
     return (expr.str.split(",")
             .list.eval(pl.element().str.strip_chars().str.replace(r"\*.*$", ""))
             .list.unique().list.sort().list.join(","))
+
+
+def resolve_gene(expr: pl.Expr) -> pl.Expr:
+    """Reduce a segment call to exactly ONE gene: allele stripped, ambiguity resolved to the first.
+
+    The companion to :func:`strip_allele`, and the distinction matters:
+
+    - :func:`strip_allele` keeps a genuine cross-gene tie as ``IGHV3-23,IGHV3-23D``, because when
+      you are *reporting* usage you must not invent certainty the aligner did not have.
+    - :func:`resolve_gene` collapses it to ``IGHV3-23``, because when the gene is a **feature
+      axis** every distinct ambiguity string otherwise becomes its own category.
+
+    That second failure is not hypothetical. Fitting a V+k-mer vocabulary on 200 HIP samples
+    produced **1,296 V "genes", 1,235 of them comma-strings** such as
+    ``TRBV1,TRBV23-1,TRBV4-1,TRBV4-2,TRBV4-3``. The cost is not the 21x wider axis: it is that the
+    real ``TRBV9`` bucket gets *drained*, since every TRBV9 clone that happened to be called
+    ambiguously was filed elsewhere. Its features then fall below any incidence floor and vanish,
+    so a cohort with clean calls is scored against columns nobody populated.
+
+    Where the ambiguity comes from matters, because it is not a parsing artifact and will not go
+    away: that cohort is Adaptive/immunoSEQ **realigned with MiXCR against IMGT from the junction
+    plus short flanks**. The realignment is the better call -- MiXCR/IMGT is a sounder reference
+    than Adaptive's own -- and the ambiguity is what honest calling looks like when V genes differ
+    only outside the sequenced window. So first-listed is a resolution, not a correction.
+
+    Two things it cannot fix, and which belong to the assay rather than the reference: the window
+    still bounds what is resolvable, and Adaptive's multiplex V primers distort V usage
+    frequencies. A V-conditioned feature axis *fitted* on such a cohort inherits both, which makes
+    it a poor donor for a 5'RACE cohort whatever this function does.
+
+    First-listed rather than dropped: an ambiguous call still carries a clonotype, and the
+    aligner lists its best call first. Note this takes the first call **as written**, not
+    ``strip_allele(...).list.first()`` -- ``strip_allele`` sorts, so composing the two silently
+    returns the alphabetically-first gene instead (``TRBV5*01,TRBV19*03`` -> ``TRBV19``, not
+    ``TRBV5``).
+
+    Args:
+        expr: A polars string expression over segment calls.
+
+    Returns:
+        One gene per row (``TRBV12-3*01`` -> ``TRBV12-3``; ``A*01,B*01`` -> ``A``); nulls pass
+        through unchanged.
+    """
+    return (expr.str.split(",").list.first()
+            .str.strip_chars().str.replace(r"\*.*$", ""))

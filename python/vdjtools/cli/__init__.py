@@ -317,6 +317,150 @@ def diversity(
 
 
 @app.command()
+def signature(
+    samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
+    base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
+    fmt: str = _FMT,
+    tier: str = typer.Option("standard", help="core | standard | full — nested column sets."),
+    weight: str = typer.Option("log2p1", help="Clone-size weight g: log2p1 | duplicate_count | "
+                                              "distinct | log1p | anscombe."),
+    preset: Optional[str] = typer.Option(None, "--preset",
+                                         help="Named feature set (see `vdjtools presets`). "
+                                              "Overrides --tier and selects the columns."),
+    describe: bool = typer.Option(False, "--describe",
+                                  help="Print the column dictionary for --tier and exit."),
+    threads: int = _THREADS, out: Optional[Path] = _OUT,
+) -> None:
+    """One repertoire in, one row of named features out — ready for a classifier.
+
+    Emits the `vsig` (statistics) half of the portable repertoire
+    signature: a fixed, named, positional feature vector, so your matrix
+    and a collaborator's are the same coordinate system. Reads AIRR
+    Rearrangement, native vdjtools, Parquet and the usual third-party
+    exports, auto-detected. Writes TSV, or Parquet if -o ends in .parquet.
+
+    \b
+    START HERE
+      # a metadata sheet plus a directory of samples
+      vdjtools signature --preset classify \\
+          -m metadata.txt --base-dir samples/ -o sig.tsv
+    \b
+      # or just pass files
+      vdjtools signature --preset compact a.tsv b.tsv.gz -o sig.tsv
+    \b
+      # the exact columns you will get, reading no input at all
+      vdjtools signature --preset classify --describe
+
+    \b
+    PICK A PRESET rather than columns by hand (`vdjtools presets` lists all):
+      compact    smallest vector that still describes a repertoire (n >= 50)
+      classify   general-purpose; the usual random-forest / boosting input
+      transfer   for a model that must work on ANOTHER LAB's samples
+    \b
+    --preset overrides --tier; with neither you get all of --tier (standard).
+
+    THE OTHER HALF: this command is statistics only. The geometry half
+    (`rsig`) needs the prototype embedding and ships in mirpy --
+    `mir signature --preset classify ...` emits both halves as one vector,
+    which is what you usually want for a classifier. A preset spanning both
+    halves keeps only its `vsig:` columns here and says so on stderr,
+    because silently returning half of what was asked for is worse than
+    saying it.
+
+    \b
+    GOTCHAS
+      * CDR3 vs junction. The reader prefers AIRR `junction_aa` (anchors
+        INCLUDED) and falls back to IMGT `cdr3_aa` (anchors excluded), so a
+        file carrying only `cdr3_aa` is two residues short everywhere --
+        shifting length, k-mer and Pgen features. Check your headers first.
+      * Do not PCA-project the result. Plain scaling beat projection at
+        every rank tested.
+      * -t/--threads defaults to all cores. Inside your own process pool,
+        pass -t 1 per worker.
+    """
+    from vdjtools.signature import layout as L
+    from vdjtools.signature import presets as P
+    from vdjtools.signature import vsig
+
+    keep = None
+    if preset is not None:
+        try:
+            spec = P.get(preset)
+        except KeyError as e:
+            _err(str(e))
+        tier = spec.tier
+        keep = [c for c in spec.columns() if c.startswith("vsig:")]
+        if not keep:
+            _err(f"preset {preset!r} selects no vsig columns (it is {'+'.join(spec.sig)}); "
+                 f"use `mir signature --preset {preset}` for the geometry half")
+        dropped = spec.n_columns - len(keep)
+        if dropped:
+            typer.echo(f"preset {preset!r}: {len(keep)} vsig columns "
+                       f"({dropped} rsig columns need `mir signature`)", err=True)
+
+    if tier not in L.TIERS:
+        _err(f"--tier must be one of {L.TIERS}; got {tier!r}")
+    if describe:
+        # The column dictionary for what will actually be emitted, preset or tier.
+        d = L.describe(tier)
+        _write(d.filter(pl.col('column').is_in(keep)) if keep else d, out)
+        return
+
+    from vdjtools.io.batch import map_samples
+
+    items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
+    fn = functools.partial(vsig, tier=tier, weight=weight, threads=1)
+    # `v_identity` is the one field the signature needs that the canonical schema does not
+    # carry, so it has to be asked for by name. Without it the SHM block is not merely absent
+    # but uncomputable, and ships as a permanently-nan column on files that do have it.
+    rows = [{"sample_id": sid, **res} for sid, res in
+            map_samples(fn, items, fmt=fmt, workers=threads or None, keep=("v_identity",))]
+    if not rows:
+        _err("no samples produced a signature")
+    cols = keep if keep is not None else L.columns(tier, "vsig")
+    _write(pl.DataFrame(rows).select(["sample_id", *cols]), out)
+
+
+@app.command()
+def presets(
+    name: Optional[str] = typer.Argument(None, help="Show one preset in full."),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """List the named feature sets for `signature`, with their rankings.
+
+    \b
+      vdjtools presets            # the table: name, rank, width, halves, scaling, summary
+      vdjtools presets classify   # one preset in full — what is in it, how, and when to use it
+
+    \b
+    Ranks tell you how much to trust a choice:
+      recommended  use one of these unless you have a reason not to
+      specific     correct for a stated purpose and wrong outside it
+      avoid        a control or a measured dead end, named so that picking it is deliberate
+
+    The `halves` column says whether a preset needs `vsig` (this package), `rsig` (the geometry
+    half, in mirpy), or both. `vdjtools signature` emits only the `vsig:` columns; use
+    `mir signature` for a preset spanning both.
+    """
+    from vdjtools.signature import presets as P
+
+    if name is None:
+        _write(P.table().select("preset", "rank", "columns", "halves", "scaling", "summary"), out)
+        return
+    try:
+        spec = P.get(name)
+    except KeyError as e:
+        _err(str(e))
+    typer.echo(f"{spec.name}  [{spec.rank}]  {spec.n_columns} columns  "
+               f"tier={spec.tier}  halves={'+'.join(spec.sig)}  scaling={spec.scaling}\n")
+    for label, text in (("summary", spec.summary), ("features", spec.features),
+                        ("how it is computed", spec.how), ("use cases", spec.use_cases),
+                        ("notes", spec.notes)):
+        if text:
+            typer.echo(f"{label}:\n  {text}\n")
+
+
+@app.command()
 def spectratype(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
@@ -994,3 +1138,244 @@ def model_log(
     if not log.height:
         _err(f"{spec!r} carries no training log (it was not fitted by this tool)")
     _write(log, out)
+
+
+# ------------------------------------------------------------------------------ single-cell
+sc_app = typer.Typer(
+    no_args_is_help=True,
+    help="Single-cell (10x / AIRR Cell) ingestion, pairing QC, paired Pgen, and interop.\n\n"
+         "Inputs are auto-detected: a 10x contig-annotation CSV (all_/filtered_"
+         "contig_annotations.csv) or any AIRR Rearrangement TSV carrying a cell_id column "
+         "(CellRanger's airr_rearrangement.tsv, arda's barcoded output, our own).",
+)
+app.add_typer(sc_app, name="sc")
+
+
+SC_FORMATS = ("auto", "10x", "airr", "arda")
+
+
+def _sniff_sc(path: Path) -> str:
+    """Detect a single-cell input format from its HEADER, not its filename.
+
+    Filenames are not a contract -- people rename exports, and ``arda cells`` and CellRanger
+    both produce files with "contig" in the name but different layouts. So dispatch on the
+    columns actually present: 10x contig CSVs are keyed by ``barcode`` + ``contig_id``, arda's
+    single-cell AIRR carries its tandem-D ``d2_call``, and anything else with a ``cell_id`` is
+    plain AIRR.
+    """
+    sep = "," if path.name.lower().replace(".gz", "").endswith(".csv") else "\t"
+    try:
+        cols = set(pl.read_csv(path, separator=sep, n_rows=0,
+                               infer_schema_length=0).columns)
+    except Exception as e:  # unreadable / not tabular
+        _err(f"{path}: cannot read a header ({e})")
+    if {"barcode", "contig_id"} <= cols:
+        return "10x"
+    if "d2_call" in cols and "cell_id" in cols:
+        return "arda"
+    if "cell_id" in cols:
+        return "airr"
+    _err(f"{path}: not a single-cell table -- no 'cell_id', and no 10x 'barcode'/'contig_id' "
+         f"(columns: {sorted(cols)[:8]}...). Pass --fmt to force a reader.")
+
+
+def _read_sc(path: Path, fmt: str = "auto", *,
+             require_cell: bool = True, require_high_conf: bool = True,
+             consensus: Optional[Path] = None) -> pl.DataFrame:
+    """Read any supported single-cell input into the canonical long frame."""
+    from vdjtools import sc as _sc
+
+    if fmt not in SC_FORMATS:
+        _err(f"--fmt must be one of {', '.join(SC_FORMATS)}; got {fmt!r}")
+    if fmt == "auto":
+        fmt = _sniff_sc(path)
+    try:
+        if fmt == "10x":
+            return _sc.read_10x(path, consensus, require_cell=require_cell,
+                                require_high_conf=require_high_conf)
+        if fmt == "arda":
+            return _sc.read_arda_cells(path)
+        return _sc.read_airr_cell(path)
+    except (FileNotFoundError, ValueError) as e:
+        _err(f"{path}: {e}")
+
+
+# Shared single-cell options. The input is a positional argument on every command, so the
+# reader flags live here rather than being repeated five times.
+_SC_IN = typer.Argument(..., help="10x contig CSV, AIRR TSV with cell_id, or an `arda cells` prefix.")
+_SC_FMT = typer.Option("auto", "--fmt", help="Input format: auto (sniff the header) | 10x | airr | arda.")
+_SC_PAIR = typer.Option("TRA_TRB", "--locus-pair", help="TRA_TRB, TRG_TRD, IGH_IGK or IGH_IGL.")
+_SC_CELL = typer.Option(True, "--require-cell/--no-require-cell",
+                        help="10x only: keep only contigs flagged is_cell.")
+_SC_CONF = typer.Option(True, "--require-high-conf/--no-require-high-conf",
+                        help="10x only: keep only high_confidence contigs.")
+_SC_CONS = typer.Option(None, "--consensus",
+                        help="10x only: consensus_annotations.csv to source V/D/J calls from.")
+
+
+@sc_app.command("convert")
+def sc_convert(
+    contigs: Path = _SC_IN,
+    out: Optional[Path] = _OUT,
+    fmt: str = _SC_FMT,
+    airr: bool = typer.Option(False, "--airr", help="Emit the AIRR Rearrangement spelling "
+                                                    "(junction, consensus_count) instead of "
+                                                    "the canonical vdjtools columns."),
+    require_cell: bool = _SC_CELL,
+    require_high_conf: bool = _SC_CONF,
+    consensus: Optional[Path] = _SC_CONS,
+) -> None:
+    """Read a single-cell contig table into the canonical (or AIRR) long frame."""
+    from vdjtools import sc as _sc
+
+    cells = _read_sc(contigs, fmt, require_cell=require_cell,
+                     require_high_conf=require_high_conf, consensus=consensus)
+    _write(_sc.to_airr(cells) if airr else cells, out)
+
+
+@sc_app.command("pair")
+def sc_pair(
+    contigs: Path = _SC_IN,
+    out: Optional[Path] = _OUT,
+    fmt: str = _SC_FMT,
+    locus_pair: str = _SC_PAIR,
+    resolve: bool = typer.Option(True, "--resolve/--no-resolve",
+                                 help="Reduce each cell to one heavy + one (or two) light "
+                                      "chains first. --no-resolve pairs every combination."),
+    flag_mispairing: bool = typer.Option(False, "--flag-mispairing",
+                                         help="Add mispairing_flag / mispairing_reason."),
+    max_slaves_per_master: Optional[int] = typer.Option(
+        None, "--max-slaves-per-master",
+        help="With --flag-mispairing: flag a beta paired with more than N distinct alphas "
+             "as ambient (default: an automatic threshold)."),
+    drop_mispaired: bool = typer.Option(False, "--drop-mispaired",
+                                        help="With --flag-mispairing: drop the flagged rows "
+                                             "instead of labelling them."),
+    require_cell: bool = _SC_CELL,
+    require_high_conf: bool = _SC_CONF,
+) -> None:
+    """Resolve each cell's chains and emit one row per paired receptor."""
+    from vdjtools import sc as _sc
+
+    if (max_slaves_per_master is not None or drop_mispaired) and not flag_mispairing:
+        _err("--max-slaves-per-master / --drop-mispaired need --flag-mispairing")
+    cells = _read_sc(contigs, fmt, require_cell=require_cell,
+                     require_high_conf=require_high_conf)
+    try:
+        paired = _sc.pair_chains(cells, locus_pair=locus_pair, resolve=resolve)
+        if flag_mispairing:
+            paired = _sc.flag_mispairing(paired,
+                                         max_slaves_per_master=max_slaves_per_master,
+                                         drop=drop_mispaired)
+    except ValueError as e:
+        _err(str(e))
+    _write(paired, out)
+
+
+@sc_app.command("qc")
+def sc_qc(
+    contigs: Path = _SC_IN,
+    out: Optional[Path] = _OUT,
+    fmt: str = _SC_FMT,
+    locus_pair: str = _SC_PAIR,
+    require_cell: bool = _SC_CELL,
+    require_high_conf: bool = _SC_CONF,
+) -> None:
+    """Chain-multiplicity quadrants: how many cells carry n light x n heavy chains."""
+    from vdjtools import sc as _sc
+
+    cells = _read_sc(contigs, fmt, require_cell=require_cell,
+                     require_high_conf=require_high_conf)
+    try:
+        mult = _sc.chain_multiplicity(cells, locus_pair=locus_pair)
+    except ValueError as e:
+        _err(str(e))
+    _info(f"{cells['cell_id'].n_unique()} cells, {cells.height} contigs")
+    _write(mult, out)
+
+
+@sc_app.command("pgen")
+def sc_pgen(
+    contigs: Path = _SC_IN,
+    out: Optional[Path] = _OUT,
+    fmt: str = _SC_FMT,
+    locus_pair: str = _SC_PAIR,
+    source: str = typer.Option("olga", "--source", help="Bundled model source: olga | learned."),
+    condition_vj: bool = typer.Option(True, "--condition-vj/--no-condition-vj",
+                                      help="Condition each chain's Pgen on its V/J call. "
+                                           "--no-condition-vj marginalises over all V/J."),
+    resolve_genes: bool = typer.Option(True, "--resolve-genes/--no-resolve-genes",
+                                       help="Resolve a gene-level call (TRBV10-3, what "
+                                            "CellRanger emits) to its representative model "
+                                            "allele. --no-resolve-genes scores only exact "
+                                            "allele matches, leaving the rest null."),
+    alpha_locus: Optional[str] = typer.Option(None, "--alpha-locus",
+                                              help="Force the light-chain locus (else inferred "
+                                                   "from the V-call prefix)."),
+    beta_locus: Optional[str] = typer.Option(None, "--beta-locus",
+                                             help="Force the heavy-chain locus."),
+) -> None:
+    """Paired generation probability per cell: Pgen(alpha) * Pgen(beta)."""
+    from vdjtools import sc as _sc
+
+    try:
+        paired = _sc.pair_chains(_read_sc(contigs, fmt), locus_pair=locus_pair)
+        scored = _sc.paired_pgen(paired, source=source, condition_vj=condition_vj,
+                                 resolve_genes=resolve_genes, alpha_locus=alpha_locus,
+                                 beta_locus=beta_locus)
+    except (ImportError, KeyError, ValueError) as e:
+        _err(str(e))
+    n_scored = scored["pgen_paired"].drop_nulls().len()
+    _info(f"scored {n_scored}/{scored.height} receptors")
+    _write(scored, out)
+
+
+SC_EXPORT_TARGETS = ("airr", "screpertoire", "screpertoire-10x", "scirpy", "dandelion",
+                     "airr-cell")
+
+
+@sc_app.command("export")
+def sc_export(
+    contigs: Path = _SC_IN,
+    to: str = typer.Option(..., "--to", help="airr | screpertoire | screpertoire-10x | "
+                                             "scirpy | dandelion | airr-cell."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output file."),
+    fmt: str = _SC_FMT,
+    gex: Optional[Path] = typer.Option(None, "--gex",
+                                       help="--to scirpy: an .h5ad of gene expression to pair "
+                                            "with, giving a MuData {gex, airr} instead."),
+    index_chains: bool = typer.Option(True, "--index-chains/--no-index-chains",
+                                      help="--to scirpy: run scirpy.pp.index_chains, which its "
+                                           "tools need."),
+    repertoire_id: str = typer.Option("", "--repertoire-id",
+                                      help="--to airr-cell: the AIRR Cell repertoire_id."),
+) -> None:
+    """Export for a downstream tool (scirpy / dandelion / scRepertoire / AIRR)."""
+    from vdjtools import sc as _sc
+
+    if to not in SC_EXPORT_TARGETS:
+        _err(f"--to must be one of {', '.join(SC_EXPORT_TARGETS)}; got {to!r}")
+    if gex is not None and to != "scirpy":
+        _err(f"--gex applies to --to scirpy, not {to!r}")
+    cells = _read_sc(contigs, fmt)
+    try:
+        if to == "airr":
+            _sc.write_airr(cells, out)
+        elif to == "screpertoire":
+            _sc.write_screpertoire(cells, out)
+        elif to == "screpertoire-10x":
+            _sc.write_screpertoire(cells, out, format="10x")
+        elif to == "airr-cell":
+            _sc.write_airr_cell(cells, out, repertoire_id=repertoire_id)
+        elif to == "scirpy":
+            gex_adata = None
+            if gex is not None:
+                import anndata as ad
+                gex_adata = ad.read_h5ad(gex)
+            obj = _sc.to_scirpy(cells, gex=gex_adata, index_chains=index_chains)
+            obj.write_h5mu(out) if gex_adata is not None else obj.write_h5ad(out)
+        elif to == "dandelion":
+            _sc.to_dandelion(cells).write_h5ddl(out)
+    except (ImportError, ValueError) as e:
+        _err(str(e))
+    _info(f"wrote {cells.height} contigs ({cells['cell_id'].n_unique()} cells) -> {out}")

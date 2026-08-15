@@ -64,7 +64,8 @@ def _first_call(expr: pl.Expr) -> pl.Expr:
     return expr.str.split(",").list.first().str.strip_chars()
 
 
-def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
+def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None, *,
+                  keep: tuple[str, ...] = ()) -> pl.DataFrame:
     """Read a native vdjtools clonotype table into the canonical frame.
 
     The native header is ``count freq cdr3nt cdr3aa v d j VEnd DStart DEnd JStart``
@@ -77,6 +78,9 @@ def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None) -> pl.Data
     Args:
         path: Path to a ``.txt`` or ``.txt.gz`` native vdjtools table.
         n_rows: If given, read at most this many data rows (preview huge files).
+        keep: Annotation columns to preserve past the canonical set (this format's
+            trailing annotation fields are otherwise dropped). Same contract as the
+            other two readers: absent names are skipped, not raised.
 
     Returns:
         Canonical clonotype frame with a derived ``locus`` column.
@@ -96,12 +100,24 @@ def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None) -> pl.Data
     df = raw.rename({src: canon for canon, src in found.items()})
     df = df.with_columns(_first_call(pl.col(c)) for c in (V_CALL, D_CALL, J_CALL)
                          if c in df.columns)
+    extra = [c for c in keep if c in df.columns and c not in found]
+    df = df.with_columns(pl.col(c).cast(pl.Float64, strict=False).alias(c)
+                         for c in extra if _numeric_like(df, c))
     # The native ``freq`` column is just count/total; recompute it exactly from counts.
-    df = schema.normalize(df, recompute_freq=True)
+    df = schema.normalize(df, recompute_freq=True, keep=tuple(extra))
     return schema.add_locus(df)
 
 
-def read_parquet(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
+def _numeric_like(df: pl.DataFrame, col: str) -> bool:
+    """Is this column numeric, or an all-Utf8 TSV column whose values parse as numbers?"""
+    if df.schema[col].is_numeric():
+        return True
+    s = df[col].drop_nulls().head(100)
+    return s.len() > 0 and s.cast(pl.Float64, strict=False).null_count() == 0
+
+
+def read_parquet(path: str | os.PathLike, n_rows: int | None = None, *,
+                 keep: tuple[str, ...] = ()) -> pl.DataFrame:
     """Read a Parquet clonotype table into the canonical frame.
 
     Parquet is the at-scale storage format for repertoire cohorts: typed, columnar,
@@ -117,6 +133,14 @@ def read_parquet(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataF
     Args:
         path: Path to a ``.parquet`` / ``.pq`` clonotype table.
         n_rows: If given, read at most this many data rows (preview huge files).
+        keep: Extra source columns to carry through unrenamed, e.g.
+            ``("v_identity",)``. The canonical set is deliberately small, but a
+            feature can need a field outside it -- the signature's SHM block is a
+            weighted mean of ``v_identity``, which no canonical column holds, so
+            without this it is not merely missing but *uncomputable*, and ships as a
+            permanently-nan column. Names absent from the file are skipped rather
+            than raising: ``keep`` says what to preserve if present, not what to
+            require.
 
     Returns:
         Canonical clonotype frame with a derived ``locus`` column.
@@ -142,7 +166,9 @@ def read_parquet(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataF
         raise ValueError(
             f"Parquet file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {df.columns}"
         )
-    df = df.select([pl.col(src).alias(canon) for canon, src in found.items()])
+    extra = [c for c in keep if c in have and c not in found.values()]
+    df = df.select([pl.col(src).alias(canon) for canon, src in found.items()]
+                   + [pl.col(c) for c in extra])
     # Do NOT collapse comma ambiguity here (unlike read_vdjtools, whose legacy single-call format
     # takes the first token by convention). Parquet is the at-scale storage format for a canonical
     # frame: read_airr and scan_cohort preserve a tie like "IGHV3-23*01,IGHV3-23D*01" whole, so a
@@ -150,12 +176,12 @@ def read_parquet(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataF
     # drops IGHV3-23D, exactly the ambiguity the model.infer.call_alleles fix exists to keep.
     if COUNT not in df.columns:
         df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
-    df = schema.normalize(df, recompute_freq=True)
+    df = schema.normalize(df, recompute_freq=True, keep=tuple(extra))
     return schema.add_locus(df)
 
 
 def read_airr(path: str | os.PathLike, *, collapse: bool = True,
-              n_rows: int | None = None) -> pl.DataFrame:
+              n_rows: int | None = None, keep: tuple[str, ...] = ()) -> pl.DataFrame:
     """Read an AIRR Rearrangement TSV into the canonical frame.
 
     Prefers the junction columns ``junction_aa`` / ``junction`` (conserved anchors
@@ -179,6 +205,11 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
         collapse: If ``True`` (default), sum the count over clonotypes identical on
             ``(v_call, j_call, junction_nt, junction_aa)``.
         n_rows: If given, read at most this many data rows (preview huge files).
+        keep: Extra source columns to carry through unrenamed, e.g. ``("v_identity",)``
+            for the signature's SHM block, which no canonical column holds. Under
+            ``collapse`` a numeric kept column is averaged over the clonotype's reads
+            and anything else takes a representative value. Names absent from the file
+            are skipped rather than raising.
 
     Returns:
         Canonical clonotype frame with a derived ``locus`` column.
@@ -210,7 +241,12 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
             f"(tried {', '.join(a for c in missing for a in _AIRR_ALIASES[c])}); "
             f"have {raw.columns}"
         )
-    df = raw.select([pl.col(src).alias(canon) for canon, src in found.items()])
+    # The TSV path reads every column as Utf8, so a kept numeric arrives as a string; cast it
+    # here rather than leaving the caller to discover that its mean is a type error.
+    extra = [c for c in keep if c in raw.columns and c not in found.values()]
+    df = raw.select([pl.col(src).alias(canon) for canon, src in found.items()]
+                    + [pl.col(c).cast(pl.Float64, strict=False).alias(c)
+                       if _numeric_like(raw, c) else pl.col(c) for c in extra])
     if COUNT not in df.columns:
         df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
     else:
@@ -231,6 +267,13 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     if collapse:
         reps = [pl.col(c).drop_nulls().first().alias(c)
                 for c in (D_CALL, C_CALL) if c in df.columns]
+        # A kept column needs an aggregation rule too. Numerics take the mean -- reads of one
+        # clonotype share a V and a junction, so v_identity varies only by sequencing error, and a
+        # first-non-null would hand the whole clonotype one read's error. Anything else takes the
+        # representative rule D and C use.
+        for c in extra:
+            reps.append(pl.col(c).mean().alias(c) if df.schema[c].is_numeric()
+                        else pl.col(c).drop_nulls().first().alias(c))
         df = df.group_by(key, maintain_order=True).agg(pl.col(COUNT).sum(), *reps)
-    df = schema.normalize(df, recompute_freq=True)
+    df = schema.normalize(df, recompute_freq=True, keep=tuple(extra))
     return schema.add_locus(df)

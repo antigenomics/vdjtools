@@ -71,6 +71,28 @@ std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::s
                                   const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
                                   int mismatches, int nthreads);
 
+// One recombination scenario for an amino-acid CDR3: the argmax counterpart of what ``pgen_aa``
+// sums over. Coordinates are 0-based, half-open, in CDR3 nucleotide space. ``d < 0`` for a VJ
+// chain (then idx5/idx3/pos are unused). ``w`` is the joint max weight P(nt, scenario) EXCLUDING
+// nothing — it is directly comparable across scenarios of the same sequence.
+struct AaScenario {
+    double w = 0.0;
+    int v = -1, len_v = 0, j = -1, len_j = 0;
+    int d = -1, idx5 = 0, idx3 = 0, pos = 0;
+};
+
+// Top-``k`` scenarios by joint max-product weight for an amino-acid CDR3 — the same Pi_L*Pi_R
+// transfer-matrix DP ``pgen_aa`` uses, with ``max`` in place of the sums and the winning
+// (V, delV) / (J, delJ) carried through the state.
+//
+// Returns SCENARIOS, not nucleotides: recovering the nt string is one cheap per-scenario DP over
+// the free positions (see vdjtools.model.viterbi), so the expensive search need not carry paths.
+//
+// Tandem-D (n_D=2) is deliberately not enumerated: a single D trimmed to zero length already
+// reaches every middle, so D-D can only reorder candidates, never add one.
+std::vector<AaScenario> best_aa_scenarios(const PackedModel& m, const std::string& aa,
+                                          int v_idx, int j_idx, int k);
+
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.
 struct Counts {

@@ -52,7 +52,8 @@ def sniff_format(path: str | os.PathLike) -> str:
         The detected format string, one of: ``"parquet"`` (``.parquet`` / ``.pq``
         extension), ``"vidjil"`` (``.vidjil`` / ``.json`` or a leading ``{``),
         ``"imgt"``, ``"migec"``, ``"mitcr"``, ``"rtcr"``, ``"mixcr"``, ``"immunoseq"``, ``"trust4"``
-        (each by its signature header columns), ``"arda"`` (AIRR + arda's ``d2_call``),
+        (each by its signature header columns), ``"airr_cell"`` (AIRR + a ``cell_id``
+        barcode — single-cell, see :func:`read`), ``"arda"`` (AIRR + arda's ``d2_call``),
         ``"vdjtools"`` (native table / MigMap — ``cdr3aa`` / ``count`` + ``cdr3nt``), or
         ``"airr"`` (AIRR Rearrangement — ``v_call`` / ``junction_aa`` / ``junction_nt`` /
         ``cdr3_aa``).
@@ -84,6 +85,11 @@ def sniff_format(path: str | os.PathLike) -> str:
         return "immunoseq"
     if "cid_full_length" in cols and "cdr3nt" in cols:
         return "trust4"  # TRUST4 *_report.tsv (its own cid_full_length column)
+    # Single-cell AIRR (CellRanger airr_rearrangement.tsv, arda's barcoded output, or any
+    # AIRR table with a cell barcode). Checked BEFORE arda/airr: those readers collapse
+    # reads to clonotypes, which silently discards cell_id -- see read() below.
+    if "cell_id" in cols and cols & {"v_call", "junction_aa", "junction", "cdr3_aa"}:
+        return "airr_cell"
     # arda AIRR output — standard AIRR names plus arda's tandem-D ``d2_call`` column;
     # match before plain AIRR so it routes to read_arda (nulls arda's ``""`` empty calls).
     if "d2_call" in cols and cols & {"v_call", "junction_aa", "junction", "cdr3_aa"}:
@@ -97,7 +103,7 @@ def sniff_format(path: str | os.PathLike) -> str:
 
 
 def read(path: str | os.PathLike, fmt: str = "auto",
-         n_rows: int | None = None) -> pl.DataFrame:
+         n_rows: int | None = None, *, keep: tuple[str, ...] = ()) -> pl.DataFrame:
     """Read a clonotype table, auto-detecting the format by default.
 
     Args:
@@ -110,21 +116,38 @@ def read(path: str | os.PathLike, fmt: str = "auto",
             ``"immunoseq"``, ``"imgt"``, ``"vidjil"``, ``"rtcr"``, ``"trust4"``,
             ``"arda"``).
         n_rows: If given, read at most this many data rows (preview huge files).
+        keep: Non-canonical columns to preserve if present, e.g. ``("v_identity",)`` for
+            the signature's SHM block. Honoured by the three native readers; the legacy
+            converters narrow to the canonical schema and ignore it.
 
     Returns:
         Canonical clonotype frame.
 
     Raises:
-        ValueError: If ``fmt`` is unknown or auto-detection fails.
+        ValueError: If ``fmt`` is unknown, auto-detection fails, or the file is a
+            single-cell AIRR table (a ``cell_id`` column) — those go through
+            :func:`vdjtools.sc.read_airr_cell`, since collapsing them here would drop the
+            cell barcode. Pass ``fmt="airr"`` to pool one into a bulk repertoire anyway.
     """
     if fmt == "auto":
         fmt = sniff_format(path)
+    if fmt == "airr_cell":
+        # Refuse rather than silently drop the cell barcode: every reader here returns a
+        # BULK clonotype frame, so reading a single-cell table through them collapses reads
+        # across cells and loses cell_id with no error. Forcing fmt="airr" is still allowed
+        # for callers who really do want the pooled repertoire.
+        raise ValueError(
+            f"{os.fspath(path)!r} is a single-cell AIRR table (it has a 'cell_id' column). "
+            "Reading it here would collapse reads to clonotypes and discard the cell "
+            "barcode. Use vdjtools.sc.read_airr_cell() instead, or pass fmt='airr' "
+            "explicitly to pool it into a bulk repertoire on purpose."
+        )
     if fmt == "vdjtools":
-        return read_vdjtools(path, n_rows=n_rows)
+        return read_vdjtools(path, n_rows=n_rows, keep=keep)
     if fmt == "airr":
-        return read_airr(path, n_rows=n_rows)
+        return read_airr(path, n_rows=n_rows, keep=keep)
     if fmt == "parquet":
-        return read_parquet(path, n_rows=n_rows)
+        return read_parquet(path, n_rows=n_rows, keep=keep)
     if fmt == "vidjil":
         return convert.read_vidjil(path)  # whole-JSON reader (no row cap)
     if fmt in _CONVERTERS:
@@ -238,7 +261,8 @@ def read_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
     return pl.concat(list(frames.values()), how="vertical_relaxed")
 
 
-def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None):
+def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
+                keep: tuple[str, ...] = ()):
     """Read each sample and apply ``fn`` to it, in parallel, low peak memory.
 
     The parallel, streaming replacement for "load the whole cohort, then loop over it":
@@ -256,6 +280,10 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None):
         workers: Max worker threads. ``None`` uses the pool default
             (``min(32, os.cpu_count() + 4)``); pass a smaller value if ``fn`` is
             compute-bound, to avoid oversubscribing polars' own thread pool.
+        keep: Non-canonical columns to preserve, passed to :func:`read`. Without it a
+            reduction needing a field outside the canonical eight — ``v_identity`` for
+            the SHM block — gets a frame that never carried it, and reports a hole
+            rather than a number.
 
     Returns:
         A list of ``(sample_id, fn(frame))`` in the **same order as** ``items``
@@ -265,7 +293,7 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None):
 
     def work(item):
         sid, path = item
-        return sid, fn(read(path, fmt=fmt))
+        return sid, fn(read(path, fmt=fmt, keep=keep))
 
     # ThreadPoolExecutor.map yields results in input order, so output order is
     # deterministic (metadata order) no matter the completion order.

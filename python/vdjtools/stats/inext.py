@@ -35,11 +35,6 @@ from scipy.stats import norm
 
 from ..io.schema import COUNT
 
-try:  # native size-based iNEXT kernel (curve + bootstrap + parallel batch)
-    from .. import _core as _native
-except Exception:  # pragma: no cover - _core is a build-time dependency
-    _native = None
-
 # Output schema for the size-based / estimate_d rows.
 _RE_SCHEMA = {
     "order_q": pl.Int64,
@@ -261,6 +256,13 @@ def _invert_coverage(x: np.ndarray, cvrg: float) -> float:
         return float(n)
     if cvrg < ref:
         return float(brentq(lambda m: _chat(x, m) - cvrg, 1e-9, n))
+    if cvrg >= 1.0:
+        # Coverage 1 is attained only in the limit, so the inversion below evaluates log(0) and
+        # gets there through inf arithmetic plus a RuntimeWarning. Callers use exactly 1.0 as a
+        # deliberate "no coverage level could be established" sentinel (mir.signature's
+        # _UNREACHABLE_COVERAGE), so say inf directly: the estimate then fails its own
+        # estimability check and masks out, which is the same answer without the noise.
+        return float("inf")
     f1 = float(np.count_nonzero(x == 1))
     f2 = float(np.count_nonzero(x == 2))
     if f1 > 0 and f2 > 0:
@@ -320,24 +322,18 @@ def _bootstrap_se(x: np.ndarray, ms, qs, nboot: int, seed: int) -> np.ndarray:
 
 
 def _bootstrap_se_native(x, ms, qs, nboot: int, seed: int) -> np.ndarray:
-    """Bootstrap SEs via the native ``_core.inext_bootstrap`` (GIL released)."""
-    se = _native.inext_bootstrap(
+    """Bootstrap SEs via the native ``_core.inext_bootstrap`` (GIL released).
+
+    The numpy :func:`_bootstrap_se` stays the reference implementation used by the
+    tests; this reproduces the same augmented-assemblage bootstrap with a seeded
+    ``std::mt19937_64`` (agreeing in expectation, see ``tests/python/test_inext_native.py``).
+    """
+    from .. import _core
+
+    se = _core.inext_bootstrap(
         [float(v) for v in x], [int(q) for q in qs], [float(m) for m in ms],
         int(nboot), int(seed))
     return np.asarray(se, dtype=np.float64)
-
-
-def _bootstrap_se_dispatch(x, ms, qs, nboot: int, seed: int) -> np.ndarray:
-    """Bootstrap SEs: prefer the native kernel, fall back to the numpy reference.
-
-    The numpy :func:`_bootstrap_se` stays the reference implementation used by the
-    tests; the native path reproduces the same augmented-assemblage bootstrap with
-    a seeded ``std::mt19937_64`` (agreeing in expectation, see
-    ``tests/python/test_inext_native.py``).
-    """
-    if _native is not None:
-        return _bootstrap_se_native(x, ms, qs, nboot, seed)
-    return _bootstrap_se(x, ms, qs, nboot, seed)
 
 
 def _z(conf: float) -> float:
@@ -391,7 +387,7 @@ def inext(data, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40, se=True,
         grid = np.unique(np.asarray(sizes, dtype=np.int64))
     ms = [int(m) for m in grid if m >= 1]
 
-    se_arr = _bootstrap_se_dispatch(x, ms, qs, nboot, seed) if se else None
+    se_arr = _bootstrap_se_native(x, ms, qs, nboot, seed) if se else None
     z = _z(conf) if se else 0.0
     rows = []
     for i, qq in enumerate(qs):
@@ -668,11 +664,10 @@ def inext_batch(samples, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40,
         CI columns are null when ``se=False``).
 
     Raises:
-        RuntimeError: If the native ``_core`` extension is unavailable.
         ValueError: If a ``pl.DataFrame`` input lacks a ``sample_id`` column.
     """
-    if _native is None:  # pragma: no cover - _core is a build-time dependency
-        raise RuntimeError("inext_batch requires the native _core extension")
+    from .. import _core
+
     qs = _as_orders(q)
     items = _batch_items(samples)
     ns = [int(x.sum()) for _, x in items]
@@ -680,8 +675,8 @@ def inext_batch(samples, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40,
     count_vecs = [[float(v) for v in x] for _, x in items]
 
     nb = int(nboot) if se else 0
-    results = _native.inext_batch(count_vecs, sizes_list, [int(v) for v in qs],
-                                  nb, int(seed), int(threads))
+    results = _core.inext_batch(count_vecs, sizes_list, [int(v) for v in qs],
+                                nb, int(seed), int(threads))
 
     z = _z(conf) if se else 0.0
     sample_col, order_col, m_col, method_col = [], [], [], []

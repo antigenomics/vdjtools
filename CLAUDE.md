@@ -6,9 +6,8 @@ repertoire analysis on the **AIRR schema + polars**, minimal OO, built on the an
 **seqtree** (fuzzy search / e-values), **vdjmatch** (overlap + TCRnet), **arda** (AIRR annotation +
 markup repair; brings conda/mmseqs2).
 
-API surface is in [`skills/vdjtools/SKILL.md`](skills/vdjtools/SKILL.md); the completed Phase-1 /
-campaign narrative is in [NOTES.md](NOTES.md); phases in `ROADMAP.md`; data provenance and the
-numbers of record in `SOURCES.md`.
+API surface is in [`skills/vdjtools/SKILL.md`](skills/vdjtools/SKILL.md); the release-by-release
+narrative in `CHANGELOG.md`; data provenance and the numbers of record in `SOURCES.md`.
 
 ## Layout
 - `python/vdjtools/` — package (src-layout). Subpackages `io model stats features overlap preprocess
@@ -23,7 +22,7 @@ numbers of record in `SOURCES.md`.
 
 **Repo split (2026-07-17)** — benchmarks live in `~/vcs/projects/2026-vdjtools-benchmark`
 (`bench/` scripts, the confound gates, `scripts/*.sbatch`). They *use* vdjtools, they aren't part of
-it. ⚠ That directory **is not a git repo yet**, and its scripts hardcode cluster paths.
+it. NOTE: That directory **is not a git repo yet**, and its scripts hardcode cluster paths.
 
 ## Build / test / run
 ```bash
@@ -77,7 +76,7 @@ format-conversion fixtures live there — pull them over when a phase needs them
 - **Pgen/gen/EM invariant: V and J each contribute ≥1 nt to the CDR3** (OLGA-compatible). Getting
   this wrong made nt Pgen up to 0.34% high on heavily-deleted sequences.
 
-## ⛔ Traps that produced silent wrong answers
+## WARNING: Traps that produced silent wrong answers
 - **`native` Pgen allele guard.** `vi.get(v, -1)` mapped an unrecognised V/J to `-1` = *marginalize
   over all V/J*. The model is keyed by **allele** and real repertoires carry **gene-level** `v_call`
   (`TRBV9`), so `pgen_aa(m, cdr3, "TRBV9", "TRBJ2-3")` silently returned the V/J-agnostic value —
@@ -92,6 +91,16 @@ format-conversion fixtures live there — pull them over when a phase needs them
 - **A held-out-LL claim that validated nothing**: it was the EM's own training objective, which EM
   increases monotonically by construction. Use `appendix/compare_models.py` for real held-out +
   oracle comparison. The same note's "2k clonotypes/locus" cap was also real and wrong.
+- **`sc.paired_pgen` was 100% null on real CellRanger data** — and silently. CellRanger reports
+  **gene**-level V/J (`TRBV10-3`); the model is keyed by allele; `native.pgen_aa` raises on a gene
+  name *on purpose* (see the `-1` trap above) — and `_chain_pgen` swallowed it with a bare
+  `except Exception: return None`. 27,268/27,268 dCODE receptors scored null with no signal.
+  `paired_pgen` now resolves gene → representative allele (`*01`) explicitly (`resolve_genes=False`
+  to opt out), warns when a whole locus is null, and catches only `(KeyError, ValueError)`.
+  **A bare `except` over a call that raises deliberately re-creates the very bug the raise prevents.**
+- **A barcoded AIRR table sniffed as bulk `"airr"`** and `read_airr` pooled reads across cells,
+  dropping `cell_id` with no error. `sniff_format` now returns `"airr_cell"` and `io.read` refuses
+  it, pointing at `sc.read_airr_cell`; `fmt="airr"` still pools deliberately.
 - **`str.len_chars()` is UInt32** — `len - 2*flank` underflows on short junctions; cast first.
 - **`_lower_map` is exact-lowercase**, so MiGEC's space-separated column picks never match the
   MiTCR/tcR dotted dialect (`Read.count`, `CDR3.nucleotide.sequence`) — it needs its own reader.
@@ -99,10 +108,25 @@ format-conversion fixtures live there — pull them over when a phase needs them
   `2026-vdjtools-benchmark/bench/`, not from prose.
 
 ## Open loops / next steps
+- **Single-cell interop (`feature/single-cell-interop`) landed for 3.8.0.** Everything routes
+  through ONE flat AIRR Rearrangement table (`sequence_id` + `cell_id`) in `sc/airr.py` — that is
+  what scirpy, dandelion AND scRepertoire all read, so it is one emitter + thin adapters, not four
+  bridges. **None of them consumes AIRR `Cell` objects**; cell state lives in `adata.obs` /
+  `Dandelion.metadata` / Seurat `meta.data`. `write_airr_cell` stays a spec-faithful export, not an
+  interop path. Asymmetry on purpose: *writing* a container delegates to the library that owns it
+  (no schema copy to drift), *reading* is ours (`from_scirpy` needs only `awkward`, `read_h5ddl`
+  only `h5py`). TODO: nothing blocking — possible next steps are a `Dandelion` polars-backend
+  fast path (`ddl.set_backend("polars")` takes polars frames directly) and reconciling
+  `resolve_chains` with scirpy's `chain_qc` `receptor_subtype` vocabulary (report alongside, never
+  overwrite — that is how a QC call gets lost).
+- **Dev-env note**: the worktree needs its OWN venv — the editable install's meta-path finder wins
+  over `PYTHONPATH`, so a symlinked `_core` will NOT redirect `import vdjtools` to a worktree.
+  Also: `cd` inside a backgrounded/`/tmp` command resets the shell cwd back to the MAIN repo, so
+  relative-path writes silently land there. Use absolute paths for edits.
 - **Phase 1 (`feature/model-engine`) is functionally complete** — native nt/aa Pgen via the
   Murugan/OLGA `Pi_L·Pi_R` transfer matrix (single-D and D-D), batch-parallel Pgen, threaded EM
   E-step, D-D learning with arda anchoring, 7-locus concordance `r(log10 Pgen)=1.00000`, bundled
-  `olga` + `learned` models shipped in **v2.9.0**. Per-item detail in [NOTES.md](NOTES.md).
+  `olga` + `learned` models shipped in **v2.9.0**.
 - **TODO — arda full-length V/J germline helper** for arda-native stitching (the P1c residual).
   `derive_orf` covers the ORF-usage case but not full-length stitching.
 - **TODO — native perf gaps**: (a) VJ / Hamming-1 codon-boundary sweep is **set aside** — the V/J
@@ -142,4 +166,20 @@ format-conversion fixtures live there — pull them over when a phase needs them
      exactly (ratio 1.000000) on every sequence OLGA will score. `IGHV4-30-4*01` has Pgen ≡ 0 in
      OLGA too. **Do not "fix" this** — it would break the exact-OLGA-Pgen invariant. `check_model`
      reports it as `warn` (not `error`) when `manifest.source` starts with `olga`.
-- `rescale.py:63` raises a Polars-2.0 `empty_as_null` DeprecationWarning — set it when convenient.
+- **`infer_nt` (aa→nt) landed in v3.6.0, natively.** Stage 1 is `native.best_aa_scenarios` — the
+  same `Pi_L·Pi_R` transfer matrix `pgen_aa` sums over, with `max` and the winning `(V,delV)`/
+  `(J,delJ)` carried in the state; stage 2 re-scores the survivors with the exact `pgen_nt`.
+  2.5 ms/TRB, 0.5 ms/TRA (all of VDJdb in ~3 min); reproduces the brute-force oracle 25/25 TRG,
+  19/19 TRA. **The Python scenario enumeration in `viterbi.py` is the reference, not the product**
+  — it is ~600× slower on TRB and is selected only when a `prepare()`-d model is passed;
+  `test_native_search_agrees_with_the_python_reference` is what makes it worth keeping.
+  NOTE: Two things measured and rejected along the way: fixing the germline trim first and then picking
+  the best codon per residue agrees with the oracle only 9/25 and 4/19 (a trim chosen before the
+  codons pins a codon the optimum would have trimmed), and bounding the codon DP by 1.0 in
+  branch-and-bound prunes nothing — the insertion chain costs ~0.4/nt, so the cutoff sits six orders
+  of magnitude too high.
+- No emoji anywhere in the repo (v3.6.0); the old `⛔`/`⚠` markers are `WARNING:` / `NOTE:`.
+- `ruff check .` is green as of v3.6.1, with `[tool.ruff.lint]` ignoring only `E702`/`E741`/`E731`
+  (house style). Keep it green so a real finding is not buried in style hits. `ruff format` is NOT
+  the house style — it would rewrite 171 files; do not run it.
+  (The old `rescale.py` `empty_as_null` note is resolved: it is set explicitly at `model/rescale.py:62`.)

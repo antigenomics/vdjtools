@@ -542,14 +542,34 @@ Metaclonotype grouping (fuzzy CDR3 + V/J).
 Single-cell interop (``vdjtools.sc``)
 -------------------------------------
 
-Single-cell AIRR Cell / 10x paired-chain interop: contig ingestion, chain resolution and pairing, doublet / mispairing QC, cluster evaluation, and an AnnData bridge.
+Single-cell AIRR Cell / 10x paired-chain interop: contig ingestion, chain resolution and pairing, doublet / mispairing QC, cluster evaluation, and bridges to scirpy, dandelion and scRepertoire. See :doc:`singlecell` for the narrative guide.
 
 ``vdjtools.sc.read``
 ~~~~~~~~~~~~~~~~~~~~
 
-10x / AIRR-Cell ingestion and AIRR Data File export.
+10x / AIRR-Cell / arda ingestion and AIRR Data File export.
 
 .. automodule:: vdjtools.sc.read
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.sc.airr``
+~~~~~~~~~~~~~~~~~~~~
+
+The AIRR Rearrangement interchange layer every downstream bridge is built on, plus the scRepertoire export.
+
+.. automodule:: vdjtools.sc.airr
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+``vdjtools.sc.dandelion``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+dandelion bridge, including a dandelion-free ``.h5ddl`` reader.
+
+.. automodule:: vdjtools.sc.dandelion
    :members:
    :undoc-members:
    :show-inheritance:
@@ -587,7 +607,7 @@ Clustering-quality evaluation against antigen labels.
 ``vdjtools.sc.anndata``
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-AnnData bridge for the single-cell frame.
+scverse bridge: the scirpy-native ``obsm["airr"]`` round-trip, the flat paired-receptor AnnData, and ``push_obs`` for augmenting an existing container.
 
 .. automodule:: vdjtools.sc.anndata
    :members:
@@ -608,4 +628,12 @@ The ``vdjtools`` command-line application.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: signature, presets
+
+.. note::
+
+   ``signature`` and ``presets`` are excluded above on purpose. Their help text is written for the
+   terminal — worked examples in indented blocks, which are not valid reStructuredText — and it is
+   the primary documentation for those two commands. Read it with ``vdjtools signature --help`` /
+   ``vdjtools presets --help``, or see :doc:`signature`.
 

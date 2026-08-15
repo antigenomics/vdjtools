@@ -67,6 +67,16 @@ _D_EVENTS = {"d_gene", "d2_gene", "n_d", "d_del", "d2_del", "vd_ins", "dj_ins", 
 _TANDEM_EVENTS = {"d2_gene", "d2_del", "dd_ins", "dd_dinucl"}
 
 
+def _is_faithful_olga_import(model: Model) -> bool:
+    """Is this a straight OLGA import, whose defects are OLGA's and must not be "corrected"?
+
+    ``manifest.source`` alone is not enough: an EM-refit model keeps its OLGA seed in ``source``
+    (``"olga:human_T_beta+dd"``), and its defects ARE ours to fix. A fit leaves a training log, so
+    that is the discriminator.
+    """
+    return model.manifest.source.startswith("olga") and not model.training
+
+
 def _group_sums(df: pl.DataFrame, keys: list[str]) -> pl.DataFrame:
     """``Σ p`` per normalization group; a single ``s`` row when the event is unconditioned."""
     if keys:
@@ -152,6 +162,34 @@ def _check_event_set(model: Model) -> list[dict]:
 
     # A tandem model must declare the whole n_D=2 machinery, else the Pgen DP has no D-D path to
     # spend that mass on -- `pgen.prepare` raises on this; report it as a row rather than crash.
+    # Deletional recombination cannot join a D to a J that lies 5' of it. This is a genomic fact,
+    # not something the data may override -- and EM will learn the impossible pair from noisy short
+    # -read D calls if nothing forbids it (human TRB reached P(TRBD2|TRBJ1-1) = 0.091).
+    if chain == "VDJ" and "d_gene" in model.tables:
+        from .reference import forbidden_dj_pairs
+
+        dg = model.tables["d_gene"]
+        if {"d_allele", "j_allele"} <= set(dg.columns):
+            bad = forbidden_dj_pairs(dg["d_allele"].unique().to_list(),
+                                     dg["j_allele"].unique().to_list(), model.locus)
+            if bad:
+                key = pl.concat_str([pl.col("d_allele"), pl.lit("|"), pl.col("j_allele")])
+                hit = dg.filter(key.is_in([f"{d}|{j}" for d, j in bad]) & (pl.col("p") > 0))
+                # OLGA's own model carries these (P(TRBD2*01 | TRBJ1-6*01) = 0.333), and a faithful
+                # import reproduces them on purpose; correcting them would break the exact-Pgen
+                # invariant. Anything we fitted ourselves is ours to fix -- see enforce_dj_order.
+                sev = "warn" if _is_faithful_olga_import(model) else "error"
+                for r in hit.head(6).iter_rows(named=True):
+                    rows.append(_issue(
+                        sev, "impossible_dj_pair",
+                        f"P({r['d_allele']} | {r['j_allele']}) = {r['p']:.4g}, but that J lies 5' "
+                        f"of that D, so deletional recombination cannot produce the pair",
+                        event="d_gene", allele=r["d_allele"], value=float(r["p"])))
+                if hit.height > 6:
+                    rows.append(_issue(sev, "impossible_dj_pair",
+                                       f"...and {hit.height - 6} further impossible D-J pair(s)",
+                                       event="d_gene", value=float(hit.height - 6)))
+
     nd = model.tables.get("n_d")
     if nd is not None and "n_d" in nd.columns:
         p_two = nd.filter(pl.col("n_d") == 2)["p"].sum()
@@ -284,7 +322,7 @@ def _check_deletion(model: Model, name, event, df: pl.DataFrame, pal: dict) -> l
     # Pgen matches olga-pip to machine precision on every sequence OLGA will score. It is real (that
     # gene's Pgen is 0 in OLGA too) but it cannot be corrected here without breaking the exact-Pgen
     # invariant, so it is reported as a property of the source model, not as a defect of ours.
-    inherited = model.manifest.source.startswith("olga")
+    inherited = _is_faithful_olga_import(model)
     note = (" — inherited from the OLGA model this was imported from, which carries the same mass; "
             "correcting it here would break exact-OLGA-Pgen fidelity" if inherited else "")
     for r in per_allele.head(10).iter_rows(named=True):

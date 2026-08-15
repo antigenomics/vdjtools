@@ -138,5 +138,136 @@ def _(analyze, avail, load_bundled, locus, mo):
     return
 
 
+@app.cell
+def _(mo):
+    mo.md(
+        """
+        ## Annotating VDJdb — the missing nucleotides
+
+        A VDJdb record carries `(V, J, CDR3aa)` and **no nucleotide sequence**, so none of the
+        boundary markup a repertoire analysis wants is there. `model.infer_nt` reconstructs it:
+        germline positions are pinned to their V/D/J segment, and every free N-region position takes
+        the nucleotide the corresponding insertion model prefers
+        (`P(nt₁)·∏P(nt_k | nt_{k−1})`). The result is a full annotation — `cdr3_nt`, the V/D/J
+        spans, and the exact `pgen_nt` of the reconstruction.
+        """
+    ).callout()
+    return
+
+
+@app.cell
+def _(mo):
+    vdjdb_n = mo.ui.slider(10, 200, value=40, step=10, label="VDJdb records to annotate")
+    vdjdb_n
+    return (vdjdb_n,)
+
+
+@app.cell
+def _(locus, mo, pl):
+    def vdjdb_records(locus_name, n):
+        """`(cdr3_aa, v_call, j_call)` from a local ./data_dump/vdjdb.slim.txt(.gz) if present, else
+        from the latest antigenomics/vdjdb-db release (cached into ./data_dump/)."""
+        import io
+        import json
+        import urllib.request
+        import zipfile
+        from pathlib import Path
+
+        d = Path("data_dump")
+        src = next((d / n_ for n_ in ("vdjdb.slim.txt", "vdjdb.slim.txt.gz") if (d / n_).exists()),
+                   None)
+        if src is None:
+            d.mkdir(exist_ok=True)
+            rel = json.load(urllib.request.urlopen(
+                "https://api.github.com/repos/antigenomics/vdjdb-db/releases/latest", timeout=30))
+            url = next(a["browser_download_url"] for a in rel["assets"]
+                       if a["name"].endswith(".zip"))
+            z = zipfile.ZipFile(io.BytesIO(urllib.request.urlopen(url, timeout=180).read()))
+            name = next(n_ for n_ in z.namelist()
+                        if n_.endswith(("vdjdb.slim.txt", "vdjdb.slim.txt.gz")))
+            src = d / Path(name).name
+            src.write_bytes(z.read(name))
+        gene = {"TRA": "TRA", "TRB": "TRB"}.get(locus_name)
+        if gene is None:
+            return None
+        return (pl.read_csv(src, separator="\t", infer_schema_length=0)
+                .filter((pl.col("species") == "HomoSapiens") & (pl.col("gene") == gene))
+                .select(cdr3_aa=pl.col("cdr3"), v_call=pl.col("v.segm"), j_call=pl.col("j.segm"))
+                .unique(subset="cdr3_aa", maintain_order=True)
+                .head(n))
+
+    try:
+        recs = vdjdb_records(locus.value, 2000)
+        recs_err = None
+    except Exception as exc:                     # offline, or no release asset — say so, don't fail
+        recs, recs_err = None, str(exc)
+    mo.md(f"*VDJdb unavailable: {recs_err}*").callout("warn") if recs_err else None
+    return (recs,)
+
+
+@app.cell
+def _(mo, model, pl, recs, vdjdb_n):
+    # NOTE: VDJdb stores GENE-level calls ("TRBV9"); the model is keyed by ALLELE, and passing a gene
+    # name raises by design. Resolve to the model's unique allele of that gene, skip the ambiguous.
+    if recs is None:
+        ann = None
+        out2 = mo.md("*No VDJdb records for this locus — TRA/TRB only.*").callout()
+    else:
+        import time
+
+        from vdjtools.model import infer_nt
+
+        # NOTE: pass the Model, not a prepare()-d one — that selects the pure-Python reference
+        # search, which is ~600x slower on a VDJ locus.
+        by_gene = {}
+        for seg in ("v", "j"):
+            for a in model.genomic[f"genes_{seg}"][f"{seg}_allele"]:
+                by_gene.setdefault((seg, a.split("*")[0]), []).append(a)
+        rows, t0 = [], time.perf_counter()
+        for r in recs.head(vdjdb_n.value).iter_rows(named=True):
+            va = by_gene.get(("v", r["v_call"].split("*")[0]), [])
+            ja = by_gene.get(("j", r["j_call"].split("*")[0]), [])
+            if len(va) != 1 or len(ja) != 1:
+                continue
+            sc = infer_nt(model, r["cdr3_aa"], va[0], ja[0])
+            if sc is None:
+                continue
+            rows.append({"cdr3_aa": r["cdr3_aa"], "cdr3_nt": sc.cdr3_nt, "v_call": sc.v_call,
+                         "d_call": sc.d_call, "j_call": sc.j_call, "v_end": sc.v_end,
+                         "d_start": sc.d_start, "d_end": sc.d_end, "j_start": sc.j_start,
+                         "pgen": sc.pgen, "margin": round(sc.margin, 2)})
+        ms = (time.perf_counter() - t0) / max(len(rows), 1) * 1000
+        ann = pl.DataFrame(rows)
+        out2 = mo.vstack([
+            mo.md(f"### {len(ann)} VDJdb records annotated · {ms:.1f} ms/record"),
+            mo.md("`margin` = Pgen of the winner over the runner-up. A margin near 1 means the "
+                  "N-region is long enough that several nucleotide sequences are near-equally "
+                  "likely — the reconstruction is a *most likely* one, not *the* one."),
+            ann,
+        ])
+    out2
+    return (ann,)
+
+
+@app.cell
+def _(ann, mo, plt):
+    # Where the model puts the segment boundaries across the annotated set.
+    if ann is None or ann.is_empty():
+        out3 = mo.md("*Nothing annotated yet.*").callout()
+    else:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.2))
+        ax1.hist(ann["pgen"].log10().to_list(), bins=30, color="#0072B2")
+        ax1.set_xlabel("log10 Pgen of the reconstruction"); ax1.set_ylabel("records")
+        ax2.hist(ann["v_end"].to_list(), bins=range(0, 25), alpha=0.7,
+                 color="#009E73", label="V end")
+        ax2.hist([len(s) - t for s, t in zip(ann["cdr3_nt"], ann["j_start"])], bins=range(0, 25),
+                 alpha=0.7, color="#D55E00", label="J length")
+        ax2.set_xlabel("nt contributed by germline"); ax2.legend()
+        fig.tight_layout()
+        out3 = fig
+    out3
+    return
+
+
 if __name__ == "__main__":
     app.run()

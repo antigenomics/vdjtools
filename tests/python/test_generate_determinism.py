@@ -1,6 +1,6 @@
 """`generate(seed=)` must be reproducible ACROSS PROCESSES, not just within one.
 
-⛔ It was not. Same seed, same wheel, a new interpreter — a different draw. Within a single process
+WARNING: It was not. Same seed, same wheel, a new interpreter — a different draw. Within a single process
 it looked perfect, which is why an in-process test would never have caught it.
 
 Root cause: `collapse_alleles` (which `load_bundled(..., collapse=True)` runs by default) built its
@@ -8,7 +8,7 @@ tables with unordered polars `group_by().agg()`. `group_by` is a multithreaded h
 the collapsed table's ROW ORDER varied per process; `_cum` then assigned the same cumulative
 interval to a different allele, and the same `rng.random()` selected a different one.
 
-⚠ Not hash randomisation — `PYTHONHASHSEED=0` did not help, which is what ruled that out and
+NOTE: Not hash randomisation — `PYTHONHASHSEED=0` did not help, which is what ruled that out and
 pointed at the aggregation instead. Same class as the nondeterminism recorded against arda's
 `correct` stage.
 """
