@@ -299,8 +299,9 @@ to 10x input. `convert` (`--airr`), `pair` (`--locus-pair --resolve/--no-resolve
 --flag-mispairing --max-slaves-per-master --drop-mispaired`), `qc` (`--locus-pair`), `pgen`
 (`--source --condition-vj/--no-condition-vj --resolve-genes/--no-resolve-genes --alpha-locus
 --beta-locus`; prints `scored N/M receptors`), `export --to
-airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell` (`--gex` → MuData,
-`--index-chains/--no-index-chains`, `--repertoire-id`).
+airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell`
+(`--index-chains/--no-index-chains`, `--repertoire-id`). GEX pairing is library-only:
+`to_scirpy(cells, gex=...)` -> MuData.
 
 ### `vdjtools.cli`
 The `vdjtools` typer app. Model: `models`, `generate`, `pgen`, plus the **`vdjtools model <sub>`**

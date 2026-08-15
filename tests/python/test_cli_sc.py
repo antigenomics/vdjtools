@@ -23,7 +23,15 @@ def _run(*args):
 
 
 def _ok(result):
-    assert result.exit_code == 0, f"exit {result.exit_code}\n{result.output}\n{result.exception!r}"
+    # CliRunner keeps the exception but not its traceback in the message, which turns a real
+    # failure into a bare "AttributeError(...)" with no location -- useless from a CI log.
+    # Format the stored exc_info so the failing frame travels with the assertion.
+    if result.exit_code != 0:
+        import traceback
+
+        tb = ("".join(traceback.format_exception(*result.exc_info))
+              if result.exc_info else "(no traceback captured)")
+        raise AssertionError(f"exit {result.exit_code}\n{result.output}\n{tb}")
     return result
 
 
@@ -82,6 +90,23 @@ def test_pair_rejects_an_unknown_locus_pair(airr_tsv):
     assert result.exit_code != 0
 
 
+
+def _need(name):
+    """Import an optional tool, skipping if it is unusable for ANY import reason.
+
+    Not `pytest.importorskip`: that only skips when the named module is missing, and
+    re-raises when the module exists but its own dependency chain is broken -- which is the
+    normal state of these packages (dandelion pulls nxviz, which breaks on matplotlib >=3.9).
+    The [interop] extra is best-effort by design, so an unimportable tool must SKIP, not fail.
+    """
+    import importlib
+
+    try:
+        return importlib.import_module(name)
+    except ImportError as e:                     # incl. a transitive ImportError
+        pytest.skip(f"{name} not importable: {e}")
+
+
 def _table_header(result):
     """The TSV header line, ignoring any progress/info lines printed before it."""
     for line in result.output.splitlines():
@@ -104,7 +129,7 @@ def test_export_writes_each_plain_text_target(airr_tsv, tmp_path):
 
 
 def test_export_scirpy_writes_an_h5ad(airr_tsv, tmp_path):
-    pytest.importorskip("scirpy")
+    _need("scirpy")
     out = tmp_path / "vdj.h5ad"
     _ok(_run("sc", "export", str(airr_tsv), "--to", "scirpy", "-o", str(out)))
     import anndata as ad
@@ -112,7 +137,7 @@ def test_export_scirpy_writes_an_h5ad(airr_tsv, tmp_path):
 
 
 def test_export_dandelion_writes_an_h5ddl(airr_tsv, tmp_path):
-    pytest.importorskip("dandelion")
+    _need("dandelion")
     out = tmp_path / "vdj.h5ddl"
     _ok(_run("sc", "export", str(airr_tsv), "--to", "dandelion", "-o", str(out)))
     # Readable back without dandelion.
@@ -191,28 +216,3 @@ def test_export_airr_cell_carries_the_repertoire_id(airr_tsv, tmp_path):
     _ok(_run("sc", "export", str(airr_tsv), "--to", "airr-cell", "-o", str(out),
              "--repertoire-id", "REP1"))
     assert "repertoire_id: REP1" in out.read_text()
-
-
-def test_export_gex_only_applies_to_scirpy(airr_tsv, tmp_path):
-    result = _run("sc", "export", str(airr_tsv), "--to", "airr", "-o", str(tmp_path / "a.tsv"),
-                  "--gex", str(tmp_path / "nope.h5ad"))
-    assert result.exit_code != 0 and "--gex applies to" in result.output
-
-
-def test_export_with_gex_writes_a_mudata(airr_tsv, tmp_path):
-    pytest.importorskip("scirpy")
-    pytest.importorskip("mudata")
-    import anndata as ad
-    import numpy as np
-
-    adata = sc.to_scirpy(sc.read_airr_cell(airr_tsv))
-    gex = ad.AnnData(X=np.zeros((adata.n_obs, 3), dtype="float32"))
-    gex.obs_names = adata.obs_names
-    gex_path = tmp_path / "gex.h5ad"
-    gex.write_h5ad(gex_path)
-
-    out = tmp_path / "vdj.h5mu"
-    _ok(_run("sc", "export", str(airr_tsv), "--to", "scirpy", "-o", str(out),
-             "--gex", str(gex_path)))
-    import mudata
-    assert set(mudata.read_h5mu(out).mod) == {"gex", "airr"}
