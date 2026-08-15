@@ -6,8 +6,6 @@ Other immune repertoire sequencing (AIRR-seq) data analysis tools by the Immunos
 
 - [mirpy](https://github.com/antigenomics/mirpy) a library with useful python modules and functions for analysis of AIRR-seq data
 - [vdjmatch](https://github.com/antigenomics/vdjmatch) for fast querying and matching clonotypes across large AIRR-seq datasets and annotating repertoires using VDJdb database
-- [redcea](https://github.com/antigenomics/redcea) and [irrm-codec](https://github.com/antigenomics/redcea) implementing smart adaptive immune receptor sequence embeddings and extended TCRNET algorithm coming soon
-
 ---
 
 ## VDJtools
