@@ -67,8 +67,10 @@ same question. `productive` joins `SC_COLUMNS` so the emitted AIRR table is sche
 `export --to airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell`, each exposing the
 matching library options: `--fmt`, `--require-cell`, `--require-high-conf`, `--consensus`,
 `--locus-pair`, `--resolve`, `--flag-mispairing`, `--max-slaves-per-master`, `--drop-mispaired`,
-`--source`, `--condition-vj`, `--resolve-genes`, `--alpha-locus`, `--beta-locus`, `--gex`
-(scirpy MuData), `--index-chains`, `--repertoire-id`. The input format is sniffed from the
+`--source`, `--condition-vj`, `--resolve-genes`, `--alpha-locus`, `--beta-locus`,
+`--index-chains`, `--repertoire-id`. (GEX pairing stays library-only --
+`to_scirpy(cells, gex=...)` returns the MuData; a CLI flag for it only added a MuData
+serialisation step, which failed in CI environments we could not reproduce.) The input format is sniffed from the
 **header**, not the filename — a renamed export still works and a bulk table is refused by name
 rather than mis-parsed. `sc pgen` reports `scored N/M receptors`, so a naming mismatch is a
 number on screen rather than a column of nulls to notice later. A dedicated

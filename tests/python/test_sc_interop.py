@@ -1,7 +1,7 @@
 """Round-trip tests against the real downstream containers (scirpy, dandelion).
 
-Each tool is `importorskip`'d, so this file is optional -- the non-skippable contract for
-the interchange format itself lives in `test_sc_airr.py`. What is pinned here is that the
+Each tool is skipped if unimportable (see `_need`), so this file is optional -- the
+non-skippable contract for the interchange format itself lives in `test_sc_airr.py`. What is pinned here is that the
 containers those tools actually build survive a round-trip through vdjtools unchanged, and
 that `push_obs` attaches computed columns to both container shapes.
 """
@@ -31,6 +31,23 @@ def _cells():
     }).select(SC_COLUMNS)
 
 
+
+def _need(name):
+    """Import an optional tool, skipping if it is unusable for ANY import reason.
+
+    Not `pytest.importorskip`: that only skips when the named module is missing, and
+    re-raises when the module exists but its own dependency chain is broken -- which is the
+    normal state of these packages (dandelion pulls nxviz, which breaks on matplotlib >=3.9).
+    The [interop] extra is best-effort by design, so an unimportable tool must SKIP, not fail.
+    """
+    import importlib
+
+    try:
+        return importlib.import_module(name)
+    except ImportError as e:                     # incl. a transitive ImportError
+        pytest.skip(f"{name} not importable: {e}")
+
+
 def _sorted(df):
     return df.sort("sequence_id")
 
@@ -38,13 +55,13 @@ def _sorted(df):
 # --------------------------------------------------------------------------- scirpy
 
 def test_scirpy_round_trip_is_lossless():
-    pytest.importorskip("scirpy")
+    _need("scirpy")
     cells = _cells()
     assert _sorted(sc.from_scirpy(sc.to_scirpy(cells))).equals(_sorted(cells))
 
 
 def test_to_scirpy_builds_the_obsm_airr_layout():
-    pytest.importorskip("scirpy")
+    _need("scirpy")
     adata = sc.to_scirpy(_cells())
     # scirpy >=0.13 keys chains off obsm["airr"], one obs row per CELL (not per contig).
     assert "airr" in adata.obsm
@@ -54,14 +71,14 @@ def test_to_scirpy_builds_the_obsm_airr_layout():
 
 
 def test_to_scirpy_can_skip_chain_indexing():
-    pytest.importorskip("scirpy")
+    _need("scirpy")
     adata = sc.to_scirpy(_cells(), index_chains=False)
     assert "chain_indices" not in adata.obsm
 
 
 def test_from_scirpy_needs_no_scirpy_import(monkeypatch):
     """The read direction must work from a plain [sc] install (awkward only)."""
-    pytest.importorskip("scirpy")
+    _need("scirpy")
     adata = sc.to_scirpy(_cells())
     monkeypatch.setitem(__import__("sys").modules, "scirpy", None)
     assert sc.from_scirpy(adata).height == 3
@@ -77,8 +94,8 @@ def test_from_scirpy_rejects_an_object_without_airr():
 
 
 def test_mudata_wrapping_puts_vdj_in_the_airr_modality():
-    pytest.importorskip("scirpy")
-    pytest.importorskip("mudata")
+    _need("scirpy")
+    _need("mudata")
     import anndata as ad
     import numpy as np
 
@@ -94,13 +111,13 @@ def test_mudata_wrapping_puts_vdj_in_the_airr_modality():
 # ------------------------------------------------------------------------ dandelion
 
 def test_dandelion_round_trip_is_lossless():
-    pytest.importorskip("dandelion")
+    _need("dandelion")
     cells = _cells()
     assert _sorted(sc.from_dandelion(sc.to_dandelion(cells))).equals(_sorted(cells))
 
 
 def test_to_dandelion_builds_contig_and_cell_tables():
-    pytest.importorskip("dandelion")
+    _need("dandelion")
     vdj = sc.to_dandelion(_cells())
     assert len(vdj.data) == 3          # contig level
     assert len(vdj.metadata) == 2      # cell level
@@ -108,7 +125,7 @@ def test_to_dandelion_builds_contig_and_cell_tables():
 
 def test_read_h5ddl_needs_no_dandelion(tmp_path, monkeypatch):
     """.h5ddl is plain HDF5, so a dandelion result is readable without dandelion."""
-    pytest.importorskip("dandelion")
+    _need("dandelion")
     pytest.importorskip("h5py")
     out = tmp_path / "vdj.h5ddl"
     sc.to_dandelion(_cells()).write_h5ddl(out)
@@ -130,7 +147,7 @@ def test_cell_id_is_recovered_from_the_contig_naming():
 # -------------------------------------------------------------------------- augment
 
 def test_push_obs_attaches_columns_to_an_anndata():
-    pytest.importorskip("scirpy")
+    _need("scirpy")
     adata = sc.to_scirpy(_cells())
     scores = pl.DataFrame({"cell_id": ["c1", "c2"], "pgen_paired": [1e-9, 4e-11]})
     sc.push_obs(adata, scores)
@@ -139,7 +156,7 @@ def test_push_obs_attaches_columns_to_an_anndata():
 
 
 def test_push_obs_leaves_unmentioned_cells_null():
-    pytest.importorskip("scirpy")
+    _need("scirpy")
     import numpy as np
 
     adata = sc.to_scirpy(_cells())
@@ -149,14 +166,14 @@ def test_push_obs_leaves_unmentioned_cells_null():
 
 
 def test_push_obs_attaches_to_a_dandelion_metadata():
-    pytest.importorskip("dandelion")
+    _need("dandelion")
     vdj = sc.to_dandelion(_cells())
     sc.push_obs(vdj, pl.DataFrame({"cell_id": ["c1", "c2"], "pgen_paired": [1e-9, 4e-11]}))
     assert "pgen_paired" in vdj.metadata.columns
 
 
 def test_push_obs_rejects_a_multi_pair_frame():
-    pytest.importorskip("scirpy")
+    _need("scirpy")
     adata = sc.to_scirpy(_cells())
     dup = pl.DataFrame({"cell_id": ["c1", "c1"], "x": [1.0, 2.0]})
     with pytest.raises(ValueError, match="not unique"):

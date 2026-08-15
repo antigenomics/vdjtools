@@ -1341,9 +1341,6 @@ def sc_export(
                                              "scirpy | dandelion | airr-cell."),
     out: Path = typer.Option(..., "--out", "-o", help="Output file."),
     fmt: str = _SC_FMT,
-    gex: Optional[Path] = typer.Option(None, "--gex",
-                                       help="--to scirpy: an .h5ad of gene expression to pair "
-                                            "with, giving a MuData {gex, airr} instead."),
     index_chains: bool = typer.Option(True, "--index-chains/--no-index-chains",
                                       help="--to scirpy: run scirpy.pp.index_chains, which its "
                                            "tools need."),
@@ -1355,8 +1352,6 @@ def sc_export(
 
     if to not in SC_EXPORT_TARGETS:
         _err(f"--to must be one of {', '.join(SC_EXPORT_TARGETS)}; got {to!r}")
-    if gex is not None and to != "scirpy":
-        _err(f"--gex applies to --to scirpy, not {to!r}")
     cells = _read_sc(contigs, fmt)
     try:
         if to == "airr":
@@ -1368,12 +1363,10 @@ def sc_export(
         elif to == "airr-cell":
             _sc.write_airr_cell(cells, out, repertoire_id=repertoire_id)
         elif to == "scirpy":
-            gex_adata = None
-            if gex is not None:
-                import anndata as ad
-                gex_adata = ad.read_h5ad(gex)
-            obj = _sc.to_scirpy(cells, gex=gex_adata, index_chains=index_chains)
-            obj.write_h5mu(out) if gex_adata is not None else obj.write_h5ad(out)
+            # ponytail: VDJ-only AnnData. Pairing with gene expression is
+            # sc.to_scirpy(cells, gex=...) in Python, where you already hold the GEX
+            # AnnData; a --gex flag here only added a MuData serialisation step.
+            _sc.to_scirpy(cells, index_chains=index_chains).write_h5ad(out)
         elif to == "dandelion":
             _sc.to_dandelion(cells).write_h5ddl(out)
     except (ImportError, ValueError) as e:
