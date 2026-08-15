@@ -1,10 +1,11 @@
-## This software is deprecated
+## This version is deprecated
 
-This software is no longer actively developed and maintained. For immune repertoire sequencing (AIRR-seq) data analysis software alternatives see other tools by Immunosequencing Algorithms laboratory:
+This is the legacy Groovy/Java VDJtools v1.x, kept for reference on the [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch. It is no longer developed or maintained - **use the latest version at https://github.com/antigenomics/vdjtools instead**, a Python/C++ rewrite re-implementing all VDJtools analysis methods and more.
+
+Other immune repertoire sequencing (AIRR-seq) data analysis tools by the Immunosequencing Algorithms laboratory:
 
 - [mirpy](https://github.com/antigenomics/mirpy) a library with useful python modules and functions for analysis of AIRR-seq data
 - [vdjmatch2](https://github.com/antigenomics/vdjmatch2) for fast querying and matching clonotypes across large AIRR-seq datasets and annotating repertoires using VDJdb database
-- [vdjtools2](https://github.com/antigenomics/vdjtools2) re-implementing all VDJtools analysis methods and more! - coming soon
 - [redcea](https://github.com/antigenomics/redcea) and [irrm-codec](https://github.com/antigenomics/redcea) implementing smart adaptive immune receptor sequence embeddings and extended TCRNET algorithm coming soon
 
 ---
