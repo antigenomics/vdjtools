@@ -216,28 +216,3 @@ def test_export_airr_cell_carries_the_repertoire_id(airr_tsv, tmp_path):
     _ok(_run("sc", "export", str(airr_tsv), "--to", "airr-cell", "-o", str(out),
              "--repertoire-id", "REP1"))
     assert "repertoire_id: REP1" in out.read_text()
-
-
-def test_export_gex_only_applies_to_scirpy(airr_tsv, tmp_path):
-    result = _run("sc", "export", str(airr_tsv), "--to", "airr", "-o", str(tmp_path / "a.tsv"),
-                  "--gex", str(tmp_path / "nope.h5ad"))
-    assert result.exit_code != 0 and "--gex applies to" in result.output
-
-
-def test_export_with_gex_writes_a_mudata(airr_tsv, tmp_path):
-    _need("scirpy")
-    _need("mudata")
-    import anndata as ad
-    import numpy as np
-
-    adata = sc.to_scirpy(sc.read_airr_cell(airr_tsv))
-    gex = ad.AnnData(X=np.zeros((adata.n_obs, 3), dtype="float32"))
-    gex.obs_names = adata.obs_names
-    gex_path = tmp_path / "gex.h5ad"
-    gex.write_h5ad(gex_path)
-
-    out = tmp_path / "vdj.h5mu"
-    _ok(_run("sc", "export", str(airr_tsv), "--to", "scirpy", "-o", str(out),
-             "--gex", str(gex_path)))
-    import mudata
-    assert set(mudata.read_h5mu(out).mod) == {"gex", "airr"}

@@ -216,15 +216,14 @@ still works, and ``--fmt auto|10x|airr|arda`` forces it. Every library option is
    * - ``pgen``
      - ``--source``, ``--condition-vj/--no-condition-vj``, ``--resolve-genes/--no-resolve-genes``, ``--alpha-locus``, ``--beta-locus``
    * - ``export``
-     - ``--to``, ``--gex`` (scirpy: emit a MuData), ``--index-chains/--no-index-chains``, ``--repertoire-id`` (airr-cell)
+     - ``--to``, ``--index-chains/--no-index-chains``, ``--repertoire-id`` (airr-cell)
 
 ``sc pgen`` reports how many receptors actually scored (``scored 24325/27268``), so a naming
 mismatch shows up as a number rather than a column of nulls you have to notice yourself.
 
-.. code-block:: bash
-
-   # A MuData with gene expression attached, for scirpy's multimodal path:
-   vdjtools sc export outs/airr_rearrangement.tsv --to scirpy --gex gex.h5ad -o vdj.h5mu
+Pairing VDJ with gene expression is a Python-level step -- ``sc.to_scirpy(cells, gex=gex_adata)``
+returns the ``MuData`` -- since by then you already hold the GEX ``AnnData``. The CLI writes the
+VDJ ``AnnData`` only.
 
 Worked example
 --------------
