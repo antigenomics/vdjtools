@@ -293,8 +293,14 @@ Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Wi
 is ours, so `from_scirpy` needs only `awkward` and `read_h5ddl` only `h5py`.
 NOTE: `io.read` REFUSES a `cell_id`-bearing AIRR table (it would collapse reads across cells and
 drop the barcode); it raises and points at `sc.read_airr_cell`. `fmt="airr"` forces pooling.
-CLI: **`vdjtools sc`** — `convert` (`--airr`), `pair` (`--flag-mispairing`), `qc`, `pgen`,
-`export --to airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell`.
+CLI: **`vdjtools sc`** — input format sniffed from the **header** (not the filename);
+`--fmt auto|10x|airr|arda` forces it, and `--require-cell/--require-high-conf/--consensus` apply
+to 10x input. `convert` (`--airr`), `pair` (`--locus-pair --resolve/--no-resolve
+--flag-mispairing --max-slaves-per-master --drop-mispaired`), `qc` (`--locus-pair`), `pgen`
+(`--source --condition-vj/--no-condition-vj --resolve-genes/--no-resolve-genes --alpha-locus
+--beta-locus`; prints `scored N/M receptors`), `export --to
+airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell` (`--gex` → MuData,
+`--index-chains/--no-index-chains`, `--repertoire-id`).
 
 ### `vdjtools.cli`
 The `vdjtools` typer app. Model: `models`, `generate`, `pgen`, plus the **`vdjtools model <sub>`**

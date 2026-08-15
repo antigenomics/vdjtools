@@ -196,6 +196,36 @@ Command line
    vdjtools sc export  outs/airr_rearrangement.tsv --to dandelion    -o vdj.h5ddl
    vdjtools sc export  outs/airr_rearrangement.tsv --to screpertoire -o airr.tsv
 
+The input format is detected from the file's **header**, not its name — a renamed export
+still works, and ``--fmt auto|10x|airr|arda`` forces it. Every library option is reachable:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Command
+     - Options
+   * - all
+     - ``--fmt``; ``--require-cell/--no-require-cell``, ``--require-high-conf/--no-require-high-conf``, ``--consensus`` (10x input only)
+   * - ``convert``
+     - ``--airr`` (AIRR spelling instead of the canonical columns)
+   * - ``pair``
+     - ``--locus-pair``, ``--resolve/--no-resolve``, ``--flag-mispairing``, ``--max-slaves-per-master``, ``--drop-mispaired``
+   * - ``qc``
+     - ``--locus-pair``
+   * - ``pgen``
+     - ``--source``, ``--condition-vj/--no-condition-vj``, ``--resolve-genes/--no-resolve-genes``, ``--alpha-locus``, ``--beta-locus``
+   * - ``export``
+     - ``--to``, ``--gex`` (scirpy: emit a MuData), ``--index-chains/--no-index-chains``, ``--repertoire-id`` (airr-cell)
+
+``sc pgen`` reports how many receptors actually scored (``scored 24325/27268``), so a naming
+mismatch shows up as a number rather than a column of nulls you have to notice yourself.
+
+.. code-block:: bash
+
+   # A MuData with gene expression attached, for scirpy's multimodal path:
+   vdjtools sc export outs/airr_rearrangement.tsv --to scirpy --gex gex.h5ad -o vdj.h5mu
+
 Worked example
 --------------
 
