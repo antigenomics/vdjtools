@@ -410,22 +410,26 @@ local ``./data_dump/`` copy (gitignored; symlink your data there), else fetches 
 Single-cell
 -----------
 
-:mod:`vdjtools.sc` ingests 10x / AIRR-Cell contigs into a flat ``cell_id``-keyed frame,
-resolves and pairs chains with doublet / mispairing QC, and scores paired α/β generation
-probability:
+:mod:`vdjtools.sc` ingests 10x / AIRR-Cell / arda contigs into a flat ``cell_id``-keyed
+frame, resolves and pairs chains with doublet / mispairing QC, and scores paired α/β
+generation probability:
 
 .. code-block:: python
 
    from vdjtools import sc
 
-   cells = sc.read_10x("filtered_contig_annotations.csv")   # -> cell_id-keyed Rearrangement frame
-   cells = sc.resolve_chains(cells)                         # pick the productive chain per locus
-   paired = sc.pair_chains(cells, locus_pair="TRA_TRB")     # one row per α/β cell
+   cells = sc.read_airr_cell("outs/airr_rearrangement.tsv")  # -> cell_id-keyed frame
+   cells = sc.resolve_chains(cells)                          # pick the productive chain per locus
+   paired = sc.pair_chains(cells, locus_pair="TRA_TRB")      # one row per α/β cell
 
    sc.paired_pgen(paired)                 # adds pgen_alpha, pgen_beta, pgen_paired (= product)
 
-``write_airr_cell`` exports the AIRR Cell / Receptor format; ``to_anndata`` bridges to the
-scverse ecosystem.
+   adata = sc.to_scirpy(cells)            # scverse-native AnnData (obsm["airr"])
+   vdj   = sc.to_dandelion(cells)         # dandelion
+   sc.write_screpertoire(cells, "airr_rearrangement.tsv")    # scRepertoire (R)
+
+See :doc:`singlecell` for the full ingestion matrix, the interop round-trips, and the
+``vdjtools sc`` command line.
 
 Recombination model
 -------------------

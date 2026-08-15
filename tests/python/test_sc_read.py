@@ -159,3 +159,88 @@ def test_write_airr_cell_unpaired_cell(tmp_path):
     doc = yaml.safe_load(out.read_text())
     assert doc["Cell"][0]["receptors"] == ["s1"]
     assert not doc.get("Receptor")
+
+
+# --------------------------------------------------------------- arda `arda cells` output
+
+def _write_arda_cells(tmp_path, *, chains=True):
+    """Minimal `arda cells` output: <prefix>.contigs.airr.tsv (+ .chains.tsv)."""
+    prefix = tmp_path / "run"
+    pl.DataFrame({
+        "sequence_id": ["c1_contig_1", "c1_contig_2"],
+        "cell_id": ["c1", "c1"],
+        "locus": ["TRA", "TRB"],
+        "v_call": ["TRAV1-2*01", "TRBV20-1*01"],
+        "d_call": ["", "TRBD1*01"],
+        "j_call": ["TRAJ33*01", "TRBJ2-7*01"],
+        "c_call": ["TRAC", "TRBC2"],
+        "junction": ["TGTGCC", "TGTGCCAGC"],
+        "junction_aa": ["CAVRDSNYQLIW", "CASSLGQAYEQYF"],
+        "productive": ["T", "T"],
+        "molecules": [6, 14],
+        "reads": [120, 340],
+    }).write_csv(f"{prefix}.contigs.airr.tsv", separator="\t")
+    if chains:
+        pl.DataFrame({
+            "cell_id": ["c1", "c1"],
+            "locus": ["TRA", "TRB"],
+            "junction_aa": ["CAVRDSNYQLIW", "CASSLGQAYEQYF"],
+            "status": ["primary", "secondary"],
+            "molecules": [6, 14],
+        }).write_csv(f"{prefix}.chains.tsv", separator="\t")
+    return prefix
+
+
+def test_read_arda_cells_maps_contigs_onto_the_canonical_frame(tmp_path):
+    from vdjtools.sc import read_arda_cells
+
+    df = read_arda_cells(_write_arda_cells(tmp_path, chains=False))
+    assert df.columns == SC_COLUMNS
+    assert df["cell_id"].to_list() == ["c1", "c1"]
+    # arda's per-contig `molecules` is the UMI count.
+    assert df["umi_count"].to_list() == [6, 14]
+    assert df["duplicate_count"].to_list() == [120, 340]
+    assert df["junction_nt"].to_list() == ["TGTGCC", "TGTGCCAGC"]
+
+
+def test_read_arda_cells_surfaces_ardas_own_verdict_without_acting_on_it(tmp_path):
+    from vdjtools.sc import read_arda_cells
+
+    df = read_arda_cells(_write_arda_cells(tmp_path))
+    # Namespaced, so it cannot be confused with resolve_chains' own call, and every contig
+    # is still present -- arda calling one "secondary" must not silently drop it here.
+    assert df["arda_status"].to_list() == ["primary", "secondary"]
+    assert df["arda_molecules"].to_list() == [6, 14]
+    assert df.height == 2
+
+
+def test_read_arda_cells_can_skip_the_chains_join(tmp_path):
+    from vdjtools.sc import read_arda_cells
+
+    df = read_arda_cells(_write_arda_cells(tmp_path), chains=False)
+    assert "arda_status" not in df.columns
+
+
+def test_read_arda_cells_accepts_a_direct_airr_path(tmp_path):
+    from vdjtools.sc import read_arda_cells
+
+    prefix = _write_arda_cells(tmp_path, chains=False)
+    assert read_arda_cells(f"{prefix}.contigs.airr.tsv").height == 2
+
+
+def test_read_arda_cells_errors_when_the_prefix_has_no_output(tmp_path):
+    from vdjtools.sc import read_arda_cells
+
+    with pytest.raises(FileNotFoundError, match="arda cells"):
+        read_arda_cells(tmp_path / "missing")
+
+
+def test_read_arda_cells_points_at_the_bulk_reader_when_uncelled(tmp_path):
+    """arda's BULK output has no cell_id; say so instead of producing a cell-less frame."""
+    from vdjtools.sc import read_arda_cells
+
+    path = tmp_path / "bulk.contigs.airr.tsv"
+    pl.DataFrame({"sequence_id": ["s1"], "v_call": ["TRBV9*01"],
+                  "junction_aa": ["CASSF"]}).write_csv(path, separator="\t")
+    with pytest.raises(ValueError, match="cell_id"):
+        read_arda_cells(tmp_path / "bulk")

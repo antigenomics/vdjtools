@@ -273,11 +273,34 @@ Incidence contingency testing across a cohort (Emerson 2017 / Howie 2015 / De Wi
 - `select_candidates` (public features over incidence count/fraction), `stats` (vectorised 2×2 kernels),
   `fisher_association` (Emerson Fisher shortcut, legacy schema), `metaclonotypes` (1mm grouping).
 
-### `vdjtools.sc` — single-cell (AIRR Cell / 10x)
-`read_10x`, `read_airr_cell`, `write_airr_cell`; `resolve_chains`, `pair_chains`,
-`chain_multiplicity`, `flag_mispairing`; **`paired_pgen(paired, source=, condition_vj=)`**
-(`Pgen(α)·Pgen(β)` via the native model); `cluster_eval` (+ `purity`, `homogeneity`, `parsimony`,
-`q_measure`, …); `to_anndata`.
+### `vdjtools.sc` — single-cell (CellRanger / AIRR Cell / arda) + ecosystem interop
+**Ingest**: `read_airr_cell` (any AIRR Rearrangement TSV with `cell_id` — incl. CellRanger's
+`airr_rearrangement.tsv`, CR≥4.0, the **preferred** input), `read_10x`
+(`all_`/`filtered_contig_annotations.csv`, tolerates CR3→CR7 column drift), `read_arda_cells`
+(`arda cells` output; surfaces arda's verdict as `arda_status` **without acting on it**),
+`write_airr_cell` (AIRR Cell Data File).
+**QC/analysis**: `resolve_chains`, `pair_chains`, `chain_multiplicity`, `flag_mispairing`;
+**`paired_pgen(paired, source=, condition_vj=)`** (`Pgen(α)·Pgen(β)`, native model);
+`cluster_eval` (+ `purity`, `homogeneity`, `parsimony`, `q_measure`, …).
+**Interop** — everything routes through ONE flat AIRR Rearrangement table (`sequence_id` +
+`cell_id`), which is what scirpy/dandelion/scRepertoire all read: `to_airr` / `from_airr` /
+`write_airr` is the contract; `to_scirpy(cells, gex=)` → scirpy's `obsm["airr"]` awkward layout
+(or a `MuData`) / `from_scirpy`; `to_dandelion` / `from_dandelion` / `read_h5ddl`;
+`write_screpertoire(..., format="airr"|"10x")`; `push_obs(target, df)` augments an existing
+`AnnData.obs` or `Dandelion.metadata`; `to_anndata` is the older FLAT one-row-per-pair container
+(kept, but scirpy does not read it — use `to_scirpy`).
+**Asymmetry by design**: writing a container delegates to the library that owns it; reading one
+is ours, so `from_scirpy` needs only `awkward` and `read_h5ddl` only `h5py`.
+NOTE: `io.read` REFUSES a `cell_id`-bearing AIRR table (it would collapse reads across cells and
+drop the barcode); it raises and points at `sc.read_airr_cell`. `fmt="airr"` forces pooling.
+CLI: **`vdjtools sc`** — input format sniffed from the **header** (not the filename);
+`--fmt auto|10x|airr|arda` forces it, and `--require-cell/--require-high-conf/--consensus` apply
+to 10x input. `convert` (`--airr`), `pair` (`--locus-pair --resolve/--no-resolve
+--flag-mispairing --max-slaves-per-master --drop-mispaired`), `qc` (`--locus-pair`), `pgen`
+(`--source --condition-vj/--no-condition-vj --resolve-genes/--no-resolve-genes --alpha-locus
+--beta-locus`; prints `scored N/M receptors`), `export --to
+airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell` (`--gex` → MuData,
+`--index-chains/--no-index-chains`, `--repertoire-id`).
 
 ### `vdjtools.cli`
 The `vdjtools` typer app. Model: `models`, `generate`, `pgen`, plus the **`vdjtools model <sub>`**

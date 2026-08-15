@@ -91,6 +91,16 @@ format-conversion fixtures live there — pull them over when a phase needs them
 - **A held-out-LL claim that validated nothing**: it was the EM's own training objective, which EM
   increases monotonically by construction. Use `appendix/compare_models.py` for real held-out +
   oracle comparison. The same note's "2k clonotypes/locus" cap was also real and wrong.
+- **`sc.paired_pgen` was 100% null on real CellRanger data** — and silently. CellRanger reports
+  **gene**-level V/J (`TRBV10-3`); the model is keyed by allele; `native.pgen_aa` raises on a gene
+  name *on purpose* (see the `-1` trap above) — and `_chain_pgen` swallowed it with a bare
+  `except Exception: return None`. 27,268/27,268 dCODE receptors scored null with no signal.
+  `paired_pgen` now resolves gene → representative allele (`*01`) explicitly (`resolve_genes=False`
+  to opt out), warns when a whole locus is null, and catches only `(KeyError, ValueError)`.
+  **A bare `except` over a call that raises deliberately re-creates the very bug the raise prevents.**
+- **A barcoded AIRR table sniffed as bulk `"airr"`** and `read_airr` pooled reads across cells,
+  dropping `cell_id` with no error. `sniff_format` now returns `"airr_cell"` and `io.read` refuses
+  it, pointing at `sc.read_airr_cell`; `fmt="airr"` still pools deliberately.
 - **`str.len_chars()` is UInt32** — `len - 2*flank` underflows on short junctions; cast first.
 - **`_lower_map` is exact-lowercase**, so MiGEC's space-separated column picks never match the
   MiTCR/tcR dotted dialect (`Read.count`, `CDR3.nucleotide.sequence`) — it needs its own reader.
@@ -98,6 +108,21 @@ format-conversion fixtures live there — pull them over when a phase needs them
   `2026-vdjtools-benchmark/bench/`, not from prose.
 
 ## Open loops / next steps
+- **Single-cell interop (`feature/single-cell-interop`) landed for 3.8.0.** Everything routes
+  through ONE flat AIRR Rearrangement table (`sequence_id` + `cell_id`) in `sc/airr.py` — that is
+  what scirpy, dandelion AND scRepertoire all read, so it is one emitter + thin adapters, not four
+  bridges. **None of them consumes AIRR `Cell` objects**; cell state lives in `adata.obs` /
+  `Dandelion.metadata` / Seurat `meta.data`. `write_airr_cell` stays a spec-faithful export, not an
+  interop path. Asymmetry on purpose: *writing* a container delegates to the library that owns it
+  (no schema copy to drift), *reading* is ours (`from_scirpy` needs only `awkward`, `read_h5ddl`
+  only `h5py`). TODO: nothing blocking — possible next steps are a `Dandelion` polars-backend
+  fast path (`ddl.set_backend("polars")` takes polars frames directly) and reconciling
+  `resolve_chains` with scirpy's `chain_qc` `receptor_subtype` vocabulary (report alongside, never
+  overwrite — that is how a QC call gets lost).
+- **Dev-env note**: the worktree needs its OWN venv — the editable install's meta-path finder wins
+  over `PYTHONPATH`, so a symlinked `_core` will NOT redirect `import vdjtools` to a worktree.
+  Also: `cd` inside a backgrounded/`/tmp` command resets the shell cwd back to the MAIN repo, so
+  relative-path writes silently land there. Use absolute paths for edits.
 - **Phase 1 (`feature/model-engine`) is functionally complete** — native nt/aa Pgen via the
   Murugan/OLGA `Pi_L·Pi_R` transfer matrix (single-D and D-D), batch-parallel Pgen, threaded EM
   E-step, D-D learning with arda anchoring, 7-locus concordance `r(log10 Pgen)=1.00000`, bundled

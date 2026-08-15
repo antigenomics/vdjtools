@@ -3,6 +3,84 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.8.0 — 2026-08-15
+
+Single-cell interop: vdjtools now sits inside the downstream single-cell ecosystem instead of
+ending at its own frame.
+
+### Fixed — `paired_pgen` returned nothing but nulls on real CellRanger data
+
+The bug that mattered most here, and it was silent. CellRanger reports **gene**-level V/J calls
+(`TRBV10-3`); the model is keyed by **allele**. `native.pgen_aa` raises on a gene name on
+purpose — the old `-1` fallback meant *marginalise over every allele* and once returned a Pgen
+**2.38x too high** with no error — but `sc.pgen._chain_pgen` caught that with a bare
+`except Exception: return None`. Net effect: on the single most common real input, `pgen_alpha`,
+`pgen_beta` and `pgen_paired` were **100% null**, with nothing to indicate why. Measured on the
+public dCODE donor-4 run: **27,268 of 27,268 receptors null**.
+
+`paired_pgen` now resolves a gene to its representative allele (`*01` where the model has it)
+before scoring — deliberately and documented, *not* by falling back to marginalising. Same
+dataset: **24,325 of 27,268 now scored** (median paired Pgen 2.1e-19). `resolve_genes=False`
+restores exact-allele-only matching, and an all-null locus now emits a `UserWarning` instead of
+shipping a silent column. The `except` is narrowed to `(KeyError, ValueError)` with a
+non-`str` junction guard, so unrelated failures stop being swallowed.
+
+### Fixed — a barcoded AIRR table was silently collapsed into a bulk repertoire
+
+`io.sniff_format` had no `cell_id` branch, so CellRanger's `airr_rearrangement.tsv` (or any
+barcoded AIRR table) sniffed as `"airr"`/`"arda"` and `read_airr` pooled reads **across cells**,
+dropping the barcode with no error. It now sniffs as `"airr_cell"` and `io.read` refuses it,
+naming `sc.read_airr_cell` instead; `fmt="airr"` still pools on purpose.
+
+### Added — one interchange format, four ecosystems
+
+scirpy, dandelion and scRepertoire all read the same thing: a flat AIRR Rearrangement table with
+`sequence_id` + `cell_id`. So `vdjtools/sc/airr.py` is one emitter (`to_airr`) and one inverse
+(`from_airr`), and each bridge is a thin adapter — `write_airr`, plus `write_screpertoire`
+(`format="airr"|"10x"`). It reconciles the two spellings that otherwise bite: AIRR says
+`junction` where vdjtools says `junction_nt`, and scRepertoire's parser reads `consensus_count`
+where scirpy and dandelion prefer `umi_count`, so both are emitted.
+
+- **scirpy / scverse** — `to_scirpy` (scirpy's `obsm["airr"]` awkward layout, `index_chains` run
+  by default; `gex=` gives a `MuData`) and `from_scirpy`. Writing **delegates** to
+  `scirpy.io.read_airr` so no copy of their schema can drift here; reading is ours and needs only
+  `awkward`, so consuming someone else's AnnData costs no scirpy install.
+- **dandelion** — `to_dandelion` / `from_dandelion`, plus `read_h5ddl`: `.h5ddl` is plain HDF5, so
+  a dandelion result opens with `h5py` alone.
+- **`push_obs`** — attach vdjtools-computed columns (`pgen_paired`, mispairing flags) to an
+  `AnnData.obs` or `Dandelion.metadata` you did not build. Refuses a multi-pair frame rather than
+  silently picking one row per cell.
+
+### Added — ingestion
+
+`read_10x` now accepts `filtered_contig_annotations.csv` as well as `all_contig_annotations.csv`
+(one CellRanger writer, one layout) and tolerates version drift — `fwr*`/`cdr1`/`cdr2` are CR6+,
+`exact_subclonotype_id` CR4+, `sample` only under `cellranger multi`, and `raw_consensus_id` is
+used when present rather than required. `read_arda_cells` reads `arda cells` output
+(`.contigs.airr.tsv` + `.chains.tsv`), surfacing arda's own per-chain verdict as `arda_status`
+**without acting on it** — arda's call and `resolve_chains`' call are independent answers to the
+same question. `productive` joins `SC_COLUMNS` so the emitted AIRR table is schema-valid.
+
+### Added — CLI, docs, example
+
+`vdjtools sc` — `convert`, `pair`, `qc`, `pgen`, and
+`export --to airr|scirpy|dandelion|screpertoire|screpertoire-10x|airr-cell`, each exposing the
+matching library options: `--fmt`, `--require-cell`, `--require-high-conf`, `--consensus`,
+`--locus-pair`, `--resolve`, `--flag-mispairing`, `--max-slaves-per-master`, `--drop-mispaired`,
+`--source`, `--condition-vj`, `--resolve-genes`, `--alpha-locus`, `--beta-locus`, `--gex`
+(scirpy MuData), `--index-chains`, `--repertoire-id`. The input format is sniffed from the
+**header**, not the filename — a renamed export still works and a bulk table is refused by name
+rather than mis-parsed. `sc pgen` reports `scored N/M receptors`, so a naming mismatch is a
+number on screen rather than a column of nulls to notice later. A dedicated
+`docs/singlecell.rst` (the `usage.rst` section is now a pointer), and
+`examples/single_cell_interop.py`, a marimo notebook running the whole path on dCODE donor 4 —
+which is what surfaced the Pgen bug above.
+
+`[sc]` gains `awkward` + `mudata`; a new **test-only** `[interop]` extra carries `scirpy` and
+`sc-dandelion` (PyPI name; imports as `dandelion`). CI installs it best-effort and reports
+whether the round-trip tests ran or skipped, since their dep chains break on new matplotlib.
+The format contract itself (`test_sc_airr.py`) has no optional deps and never skips.
+
 ## 3.7.3 — 2026-08-15
 
 Housekeeping. The first PyPI release since 3.7.0, so it carries 3.7.1 and 3.7.2 with it.

@@ -63,6 +63,25 @@ pip install -e ".[examples,sc,overlap]"
 marimo edit examples/single_cell.py
 ```
 
+## `single_cell_interop.py` — CellRanger in, scirpy / dandelion / scRepertoire out
+
+A [marimo](https://marimo.io) notebook on the same dCODE data, showing vdjtools sitting in the
+middle of the single-cell ecosystem rather than replacing any of it: ingest 10x contigs, QC
+(`chain_multiplicity`, `flag_mispairing`) and score (`paired_pgen`), then hand the result to each
+downstream container and read it back — `to_scirpy`/`from_scirpy` (scirpy's `obsm["airr"]`
+awkward layout), `to_dandelion`/`read_h5ddl`, `write_screpertoire` for R — and finally `push_obs`
+to attach `pgen_paired` to an AnnData you did not build. The seam throughout is one flat AIRR
+Rearrangement table (`to_airr`).
+
+scirpy and dandelion are **optional**: each section degrades to a note if its library is missing,
+and the reading directions need only `awkward` / `h5py`.
+
+```bash
+pip install -e ".[examples,sc]"
+pip install -e ".[interop]"            # optional: scirpy + sc-dandelion, to run those sections
+marimo edit examples/single_cell_interop.py
+```
+
 ## `cdr_features.py` — CDR3 physicochemistry & k-mer features
 
 A [marimo](https://marimo.io) notebook computing CDR3 amino-acid features with

@@ -64,7 +64,8 @@ Two things are still optional, because each has a working alternative or is a si
 ```bash
 pip install "vdjtools[overlap]"   # scikit-learn — only for cluster_samples(method="mds");
                                   # method="hclust" works out of the box (scipy)
-pip install "vdjtools[sc]"        # single-cell extras: anndata (scverse bridge), pyyaml
+pip install "vdjtools[sc]"        # single-cell: anndata + awkward + mudata (scverse
+                                  # bridges), pyyaml (AIRR Cell export)
 ```
 
 MMseqs2 is needed **only** for arda's alignment/annotation path (`model.stitch.annotate`) — never
@@ -358,8 +359,23 @@ suites (`RUN_BENCHMARK=1`).
   expansion test (emergent / expanded / persistent / contracted / vanishing), the VDJtrack
   size-bucket **recapture model**, metaclonotype-grouped testing, and an edgeR NB-exact caller
   ([`vdjtools.dynamics`](python/vdjtools/dynamics)).
-- **Single-cell** — AIRR Cell / 10x interoperability, chain pairing + QC, paired α/β Pgen, and a
-  `to_anndata` bridge into the scverse ecosystem (writes `.h5ad` / `.zarr` via AnnData).
+- **Single-cell** — CellRanger / AIRR Cell / arda ingestion, chain pairing + doublet & mispairing
+  QC, paired α/β Pgen, clustering evaluation, and **round-trip interop** with the downstream
+  single-cell stack ([`vdjtools.sc`](python/vdjtools/sc), [guide](docs/singlecell.rst)).
+
+  | Ecosystem | Out | Back in | Needs |
+  |---|---|---|---|
+  | [scirpy](https://github.com/scverse/scirpy) / scverse | `to_scirpy` (scirpy's `obsm["airr"]`, or a `MuData` with GEX) | `from_scirpy` | `scirpy` out; only `awkward` back |
+  | [dandelion](https://github.com/tuonglab/dandelion) | `to_dandelion` | `from_dandelion`, `read_h5ddl` | `sc-dandelion` out; only `h5py` back |
+  | [scRepertoire](https://github.com/BorchLab/scRepertoire) (R) | `write_screpertoire` (AIRR or 10x shaped) | — | nothing |
+  | Any AIRR consumer | `to_airr` / `write_airr` | `from_airr`, `read_airr_cell` | nothing |
+
+  All four read the same thing — a flat AIRR Rearrangement table with `sequence_id` + `cell_id` —
+  so there is one emitter and one inverse, and each bridge is a thin adapter. Writing a container
+  delegates to the library that owns it (no stale copy of someone else's schema to drift); reading
+  one is ours, so a result handed to you is always openable. `push_obs` pushes a vdjtools-computed
+  column (`pgen_paired`, mispairing flags) onto an `AnnData.obs` or `Dandelion.metadata` you did
+  not build. CLI: `vdjtools sc convert|pair|qc|pgen|export`.
 
 ## License
 

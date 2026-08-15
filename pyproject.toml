@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "3.7.3"
+version = "3.8.0"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -66,7 +66,8 @@ vdjtools = "vdjtools.cli:app"
 model = []                             # DEPRECATED no-op alias: arda-mapper is a BASE dep since v2.4.0 (the model engine + germline reference ship with a plain `pip install vdjtools`). Kept so existing `vdjtools[model]` pins (e.g. mirpy's) keep resolving.
 overlap = ["scikit-learn"]             # vdjmatch/seqtree are BASE deps since v2.5.0; sklearn is still an extra -- it is only needed by cluster_samples(method="mds") (method="hclust" uses scipy, a base dep) and sc.cluster_eval, and both raise a clear install hint.
 preprocess = []                        # DEPRECATED no-op alias: seqtree (freq-based error correction) is a BASE dep since v2.5.0.
-sc = ["scikit-learn", "pyyaml", "anndata"]  # Phase 7: single-cell — sklearn for cluster_eval contingency, pyyaml for AIRR Cell export, anndata for the scverse bridge (to_anndata). huggingface_hub is a BASE dep now.
+sc = ["scikit-learn", "pyyaml", "anndata", "awkward", "mudata"]  # single-cell — sklearn for cluster_eval contingency, pyyaml for AIRR Cell export, anndata+awkward for the scverse bridge (awkward backs scirpy's obsm["airr"], and from_scirpy reads it WITHOUT needing scirpy installed), mudata for the multimodal gex+airr container. huggingface_hub is a BASE dep now.
+interop = ["scirpy", "sc-dandelion"]  # TEST-ONLY: the downstream tools themselves. Not needed to USE the bridges -- to_scirpy/to_dandelion raise a clear install hint, and from_scirpy/read_h5ddl need only awkward/h5py from [sc]. Installed in CI so tests/python/test_sc_interop.py actually round-trips against the real containers instead of skipping. NOTE the PyPI name is `sc-dandelion`; it imports as `dandelion`.
 examples = ["marimo", "matplotlib", "scikit-learn"]  # example notebooks (scipy + huggingface_hub are base deps)
 oracle = ["olga"]                      # Pgen cross-check oracle (tests only)
 test = ["pytest>=7.4", "pytest-cov"]

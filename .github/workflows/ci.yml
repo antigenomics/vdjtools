@@ -44,6 +44,13 @@ jobs:
         # arda/vdjmatch/seqtree are base deps and install here; only the arda-annotate tests that
         # need the mmseqs2 *binary* (not on CI) and the huggingface_hub tests (no data access) skip.
         run: pip install -e ".[test,oracle,overlap,sc]"
+      - name: Install the downstream single-cell tools (interop round-trip tests)
+        # scirpy + dandelion are NOT needed to use the bridges, only to prove they
+        # round-trip. Best-effort: their dep chains pull scanpy/nxviz and break on new
+        # matplotlib often enough that a hard failure here would block unrelated work --
+        # the guard below is what makes a silent skip visible instead.
+        continue-on-error: true
+        run: pip install -e ".[interop]"
       - name: Test
         run: pytest tests/python -q
       - name: Assert the OLGA oracle suite actually ran (guard against silent skip)
@@ -52,3 +59,13 @@ jobs:
         run: |
           python -c "import olga.load_model" || { echo 'olga did not install; oracle suite would skip'; exit 1; }
           pytest tests/python/test_pgen_nt.py -q --co >/dev/null
+      - name: Report whether the single-cell interop suite ran or skipped
+        # Same reasoning as the olga guard, one notch softer: [interop] is best-effort, so a
+        # skip is tolerated -- but it must be VISIBLE, not silently green. The format
+        # contract itself (test_sc_airr.py) has no optional deps and always runs.
+        run: |
+          for m in scirpy dandelion; do
+            python -c "import $m" 2>/dev/null \
+              && echo "$m present: interop round-trip tests ran" \
+              || echo "WARNING: $m did not install; its round-trip tests SKIPPED"
+          done
