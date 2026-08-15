@@ -3,7 +3,7 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## 3.8.0 — unreleased
+## 3.8.0 — 2026-08-15
 
 Single-cell interop: vdjtools now sits inside the downstream single-cell ecosystem instead of
 ending at its own frame.
