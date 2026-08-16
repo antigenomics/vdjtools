@@ -48,10 +48,25 @@ Measured locally (M3, `HF_HUB_OFFLINE=1`):
 | release path (`-m 'not slow and not heavy'`) | **1140 passed, 12 skipped, 29 deselected** | **72.65 s** |
 
 **5.3× faster**, ten more tests deselected, same pass count otherwise. CI runs ≈4.7× slower than
-this machine, so the projected release-gate job is **~6 min against the measured 31m18s** — at which
+this machine, so the projected release-gate job was **~6 min against the measured 31m18s** — at which
 point it really would finish alongside the 6m06s Windows wheel build, as 3.9.2 wrongly claimed it
-already did. That projection is arithmetic, not a measurement; the next release run is what confirms
-it.
+already did.
+
+**Measured on this release run, and it beat the projection:**
+
+| release | gate job | wall |
+|---|---|--:|
+| 3.9.2 | `Test before publishing` | 31m18s |
+| 3.9.3 | `Test before publishing` | **4m04s** |
+
+**7.7× on CI**, against 5.3× locally and the ~6 min projected. The runner gains more than the
+arithmetic predicted because `test_gene_prior.py`'s thread-parallel C++ E-step degrades worst on a
+4-vCPU runner, and that is exactly what `heavy` removes. The gate now finishes well inside the
+6m06s Windows wheel build, so it genuinely costs no extra wall time — which is what 3.9.2's comment
+asserted without measuring.
+
+Coverage is unchanged: `ci.yml` ran the **full** suite green on this same SHA across ubuntu and
+macOS × Python 3.10/3.12 (run 31970256603).
 
 
 ### Added — `Manifest.builder_version`
