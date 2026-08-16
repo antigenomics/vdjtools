@@ -98,6 +98,24 @@ format-conversion fixtures live there — pull them over when a phase needs them
   `paired_pgen` now resolves gene → representative allele (`*01`) explicitly (`resolve_genes=False`
   to opt out), warns when a whole locus is null, and catches only `(KeyError, ValueError)`.
   **A bare `except` over a call that raises deliberately re-creates the very bug the raise prevents.**
+- **`collapse_alleles` relabelled an ORF allele's germline `*01`** (fixed 3.9.1). The representative
+  key was `(len(cut_segment), usage, name)` and **usage was only passed for V** — so on J and D the
+  key degenerated to the allele *name* after the length tie and `max` took the lexicographically
+  last one. `TRBJ2-7*01` (F, `SYEQYF`) and `*02` (**ORF**, `SYEQYV`) are both 19 nt, so `*02` won
+  and shipped under `*01`'s label: `Pgen("CASSIRSSYEQYF"|TRBJ2-7*01)` was **exactly 0** on the
+  default `collapse=True` path, no error, in every version that shipped these models — **864/864**
+  TRBJ2-7 junctions drawn from the model itself scored `pgen_nt == 0`. Key is now
+  `(length, IMGT functionality, usage, prefer *01, name)`; **length still leads** — leading with
+  functionality installs an empty germline on `TRBV23/OR9-2` (its only non-P allele has none), the
+  same silent zero from the other side. 65 genes' germlines moved; `collapse=False` is the escape
+  hatch. **arda's `cdr3_anchors.tsv` (`functionality`/`status`/`templated_aa`) is the reference for
+  anchor questions** — vdjtools' own `anchor` column is an nt offset into `full_germline`, and
+  reading it as a codon index into `cut_segment` flags 822 correct entries.
+- **`from_olga(derive_orf=True)` sliced J germlines on the V side of the anchor** (fixed 3.9.1):
+  V's CDR3 region is `full[anchor:]`, J's is `full[:anchor+3]`, and one line used the V form for
+  both. 11 ORF/P J alleles in the bundled `learned` human TRA model still carry the framework
+  *downstream* of Phe118 — **a model rebuild is needed to clear them**; `test_collapse.py` pins
+  them by name until then.
 - **A barcoded AIRR table sniffed as bulk `"airr"`** and `read_airr` pooled reads across cells,
   dropping `cell_id` with no error. `sniff_format` now returns `"airr_cell"` and `io.read` refuses
   it, pointing at `sc.read_airr_cell`; `fmt="airr"` still pools deliberately.

@@ -15,5 +15,14 @@ never pays the cost of the compiled extension or heavy optional dependencies unt
 feature that needs them is used.
 """
 
-__version__ = "3.9.0"
+from importlib.metadata import PackageNotFoundError, version as _dist_version
+
+try:
+    #: Read from the installed distribution, which scikit-build-core fills from `pyproject.toml`
+    #: — the same file CMake parses for the native `_core.version()`. A hand-copied literal here
+    #: drifted from the release version once already (fixed post-hoc in a80a447); this cannot.
+    __version__ = _dist_version("vdjtools")
+except PackageNotFoundError:              # a source tree that was never installed
+    __version__ = "0.0.0+unknown"
+
 __all__ = ["__version__"]

@@ -12,6 +12,7 @@ convention is byte-identical to OLGA's (0-based Cys104/[FW]118 offset into the f
 | Dataset | Origin | Format | Notes |
 |---|---|---|---|
 | V/J germline + CDR3 anchors | arda `database/vdj/<org>/cdr3_anchors.tsv` (via `arda.cdr3fix.load_anchors`) | TSV, per-allele | CDR3-region germline + anchor + functionality; **full-length V/J germline not shipped** (build-time only) — a P1c/stitching prerequisite |
+| IMGT functionality (`F`/`ORF`/`P`) per allele | same table, `functionality` column (3.9.1: `model.collapse` ranks a gene's representative allele on it) | TSV, per-allele | Reused, not vendored: arda is already a base dependency and `load_germline` already surfaces `functionality`/`status`. `status` (`ok`/`no_anchor`/`truncated`) and `templated_aa` are the reference the collapse tests assert against |
 | D germline | arda `database/vdj/<org>/d_germlines.fasta` | FASTA `>LOCUS\|allele` | full D germline, no anchor |
 
 **OLGA/IGoR model files contribute recombination probabilities only** (and, for bootstrap
