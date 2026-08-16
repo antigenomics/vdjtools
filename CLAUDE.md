@@ -114,10 +114,14 @@ format-conversion fixtures live there — pull them over when a phase needs them
 - **`from_olga(derive_orf=True)` sliced J germlines on the V side of the anchor** (fixed 3.9.1):
   V's CDR3 region is `full[anchor:]`, J's is `full[:anchor+3]`, and one line used the V form for
   both. 11 J alleles in the bundled `learned` human TRA model still carry the framework *downstream*
-  of Phe118 — **a model rebuild is needed to clear them**; `test_collapse.py` pins them by name
-  until then. Size it against the unaffected `arda` TRA model, not against the `learned` model's own
-  usage: **`TRAJ35` (functional) holds 2.93e-03 in `arda` and 3.79e-06 in `learned` — 774× lower**,
-  while unaffected controls (`TRAJ33`, `TRAJ42`) agree between the two within 25%.
+  of Phe118; `test_collapse.py` pins them by name. Size it against the unaffected `arda` TRA model,
+  not against the `learned` model's own usage: **`TRAJ35` (functional) holds 2.93e-03 in `arda` and
+  3.79e-06 in `learned` — 774× lower**, while unaffected controls (`TRAJ33`, `TRAJ42`) agree between
+  the two within 25%. **Left unfixed on purpose**: clearing it needs an all-loci regeneration, and
+  **0** of VDJdb's 30,937 human TRA records use any of the 11 (real absence — neighbours `TRAJ34`
+  891 and `TRAJ36` 494 are well covered). Numbers: `bench/results/vdjtools_germline_pgen_shift.md`
+  in `2026-mhcmatch-benchmark`. Users who need `TRAJ35` usage should take `load_bundled("TRA",
+  "arda")`, which cannot carry the defect.
 - **A germline defect in an EM-fit model is not a fixed-size error — the model learns around it.**
   Wrong germline → reads stop scoring against the gene → EM drives its usage toward 0 → the gene's
   mass, measured *after* the fit, looks negligible. The 11 alleles above hold 0.33% of `learned`
@@ -125,6 +129,29 @@ format-conversion fixtures live there — pull them over when a phase needs them
   three orders of magnitude on a functional gene. **Never size a germline/annotation bug from the
   affected model's own posterior.** Compare against a reference fit that does not share the defect
   (here `arda` vs `learned`), or against pre-EM read counts.
+
+## Never regenerate a bundled model unless a germline entering it changed
+
+**If no germline entering a locus changed, that locus's model cannot change — regenerating it is
+pure cost.** This is measured, not assumed: rebuilding `learned` on the same corpus with the same EM
+reproduced TRB and TRG **bit-identically** (89 and 15 V alleles, max `|ΔP(V)| ≈ 5e-17` / `3e-16`,
+max `|Δlog10| = 0.0000`), because neither locus had an affected allele. Only TRA moved, and only
+because 11 of its J germlines were wrong.
+
+So the decision is a lookup, not a judgement call: **name the germline that changed and the locus it
+enters.** If you cannot, there is nothing to regenerate. A metadata field being empty, a version
+having been bumped, or a fix having landed in the *builder* are all insufficient — the builder fix
+only matters for models built after it.
+
+- Regeneration is a **multi-hour, all-loci job on Aldan-3** (`../aldan3-client`), never a laptop run
+  and never a subset: a partial run leaves the set with mixed `manifest.builder_version`, which
+  `test_the_learned_set_is_never_a_mix_of_builders` fails on. It caught exactly that after an
+  interrupted run left 4 loci at `3.9.2` and 3 at `""`.
+- Before proposing one, **name the downstream number that moves**. For the TRAJ35 defect that number
+  is zero — 0 of 30,937 VDJdb human TRA records touch the 11 affected alleles — which is what makes
+  not regenerating the right call rather than the lazy one.
+- `appendix/build_bundled_models.py` is the only builder; it takes `LOCI=...`. Do not write a
+  second one.
 - **A barcoded AIRR table sniffed as bulk `"airr"`** and `read_airr` pooled reads across cells,
   dropping `cell_id` with no error. `sniff_format` now returns `"airr_cell"` and `io.read` refuses
   it, pointing at `sc.read_airr_cell`; `fmt="airr"` still pools deliberately.

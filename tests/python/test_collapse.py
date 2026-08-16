@@ -266,8 +266,11 @@ def test_collapsed_representative_is_functional_wherever_a_functional_allele_exi
 
 #: The ``learned`` human TRA model was built by `from_olga(derive_orf=True)` before that path knew
 #: the CDR3 region lies on the 5' side of a J anchor, so these 11 germlines are the framework
-#: *downstream* of Phe118. `io._genomic_table` is fixed; the bundled parquet still carries them and
-#: only a model rebuild clears it. All 11 are ORF/P except TRAJ35*01, which is exempt above anyway.
+#: *downstream* of Phe118. `io._genomic_table` is fixed (3.9.1); the SHIPPED parquet still carries
+#: them, and only regenerating the models clears it — a multi-hour all-loci job, deliberately not
+#: run for a defect with no measured downstream consumer (**0** of VDJdb's 30,937 human TRA records
+#: use any of these 11 alleles; see `bench/results/vdjtools_germline_pgen_shift.md`). All 11 are
+#: ORF/P except TRAJ35*01, which the terminal-anchor test above exempts on arda's own record.
 _WRONG_SIDE_OF_THE_J_ANCHOR = {
     ("learned", "human", "TRA", a) for a in
     ("TRAJ1*01", "TRAJ2*01", "TRAJ19*01", "TRAJ25*01", "TRAJ35*01", "TRAJ51*01", "TRAJ55*01",
@@ -289,6 +292,26 @@ def test_bundled_cdr3_germline_sits_on_the_documented_side_of_the_anchor(source,
             if seq != want and (source, organism, locus, r[f"{seg}_allele"]) not in _WRONG_SIDE_OF_THE_J_ANCHOR:
                 bad.append(r[f"{seg}_allele"])
     assert not bad, f"{source}/{organism}/{locus}: CDR3 germline off the anchor for {bad}"
+
+
+def test_the_learned_set_is_never_a_mix_of_builders():
+    """The seven `learned` loci must all report the **same** builder version.
+
+    A germline defect lives in the builder, so "which build is this from" should be a lookup rather
+    than a posterior comparison against a reference fit. The dangerous state is a *partial*
+    regeneration, where half the set silently answers a different question from the other half —
+    this caught exactly that (4 loci at ``3.9.2``, 3 at ``""``) when an all-loci rebuild was
+    interrupted midway.
+
+    Deliberately **not** asserting that every model carries a stamp. Only regenerating the shipped
+    set could satisfy that, so it would encode "always rebuild" as policy — and the models are
+    regenerated when a germline actually changes, not to populate a metadata field.
+    """
+    stamped = {locus: load_bundled(locus, "learned", collapse=False).manifest.builder_version
+               for locus in LOCI}
+    assert len(set(stamped.values())) == 1, (
+        f"learned set has mixed builder versions: {stamped} — regenerate all seven loci together, "
+        f'never a subset. ("" is not missing data: it means the model predates 3.9.2.)')
 
 
 def test_trbj2_7_is_not_a_silent_zero():
