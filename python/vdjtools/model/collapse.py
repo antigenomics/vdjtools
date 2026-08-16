@@ -18,14 +18,28 @@ The collapse is a proper marginalisation, not a truncation:
   single germline, so collapsed Pgen is approximate there (exact wherever the CDR3-region germline
   is allele-invariant, which is the common case).
 
-The representative is chosen by **CDR3-region germline length first, usage second**. Usage alone is
-wrong: IMGT ships some alleles with a truncated CDR3-region germline, and if such an allele happens
-to carry the gene's highest learned usage it becomes the gene's germline and shortens every trim the
-gene can support. Human IGKV3-20 is exactly that case — ``*02`` is 11 nt against ``*01``'s 30 and
-had the higher learned usage, so the collapsed gene inherited an 11-nt germline (labelled ``*01``,
-which was doubly misleading) and stranded 25% of its own deletion distribution on trims it could no
-longer reach. Alleles of one gene are near-identical through the CDR3 region, so a large length gap
-means an incomplete database entry, not biology.
+The representative is ranked, in order, by **CDR3-region germline length**, then **IMGT
+functionality** (``F`` > ``ORF`` > ``P``, read from arda's per-allele CDR3-anchor table), then
+**usage**, then a preference for ``*01``, then the allele name as a last resort.
+
+*Length leads* because IMGT ships some alleles with a truncated — sometimes empty — CDR3-region
+germline, and a truncated allele must never define the gene's trim range. Human IGKV3-20 is the
+usage version of that trap: ``*02`` is 11 nt against ``*01``'s 30 and had the higher learned usage,
+so the collapsed gene inherited an 11-nt germline (labelled ``*01``, which was doubly misleading)
+and stranded 25% of its own deletion distribution on trims it could no longer reach. Functionality
+cannot lead for the same reason: over every bundled model the two orders differ on exactly one gene,
+human ``TRBV23/OR9-2``, where the only non-pseudogene allele (``*02``, ORF) has an **empty** CDR3
+germline and ``*01`` (P) has 21 nt — leading with functionality would install the empty one and make
+Pgen through that gene exactly 0. Alleles of one gene are near-identical through the CDR3 region, so
+a large length gap means an incomplete database entry, not biology.
+
+*Functionality is second* because ties on length are common and the name tie-break underneath them
+is meaningless — it just takes the lexicographically last allele. That is how ``TRBJ2-7*02``, an
+**ORF** allele whose germline templates ``SYEQYV`` instead of the conserved ``SYEQYF``, became
+the representative of ``TRBJ2-7`` *and was relabelled* ``*01``: both alleles are 19 nt, so
+length did not separate them, no usage was passed for J at all, and ``*02`` won on the name. Every
+real ``…YEQYF`` junction then scored **exactly zero** against the collapsed model, with no error
+raised, and the ``TRBJ2-7`` marginal fell 5–6 orders of magnitude.
 
 Having fixed the representative, the collapsed deletion conditionals are then **projected onto what
 that germline supports** and renormalized: the collapsed model is a single-germline model, so any
@@ -36,6 +50,10 @@ from __future__ import annotations
 import polars as pl
 
 from .model import Model
+
+#: IMGT functionality preference for the gene's representative allele. An allele arda does not
+#: know (a few OLGA-namespace names) ranks with the pseudogenes rather than below them.
+_FUNCTIONALITY_RANK = {"F": 2, "ORF": 1, "P": 0}
 
 
 def _gene(col: str) -> pl.Expr:
@@ -84,6 +102,31 @@ def _marginal(choice: pl.DataFrame, allele_col: str) -> pl.DataFrame:
     return choice.select(pl.col(allele_col).alias("_a"), pl.col("p"))
 
 
+def _functionality(manifest) -> dict[str, str]:
+    """``{allele: 'F'|'ORF'|'P'}`` from arda's CDR3-anchor table for this model's locus/organism.
+
+    Empty when the model's namespace is not arda's (a custom :func:`~vdjtools.model.io.from_germline`
+    locus): the representative then ranks on length, usage and ``*01`` alone.
+    """
+    from .reference import load_germline
+
+    try:
+        g = load_germline(manifest.locus, manifest.organism)
+    except (ImportError, ValueError):
+        return {}
+    return dict(zip(g["allele"].to_list(), g["functionality"].to_list()))
+
+
+def _representative(alleles: list[str], cut: dict[str, str], func: dict[str, str],
+                    usage: dict[str, float]) -> str:
+    """The allele whose germline represents the gene — see the module docstring for the order."""
+    return max(alleles, key=lambda a: (len(cut.get(a) or ""),
+                                       _FUNCTIONALITY_RANK.get(func.get(a, ""), 0),
+                                       usage.get(a, 0.0),
+                                       a.endswith("*01"),
+                                       a))
+
+
 def collapse_alleles(model: Model) -> Model:
     """Return a copy of ``model`` with every gene reduced to a single ``*01`` allele.
 
@@ -93,7 +136,8 @@ def collapse_alleles(model: Model) -> Model:
     Returns:
         A new :class:`Model` at gene resolution: one allele (``gene*01``) per gene in every table
         and in the germline. Marginal usage is preserved exactly; conditionals are the correct
-        usage-weighted allele averages; germline is the top-usage allele's, relabelled ``*01``.
+        usage-weighted allele averages; germline is the representative allele's (ranked by length,
+        then IMGT functionality, then usage, then ``*01``), relabelled ``*01``.
 
     Example:
         >>> m = collapse_alleles(load_bundled("TRB", "learned"))
@@ -103,6 +147,11 @@ def collapse_alleles(model: Model) -> Model:
     t = model.tables
     wv = _allele_weights(t["v_choice"], "v_allele")
     new: dict[str, pl.DataFrame] = {}
+    # Marginal P(allele) per segment, for ranking the germline representative below. J and D get
+    # theirs here too — passing only V left the J/D ranking with nothing under the length rule but
+    # the allele name, which is what promoted the ORF TRBJ2-7*02 over *01.
+    marg: dict[str, dict[str, float]] = {
+        "v": dict(zip(t["v_choice"]["v_allele"].to_list(), t["v_choice"]["p"].to_list()))}
 
     # ---- V ----
     new["v_choice"] = _collapse_choice(t["v_choice"], "v_allele")
@@ -114,6 +163,7 @@ def collapse_alleles(model: Model) -> Model:
         new["j_choice"] = _collapse_choice(t["j_choice"], "j_allele")
         wj = _allele_weights(t["j_choice"], "j_allele")
         new["j_5_del"] = _collapse_conditional(t["j_5_del"], "j_allele", wj, ["ndel"])
+        marg["j"] = dict(zip(t["j_choice"]["j_allele"].to_list(), t["j_choice"]["p"].to_list()))
     else:
         # VJ: j_choice is P(J|V) keyed (v_allele, j_allele). Collapse J within each V allele
         # (sum over J sub-alleles), then collapse V (weighted average over V sub-alleles).
@@ -131,6 +181,7 @@ def collapse_alleles(model: Model) -> Model:
                  .group_by("j_allele", maintain_order=True).agg(pl.col("pj").sum().alias("p")))
         wjm = _allele_weights(jmarg, "j_allele")
         new["j_5_del"] = _collapse_conditional(t["j_5_del"], "j_allele", wjm, ["ndel"])
+        marg["j"] = dict(zip(jmarg["j_allele"].to_list(), jmarg["p"].to_list()))
 
     # ---- D (VDJ only) ----
     if vdj:
@@ -152,6 +203,7 @@ def collapse_alleles(model: Model) -> Model:
         wdm = _allele_weights(dmarg, "d_allele")
         bins = [c for c in t["d_del"].columns if c not in ("d_allele", "p")]
         new["d_del"] = _collapse_conditional(t["d_del"], "d_allele", wdm, bins)
+        marg["d"] = dict(zip(dmarg["d_allele"].to_list(), dmarg["p"].to_list()))
 
         # ---- tandem D (d2_gene P(D2|D1), d2_del P(delD2|D2)) — same D allele set ----
         if "d2_gene" in t:
@@ -187,21 +239,17 @@ def collapse_alleles(model: Model) -> Model:
         new[name] = t[name]
 
     # ---- germline: keep one representative allele per gene, relabel *01 ----
-    pv_all = dict(zip(t["v_choice"]["v_allele"].to_list(), t["v_choice"]["p"].to_list()))
+    func = _functionality(model.manifest)
     genomic = {}
     for gname, g in model.genomic.items():
         seg = gname.split("_")[1][0]                    # genes_v -> 'v'
         acol = f"{seg}_allele"
-        usage = pv_all if seg == "v" else {}
+        usage = marg.get(seg, {})
         rows = []
         for gene, sub in g.group_by(_gene(acol).alias("_g"), maintain_order=True):
             key = gene[0] if isinstance(gene, tuple) else gene
             cut = dict(zip(sub[acol].to_list(), sub["cut_segment"].to_list()))
-            # Longest CDR3-region germline first, then usage, then name — see the module docstring
-            # on IGKV3-20. A truncated allele must never define the gene's trim range just because
-            # it won a usage vote.
-            best = max(sub[acol].to_list(),
-                       key=lambda a: (len(cut.get(a) or ""), usage.get(a, 0.0), a))
+            best = _representative(sub[acol].to_list(), cut, func, usage)
             rep = sub.filter(pl.col(acol) == best).with_columns(pl.lit(_rep(key)).alias(acol),
                                                                 pl.lit(key).alias("gene"))
             rows.append(rep)
