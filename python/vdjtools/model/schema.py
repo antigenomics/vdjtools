@@ -84,6 +84,12 @@ class Manifest:
         palindrome_max: Max palindromic nt per trimmable end (e.g. ``{"v_3": 4, "j_5": 4}``).
         model_version: Schema/model version tag.
         source: Free-text provenance (e.g. ``"olga:human_T_beta"``).
+        builder_version: The ``vdjtools`` version whose builder produced this model (set by
+            :func:`~vdjtools.model.data.build_model`; ``""`` means "written before 3.9.2, unknown").
+            Germline bugs live in the **builder**, not the schema, so ``model_version`` cannot
+            answer *was this built before or after the fix* — the 3.9.1 J-anchor defect had to be
+            diagnosed by comparing a shipped model's P(J) against an unaffected reference fit.
+            This makes that a field lookup instead.
         error_rate: Optional per-nt error rate (unused by Pgen; carried for round-trip).
     """
 
@@ -94,6 +100,7 @@ class Manifest:
     palindrome_max: dict[str, int] = field(default_factory=dict)
     model_version: str = "2.0.0"
     source: str = ""
+    builder_version: str = ""
     error_rate: float | None = None
 
     def __post_init__(self) -> None:
@@ -108,6 +115,7 @@ class Manifest:
             "chain_type": self.chain_type,
             "model_version": self.model_version,
             "source": self.source,
+            "builder_version": self.builder_version,
             "error_rate": self.error_rate,
             "palindrome_max": self.palindrome_max,
             "events": {
@@ -132,6 +140,7 @@ class Manifest:
             palindrome_max=obj.get("palindrome_max", {}),
             model_version=obj.get("model_version", "2.0.0"),
             source=obj.get("source", ""),
+            builder_version=obj.get("builder_version", ""),
             error_rate=obj.get("error_rate"),
         )
 
