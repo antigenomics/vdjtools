@@ -113,9 +113,18 @@ format-conversion fixtures live there — pull them over when a phase needs them
   reading it as a codon index into `cut_segment` flags 822 correct entries.
 - **`from_olga(derive_orf=True)` sliced J germlines on the V side of the anchor** (fixed 3.9.1):
   V's CDR3 region is `full[anchor:]`, J's is `full[:anchor+3]`, and one line used the V form for
-  both. 11 ORF/P J alleles in the bundled `learned` human TRA model still carry the framework
-  *downstream* of Phe118 — **a model rebuild is needed to clear them**; `test_collapse.py` pins
-  them by name until then.
+  both. 11 J alleles in the bundled `learned` human TRA model still carry the framework *downstream*
+  of Phe118 — **a model rebuild is needed to clear them**; `test_collapse.py` pins them by name
+  until then. Size it against the unaffected `arda` TRA model, not against the `learned` model's own
+  usage: **`TRAJ35` (functional) holds 2.93e-03 in `arda` and 3.79e-06 in `learned` — 774× lower**,
+  while unaffected controls (`TRAJ33`, `TRAJ42`) agree between the two within 25%.
+- **A germline defect in an EM-fit model is not a fixed-size error — the model learns around it.**
+  Wrong germline → reads stop scoring against the gene → EM drives its usage toward 0 → the gene's
+  mass, measured *after* the fit, looks negligible. The 11 alleles above hold 0.33% of `learned`
+  TRA's J mass, which reads as "ignore it"; against an unaffected reference the real suppression is
+  three orders of magnitude on a functional gene. **Never size a germline/annotation bug from the
+  affected model's own posterior.** Compare against a reference fit that does not share the defect
+  (here `arda` vs `learned`), or against pre-EM read counts.
 - **A barcoded AIRR table sniffed as bulk `"airr"`** and `read_airr` pooled reads across cells,
   dropping `cell_id` with no error. `sniff_format` now returns `"airr_cell"` and `io.read` refuses
   it, pointing at `sc.read_airr_cell`; `fmt="airr"` still pools deliberately.

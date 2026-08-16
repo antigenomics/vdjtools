@@ -369,6 +369,14 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
                               gene_prior=gene_prior,
                               progress=print_progress(prefix=f"[{chain}] ") if verbose else None,
                               checkpoint=checkpoint, checkpoint_every=checkpoint_every)
+    # Stamp the builder that produced this model. A germline defect lives in the BUILDER, so
+    # without this the only way to date a shipped model is to compare its posterior against an
+    # unaffected reference fit — which is how the 3.9.1 J-anchor bug had to be sized.
+    from dataclasses import replace
+
+    from .. import __version__
+
+    model.manifest = replace(model.manifest, builder_version=__version__)
     nd = (dict(zip(model.tables["n_d"]["n_d"].to_list(), model.tables["n_d"]["p"].to_list()))
           if "n_d" in model.tables else {})
     stats = {
