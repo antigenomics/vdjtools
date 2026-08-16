@@ -3,6 +3,74 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.9.1 — 2026-08-16
+
+### Fixed — a collapsed gene could be represented by a **non-functional** allele, making Pgen a silent zero
+
+`collapse_alleles` picks one allele per gene, keeps its germline and relabels it `gene*01`. It
+ranked candidates by CDR3-region germline length, then usage, then the allele **name** — but usage
+was only ever passed for **V**. For J and D the key therefore degenerated to the name after the
+length tie, and `max` took the lexicographically last allele, which was then relabelled `*01`.
+
+Human `TRBJ2-7` is the worst case. `*01` is functional and templates `SYEQYF`; `*02` is an IMGT
+**ORF** and templates `SYEQYV`. Both are 19 nt, so length did not separate them and `*02` won on
+the name — the collapsed model shipped `*02`'s germline under `*01`'s label:
+
+```
+Pgen("CASSIRSSYEQYF" | TRBV19*01, TRBJ2-7*01), bundled human TRB `olga` model
+             collapse=True   collapse=False
+  3.9.0        0.0             4.7889e-08
+  3.9.1        4.9986e-08      4.7889e-08
+```
+
+**Exactly zero, with no error raised.** Measured on 864 `TRBJ2-7` nucleotide junctions drawn from
+the model itself (`generate(seed=7)`, n=4000): **864 of 864 scored `pgen_nt == 0`** against the
+3.9.0 collapsed model, 3 of 864 against 3.9.1 — and those 3 are genuine `*02`-germline draws, which
+a single-germline collapsed model cannot represent by construction. Summed over the 864: `0.0` at
+3.9.0, `3.357e-07` at 3.9.1, against `3.725e-07` uncollapsed (mean `|Δlog10|` 0.157). This affects
+**every released version that shipped these bundled models**, on the default `collapse=True` path.
+`load_bundled(..., collapse=False)` reproduces the old numbers for anyone who needs them.
+
+The representative is now ranked by **length → IMGT functionality (`F` > `ORF` > `P`, read from
+arda's `cdr3_anchors.tsv`) → usage → prefer `*01` → name**, and the J and D usage marginals are
+actually passed. Length still leads: over all 23 bundled models the two orders differ on exactly one
+gene, human `TRBV23/OR9-2`, where the only non-pseudogene allele has an **empty** CDR3 germline and
+leading with functionality would install it — trading one silent zero for another.
+
+**65 genes change their collapsed germline** (every change length-preserving, 63 of them onto
+`*01`): 10 in `olga`/human, 9 in `learned`/human, 29 in `arda`/human, 17 in `arda`/mouse. Beyond
+`TRBJ2-7`: `IGKJ2`, `IGKJ4`, `TRAJ47` in all three sources; `TRAJ24/32/37/41`, `IGHJ4`, `IGHJ6`,
+`IGKV1-39`, `IGKV3D-20`, `IGHV2-70`, `IGLV1-41` and 7 `IGHD` genes in `arda`; 12 mouse `TRAV` plus
+`TRBJ1-1`/`TRBJ1-5`. **Any Pgen, generation or scoring output on a collapsed model can move.**
+
+### Fixed — `from_olga(derive_orf=True)` rebuilt J germlines from the wrong side of the anchor
+
+The CDR3 region lies on opposite sides of the conserved-codon anchor per segment: V runs
+`full[anchor:]`, J runs `full[:anchor + 3]`. `_genomic_table` used the V slice for both, so every
+ORF/P J allele it reconstructed got the framework *downstream* of Phe118 — still a plausible
+in-locus sequence, hence silent. 11 alleles in the bundled `learned` human TRA model carry it
+(`TRAJ1*01`, `TRAJ2*01`, `TRAJ19*01`, `TRAJ25*01`, `TRAJ35*01`, `TRAJ51*01`, `TRAJ55*01`,
+`TRAJ58*01`, `TRAJ59*01`, `TRAJ60*01`, `TRAJ61*01`); the builder is fixed, but clearing the shipped
+parquet needs a model rebuild, so the new test pins those 11 as a named exception.
+
+### Added — permanent anchor tests over every shipped model
+
+`tests/python/test_collapse.py` now asserts, across all 23 bundled models (`olga`/`learned`/`arda`
+× human, `arda` × mouse TRA/TRB) and both `collapse=True` and `False`, against arda's per-allele
+`functionality`/`status`/`templated_aa` rather than a guessed convention:
+
+- every functional J germline translates, in its anchor frame, to a terminal **F or W**. A
+  collapsed row is held to its *gene's* standard, not to whichever allele supplied the germline —
+  judging it by that allele would have exempted `TRBJ2-7*02` as "an ORF" and waved the defect
+  through. Named exceptions: `TRAJ35*01` (arda records `templated_aa=IGFGNVLHC` at `status=ok`;
+  IMGT still calls it F) and `IGHJ6*02` in OLGA's namespace only (OLGA ships it 1 nt short of the
+  Trp118 codon; arda's own copy templates `YYYYYGMDVW` and passes);
+- no gene is represented by an ORF/pseudogene allele where a functional one exists — 18 genes
+  failed this before the fix;
+- the CDR3-region germline sits on the documented side of the anchor;
+- regression pin: `Pgen("CASSIRSSYEQYF" | TRBJ2-7*01) > 0` in all three sources, with collapsed and
+  uncollapsed agreeing to within 0.3 in `log10`.
+
 ## 3.9.0 — 2026-08-16
 
 ### Added — `Pgen` of a degenerate motif

@@ -61,10 +61,16 @@ def _genomic_table(gen_list, anchors, cut_segs, *, seg: str, has_anchor: bool,
         if has_anchor:  # genV/genJ entries are [name, cdr3_trim, full_germline]
             cdr3_seg, full = entry[1], entry[2]
             anchor = anchors.get(name, (-1, ""))[0]
-            if (derive_orf and not cut and anchor >= 0 and len(full) > anchor
-                    and set(full[anchor:]) <= _ACGT):  # skip IUPAC-ambiguous germlines (e.g. IGHV3-54 'Y'): unencodable
-                cdr3_seg = full[anchor:]
-                cut = ref.cut_segment(cdr3_seg, seg.upper(), max_pal)
+            if derive_orf and not cut and anchor >= 0 and len(full) > anchor:
+                # The anchor is an nt offset into the FULL germline marking the conserved codon, and
+                # the CDR3 region lies on opposite sides of it per segment: V runs from the Cys104
+                # codon to the 3' end, J from the 5' end THROUGH the [FW]118 codon. Slicing
+                # `full[anchor:]` for a J takes the framework *downstream* of Phe118 instead — the
+                # wrong side, and silent, because the result is still a plausible in-locus sequence.
+                derived = full[anchor:] if seg == "v" else full[:anchor + 3]
+                if set(derived) <= _ACGT:  # skip IUPAC-ambiguous germlines (e.g. IGHV3-54 'Y'): unencodable
+                    cdr3_seg = derived
+                    cut = ref.cut_segment(cdr3_seg, seg.upper(), max_pal)
         else:  # genD entries are [name, germline]
             full, cdr3_seg, anchor = entry[1], entry[1], -1
         rows.append(
