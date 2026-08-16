@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <thread>
 
 namespace vdjtools {
@@ -181,11 +182,6 @@ double vdj_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
     if (m.dd && m.p_nd2 > 0.0) t += m.p_nd2 * dd_middle(m, j, mid, mlen);
     return t;
 }
-
-// Fast nt Pgen via the aa transfer matrix (defined below): an in-frame nt CDR3 is exactly an
-// amino-acid query with a singleton allowed-codon mask per position, so the Pi_L*Pi_R split-DP
-// gives the identical result far faster than the per-(V,J,delV,delJ) D enumeration in `pgen_nt`.
-double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int v_idx, int j_idx);
 
 }  // namespace
 
@@ -697,7 +693,6 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
 
 }  // namespace
 
-namespace {
 double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int v_idx, int j_idx) {
     if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx);
     // n_D mixture: P(n_D≤1)·single-D + P(n_D=2)·tandem. Non-D-D models have p_nd1=1, p_nd2=0.
@@ -705,7 +700,6 @@ double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int 
     if (m.dd && m.p_nd2 > 0.0) r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, v_idx, j_idx);
     return r;
 }
-}  // namespace
 
 double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx) {
     int L = aa.size();
@@ -735,23 +729,15 @@ double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, 
     return total - (L - 1) * base;
 }
 
-// Batch aa Pgen over many sequences, parallelized across sequences. Each output is the exact
-// per-sequence pgen_aa (mismatches=0) or pgen_aa_hamming1 (mismatches=1) — the parallelism is
+namespace {
+
+// out[i] = one(i) for i in [0,n), split across `nthreads` workers (<=0 → auto = hw-2). The work is
 // embarrassingly disjoint (no shared state, no reduction), so the result is bitwise-identical to
-// the serial computation regardless of thread count. This is the clean exact speedup for the real
-// workload (Pgen/1mm over many clonotypes, e.g. TCRnet / biomarker matching); the packed model is
-// shared read-only across threads. Per-sequence v_idxs/j_idxs (empty → all -1 = gene-agnostic).
-std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::string>& seqs,
-                                  const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
-                                  int mismatches, int nthreads) {
-    size_t n = seqs.size();
+// the serial loop regardless of thread count; `one` must not throw (an escaping exception in a
+// worker terminates the process — validate before calling).
+template <class F>
+std::vector<double> run_batch(size_t n, int nthreads, F&& one) {
     std::vector<double> out(n, 0.0);
-    auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
-    auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
-    auto one = [&](size_t i) {
-        return mismatches == 1 ? pgen_aa_hamming1(m, seqs[i], vi(i), ji(i))
-                               : pgen_aa(m, seqs[i], vi(i), ji(i));
-    };
     int T = nthreads;
     if (T <= 0) {
         unsigned hw = std::thread::hardware_concurrency();
@@ -772,6 +758,82 @@ std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::s
     }
     for (auto& th : pool) th.join();
     return out;
+}
+
+}  // namespace
+
+// Batch aa Pgen over many sequences, parallelized across sequences. Each output is the exact
+// per-sequence pgen_aa (mismatches=0) or pgen_aa_hamming1 (mismatches=1) — the parallelism is
+// embarrassingly disjoint (no shared state, no reduction), so the result is bitwise-identical to
+// the serial computation regardless of thread count. This is the clean exact speedup for the real
+// workload (Pgen/1mm over many clonotypes, e.g. TCRnet / biomarker matching); the packed model is
+// shared read-only across threads. Per-sequence v_idxs/j_idxs (empty → all -1 = gene-agnostic).
+std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::string>& seqs,
+                                  const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
+                                  int mismatches, int nthreads) {
+    auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
+    auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
+    return run_batch(seqs.size(), nthreads, [&](size_t i) {
+        return mismatches == 1 ? pgen_aa_hamming1(m, seqs[i], vi(i), ji(i))
+                               : pgen_aa(m, seqs[i], vi(i), ji(i));
+    });
+}
+
+namespace {
+
+// Per-position residue sets -> per-position allowed-codon masks. ``allowed[c]`` is the string of
+// residues permitted at position c; an empty string or one containing 'X' is a wildcard (any of the
+// 20 amino acids, OLGA's degenerate X). Throws on a character the genetic code does not name: the
+// mask would otherwise be empty and the whole query would score a silent 0.
+std::vector<uint64_t> masks_for_sets(const std::vector<std::string>& allowed) {
+    std::vector<uint64_t> out(allowed.size(), 0ULL);
+    for (size_t c = 0; c < allowed.size(); ++c) {
+        const std::string& set = allowed[c];
+        if (set.empty() || set.find('X') != std::string::npos) {
+            out[c] = mask_wildcard();
+            continue;
+        }
+        uint64_t mk = 0;
+        for (char x : set) {
+            uint64_t one = mask_for_aa(x);
+            if (one == 0ULL)
+                throw std::invalid_argument(
+                    "allowed[" + std::to_string(c) + "]: '" + std::string(1, x) +
+                    "' is not an amino acid; use '' or 'X' for a wildcard position");
+            mk |= one;
+        }
+        out[c] = mk;
+    }
+    return out;
+}
+
+}  // namespace
+
+// Total Pgen of every amino-acid CDR3 matching a per-position residue set — the general masked DP
+// (``pgen_aa`` is the all-singletons case, ``pgen_aa_hamming1`` the one-wildcard-at-a-time one).
+// Cost is one transfer-matrix pass whatever the sets contain, so a motif is scored without
+// enumerating the sequences it matches. See ``masks_for_sets`` for the '' / 'X' wildcard rule.
+double pgen_aa_degenerate(const PackedModel& m, const std::vector<std::string>& allowed,
+                          int v_idx, int j_idx) {
+    std::vector<uint64_t> masks = masks_for_sets(allowed);
+    return pgen_aa_masked(m, masks.data(), static_cast<int>(masks.size()), v_idx, j_idx);
+}
+
+// Batch degenerate aa Pgen, parallelized across queries exactly as ``pgen_aa_batch`` is (and
+// bitwise-identical to the per-query calls). Masks are built serially up front so a bad residue
+// raises here rather than inside a worker thread.
+std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
+                                             const std::vector<std::vector<std::string>>& allowed,
+                                             const std::vector<int>& v_idxs,
+                                             const std::vector<int>& j_idxs, int nthreads) {
+    std::vector<std::vector<uint64_t>> masks;
+    masks.reserve(allowed.size());
+    for (const auto& a : allowed) masks.push_back(masks_for_sets(a));
+    auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
+    auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
+    return run_batch(masks.size(), nthreads, [&](size_t i) {
+        return pgen_aa_masked(m, masks[i].data(), static_cast<int>(masks[i].size()), vi(i), ji(i));
+    });
 }
 
 // ---- EM E-step ----------------------------------------------------------------------------

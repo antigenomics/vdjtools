@@ -64,6 +64,27 @@ double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx
 // via the inclusion-exclusion identity over per-position wildcards. v_idx/j_idx as above.
 double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, int j_idx);
 
+// The degenerate-sequence DP the two above are special cases of. ``allowed[c]`` is a 64-bit mask
+// over codon indices (a*16+b*4+c, nt A,C,G,T = 0..3) accepted at amino-acid position c, so a
+// position may permit any residue subset at no extra cost — the transfer matrix contracts over the
+// allowed codons either way. ``L`` is the length in amino acids; v_idx/j_idx as above.
+double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int v_idx, int j_idx);
+
+// Total Pgen of every amino-acid CDR3 matching a motif given as per-position residue sets:
+// ``allowed[c]`` is the string of residues permitted at position c, where an empty string or one
+// containing 'X' means a wildcard (any of the 20 amino acids). One masked DP pass whatever the sets
+// contain — the sequences the motif matches are never enumerated. Throws std::invalid_argument on a
+// character the genetic code does not name (an empty mask would score a silent 0). v/j as above.
+double pgen_aa_degenerate(const PackedModel& m, const std::vector<std::string>& allowed,
+                          int v_idx, int j_idx);
+
+// Batch ``pgen_aa_degenerate``, parallelized across queries like ``pgen_aa_batch`` and
+// bitwise-identical to the per-query calls. Empty v_idxs/j_idxs → all -1 (gene-agnostic).
+std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
+                                             const std::vector<std::vector<std::string>>& allowed,
+                                             const std::vector<int>& v_idxs,
+                                             const std::vector<int>& j_idxs, int nthreads);
+
 // Batch aa Pgen over many sequences, parallelized across sequences (mismatches: 0 = exact,
 // 1 = Hamming-1 ball). Bitwise-identical to the per-sequence calls. Per-sequence v/j indices;
 // empty v_idxs/j_idxs → all -1 (gene-agnostic). nthreads=0 → auto (hw-2).

@@ -1,7 +1,9 @@
 # Memo: Pgen of a motif — expose the masked DP, then (optionally) an offset automaton
 
 2026-08-16. Requested for the mhcmatch immunogenicity / precursor-frequency work
-(`~/vcs/projects/2026-mhcmatch-benchmark`). Status: proposal, nothing implemented.
+(`~/vcs/projects/2026-mhcmatch-benchmark`). Status: **Proposal 1 implemented**
+(`native.pgen_aa_degenerate` / `pgen_aa_degenerate_batch`, `tests/python/test_native_degenerate.py`);
+Proposal 2 (the offset automaton) is still a proposal.
 
 ## The ask
 
@@ -31,6 +33,12 @@ is reachable from Python.
 **The gap is purely a binding.** `pgen_aa_masked` sits in an anonymous namespace
 (`src/pgen.cpp:700`, `}  // namespace` at :709), and `src/_bindings.cpp` exposes only `pgen_nt`,
 `pgen_aa`, `pgen_aa_hamming1`, `pgen_aa_batch` (lines 64/68/72/76). Nothing else is missing.
+
+Correction from the implementation: promoting it is a **two**-place edit, not one. `pgen_nt`'s
+in-frame fast path calls `pgen_aa_masked` through a *second*, forward declaration in the file's
+first anonymous namespace (`src/pgen.cpp:188`). Leave that in place and the promoted symbol makes
+every call site ambiguous — the build fails at six of them. Delete the forward declaration; the
+header declaration covers those calls.
 
 ## Proposal 1 — expose the masked DP (small, unlocks most of the use case)
 

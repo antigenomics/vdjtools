@@ -448,6 +448,35 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    native.pgen_aa_batch(model, seqs, threads=0)   # many CDR3s, thread-parallel (~11x)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
 
+Pgen of a motif
+^^^^^^^^^^^^^^^
+
+:func:`~vdjtools.model.native.pgen_aa_degenerate` scores a **per-position set of permitted
+residues** instead of one sequence: the total Pgen of every junction the motif matches. That is
+the model-side estimate of how often a paratope motif — a V/J/length-pinned VDJdb cluster PWM
+thresholded per position, or any wildcard/gapped pattern — is generated at all.
+
+.. code-block:: python
+
+   motif = list("CASSLAPGATNEKLFF")
+   motif[4] = "ILV"        # position 4: any of I, L, V
+   motif[5] = "X"          # position 5: any residue  ("" means the same)
+   native.pgen_aa_degenerate(model, motif, v="TRBV5-1*01", j="TRBJ2-3*01")
+   native.pgen_aa_degenerate_batch(model, [motif, ...], threads=0)   # thread-parallel
+
+It is one transfer-matrix pass whatever the sets contain — the matching sequences are summed over,
+never enumerated — and it is the DP that has always driven ``pgen_aa`` (every position pinned) and
+``mismatches=1`` (one wildcard position at a time). Pinning every position reproduces
+:func:`~vdjtools.model.native.pgen_aa` bitwise; wildcarding every position gives the model's length
+marginal ``P(L, V, J)``.
+
+.. warning::
+
+   ``X`` is a wildcard **here only**. :func:`~vdjtools.model.native.pgen_aa` matches residues by
+   exact character against the genetic code, so ``pgen_aa(model, "CASSLAPGATNEKLXF")`` has no
+   codons at that position and returns ``0.0`` — a silent zero, not a degenerate query. Pass
+   ``list(seq)`` to ``pgen_aa_degenerate`` when the sequence carries ``X``.
+
 Reconstructing nucleotides and V/D/J markup from an amino-acid CDR3
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
