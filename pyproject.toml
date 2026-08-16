@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "3.9.2"
+version = "3.9.3"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -111,4 +111,12 @@ ignore = ["E702", "E741", "E731"]
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
 addopts = "-ra -m 'not slow'"
-markers = ["slow: heavier oracle / reference-arithmetic checks (e.g. vs OLGA's own slow Pgen); run with -m slow"]
+markers = [
+    "slow: heavier oracle / reference-arithmetic checks (e.g. vs OLGA's own slow Pgen); run with -m slow",
+    # `slow` is deselected by addopts and so never runs in CI at all -- it is not the long tail of the
+    # default suite, it is outside it. `heavy` is different: these tests DO run by default and DO run
+    # in ci.yml; only the release gate skips them, with `-m 'not slow and not heavy'`. Measured, 10
+    # tests are 318 s of a 322 s three-file run: test_gene_prior (all 4), test_viterbi's [TRB] params
+    # plus the chosen-D test, and one test_dynamics_paired case.
+    "heavy: slowest ~10 tests (full EM / pure-Python reference DP / 2M-read pairs); skipped on release",
+]

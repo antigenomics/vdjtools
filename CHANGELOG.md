@@ -3,7 +3,56 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## 3.9.2 — 2026-08-16
+## 3.9.3 — 2026-08-16
+
+### Changed — the release gate no longer runs the ten slowest tests
+
+The publish gate added **~25 minutes of wall time to every release**, and the comment introducing
+it in 3.9.2 asserted the opposite: *"running in parallel with the wheel builds, costs no extra wall
+time."* Measured on the 3.9.2 release run (33m03s end to end), that was wrong by a wide margin:
+
+| job | duration |
+|---|--:|
+| build-sdist | 0m16s |
+| build-wheels macos | 2m42s |
+| build-wheels ubuntu | 3m07s |
+| build-wheels windows | 6m06s |
+| **test (the gate)** | **31m18s** |
+| publish | 0m43s |
+
+Wheels finished at +6m06s; `publish` started at +32m19s. For comparison 3.9.1, before the gate
+existed, took 15m26s. Inside the gate the split is **51 s** of install-and-compile against
+**30m21s** of pytest — roughly 1:180, so the C++ build was never the problem.
+
+The obvious fix does not work: `slow` is already deselected by `addopts`, so those 19 tests **never
+run in CI at all** and the 30 minutes is entirely non-`slow` tests. Hence a second marker.
+
+**`heavy`** — ten tests, measured at **318 s of a 322 s** three-file run:
+
+| test | measured | why |
+|---|--:|---|
+| `test_gene_prior.py` (all 4) | 162.9 s | four full `infer_native` EM runs over the 89-allele bundled TRB locus; the C++ E-step is thread-parallel, so it degrades further on a 4-vCPU runner |
+| `test_viterbi.py` `[TRB]` (4) + chosen-D | 130.2 s | the pure-Python reference scenario DP, documented at ~600× slower than native; the `[TRA]` twins cost 0.4 s because VJ has no D enumeration |
+| `test_dynamics_paired.py::test_pvalues_are_calibrated…` | 25.4 s | a 200k/2M-read replicate pair plus a mandatory negative control |
+
+`publish.yml` now runs `-m "not slow and not heavy"`. **Nothing loses coverage:** `ci.yml` still
+runs the full suite on every push and PR at the same SHA — only the release path is trimmed.
+
+Unlike `slow`, `heavy` is **not** in `addopts`, so a plain `pytest` locally still runs all ten.
+
+Measured locally (M3, `HF_HUB_OFFLINE=1`):
+
+| suite | result | wall |
+|---|---|--:|
+| full (`-m 'not slow'`, what the gate ran) | 1150 passed, 12 skipped, 19 deselected | 387.23 s |
+| release path (`-m 'not slow and not heavy'`) | **1140 passed, 12 skipped, 29 deselected** | **72.65 s** |
+
+**5.3× faster**, ten more tests deselected, same pass count otherwise. CI runs ≈4.7× slower than
+this machine, so the projected release-gate job is **~6 min against the measured 31m18s** — at which
+point it really would finish alongside the 6m06s Windows wheel build, as 3.9.2 wrongly claimed it
+already did. That projection is arithmetic, not a measurement; the next release run is what confirms
+it.
+
 
 ### Added — `Manifest.builder_version`
 
