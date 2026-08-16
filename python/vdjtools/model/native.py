@@ -190,6 +190,85 @@ def pgen_aa(
     raise ValueError("mismatches must be 0 or 1")
 
 
+def pgen_aa_degenerate(
+    model: Model,
+    allowed: list[str],
+    v: str | None = None,
+    j: str | None = None,
+) -> float:
+    """Total Pgen of every CDR3 matching a motif — a per-position set of permitted residues.
+
+    The same masked transfer-matrix DP :func:`pgen_aa` runs (that is the all-singletons case) and
+    :func:`pgen_aa` with ``mismatches=1`` runs per position (the one-wildcard case), with the
+    residue set at each position free. Cost is one DP pass whatever the sets contain: the sequences
+    the motif matches are summed over, never enumerated. This is the exact Pgen of a V/J/length-
+    pinned motif such as a VDJdb cluster PWM thresholded per position.
+
+    Args:
+        model: A recombination :class:`Model`.
+        allowed: One item per amino-acid position of the junction/CDR3 (so ``len(allowed)`` is the
+            junction length). Each item is a string of the residues permitted there: ``"C"`` pins
+            one, ``"ILVF"`` allows a subset, and ``""`` or a string containing ``"X"`` is a
+            **wildcard** (any of the 20 amino acids). ``list(seq)`` reproduces
+            :func:`pgen_aa` exactly. A character the genetic code does not name raises
+            :class:`ValueError` — an empty codon mask would score a silent ``0.0``.
+        v: V **allele** to condition on, or ``None`` to marginalize — as :func:`pgen_aa`, including
+            the :class:`KeyError` on a gene-level or unknown name.
+        j: J allele to condition on, or ``None`` to marginalize (as ``v``).
+
+    Returns:
+        Pgen as a float — the summed Pgen of all matching sequences.
+
+    Note:
+        ``X`` means wildcard **here only**. :func:`pgen_aa` matches residues by exact character
+        against the genetic code, so ``pgen_aa(m, "CASSLAPGATNEKLXF")`` is ``0.0``, not a
+        wildcard query. Pass ``list("CASSLAPGATNEKLXF")`` to this function to get the latter.
+    """
+    from .._core import pgen_aa_degenerate as _deg
+
+    pm, vi, ji = pack(model)
+    return _deg(pm, [str(a).upper() for a in allowed],
+                _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"))
+
+
+def pgen_aa_degenerate_batch(
+    model: Model,
+    allowed: list[list[str]],
+    v: list[str | None] | None = None,
+    j: list[str | None] | None = None,
+    threads: int = 0,
+) -> list[float]:
+    """Batch :func:`pgen_aa_degenerate` over many motifs, parallelized across queries.
+
+    Mirrors :func:`pgen_aa_batch`: the GIL is released and the queries are partitioned across
+    worker threads, and the result is bitwise-identical to the serial per-motif computation for
+    any ``threads``.
+
+    Args:
+        model: A recombination :class:`Model`.
+        allowed: One per-position residue-set list per motif (see :func:`pgen_aa_degenerate`).
+        v: Optional per-motif V **alleles** (same length as ``allowed``); ``None`` marginalizes
+            over all V for every motif. Individual entries may be ``None``.
+        j: Optional per-motif J alleles (as ``v``).
+        threads: Worker threads; ``0`` = auto (``hardware_concurrency - 2``). Batches under 64
+            motifs run single-threaded.
+
+    Returns:
+        Per-motif Pgen in input order.
+    """
+    from .._core import pgen_aa_degenerate_batch as _batch
+
+    pm, vi, ji = pack(model)
+    sets = [[str(a).upper() for a in one] for one in allowed]
+    v_idxs = [_gene_idx(vi, x, "V") for x in v] if v is not None else []
+    j_idxs = [_gene_idx(ji, x, "J") for x in j] if j is not None else []
+    if v_idxs and len(v_idxs) != len(sets):
+        raise ValueError("v must have the same length as allowed")
+    if j_idxs and len(j_idxs) != len(sets):
+        raise ValueError("j must have the same length as allowed")
+    return _batch(pm, sets, v_idxs, j_idxs, threads)
+
+
 def pgen_aa_batch(
     model: Model,
     cdr3_aas: list[str],

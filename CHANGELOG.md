@@ -3,6 +3,21 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.9.0 — 2026-08-16
+
+### Added — `Pgen` of a degenerate motif
+
+`native.pgen_aa_degenerate(model, allowed, v=None, j=None)` and `pgen_aa_degenerate_batch` expose
+the masked transfer-matrix DP that already backed `pgen_aa` and `pgen_aa_hamming1`. `allowed` is one
+entry per position, each a string of permitted residues; `""` or `"X"` means any residue.
+
+This makes the total generation probability of a V/J/length-pinned motif — a VDJdb cluster PWM, say
+— a single exact call, with no enumeration and no inclusion–exclusion. Motivated by epitope
+precursor-frequency estimation (`appendix/pgen_motif.md`).
+
+Note `pgen_aa` itself still scores an `X` as **0.0**, because `mask_for_aa` matches the genetic code
+by exact character. Use `pgen_aa_degenerate` when a position is meant to be a wildcard.
+
 ## 3.8.0 — 2026-08-15
 
 Single-cell interop: vdjtools now sits inside the downstream single-cell ecosystem instead of

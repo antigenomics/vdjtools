@@ -57,6 +57,14 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   (0=exact, 1=Hamming-1 ball; v/j=None marginalises), **`pgen_aa_batch(m, seqs, v=, j=, mismatches=,
   threads=)`** (thread-parallel across sequences, bitwise-identical to serial, ~11× on 16 cores).
   Pure-Python reference impls in `vdjtools.model.pgen`.
+- **Pgen of a motif**: **`pgen_aa_degenerate(m, allowed, v=None, j=None)`** (+
+  `pgen_aa_degenerate_batch(m, allowed, v=, j=, threads=)`) — `allowed` is one item per position,
+  each a string of permitted residues: `"C"` pins, `"ILV"` allows a subset, **`""` or `"X"` is a
+  wildcard**. Returns the summed Pgen of every junction the motif matches in ONE DP pass (no
+  enumeration) — the exact Pgen of a V/J/length-pinned VDJdb cluster PWM. `list(seq)` reproduces
+  `pgen_aa` bitwise; all-wildcard gives the length marginal `P(L,V,J)`. WARNING: `X` means wildcard
+  **only here** — `pgen_aa(m, "CASS…LXF")` matches residues by exact character and returns a silent
+  `0.0`. An unrecognised residue raises `ValueError` rather than scoring 0.
 - **Generate**: `vdjtools.model.generate.generate(model, n, seed=, productive_only=)` → `pl.DataFrame`.
   NOTE: `seed=` is reproducible **across processes** only from **3.3.0**: `collapse_alleles` used
   unordered polars `group_by`, so the collapsed table's row order varied per process and the same
