@@ -3,6 +3,52 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.9.2 — 2026-08-16
+
+### Added — `Manifest.builder_version`
+
+Which vdjtools built a model, set by `data.build_model` and persisted in `manifest.json`. A germline
+defect lives in the **builder**, not the schema, so `model_version` could not answer *was this built
+before or after the fix* — for the 3.9.1 J-anchor defect the answer had to be reconstructed by
+comparing a shipped model's posterior against an unaffected reference fit. Now it is a field lookup.
+
+Backward compatible: a manifest written earlier reads `""`, which means *predates 3.9.2*, not
+*missing*. The bundled models are unchanged in this release and so all read `""`. A new
+`test_collapse.py` check asserts the seven `learned` loci always report the **same** builder — a
+*partial* regeneration is the dangerous state, because half the set would silently answer a
+different question from the other half.
+
+### Fixed — the PyPI upload was not gated on a green test suite
+
+3.9.1 uploaded to PyPI while CI was still running its Test step. Same commit, so the code was
+covered, but nothing enforced the **order**, and a CI-only failure could have landed on an
+already-published version. `needs:` cannot reference another workflow, so `publish.yml` now carries
+its own `test` job — same extras as `ci.yml`, so the OLGA oracle suite actually runs instead of
+silently skipping — and `publish` needs it. It runs alongside the wheel builds, so it costs no
+extra wall time.
+
+### Note — the bundled models are NOT regenerated, deliberately
+
+3.9.1 fixed `from_olga(derive_orf=True)`, which had reconstructed J CDR3-region germlines as
+`full[anchor:]` (the **V** convention) instead of `full[:anchor + 3]`. Fixing the builder does not
+fix already-built parquet, so the bundled `learned` human TRA model still carries 11 J germlines
+from the wrong side of the anchor, and `TRAJ35` — the one functional allele among them — reads
+**~774× low** against the unaffected `arda` fit.
+
+That is left in place on purpose. **0** of VDJdb's 30,937 human TRA records (27,272 unique
+junctions, 49 TRAJ genes) use any of the 11 affected alleles — verified as real absence, not a
+name-matching artefact, since neighbouring `TRAJ34` (891 records) and `TRAJ36` (494) are well
+covered. Regenerating the set is a multi-hour all-loci job, and there is no measured consumer of
+the difference. The affected alleles stay pinned by name in `test_collapse.py`.
+
+**If you use human TRA and care about `TRAJ35` usage, use `load_bundled("TRA", "arda")`** — that set
+is built from arda germline, where `derive_orf` never runs, so it cannot carry this defect.
+
+Measurements: `bench/results/vdjtools_germline_pgen_shift.md` in the benchmark repo, which also
+records what the **3.9.1** collapse fix already moved — 6,676 of 41,322 VDJdb human TRB junctions
+(16.2%) went from `Pgen` exactly `0.0` to positive, all of them `TRBJ2-7`, with max
+`|Δlog10| = 0.000000` across every junction that was already non-zero.
+
 ## 3.9.1 — 2026-08-16
 
 ### Fixed — a collapsed gene could be represented by a **non-functional** allele, making Pgen a silent zero

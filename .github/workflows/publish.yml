@@ -58,9 +58,31 @@ jobs:
           name: python-wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
 
+  test:
+    # The publish gate. `needs:` cannot reference another workflow, so CI's matrix (ci.yml, on
+    # push) cannot gate this one -- and it did not: 3.9.1 uploaded to PyPI while CI was still in
+    # its Test step. Same SHA, so CI covers the code, but nothing enforced the ORDER. One job on
+    # one interpreter, running in parallel with the wheel builds, costs no extra wall time and
+    # makes a green suite a precondition for upload rather than a race.
+    name: Test before publishing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package (compiles the _core C++ extension)
+        # Same extras as ci.yml: [oracle] is what un-skips the OLGA Pgen suite, the library's
+        # central correctness claim. Without it the gate would be green on a suite that skipped.
+        run: pip install -e ".[test,oracle,overlap,sc]"
+      - name: Test
+        run: pytest tests/python -q
+      - name: Assert the OLGA oracle suite actually ran (guard against silent skip)
+        run: python -c "import olga.load_model"
+
   publish:
     name: Publish To PyPI
-    needs: [build-sdist, build-wheels]
+    needs: [test, build-sdist, build-wheels]
     # Only a published GitHub Release publishes to PyPI; workflow_dispatch runs build + wheels as a
     # dry run (no PyPI upload, never enters the pypi environment) so the release build can be tested.
     if: github.event_name == 'release'
