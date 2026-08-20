@@ -3,6 +3,138 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.10.0 — 2026-08-20
+
+### Added — three filtering axes, named after the standards that define them
+
+One English word had been doing three jobs. They are now three predicates with three names:
+
+| axis | question | standard | function |
+|---|---|---|---|
+| parseable | is `junction_aa` readable at all? | — | `assert_parseable` (raises) |
+| productive | does the rearrangement encode a chain? | [AIRR](https://docs.airr-community.org/en/latest/datarep/rearrangements.html) | `filter_productive` |
+| functional | is the germline gene real? | [IMGT](https://www.imgt.org/IMGTindex/functionality.php) F/ORF/P | `filter_functional_genes` |
+
+AIRR's `productive` is a property of the **rearrangement**; IMGT's *functional* is a property of
+the **germline gene**. They are orthogonal — a rearrangement can be in frame with no stop codon
+while using a pseudogene V. Calling the first one "functional", as this package did, guaranteed the
+confusion. Note the word is already overloaded a third way inside this very package:
+`vdjtools.model` trains its recombination models on `LABELS = ("functional", "nonfunctional")`
+reads, where *nonfunctional* is exactly the population `filter_productive` removes — and it wants
+them, because a rearrangement that never met selection is the cleanest read of recombination.
+
+`filter_productive` **reads the file's own annotation in preference to re-deriving it**: the AIRR
+`productive` column if present, else `stop_codon` + `vj_in_frame`, else the `junction_aa` string.
+`productive_mask()` returns the predicate *and* which evidence it used, because a caller silently
+disagreeing with their own annotation is the failure this prevents. The derived fallback cannot see
+a defect in a splicing site or a regulatory element, which AIRR's `productive` can.
+
+`filter_functional_genes` uses IMGT functionality that was already in `model/reference.py` and had
+never been wired to a filter. An unresolvable gene call is **kept**: an unrecognised name is a
+vocabulary gap, and dropping those rows would report a nomenclature bug as biology.
+
+`filter_functional(keep="coding")` still works and warns.
+
+### Added — `read(..., recompute_frequencies=False)`: use the frequencies as in the file
+
+This was **not possible before**. `_AIRR_ALIASES` had no `frequency` entry — the comment said
+outright *"frequency is always recomputed from counts, never read from source"* — and all three
+readers passed `recompute_freq=True` unconditionally (`io/read.py`:107, :179, :278). So a
+UMI-corrected frequency, or one normalised against anything other than the row counts, was
+silently replaced by `count/total` at read time and could not be recovered at any layer above.
+
+`frequency` now aliases from the source, and `read`/`read_vdjtools`/`read_airr`/`read_parquet`
+take `recompute_frequencies` (default `True`, unchanged behaviour). A file with no frequency column
+derives one either way — there is nothing to preserve. Where `read_airr` collapses rows to
+clonotypes a preserved frequency is **summed**, because two rows becoming one clonotype contribute
+additively to its share; the legacy converters build `frequency` themselves and are unaffected.
+
+### Added — `filter_length`, and `recompute_frequencies` on every filter that takes it
+
+`filter_length(df, min_len=5, max_len=60)`, both bounds **inclusive**. A data-sanity bound, not a
+biological claim: below 5 aa a junction cannot span the Cys104..Phe118 anchors with any diversity
+between them, above 60 aa it is beyond what the germline produces. Note these are `junction_aa`
+lengths, two residues longer than the IMGT CDR3.
+
+**Frequencies as they are in the file are what you get.** Reading never renormalises; a frequency
+is only recomputed when a filter removes rows, and `filter_productive`, `filter_length` and
+`filter_functional_genes` all expose that as `recompute_frequencies` (default `True`).
+
+Documented honestly: the switch is undone by the next filter in a chain, because `filter_frequency`,
+`filter_segment`, `filter_by_sample` and `downsample` renormalise unconditionally and `select_top`
+spells it `renormalize`. Do the frequency-preserving filter last.
+
+### Added — a `Data pre-processing` documentation page
+
+Reading and format conversion, the three axes, length and frequency and segment filtering, error
+correction, depth normalisation, pooling and batch correction, and the CLI for all of it. Its
+absence is why the axes were conflated in the first place.
+
+### Changed — an unparseable junction is an error, not something to filter away
+
+`sanitise()` used to drop everything that was not a plain amino-acid string. That conflated two
+different things, and only one of them is a filtering decision:
+
+- **non-functional** — a stop codon `*`, or the legacy out-of-frame marker `_`. A real
+  rearrangement that encodes no receptor. Dropped, and its weight is what
+  `vsig:qc:*:nonstd_aa_frac` reports.
+- **corrupt** — an ambiguity code (`X`/`B`/`Z`), a lowercase residue, an empty string, a stray
+  character. Not a category of receptor: the table is damaged, or was written by something that did
+  not agree on the alphabet.
+
+Silently dropping the second hid a broken input *and* inflated the reported non-functional fraction
+with junk. `sanitise(df, *, strict=True)` now raises on it; `strict=False` restores the old
+behaviour for a corpus known to carry ambiguity codes. A `null` junction stays a drop — absence is
+not a damaged character, and a partly-annotated table should still yield a vector.
+
+The character class is not a guess. Measured across the **6,047,716 rows** of one project's
+clinical AIRR store, all seven loci:
+
+| | rows |
+|---|--:|
+| plain 20-amino-acid junctions | 5,600,475 |
+| containing a stop codon `*` | 447,241 |
+| containing `_` | **0** |
+| anything else | **0** |
+
+So the strict default costs nothing on well-formed data and is only ever reached by a file with a
+real problem.
+
+### Added — `vsig(..., prefiltered=True)`, and a warning when it should have been passed
+
+A collaborator who removes non-functional rearrangements upstream got a vector that differed from
+ours, and the natural reading — a total-frequency denominator computed on the unfiltered table —
+is wrong. Every block is computed on the rows that survive `sanitise`, and `work_frame` overwrites
+`frequency` with `log2(1+count)/Σ` over those survivors without ever reading the input file's
+`frequency`, so an upstream renormalisation cannot propagate.
+
+What differs is that `sanitise` also *reports the weight fraction it dropped*, via
+`logit(nonstd_frac, raw.height)`. Pre-filtering drives the numerator to zero **and** shrinks the
+denominator, so it moves twice. Measured on 1,168 blood samples from a clinical AIRR cohort at `tier="standard"`:
+
+| | columns |
+|---|--:|
+| compared | 688 |
+| moved | **7** — one `nonstd_aa_frac` per locus |
+| bit-identical | 681, including all 528 geometry columns |
+| moved under `compact` / `transfer` / `classify` | **0** |
+
+That column emitted `logit(0, n) ≈ −13.9` on a pre-filtered input: a confident number meaning "this
+repertoire is exceptionally clean" where the truth is "we cannot tell". It violated this package's
+own rule that holes are load-bearing. `prefiltered=True` now reports `nan`.
+
+`vsig` also **warns** when every present locus reports exactly zero non-functional weight. A single
+locus reaching zero is ordinary — IGK does it in 84 of those 1,168 samples, 54 of them with 100+
+clonotypes — but every locus at once happens in **0 of 1,168**, the minimum being 5 of 7. So the
+detector is on the conjunction, which has no false positives in that corpus, and `prefiltered` is a
+parameter rather than something inferred.
+
+### Why this is worth a release rather than a footnote
+
+Costed on real endpoints, the filtering choice moves a **stage-IV immune-toxicity AUC by 0.073** and an
+OS C-index by 0.017 for arms that carry the `qc` block. For arms under any `recommended` preset it
+moves nothing at all, on 30 of 30 (endpoint, arm) cells.
+
 ## 3.9.3 — 2026-08-16
 
 ### Changed — the release gate no longer runs the ten slowest tests

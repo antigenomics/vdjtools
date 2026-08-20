@@ -106,6 +106,7 @@ Capabilities (see the :doc:`API reference <api>`):
 
    self
    usage
+   preprocessing
    model
    singlecell
    signature

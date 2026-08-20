@@ -248,22 +248,54 @@ def downsample(
 def filter_(
     input: Path = typer.Argument(..., help="Clonotype sample file."),
     fmt: str = _FMT, out: Optional[Path] = _OUT,
-    coding: bool = typer.Option(False, "--coding", help="Keep only coding (in-frame, stop-free) clonotypes."),
-    noncoding: bool = typer.Option(False, "--noncoding", help="Keep only NON-coding clonotypes (the complement)."),
+    productive: bool = typer.Option(False, "--productive", help="Keep only AIRR-productive rearrangements (in-frame, stop-free)."),
+    nonproductive: bool = typer.Option(False, "--nonproductive", help="Keep only NON-productive rearrangements (the complement)."),
+    functional_genes: bool = typer.Option(False, "--functional-genes", help="Keep only rearrangements whose V/J are IMGT-functional (F). A DIFFERENT axis from --productive."),
+    keep_orf: bool = typer.Option(False, "--keep-orf", help="With --functional-genes: keep IMGT ORF alleles as well as F."),
+    recompute_frequencies: bool = typer.Option(True, "--recompute-frequencies/--keep-frequencies", help="Renormalise `frequency` over the survivors (default), or leave the file's own frequencies untouched."),
+    coding: bool = typer.Option(False, "--coding", hidden=True, help="Deprecated alias for --productive."),
+    noncoding: bool = typer.Option(False, "--noncoding", hidden=True, help="Deprecated alias for --nonproductive."),
+    min_len: Optional[int] = typer.Option(None, "--min-len", help="Shortest junction_aa to keep, INCLUSIVE (default bound 5)."),
+    max_len: Optional[int] = typer.Option(None, "--max-len", help="Longest junction_aa to keep, INCLUSIVE (default bound 60)."),
     min_freq: Optional[float] = typer.Option(None, "--min-freq", help="Keep clonotypes with frequency >= this."),
     v: Optional[str] = typer.Option(None, "--v", help="Comma-separated V segments (prefix ok)."),
     j: Optional[str] = typer.Option(None, "--j", help="Comma-separated J segments (prefix ok)."),
     remove: bool = typer.Option(False, "--remove", help="With --v/--j: remove the listed segments instead of keeping them."),
 ) -> None:
-    """Filter clonotypes: coding / non-coding, by frequency, and/or by V/J segment."""
+    """Filter clonotypes: productive / non-productive, IMGT-functional genes, frequency, V/J segment.
+
+    Two DIFFERENT axes, deliberately separate flags. `--productive` is a property of the
+    REARRANGEMENT (AIRR: in frame, no stop codon); `--functional-genes` is a property of the
+    GERMLINE GENE it uses (IMGT: F / ORF / P). A productive rearrangement can use a pseudogene V.
+    """
     from vdjtools import preprocess
     from vdjtools.io.batch import read
 
-    if coding and noncoding:
-        _err("--coding and --noncoding are mutually exclusive")
+    if coding:
+        typer.echo("[vdjtools] --coding is deprecated; use --productive", err=True)
+        productive = True
+    if noncoding:
+        typer.echo("[vdjtools] --noncoding is deprecated; use --nonproductive", err=True)
+        nonproductive = True
+    if productive and nonproductive:
+        _err("--productive and --nonproductive are mutually exclusive")
     df = read(input, fmt=fmt)
-    if coding or noncoding:
-        df = preprocess.filter_functional(df, keep="coding" if coding else "noncoding")
+    if productive or nonproductive:
+        _, src = preprocess.productive_mask(df)
+        typer.echo(f"[vdjtools] productivity read from: {src}", err=True)
+        df = preprocess.filter_productive(
+            df, keep="productive" if productive else "nonproductive",
+            recompute_frequencies=recompute_frequencies)
+    if functional_genes:
+        df = preprocess.filter_functional_genes(
+            df, keep=("F", "ORF") if keep_orf else ("F",),
+            recompute_frequencies=recompute_frequencies)
+    if min_len is not None or max_len is not None:
+        from vdjtools.preprocess.filter import MAX_JUNCTION_AA, MIN_JUNCTION_AA
+        df = preprocess.filter_length(
+            df, min_len=MIN_JUNCTION_AA if min_len is None else min_len,
+            max_len=MAX_JUNCTION_AA if max_len is None else max_len,
+            recompute_frequencies=recompute_frequencies)
     if min_freq is not None:
         df = preprocess.filter_frequency(df, min_freq=min_freq)
     if v or j:

@@ -174,6 +174,45 @@ A locus that was not sequenced, or a statistic the sample is too shallow to esti
 plus a ``vsig:mask:`` column. A model that reads "absent" as "zero" reads an unsequenced chain as a
 biological finding.
 
+The signature filters for you — do not pre-filter
+-------------------------------------------------
+
+``sanitise`` drops non-functional clonotypes — a stop codon ``*``, or the legacy out-of-frame
+marker ``_`` — before any block is computed, and it runs **unconditionally** inside :func:`vsig`.
+There is no flag to turn it off and no need to do it yourself.
+
+Anything *outside* the 20 amino acids plus ``*`` and ``_`` raises instead of being dropped: an
+ambiguity code (``X``/``B``/``Z``), a lowercase residue, an empty string. That is a damaged table
+rather than a kind of receptor, and silently filtering it would hide a broken input. Measured over
+6,047,716 rows of real clinical AIRR: **zero** such characters, and zero ``_``. Pass
+``sanitise(df, strict=False)`` for a corpus known to carry ambiguity codes.
+
+**Pre-filtering changes exactly one column, and not the one you would expect.** Every block is
+computed on the rows that survive ``sanitise``, and ``work_frame`` overwrites ``frequency`` with
+``log2(1+count)/Σ`` over those survivors — it never reads the input file's ``frequency``, so an
+upstream renormalisation cannot propagate. But ``sanitise`` also *reports the weight fraction it
+dropped*, and that is a column::
+
+    vsig:qc:<locus>:nonstd_aa_frac = logit(dropped_fraction, n_rows)
+
+On a pre-filtered input there is nothing left to drop, so the numerator goes to zero **and** the
+denominator shrinks, and the value moves twice. Measured on 1,168 blood samples from a clinical AIRR cohort at
+``tier="standard"``: of 688 columns, **7 move** — one ``nonstd_aa_frac`` per locus — and 681 are
+bit-identical, including all 528 geometry columns.
+
+Two ways to not have the problem:
+
+* **Use a preset.** ``qc`` is in :data:`~vdjtools.signature.presets.NUISANCE_BLOCKS`, so
+  ``compact``, ``transfer`` and ``classify`` all drop it. Measured across the same 1,168 samples,
+  **zero columns differ** under any of the three. This is exact; filtering the repertoire is not.
+* **Declare it.** ``vsig(..., prefiltered=True)`` reports ``nan`` — a hole — instead of a confident
+  floor value that reads as "this repertoire is exceptionally clean".
+
+If every locus reports exactly zero non-functional weight, :func:`vsig` warns: that does not happen
+in unfiltered data. A single locus can genuinely reach zero (IGK does it in 84 of those 1,168
+samples), which is why the check is on the conjunction and why ``prefiltered`` is a parameter
+rather than something inferred.
+
 Ambiguous V calls resolve to the first gene
 -------------------------------------------
 

@@ -103,7 +103,8 @@ def sniff_format(path: str | os.PathLike) -> str:
 
 
 def read(path: str | os.PathLike, fmt: str = "auto",
-         n_rows: int | None = None, *, keep: tuple[str, ...] = ()) -> pl.DataFrame:
+         n_rows: int | None = None, *, keep: tuple[str, ...] = (),
+         recompute_frequencies: bool = True) -> pl.DataFrame:
     """Read a clonotype table, auto-detecting the format by default.
 
     Args:
@@ -111,6 +112,13 @@ def read(path: str | os.PathLike, fmt: str = "auto",
             third-party tool export (MiXcr, MiGec, MiTCR/tcR, immunoSEQ, IMGT/HighV-QUEST,
             Vidjil, RTCR, TRUST4, arda) — see :mod:`vdjtools.io.convert` (``.gz`` ok for the
             text formats).
+        recompute_frequencies: Derive ``frequency`` from ``duplicate_count`` (default, and the
+            historical behaviour). Pass ``False`` to **use the frequencies as they are in the
+            file** -- which matters when the source carries a UMI-corrected or already-normalised
+            frequency that ``count/total`` would silently discard. A file with no frequency column
+            derives one either way; there is nothing to preserve. Only the ``vdjtools``, ``airr``
+            and ``parquet`` readers honour it -- the legacy converters build ``frequency``
+            themselves.
         fmt: ``"auto"`` (sniff the header / extension), ``"vdjtools"``, ``"airr"``,
             ``"parquet"``, or a legacy format string (``"mixcr"``, ``"migec"``, ``"mitcr"``,
             ``"immunoseq"``, ``"imgt"``, ``"vidjil"``, ``"rtcr"``, ``"trust4"``,
@@ -143,11 +151,14 @@ def read(path: str | os.PathLike, fmt: str = "auto",
             "explicitly to pool it into a bulk repertoire on purpose."
         )
     if fmt == "vdjtools":
-        return read_vdjtools(path, n_rows=n_rows, keep=keep)
+        return read_vdjtools(path, n_rows=n_rows, keep=keep,
+                             recompute_frequencies=recompute_frequencies)
     if fmt == "airr":
-        return read_airr(path, n_rows=n_rows, keep=keep)
+        return read_airr(path, n_rows=n_rows, keep=keep,
+                         recompute_frequencies=recompute_frequencies)
     if fmt == "parquet":
-        return read_parquet(path, n_rows=n_rows, keep=keep)
+        return read_parquet(path, n_rows=n_rows, keep=keep,
+                            recompute_frequencies=recompute_frequencies)
     if fmt == "vidjil":
         return convert.read_vidjil(path)  # whole-JSON reader (no row cap)
     if fmt in _CONVERTERS:

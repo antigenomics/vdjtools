@@ -7,6 +7,8 @@ a narrower tier gives a prefix of the wider one rather than a differently-comput
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import polars as pl
 import pytest
@@ -207,3 +209,74 @@ class TestFullTier:
                 by_block.setdefault(block, []).append(val)
         dead = sorted(b for b, vals in by_block.items() if not any(np.isfinite(x) for x in vals))
         assert not dead, f"tier {tier!r} declares block(s) nothing computes: {dead}"
+
+
+# --------------------------------------------------------- pre-filtered inputs (2026-08-19)
+#
+# A collaborator who removes non-functional rearrangements before calling vsig gets a vector that
+# differs from ours in exactly the qc:*:nonstd_aa_frac columns -- every other block is computed on
+# the rows that survive sanitise, and pre-filtering does not change which rows those are. These
+# tests pin that down, and pin the two ways the library now surfaces it.
+
+
+def _clean_frame(n, rng):
+    aa = list("ACDEFGHIKLMNPQRSTVWY")
+    return pl.DataFrame({
+        "v_call": ["TRBV20-1"] * n, "j_call": ["TRBJ2-2"] * n, "c_call": [None] * n,
+        "junction_aa": ["C" + "".join(rng.choice(aa, 12)) + "F" for _ in range(n)],
+        "duplicate_count": np.ceil(rng.zipf(1.5, n).clip(1, 900)).astype(int).tolist(),
+    })
+
+
+def _with_nonfunctional(df, frac, rng):
+    n_bad = max(1, int(df.height * frac))
+    j = df["junction_aa"].to_list()
+    for i in rng.choice(df.height, n_bad, replace=False):
+        j[i] = j[i][:4] + "*" + j[i][5:]
+    return df.with_columns(pl.Series("junction_aa", j))
+
+
+def test_prefiltering_moves_only_the_nonstd_columns():
+    from vdjtools.preprocess.filter import filter_functional
+
+    rng = np.random.default_rng(0)
+    raw = _with_nonfunctional(_clean_frame(600, rng), 0.12, rng)
+    prefiltered = filter_functional(raw, "coding")       # what a collaborator hands us
+    assert prefiltered.height < raw.height
+    a = vsig({"TRB": raw})
+    b = vsig({"TRB": prefiltered})
+    moved = [k for k in a
+             if not (np.isnan(a[k]) and np.isnan(b[k])) and not np.isclose(a[k], b[k],
+                                                                           equal_nan=True)]
+    assert moved == ["vsig:qc:TRB:nonstd_aa_frac"], moved
+
+
+def test_prefiltered_flag_reports_a_hole_not_a_floor():
+    rng = np.random.default_rng(1)
+    clean = _clean_frame(600, rng)
+    floor = vsig({"TRB": clean})["vsig:qc:TRB:nonstd_aa_frac"]
+    hole = vsig({"TRB": clean}, prefiltered=True)["vsig:qc:TRB:nonstd_aa_frac"]
+    assert np.isfinite(floor) and floor < -5, "a pre-filtered frame otherwise reports a floor"
+    assert np.isnan(hole), "prefiltered=True must yield a hole, never a confident number"
+
+
+def test_all_loci_zero_warns_because_that_never_happens_naturally():
+    rng = np.random.default_rng(2)
+    sample = {"TRB": _clean_frame(400, rng), "IGH": _clean_frame(400, rng)}
+    with pytest.warns(UserWarning, match="filtered upstream"):
+        vsig(sample)
+    # declaring it silences the warning -- the caller already knows
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        vsig(sample, prefiltered=True)
+
+
+def test_one_locus_at_zero_does_not_warn():
+    # a light chain reaching exactly zero is normal (IGK: 84 of 1,168 clinical-cohort samples), so the
+    # detector fires only on the conjunction across every present locus
+    rng = np.random.default_rng(3)
+    sample = {"TRB": _with_nonfunctional(_clean_frame(400, rng), 0.10, rng),
+              "IGH": _clean_frame(400, rng)}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        vsig(sample)

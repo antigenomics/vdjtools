@@ -12,6 +12,7 @@ import polars as pl
 
 from . import schema
 from .schema import (
+    FREQ,
     C_CALL,
     JUNCTION_AA,
     JUNCTION_NT,
@@ -49,7 +50,11 @@ _AIRR_ALIASES: dict[str, tuple[str, ...]] = {
     JUNCTION_NT: ("junction_nt", "junction", "cdr3_nt", "cdr3"),
     # AIRR-hybrid exports (e.g. isalgo/airr_ankspond) carry a vdjtools-style `count`.
     COUNT: ("duplicate_count", "count", "reads"),
-    # frequency is always recomputed from counts, never read from source.
+    # `frequency` IS read from source when the file carries one -- see read(recompute_frequencies=).
+    # It used to be unconditionally recomputed from counts, which silently discarded a
+    # UMI-corrected or already-renormalised frequency and made "use the frequencies as in the
+    # file" impossible to honour at any layer above.
+    FREQ: ("frequency", "freq", "frequency_percent", "frac"),
 }
 
 
@@ -64,8 +69,24 @@ def _first_call(expr: pl.Expr) -> pl.Expr:
     return expr.str.split(",").list.first().str.strip_chars()
 
 
+def _needs_freq(df, recompute_frequencies: bool) -> bool:
+    """Whether ``frequency`` must be derived from counts for this frame.
+
+    ``recompute_frequencies=True`` (the default, and the historical behaviour) always derives.
+    ``False`` means *use the frequencies as in the file* -- but only if the file actually carries
+    one that survived aliasing and is not all-null; a frame with no frequency column has nothing
+    to preserve, so it still derives rather than handing back a column of nulls.
+    """
+    if recompute_frequencies:
+        return True
+    if FREQ not in df.columns:
+        return True
+    return df[FREQ].null_count() == df.height
+
+
 def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None, *,
-                  keep: tuple[str, ...] = ()) -> pl.DataFrame:
+                  keep: tuple[str, ...] = (),
+                 recompute_frequencies: bool = True) -> pl.DataFrame:
     """Read a native vdjtools clonotype table into the canonical frame.
 
     The native header is ``count freq cdr3nt cdr3aa v d j VEnd DStart DEnd JStart``
@@ -104,7 +125,8 @@ def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None, *,
     df = df.with_columns(pl.col(c).cast(pl.Float64, strict=False).alias(c)
                          for c in extra if _numeric_like(df, c))
     # The native ``freq`` column is just count/total; recompute it exactly from counts.
-    df = schema.normalize(df, recompute_freq=True, keep=tuple(extra))
+    df = schema.normalize(df, recompute_freq=_needs_freq(df, recompute_frequencies),
+                          keep=tuple(extra))
     return schema.add_locus(df)
 
 
@@ -117,7 +139,8 @@ def _numeric_like(df: pl.DataFrame, col: str) -> bool:
 
 
 def read_parquet(path: str | os.PathLike, n_rows: int | None = None, *,
-                 keep: tuple[str, ...] = ()) -> pl.DataFrame:
+                 keep: tuple[str, ...] = (),
+                 recompute_frequencies: bool = True) -> pl.DataFrame:
     """Read a Parquet clonotype table into the canonical frame.
 
     Parquet is the at-scale storage format for repertoire cohorts: typed, columnar,
@@ -176,12 +199,14 @@ def read_parquet(path: str | os.PathLike, n_rows: int | None = None, *,
     # drops IGHV3-23D, exactly the ambiguity the model.infer.call_alleles fix exists to keep.
     if COUNT not in df.columns:
         df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
-    df = schema.normalize(df, recompute_freq=True, keep=tuple(extra))
+    df = schema.normalize(df, recompute_freq=_needs_freq(df, recompute_frequencies),
+                          keep=tuple(extra))
     return schema.add_locus(df)
 
 
 def read_airr(path: str | os.PathLike, *, collapse: bool = True,
-              n_rows: int | None = None, keep: tuple[str, ...] = ()) -> pl.DataFrame:
+              n_rows: int | None = None, keep: tuple[str, ...] = (),
+                 recompute_frequencies: bool = True) -> pl.DataFrame:
     """Read an AIRR Rearrangement TSV into the canonical frame.
 
     Prefers the junction columns ``junction_aa`` / ``junction`` (conserved anchors
@@ -274,6 +299,13 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
         for c in extra:
             reps.append(pl.col(c).mean().alias(c) if df.schema[c].is_numeric()
                         else pl.col(c).drop_nulls().first().alias(c))
+        # A source `frequency` is SUMMED, not averaged or dropped: two rows collapsing into one
+        # clonotype contribute additively to that clonotype's share of the sample. Only carried
+        # when the caller asked to keep the file's frequencies -- otherwise it is about to be
+        # recomputed from counts anyway and summing it would be wasted work.
+        if not recompute_frequencies and FREQ in df.columns:
+            reps.append(pl.col(FREQ).cast(pl.Float64, strict=False).sum().alias(FREQ))
         df = df.group_by(key, maintain_order=True).agg(pl.col(COUNT).sum(), *reps)
-    df = schema.normalize(df, recompute_freq=True, keep=tuple(extra))
+    df = schema.normalize(df, recompute_freq=_needs_freq(df, recompute_frequencies),
+                          keep=tuple(extra))
     return schema.add_locus(df)
