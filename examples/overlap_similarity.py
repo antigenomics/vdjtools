@@ -128,9 +128,10 @@ def _(DEPTH, HF_FOLDER, N_SAMPLES, Path, REPO_ID, mo, np, pl, vio):
     _rng = np.random.default_rng(0)
     for _s, _a in zip(_ids, meta["age"].to_list()):
         _df = vio.read(_root / HF_FOLDER / f"{_s}.txt.gz", fmt="vdjtools")
-        # Keep only coding CDR3s — the fuzzy/similarity kernels run on seqtree's aa
-        # alphabet, which rejects the vdjtools non-coding markers (``*`` stop, ``_``
-        # frameshift). (vdjtools.preprocess.filter_functional does the same.)
+        # Keep only productive CDR3s — the fuzzy/similarity kernels run on seqtree's aa
+        # alphabet, which rejects the non-productive markers (``*`` stop, ``_``
+        # frameshift). (vdjtools.preprocess.filter_productive does the same, and reads the
+        # file's own AIRR `productive` column when it has one.)
         _df = _df.filter(~pl.col("cdr3_aa").str.contains("[*_]"))
         # multinomial downsample to DEPTH on the clonotype frequencies
         _p = _df["duplicate_count"].to_numpy().astype(float)

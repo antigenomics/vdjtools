@@ -98,7 +98,8 @@ marimo edit examples/cdr_features.py
 ## `preprocess.py` — the repertoire preprocessing pipeline
 
 A [marimo](https://marimo.io) notebook walking real Britanova samples (three sequencing
-batches) through `vdjtools.preprocess`: `filter_functional` (drop non-coding),
+batches) through `vdjtools.preprocess`: `filter_productive` (AIRR productivity),
+`filter_functional_genes` (IMGT F/ORF/P), `filter_length` (5..60 aa inclusive),
 `correct` (collapse PCR/sequencing-error variants), `downsample` (equalise depth),
 `filter_frequency`/`filter_segment`, `decontaminate` (cross-sample bleed),
 `pool_samples`/`join_samples`, and `correct_vj_usage` (VJ-usage batch-effect correction

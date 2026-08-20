@@ -191,7 +191,22 @@ vdjtools model export TRB:olga --long -o marginals.tsv
 # data — convert any format to the canonical table (TSV, or Parquet by extension), preprocess
 vdjtools convert mixcr.txt.gz -o clones.parquet   # MiXcr/immunoSEQ/AIRR/… → canonical Parquet
 vdjtools downsample clones.parquet 100000 -o ds.tsv
-vdjtools filter clones.parquet --coding --min-freq 1e-4 -o coding.tsv
+
+# filtering — THREE SEPARATE AXES, deliberately separate flags:
+#   --productive       the REARRANGEMENT encodes a chain   (AIRR: in frame, no stop codon)
+#   --functional-genes the GERMLINE GENE is real           (IMGT: F / ORF / P)
+#   --min-len/--max-len  junction_aa length, INCLUSIVE     (default sanity bound 5..60)
+# A productive rearrangement can still use a pseudogene V — filtering one says nothing
+# about the other.
+vdjtools filter clones.parquet --productive --min-freq 1e-4 -o productive.tsv
+vdjtools filter clones.parquet --nonproductive -o nonproductive.tsv   # isolate them instead
+vdjtools filter clones.parquet --functional-genes --keep-orf -o f_orf.tsv
+vdjtools filter clones.parquet --productive --keep-frequencies -o kept.tsv  # file's own freqs
+
+# cross-batch V/J-usage bias — correct the usage, and rewrite the clonotype tables
+vdjtools correct-vj s1.tsv s2.tsv s3.tsv s4.tsv -b A,A,B,B \
+    --transform sigmoid --usage-out usage.tsv --outdir corrected/
+
 vdjtools pool s1.tsv s2.tsv s3.tsv --join --min-samples 2 -o joint.tsv
 
 # repertoire analytics — sample files, or a cohort via -m/--metadata + --base-dir
@@ -246,10 +261,15 @@ overlap.tcrnet(sample)                         # per-clonotype neighbourhood enr
 
 # preprocessing: downsample to a common depth, error-correct, filter, pool
 preprocess.downsample(sample, 100_000)
-preprocess.correct(preprocess.filter_functional(sample))
+preprocess.correct(preprocess.filter_productive(sample))
+
+# three filtering axes, kept apart: AIRR productivity, IMGT gene functionality, length
+preprocess.filter_productive(sample, recompute_frequencies=False)  # keep the file's freqs
+preprocess.filter_functional_genes(sample, keep=("F", "ORF"))      # IMGT axis
+preprocess.filter_length(sample, min_len=5, max_len=60)            # inclusive bounds
 
 # cross-batch V/J-usage bias: batch-correct usage, then resample the clonotype table
-usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")  # Vlasova 2026
+usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")
 fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")
 ```
 

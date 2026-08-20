@@ -3,6 +3,56 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.11.0 — 2026-08-20
+
+### Added — `vdjtools correct-vj`, and a documented pre-processing surface
+
+`correct_vj_usage`/`apply_vj_correction` existed in the Python API and had no CLI face, so the
+one operation you most want to run over a directory of samples was the one you had to write a
+script for. `correct-vj` takes the samples and their batch labels, writes the corrected usage
+table, and — with `--outdir` — rewrites each clonotype table:
+
+```bash
+vdjtools correct-vj s1.tsv s2.tsv s3.tsv s4.tsv -b A,A,B,B \
+    --transform sigmoid --usage-out usage.tsv --outdir corrected/
+```
+
+`-b` takes a comma-separated list in file order, or a TSV with `sample_id`/`batch` columns
+matched on the file stem. Two transforms: `location`, the location term of ComBat on usage
+log-probabilities, and `sigmoid`, the σ-standardised grand-mean-preserving z-score of Vlasova
+et al. 2026, which corrects a batch that is merely *noisier* in a gene — something a location
+adjustment cannot do.
+
+The command's help carries the warning the method needs: **name the technical variable.** Point
+`--batches` at a primer mix, a run, an extraction protocol. Pointed at a study identifier that is
+collinear with the biology being measured, it removes the effect along with the batch and nothing
+reports that it happened.
+
+### Added — `docs/preprocessing.rst`
+
+One page for the whole pre-processing surface, which was previously discoverable only by reading
+the API reference: format conversion, the three filtering axes from 3.10.0, how `frequency` is
+handled at every step and when it is renormalised, error correction, downsampling, V/J-usage batch
+correction, pooling and joining, the CLI equivalents, and a short section on how mirpy differs
+(it applies the productive filter on every read and will not let you turn it off).
+
+`README.md`, `docs/index.rst` and `docs/usage.rst` now point at it, and the three filtering axes
+are spelled out in the README's CLI and Python quick-reference blocks rather than left implicit.
+
+### Changed — examples updated to the 3.10.0 names
+
+`cdr_features.py`, `overlap_similarity.py` and `preprocess.py` used `filter_functional(keep=
+"coding")`. They now use `filter_productive`, and `preprocess.py` demonstrates all three axes plus
+`correct_vj_usage`.
+
+### Fixed — a private dataset now says so
+
+`vdjtools model build` trains on `isalgo/airr_model_read`, which is private, so outside the lab it
+stopped at a bare `huggingface_hub` 401 that named neither the repo nor what to do. It now raises a
+`PermissionError` explaining that this is expected, that the bundled models are the versioned
+reference and need no rebuild, and it re-raises anything that is not an auth failure so real errors
+are not swallowed. The command's help says LAB-ONLY.
+
 ## 3.10.0 — 2026-08-20
 
 ### Added — three filtering axes, named after the standards that define them

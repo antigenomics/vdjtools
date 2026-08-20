@@ -304,6 +304,93 @@ def filter_(
     _write(df, out)
 
 
+@app.command(name="correct-vj")
+def correct_vj(
+    samples: list[Path] = typer.Argument(..., help="Two or more clonotype sample files, one per sample."),
+    batches: str = typer.Option(..., "--batches", "-b", help="Comma-separated batch label per sample, in the same order as the files; or a TSV with sample_id/batch columns."),
+    fmt: str = _FMT,
+    outdir: Optional[Path] = typer.Option(None, "--outdir", help="Write one corrected clonotype table per sample here. Without it only the usage table is written."),
+    usage_out: Optional[Path] = typer.Option(None, "--usage-out", help="Write the per-sample corrected V/J usage table here."),
+    transform: str = typer.Option("location", "--transform", help="'location' (ComBat location term) or 'sigmoid' (sigma-standardised z-score, Vlasova et al. 2026)."),
+    scope: str = typer.Option("vj", "--scope", help="Correction key: vj | v | j."),
+    z_cap: float = typer.Option(6.0, "--z-cap", help="With --transform sigmoid: cap |Z| at this."),
+    winsor_q: Optional[float] = typer.Option(None, "--winsor-q", help="Winsorize the per-batch mean/sigma at this quantile. Default off, matching the published method; 0.025 is a robustness knob for shallow/RNA-seq repertoires."),
+    unweighted: bool = typer.Option(False, "--unweighted", help="Count clonotypes rather than reads when building usage."),
+    rescale: bool = typer.Option(False, "--rescale", help="Deterministically rescale instead of roulette-wheel resampling."),
+    seed: int = typer.Option(0, "--seed", help="Seed for the resample."),
+) -> None:
+    """Batch-correct V/J gene usage across samples, and optionally rewrite the clonotype tables.
+
+    Different batches carry systematic V/J usage bias (primer mixes, amplification, extraction).
+    Two transforms:
+
+    \b
+      location  the location term of ComBat on usage log-probabilities:
+                log p - mu_batch + mu_grand.  Location only, no scale term.
+      sigmoid   the sigma-standardised, grand-mean-preserving z-score:
+                Z = (log p - mu_batch) / sigma_batch, capped at +-z_cap, then
+                P = 2*P_avg / (1 + exp(-Z)).  Corrects a batch that is merely
+                NOISIER in a gene, which the location adjustment cannot.
+
+    NAME THE TECHNICAL VARIABLE. Point --batches at a primer mix, a run, an extraction protocol.
+    Pointing it at a study identifier that is collinear with the biology being measured removes
+    the effect along with the batch, and nothing reports that it happened.
+    """
+    from vdjtools import preprocess
+    from vdjtools.io.batch import read
+
+    if len(samples) < 2:
+        _err("correct-vj needs at least two samples — a batch effect is a between-batch quantity")
+    if transform not in ("location", "sigmoid"):
+        _err(f"--transform must be 'location' or 'sigmoid'; got {transform!r}")
+
+    labels = _batch_labels(batches, samples)
+    frames = []
+    for path, batch in zip(samples, labels):
+        df = read(path, fmt=fmt)
+        frames.append(df.with_columns(pl.lit(path.stem).alias("sample_id"),
+                                      pl.lit(batch).alias("batch")))
+    _info(f"{len(frames)} samples over {len(set(labels))} batches, transform={transform}")
+
+    usage = preprocess.correct_vj_usage(
+        frames, batch_col="batch", weighted=not unweighted, transform=transform,
+        z_cap=z_cap, winsor_q=winsor_q)
+    if usage_out is not None:
+        _write(usage, usage_out)
+    elif outdir is None:
+        _write(usage, None)
+
+    if outdir is not None:
+        outdir.mkdir(parents=True, exist_ok=True)
+        for path, df in zip(samples, frames):
+            sid = path.stem
+            corrected = preprocess.apply_vj_correction(
+                df.drop(["sample_id", "batch"]), usage, scope=scope,
+                weighted=not unweighted, resample=not rescale, sample_id=sid, seed=seed)
+            _write(corrected, outdir / f"{sid}.corrected.tsv")
+
+
+def _batch_labels(batches: str, samples: "list[Path]") -> "list[str]":
+    """A batch label per sample, from a comma-separated list or a two-column TSV."""
+    p = Path(batches)
+    if p.exists():
+        meta = pl.read_csv(p, separator="\t")
+        cols = {c.lower(): c for c in meta.columns}
+        sid_col = cols.get("sample_id") or cols.get("sample")
+        b_col = cols.get("batch")
+        if not sid_col or not b_col:
+            _err(f"{batches!r} needs sample_id and batch columns; have {meta.columns}")
+        m = dict(zip(meta[sid_col].to_list(), meta[b_col].to_list()))
+        missing = [s.stem for s in samples if s.stem not in m]
+        if missing:
+            _err(f"no batch for {missing[:5]} in {batches!r} (matched on file stem)")
+        return [str(m[s.stem]) for s in samples]
+    labels = [b.strip() for b in batches.split(",") if b.strip()]
+    if len(labels) != len(samples):
+        _err(f"--batches has {len(labels)} labels for {len(samples)} samples")
+    return labels
+
+
 @app.command()
 def pool(
     samples: list[Path] = typer.Argument(..., help="Two or more clonotype sample files."),
@@ -860,10 +947,15 @@ def model_build(
 ) -> None:
     """Build models from the full AIRR read corpus: fetch, arda-map, then EM — several chains at once.
 
-    This is the real training path (raw FASTQ from the ``isalgo/airr_model_read`` dataset), so it
-    needs HuggingFace access and arda's mmseqs2. Mapping is minutes per chain and EM on a D-bearing
-    locus can be far longer, so **use ``-v``** — without it the whole run is silent until a chain
-    finishes, and a slow fit is indistinguishable from a stuck one.
+    This is the real training path (raw FASTQ from ``isalgo/airr_model_read``) and needs arda's
+    mmseqs2. Mapping is minutes per chain and EM on a D-bearing locus can be far longer, so **use
+    ``-v``** — without it the whole run is silent until a chain finishes, and a slow fit is
+    indistinguishable from a stuck one.
+
+    LAB-ONLY: ``isalgo/airr_model_read`` is a PRIVATE HuggingFace dataset, so without access this
+    command stops at a 401. That is expected outside the lab and is not a bug. The bundled models
+    ship with vdjtools, are the versioned reference, and need no rebuild — ``vdjtools models``
+    lists them.
     """
     from vdjtools.model.data import build_all
 

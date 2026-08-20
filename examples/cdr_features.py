@@ -51,14 +51,14 @@ def _():
     from vdjtools import io as vio
     from vdjtools.features import (DEFAULT_PROPERTIES, kmer_profile,
                                   load_property_table, physchem_profile)
-    from vdjtools.preprocess import filter_functional
+    from vdjtools.preprocess import filter_productive
 
     REPO_ID, HF_FOLDER = "isalgo/airr_benchmark", "vdjtools"
     N_SAMPLES = 24
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
     return (DEFAULT_PROPERTIES, HF_FOLDER, N_SAMPLES, OKABE, Path, REPO_ID,
-            filter_functional, kmer_profile, load_property_table, mo, np,
+            filter_productive, kmer_profile, load_property_table, mo, np,
             physchem_profile, pl, plt, spearmanr, vio)
 
 
@@ -79,7 +79,7 @@ def _(mo):
 
 
 @app.cell
-def _(HF_FOLDER, N_SAMPLES, Path, REPO_ID, filter_functional, mo, np, pl, vio):
+def _(HF_FOLDER, N_SAMPLES, Path, REPO_ID, filter_productive, mo, np, pl, vio):
     _nb_dir = mo.notebook_dir() or Path.cwd()
     data_dir = _nb_dir / ".data" / "cdr_nb"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -100,12 +100,12 @@ def _(HF_FOLDER, N_SAMPLES, Path, REPO_ID, filter_functional, mo, np, pl, vio):
 
     _frames = []
     for _s in ages:
-        _df = filter_functional(vio.read(_root / HF_FOLDER / f"{_s}.txt.gz", fmt="vdjtools"),
-                                keep="coding").with_columns(pl.lit(_s).alias("sample_id"))
+        _df = filter_productive(vio.read(_root / HF_FOLDER / f"{_s}.txt.gz", fmt="vdjtools"),
+                                keep="productive").with_columns(pl.lit(_s).alias("sample_id"))
         _frames.append(_df)
     cohort = pl.concat(_frames, how="vertical_relaxed")
     mo.md(f"**{len(ages)} samples**, ages {min(ages.values())}–{max(ages.values())}, "
-          f"{cohort.height:,} coding clonotypes total. Cache: `{data_dir}`")
+          f"{cohort.height:,} productive clonotypes total. Cache: `{data_dir}`")
     return ages, cohort
 
 

@@ -9,7 +9,7 @@ Raw immunosequencing data is noisy: it carries non-coding rearrangements, PCR/se
 errors, cross-sample contamination, uneven sequencing depth, and systematic batch biases.
 `vdjtools.preprocess` is a toolkit of pure-polars cleaning steps; this notebook walks a
 few real Britanova aging samples through them and shows the before/after effect of each —
-`filter_functional`, `correct` (error-collapse), `downsample`, `filter_frequency` /
+`filter_productive`, `correct` (error-collapse), `downsample`, `filter_frequency` /
 `filter_segment`, `decontaminate`, `pool_samples` / `join_samples`, and
 `correct_vj_usage` (VJ-usage batch-effect correction).
 
@@ -52,7 +52,8 @@ def _():
 
     from vdjtools import io as vio
     from vdjtools.preprocess import (correct, correct_vj_usage, decontaminate,
-                                     downsample, filter_frequency, filter_functional,
+                                     downsample, filter_frequency, filter_length,
+                                     filter_functional_genes, filter_productive,
                                      filter_segment, join_samples, pool_samples)
 
     REPO_ID, HF_FOLDER = "isalgo/airr_benchmark", "vdjtools"
@@ -61,7 +62,8 @@ def _():
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
     return (BATCHES, HF_FOLDER, OKABE, Path, REPO_ID, correct, correct_vj_usage,
-            decontaminate, downsample, filter_frequency, filter_functional,
+            decontaminate, downsample, filter_frequency, filter_length,
+            filter_functional_genes, filter_productive,
             filter_segment, join_samples, mo, np, pl, plt, pool_samples, vio)
 
 
@@ -120,31 +122,41 @@ def _(mo, pl, raw):
 def _(mo):
     mo.md(
         r"""
-        ## 2 · Functional filter + error correction
+        ## 2 · The three filtering axes + error correction
 
-        `filter_functional(keep="coding")` drops out-of-frame / stop-codon rearrangements
-        (the `*`/`_` CDR3s). `correct` then collapses low-count clonotypes whose `cdr3_nt`
-        sit within a couple of mismatches of a much more abundant "parent" — the classic
-        PCR/sequencing-error signature — merging their counts upward.
+        One English word used to do three jobs here. They are three separate questions:
+
+        | axis | question | standard |
+        |---|---|---|
+        | **productive** | does the *rearrangement* encode a chain? | AIRR: in frame, no stop codon |
+        | **functional genes** | is the *germline gene* real? | IMGT: F / ORF / P |
+        | **length** | is `junction_aa` a sane length? | not biology — a sanity bound |
+
+        They are orthogonal: a perfectly productive rearrangement can use a pseudogene V.
+        `filter_productive` reads the file's own AIRR `productive` column when it has one and
+        only derives from `junction_aa` as a fallback. `correct` then collapses low-count
+        clonotypes whose `cdr3_nt` sit within a couple of mismatches of a much more abundant
+        "parent" — the classic PCR/sequencing-error signature — merging their counts upward.
         """
     )
     return
 
 
 @app.cell
-def _(correct, filter_functional, mo, pl, raw):
+def _(correct, filter_length, filter_productive, mo, pl, raw):
     _s = next(iter(raw))
     _r = raw[_s]
-    _coding = filter_functional(_r, keep="coding")
-    _corrected = correct(_coding, max_mismatches=2, ratio=0.05)
+    _prod = filter_productive(_r)                      # AIRR axis
+    _len = filter_length(_prod)                        # 5..60 aa, inclusive
+    _corrected = correct(_len, max_mismatches=2, ratio=0.05)
     steps = pl.DataFrame({
-        "step": ["raw", "coding only", "error-corrected"],
-        "clonotypes": [_r.height, _coding.height, _corrected.height],
-        "reads": [int(_r["duplicate_count"].sum()), int(_coding["duplicate_count"].sum()),
-                  int(_corrected["duplicate_count"].sum())],
+        "step": ["raw", "productive only", "+ length 5..60", "error-corrected"],
+        "clonotypes": [_r.height, _prod.height, _len.height, _corrected.height],
+        "reads": [int(_r["duplicate_count"].sum()), int(_prod["duplicate_count"].sum()),
+                  int(_len["duplicate_count"].sum()), int(_corrected["duplicate_count"].sum())],
     })
-    mo.vstack([mo.md(f"Sample **{_s}** — coding filter + error correction "
-                     f"(reads conserved, clonotypes collapse):"), steps])
+    mo.vstack([mo.md(f"Sample **{_s}** — the filtering axes then error correction "
+                     f"(reads conserved through the correction, clonotypes collapse):"), steps])
     return
 
 
@@ -276,7 +288,7 @@ def _(mo):
         r"""
         ---
         **Takeaway.** Each step is one call over the canonical clonotype frame:
-        `filter_functional` drops non-coding rearrangements, `correct` collapses
+        `filter_productive` drops non-productive rearrangements, `correct` collapses
         error-variants (reads conserved, clonotypes down), `downsample` equalises depth,
         `filter_frequency`/`filter_segment` subset by abundance or gene, `decontaminate`
         strips cross-sample bleed, `pool_samples`/`join_samples` combine repertoires, and

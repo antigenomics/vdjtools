@@ -284,20 +284,85 @@ Both recompute ``frequency`` over what survives.
    weighting on top of the clone weight.
 
 
-Pooling, joining and batch correction
--------------------------------------
+Pooling and joining
+-------------------
 
 .. code-block:: python
 
-   from vdjtools.preprocess import pool_samples, join_samples, correct_vj_usage
+   from vdjtools.preprocess import pool_samples, join_samples
 
    pooled = pool_samples([a, b, c], key="aa")            # sum counts
    joined = join_samples([a, b, c], key="aaVJ")          # incidence
-   corrected = correct_vj_usage(samples, batch_col="batch")
 
 Match keys are ``strict | nt | ntV | ntVJ | aa | aaV | aaVJ``.
-:func:`correct_vj_usage` standardises V/J usage within a batch — for a *named technical* batch
-variable, not for a study identifier that is collinear with the biology you are measuring.
+
+
+V/J usage batch correction
+--------------------------
+
+Different sequencing batches carry systematic V/J gene-usage bias — primer mixes, amplification,
+extraction. :func:`~vdjtools.preprocess.correct_vj_usage` removes the batch-specific offset so
+per-sample usage becomes comparable across batches, and
+:func:`~vdjtools.preprocess.apply_vj_correction` pushes the corrected usage back onto the clonotype
+table.
+
+Two transforms
+~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from vdjtools.preprocess import correct_vj_usage, apply_vj_correction
+
+   usage = correct_vj_usage(samples, batch_col="batch")                        # location (default)
+   usage = correct_vj_usage(samples, batch_col="batch", transform="sigmoid")   # z-scored
+   corrected_table = apply_vj_correction(sample_df, usage)
+
+**`transform="location"`** (default) — the classic location adjustment, the location term of
+ComBat, on gene-usage log-probabilities. Per ``(locus, gene, batch)`` the batch mean of ``log p``
+is replaced by the grand mean: ``log_corrected = log p − μ_batch + μ_grand``, then exponentiate and
+renormalise. Location only, no scale term.
+
+**`transform="sigmoid"`** — the **σ-standardised, grand-mean-preserving z-score** correction. Per
+``(locus, gene, batch)``:
+
+.. math::
+
+   Z = \frac{\log p - \mu_{\text{batch}}}{\sigma_{\text{batch}}},
+   \qquad
+   P_{\text{final}} = \frac{2\,P_{\text{avg}}}{1 + e^{-Z}}
+
+``Z`` is capped at ``±z_cap`` (default 6). The sigmoid map preserves the pooled grand-mean usage
+``P_avg(gene)`` — at ``Z = 0`` it returns exactly ``P_avg`` — and the result is renormalised per
+``(sample, locus)``. Dividing by ``σ_batch`` is what distinguishes this from the location
+adjustment: a batch that is merely *noisier* in a gene, rather than shifted, is corrected too.
+
+Winsorization
+~~~~~~~~~~~~~
+
+``winsor_q=None`` is the default and matches the published method, which uses the plain mean and σ
+of the log-normal (Shapiro–Wilk validated). ``winsor_q=0.025`` is an optional robustness knob for
+the noisy usage-as-features regime — many shallow or RNA-seq-derived repertoires — and **not** for
+deep-repertoire correction. Legacy mirpy v2 winsorized by default and used a different map
+(``p·exp(Z)``); the ``2·P_avg·sigmoid(Z)`` here is the paper's Methods formula.
+
+.. warning::
+
+   **Name the technical variable.** This corrects for a *named* batch — a primer mix, a run, an
+   extraction protocol. It must not be pointed at a study identifier that is collinear with the
+   biology being measured: conditioning on study then removes the effect along with the batch, and
+   nothing reports that it happened.
+
+References
+~~~~~~~~~~
+
+- Vlasova EK, Nekrasova AI, Komkov AY, *et al.*, Britanova OV, Shugay M.
+  *Inference of SARS-CoV-2 exposure biomarkers using large-scale T-cell repertoire profiling.*
+  **Genome Medicine** 2026;18:20. `doi:10.1186/s13073-025-01589-4
+  <https://doi.org/10.1186/s13073-025-01589-4>`_ — the ``sigmoid`` transform.
+- Johnson WE, Li C, Rabinovic A. *Adjusting batch effects in microarray expression data using
+  empirical Bayes methods.* **Biostatistics** 2007;8(1):118–127.
+  `doi:10.1093/biostatistics/kxj037 <https://doi.org/10.1093/biostatistics/kxj037>`_ — ComBat,
+  whose location term the ``location`` transform implements.
 
 
 .. note::
@@ -338,6 +403,36 @@ On the command line
 
 ``--coding`` / ``--noncoding`` still work as hidden deprecated aliases and print a notice.
 ``vdjtools filter --productive`` reports which evidence it used on stderr.
+
+V/J usage batch correction has its own command:
+
+.. code-block:: bash
+
+   # batch labels inline, in file order ...
+   vdjtools correct-vj s1.tsv s2.tsv s3.tsv s4.tsv -b A,A,B,B \
+       --transform sigmoid --usage-out usage.tsv --outdir corrected/
+
+   # ... or from a TSV with sample_id / batch columns, matched on file stem
+   vdjtools correct-vj *.tsv --batches meta.tsv --transform location --outdir corrected/
+
+   # usage table only, to stdout
+   vdjtools correct-vj *.tsv -b A,A,B,B --transform sigmoid
+
+``--usage-out`` writes the per-sample corrected usage (one row per
+``sample_id, locus, v_call, j_call`` with ``p`` and ``p_corrected``); ``--outdir`` additionally
+rewrites each clonotype table with the corrected usage applied. ``--scope`` picks the correction
+key (``vj``/``v``/``j``), ``--rescale`` swaps the roulette-wheel resample for a deterministic
+rescale, and ``--winsor-q`` enables winsorization (off by default, matching the published method).
+
+Worked example — four samples, two batches, where batch B over-represents ``TRBV20-1`` 2.2×:
+
+.. code-block:: text
+
+   batch    raw usage   corrected
+   A         0.490       0.773
+   B         1.072       0.773
+
+Both land on the pooled grand mean, which is the property the sigmoid map is built to preserve.
 
 
 How mirpy differs
