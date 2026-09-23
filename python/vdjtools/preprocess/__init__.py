@@ -10,7 +10,11 @@ from .filter import (
     filter_by_sample,
     filter_frequency,
     filter_functional,
+    filter_length,
+    filter_functional_genes,
+    filter_productive,
     filter_segment,
+    productive_mask,
 )
 from .join import join_samples
 from .pool import pool_samples, resolve_key
@@ -18,7 +22,11 @@ from .pool import pool_samples, resolve_key
 __all__ = [
     "downsample",
     "select_top",
-    "filter_functional",
+    "filter_productive",
+    "filter_length",
+    "filter_functional_genes",
+    "productive_mask",
+    "filter_functional",          # deprecated alias for filter_productive
     "filter_frequency",
     "filter_segment",
     "filter_by_sample",

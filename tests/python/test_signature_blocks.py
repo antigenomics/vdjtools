@@ -50,13 +50,27 @@ class TestSanitise:
         assert clean.height == 45
         assert dropped > 0
 
-    def test_drops_ambiguity_codes_and_the_legacy_marker(self):
-        """These do not raise in the embedder — they silently return a finite distance."""
-        for junk in ("CASSXRSSYEQYF", "CASS_RSSYEQYF", "cassrssyeqytf", ""):
+    def test_drops_the_legacy_marker(self):
+        """A stop codon or '_' is a real rearrangement that encodes no receptor — dropped."""
+        for junk in ("CASS*RSSYEQYF", "CASS_RSSYEQYF"):
             df = zipf_repertoire(10).with_columns(pl.lit(junk).alias(JUNCTION_AA))
             clean, dropped = B.sanitise(df)
             assert clean.height == 0, f"{junk!r} survived the filter"
             assert dropped == pytest.approx(1.0)
+
+    def test_raises_on_ambiguity_codes_and_junk(self):
+        """These are a damaged table, not a kind of receptor — an exception, not a filter.
+
+        Changed 2026-08-19. They used to be dropped silently, which hid a broken input and
+        inflated the reported non-functional fraction with junk. Measured on 6,047,716 rows of
+        real clinical AIRR: zero such characters, so the strict default costs nothing.
+        """
+        for junk in ("CASSXRSSYEQYF", "cassrssyeqytf", ""):
+            df = zipf_repertoire(10).with_columns(pl.lit(junk).alias(JUNCTION_AA))
+            with pytest.raises(ValueError, match="unparseable"):
+                B.sanitise(df)
+            clean, dropped = B.sanitise(df, strict=False)
+            assert clean.height == 0 and dropped == pytest.approx(1.0)
 
     def test_reports_dropped_weight_not_dropped_rows(self):
         """Losing one dominant clone matters more than losing fifty singletons."""
@@ -273,3 +287,49 @@ class TestPgenJunctionDraw:
     def test_a_short_frame_is_taken_whole(self):
         df = self._frame(100)
         assert B.pgen_junctions(df, "TRB", 2000) == df["junction_aa"].to_list()
+
+
+# ----------------------------------------------------- corrupt vs non-functional (2026-08-19)
+#
+# sanitise separates two things that used to be one. A stop codon and the legacy '_' marker are a
+# real rearrangement that does not encode a receptor -- dropped, and their weight is the number
+# vsig:qc:*:nonstd_aa_frac reports. Anything else is a damaged file, and raises.
+
+
+def _frame(junctions):
+    return pl.DataFrame({"junction_aa": junctions,
+                         "duplicate_count": [10] * len(junctions)},
+                        schema={"junction_aa": pl.Utf8, "duplicate_count": pl.Int64})
+
+
+@pytest.mark.parametrize("junction", ["CASSXRSSYEQYF", "CASSBRSSYEQYF", "CASSZRSSYEQYF",
+                                      "casslrssyeqyf", "CASS1RSSYEQYF", ""])
+def test_sanitise_raises_on_corrupt_junctions(junction):
+    with pytest.raises(ValueError, match="unparseable"):
+        B.sanitise(_frame(["CASSIRSSYEQYF", junction]))
+
+
+@pytest.mark.parametrize("junction", ["CASS*YEQYF", "CASS_YEQYF"])
+def test_sanitise_drops_nonfunctional_without_raising(junction):
+    keep, dropped = B.sanitise(_frame(["CASSIRSSYEQYF", junction]))
+    assert keep.height == 1
+    assert dropped == pytest.approx(0.5)
+
+
+def test_sanitise_strict_false_restores_the_old_dropping_behaviour():
+    keep, dropped = B.sanitise(_frame(["CASSIRSSYEQYF", "CASSXRSSYEQYF"]), strict=False)
+    assert keep.height == 1
+    assert dropped == pytest.approx(0.5)
+
+
+def test_sanitise_does_not_filter_on_length():
+    # neither predicate has ever had a length bound; a 2-mer and a 62-mer both survive
+    keep, dropped = B.sanitise(_frame(["CF", "C" + "A" * 60 + "F"]))
+    assert keep.height == 2 and dropped == 0.0
+
+
+def test_a_null_junction_is_dropped_not_corrupt():
+    # null is absence, not a damaged character -- it stays a drop so a partly-annotated table
+    # still yields a vector
+    keep, dropped = B.sanitise(_frame(["CASSIRSSYEQYF", None]))
+    assert keep.height == 1 and dropped == pytest.approx(0.5)

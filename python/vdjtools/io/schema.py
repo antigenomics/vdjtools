@@ -35,6 +35,21 @@ COUNT = "duplicate_count"
 FREQ = "frequency"
 LOCUS = "locus"
 
+#: OPTIONAL AIRR Rearrangement annotation columns. Not in SCHEMA -- they are not required and most
+#: bulk pipelines do not emit them -- but when a file DOES carry them they are authoritative and
+#: :func:`vdjtools.preprocess.filter_productive` reads them in preference to re-deriving the same
+#: fact from ``junction_aa``. See https://docs.airr-community.org/en/latest/datarep/rearrangements.html
+#:
+#: ``productive`` is the composite: an open reading frame, no defect in the start codon, splicing
+#: sites or regulatory elements, no internal stop codon, and an in-frame junction. The other two
+#: are components of it, useful when the composite is absent.
+PRODUCTIVE = "productive"
+STOP_CODON = "stop_codon"
+VJ_IN_FRAME = "vj_in_frame"
+
+#: The optional AIRR annotation columns, in the order they are preferred as evidence.
+AIRR_FUNCTIONAL_COLUMNS: tuple[str, ...] = (PRODUCTIVE, STOP_CODON, VJ_IN_FRAME)
+
 #: Canonical columns in canonical order, mapped to their polars dtype.
 SCHEMA: dict[str, pl.DataType] = {
     V_CALL: pl.Utf8,

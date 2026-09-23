@@ -2,17 +2,27 @@
 
 Reimplements the legacy vdjtools clonotype-filter family:
 
-- :func:`filter_functional` — ``FunctionalClonotypeFilter`` (``isCoding``).
+- :func:`filter_productive` — AIRR-productive rearrangements (supersedes ``filter_functional``,
+  the legacy ``FunctionalClonotypeFilter`` / ``isCoding``).
 - :func:`filter_frequency` — ``FilterByFrequency`` (``FrequencyFilter`` + ``QuantileFilter``).
 - :func:`filter_segment` — ``FilterBySegment`` (``VFilter`` / ``DFilter`` / ``JFilter``).
 - :func:`filter_by_sample` — ``ApplySampleAsFilter`` (``IntersectionClonotypeFilter``).
 
-Every filter recomputes ``frequency`` within the surviving subset (legacy default;
-the ``--save-freqs`` behaviour is left to the caller).
+Every filter recomputes ``frequency`` within the surviving subset by default, and
+:func:`filter_productive` exposes that as ``recompute_frequencies=False`` for a caller who wants
+the file's own frequencies left alone.
+
+**On the word "functional".** It is IMGT's, and IMGT applies it to a *germline gene* (F / ORF / P),
+not to a rearrangement. What this module filters is AIRR **productivity** — a property of the
+rearranged sequence: no stop codon, junction in frame. The two are orthogonal; a perfectly
+productive rearrangement can use a pseudogene V. :func:`filter_productive` is therefore the name,
+and :func:`filter_functional` is kept as a deprecated alias.
 """
 from __future__ import annotations
 
 import polars as pl
+
+import warnings
 
 from ..io.schema import (
     JUNCTION_AA,
@@ -20,7 +30,12 @@ from ..io.schema import (
     D_CALL,
     FREQ,
     J_CALL,
+    PRODUCTIVE,
+    STOP_CODON,
     V_CALL,
+    VJ_IN_FRAME,
+    column_names,
+    strip_allele,
     recompute_frequency,
 )
 
@@ -31,31 +46,209 @@ from ..io.schema import (
 _NONCODING_CHARS = r"[*atgc#~_?]"
 
 
-def filter_functional(df: pl.DataFrame, keep: str = "coding") -> pl.DataFrame:
-    """Keep only coding (or only non-coding) clonotypes.
+def _productive_from_annotation(df: pl.DataFrame) -> "tuple[pl.Expr, str] | None":
+    """Read productivity off the file's own AIRR columns, if it carries any.
 
-    A clonotype is *coding* when it is in-frame **and** has no stop codon, derived
-    from ``junction_aa``: legacy ``isCoding() = isInFrame() && isNoStop()``, where
-    ``isNoStop`` means no ``*`` and ``isInFrame`` means no out-of-frame marker
-    (``[atgc#~_?]``) in the amino-acid string. A null ``junction_aa`` is treated as
-    non-coding.
+    Preference order is the composite first, then its components: ``productive`` states the whole
+    of it (open reading frame, no defect in start codon / splicing / regulatory elements, no
+    internal stop, junction in frame), while ``stop_codon`` and ``vj_in_frame`` each state a part.
+    Re-deriving any of this from ``junction_aa`` when the file already says it is how a caller ends
+    up disagreeing with their own annotation without being told.
+    """
+    cols = set(column_names(df))
+    if PRODUCTIVE in cols:
+        return pl.col(PRODUCTIVE).cast(pl.Boolean, strict=False), PRODUCTIVE
+    parts, used = [], []
+    if STOP_CODON in cols:
+        parts.append(~pl.col(STOP_CODON).cast(pl.Boolean, strict=False))
+        used.append(STOP_CODON)
+    if VJ_IN_FRAME in cols:
+        parts.append(pl.col(VJ_IN_FRAME).cast(pl.Boolean, strict=False))
+        used.append(VJ_IN_FRAME)
+    if not parts:
+        return None
+    expr = parts[0]
+    for e in parts[1:]:
+        expr = expr & e
+    return expr, "+".join(used)
+
+
+def productive_mask(df: pl.DataFrame) -> "tuple[pl.Expr, str]":
+    """The productivity predicate for this frame, and the evidence it rests on.
+
+    Returns ``(expr, source)`` where ``source`` is the AIRR column(s) used, or ``"junction_aa"``
+    when none were present and productivity had to be derived from the amino-acid string.
+
+    The fallback reads a stop codon as ``*`` and an out-of-frame junction as one of the legacy
+    markers. It is a proxy: it cannot see a defect in a splicing site or a regulatory element,
+    which AIRR's ``productive`` can.
+    """
+    ann = _productive_from_annotation(df)
+    if ann is not None:
+        expr, src = ann
+        return expr.fill_null(False), src
+    return (pl.col(JUNCTION_AA).is_not_null()
+            & ~pl.col(JUNCTION_AA).str.contains(_NONCODING_CHARS)), JUNCTION_AA
+
+
+def filter_productive(df: pl.DataFrame, keep: str = "productive", *,
+                      recompute_frequencies: bool = True) -> pl.DataFrame:
+    """Keep only AIRR-productive rearrangements (or only the complement).
+
+    A rearrangement is *productive* when it can encode a receptor chain. Where the frame carries
+    the AIRR annotation columns (``productive``, or ``stop_codon`` / ``vj_in_frame``) those are
+    authoritative; otherwise productivity is derived from ``junction_aa``, where a stop codon is
+    ``*`` and an out-of-frame junction carries one of the legacy markers ``[atgc#~_?]``. A null
+    ``junction_aa`` is treated as non-productive.
+
+    This is **not** IMGT functionality. That is a property of the germline gene (F / ORF / P) and
+    is orthogonal to this one — see :func:`filter_functional_genes`.
 
     Args:
-        df: A clonotype frame with a ``junction_aa`` column.
-        keep: ``"coding"`` (default) keeps coding clonotypes; ``"noncoding"`` keeps
-            the complement.
+        df: A clonotype frame.
+        keep: ``"productive"`` (default) or ``"nonproductive"`` for the complement.
+        recompute_frequencies: Renormalise ``frequency`` over the survivors. **Default ``True``**,
+            which is the legacy behaviour and what almost every caller wants. Pass ``False`` to
+            leave the file's own frequencies untouched — useful when the frequencies are the
+            quantity of interest and must stay comparable to the unfiltered file.
 
     Returns:
-        The filtered frame with ``frequency`` recomputed.
+        The filtered frame.
 
     Raises:
-        ValueError: If ``keep`` is not ``"coding"`` or ``"noncoding"``.
+        ValueError: If ``keep`` is not ``"productive"`` or ``"nonproductive"``.
     """
+    if keep not in ("productive", "nonproductive"):
+        raise ValueError(f"keep must be 'productive' or 'nonproductive'; got {keep!r}")
+    mask, _ = productive_mask(df)
+    out = df.filter(mask if keep == "productive" else ~mask)
+    return recompute_frequency(out) if recompute_frequencies else out
+
+
+def filter_functional(df: pl.DataFrame, keep: str = "coding") -> pl.DataFrame:
+    """Deprecated alias for :func:`filter_productive`. Use that instead.
+
+    "Functional" is IMGT's word for a germline gene; this function filters rearrangements, which
+    AIRR calls *productive*. Kept for one release so existing callers do not break silently.
+    """
+    warnings.warn(
+        "filter_functional() is deprecated; use filter_productive(). 'functional' is IMGT's term "
+        "for a germline gene (F/ORF/P), while this filters rearrangements, which AIRR calls "
+        "'productive'. Map keep='coding' -> keep='productive', "
+        "keep='noncoding' -> keep='nonproductive'.",
+        DeprecationWarning, stacklevel=2)
     if keep not in ("coding", "noncoding"):
         raise ValueError(f"keep must be 'coding' or 'noncoding'; got {keep!r}")
-    is_coding = pl.col(JUNCTION_AA).is_not_null() & ~pl.col(JUNCTION_AA).str.contains(_NONCODING_CHARS)
-    out = df.filter(is_coding if keep == "coding" else ~is_coding)
-    return recompute_frequency(out)
+    return filter_productive(df, "productive" if keep == "coding" else "nonproductive")
+
+
+def filter_functional_genes(df: pl.DataFrame, *, segments: tuple[str, ...] = ("V", "J"),
+                            keep: tuple[str, ...] = ("F",), organism: str = "human",
+                            locus: str | None = None,
+                            recompute_frequencies: bool = True) -> pl.DataFrame:
+    """Keep rearrangements whose germline gene calls are IMGT-functional.
+
+    This is the **other** axis, and the one that actually deserves the word *functional*. IMGT
+    classifies a germline gene as **F** (functional), **ORF** (an open reading frame, but a defect
+    in splicing, regulatory elements or conserved-residue hydropathy — *not* functional), or **P**
+    (pseudogene: a defect in the ORF itself). See
+    https://www.imgt.org/IMGTindex/functionality.php
+
+    It is orthogonal to :func:`filter_productive`. A rearrangement can be perfectly in frame with
+    no stop codon — AIRR-productive — while using a pseudogene V; and a functional V gene can
+    rearrange out of frame. Filtering one says nothing about the other.
+
+    A call this function cannot resolve against the germline reference is **kept**, not dropped:
+    an unrecognised gene name means our reference is incomplete or the caller uses a different
+    nomenclature, and silently discarding those rows would be a vocabulary bug reported as biology.
+
+    Args:
+        df: A clonotype frame.
+        segments: Which calls to check — any of ``"V"``, ``"D"``, ``"J"``.
+        keep: IMGT functionality codes to keep. ``("F",)`` is strict; ``("F", "ORF")`` is the
+            common looser choice.
+        organism: Passed to the germline reference.
+        locus: Locus to load the reference for. Inferred from the V calls when omitted.
+        recompute_frequencies: Renormalise ``frequency`` over the survivors. Default ``True``.
+
+    Returns:
+        The filtered frame.
+    """
+    from ..model.reference import load_germline
+
+    if locus is None:
+        v = df[V_CALL].drop_nulls()
+        if not v.len():
+            return df
+        locus = str(v[0])[:3].upper()
+    germ = load_germline(locus, organism)
+    ok = {seg: set(germ.filter((pl.col("segment") == seg)
+                               & pl.col("functionality").is_in(list(keep)))["gene"].to_list())
+          for seg in segments}
+    known = {seg: set(germ.filter(pl.col("segment") == seg)["gene"].to_list()) for seg in segments}
+
+    mask = pl.lit(True)
+    for seg, col in (("V", V_CALL), ("D", D_CALL), ("J", J_CALL)):
+        if seg not in segments or col not in column_names(df):
+            continue
+        gene = strip_allele(pl.col(col))
+        # unknown -> kept: an unrecognised name is a vocabulary gap, not a pseudogene
+        mask = mask & (gene.is_in(list(ok[seg])) | ~gene.is_in(list(known[seg]))
+                       | gene.is_null())
+    out = df.filter(mask)
+    return recompute_frequency(out) if recompute_frequencies else out
+
+
+#: Default junction_aa length bounds, INCLUSIVE, in amino acids.
+#:
+#: A CDR3 shorter than 5 aa cannot span the Cys104..Phe118 anchors with any diversity between them,
+#: and a junction longer than 60 aa is beyond anything the germline can produce -- both are almost
+#: always a misparse or a chimeric read rather than a receptor. Deliberately wide: this is a
+#: sanity bound, not a biological filter, and real junctions sit far inside it.
+MIN_JUNCTION_AA, MAX_JUNCTION_AA = 5, 60
+
+
+def filter_length(df: pl.DataFrame, *, min_len: int = MIN_JUNCTION_AA,
+                  max_len: int = MAX_JUNCTION_AA, keep: str = "within",
+                  recompute_frequencies: bool = True) -> pl.DataFrame:
+    """Keep clonotypes whose ``junction_aa`` length is within bounds, **inclusive**.
+
+    Both bounds are inclusive: ``min_len=5`` keeps a 5-mer, ``max_len=60`` keeps a 60-mer.
+
+    This is a data-sanity filter, not a receptor-biology one. It catches misparses, truncated
+    reads and chimeras; it does not encode a claim about what lengths are immunologically
+    interesting. Note that neither this nor :func:`filter_productive` filters on length by
+    default -- nothing upstream in this package has ever imposed a length bound, so switching this
+    on will change counts on any corpus that carries junk.
+
+    **CDR3 vs junction.** These bounds are on ``junction_aa``, which *includes* the Cys104 and
+    Phe118 anchors and is therefore two residues longer than the IMGT CDR3. Subtract 2 if you are
+    reasoning in CDR3 lengths.
+
+    A null ``junction_aa`` is dropped by ``keep="within"`` -- an absent junction has no length.
+
+    Args:
+        df: A clonotype frame.
+        min_len: Shortest ``junction_aa`` to keep, inclusive.
+        max_len: Longest ``junction_aa`` to keep, inclusive.
+        keep: ``"within"`` (default) or ``"outside"`` for the complement -- useful for inspecting
+            what a bound would discard before committing to it.
+        recompute_frequencies: Renormalise ``frequency`` over the survivors. Default ``True``.
+
+    Returns:
+        The filtered frame.
+
+    Raises:
+        ValueError: If ``keep`` is unknown, or ``min_len`` exceeds ``max_len``.
+    """
+    if keep not in ("within", "outside"):
+        raise ValueError(f"keep must be 'within' or 'outside'; got {keep!r}")
+    if min_len > max_len:
+        raise ValueError(f"min_len ({min_len}) exceeds max_len ({max_len})")
+    n = pl.col(JUNCTION_AA).str.len_chars()
+    within = pl.col(JUNCTION_AA).is_not_null() & (n >= min_len) & (n <= max_len)
+    out = df.filter(within if keep == "within" else ~within)
+    return recompute_frequency(out) if recompute_frequencies else out
 
 
 def filter_frequency(df: pl.DataFrame, min_freq: float | None = None,

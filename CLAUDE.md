@@ -52,10 +52,11 @@ on `legacy-1.x` under tags `v0.0.1`..`1.2.1` — do not disturb**; the v2 histor
 Carried-over legacy resources (`aa_property_table.txt`, `cdr3contact.txt`, `vj_families.txt`) and
 format-conversion fixtures live there — pull them over when a phase needs them.
 
-**Worktrees**: one worktree ↔ one `feature/*` branch —
-`git worktree add .claude/worktrees/<name> -b feature/<name>`. Never two features in one worktree;
-`.claude/` is gitignored, never commit it. Merge the finished branch into `dev`, then
-`git worktree remove`.
+**NO WORKTREES.** Branches only, one checkout. Sessions here are sequential, not concurrent, and
+worktrees only ever cost us: work committed under `.claude/worktrees/` is gitignored and invisible
+from the repo root, and a branch held by a worktree cannot be checked out in the main repo
+(`fatal: 'dev' is already used by worktree at ...`). Use `git switch -c feature/<name>`, commit,
+merge into `dev`, delete the branch.
 
 ## Conventions & invariants
 - AIRR Rearrangement/Cell + polars `pl.DataFrame` in and out; minimal OO (thin index classes only).
@@ -173,8 +174,8 @@ only matters for models built after it.
   fast path (`ddl.set_backend("polars")` takes polars frames directly) and reconciling
   `resolve_chains` with scirpy's `chain_qc` `receptor_subtype` vocabulary (report alongside, never
   overwrite — that is how a QC call gets lost).
-- **Dev-env note**: the worktree needs its OWN venv — the editable install's meta-path finder wins
-  over `PYTHONPATH`, so a symlinked `_core` will NOT redirect `import vdjtools` to a worktree.
+- **Dev-env note**: the editable install's meta-path finder wins over `PYTHONPATH`, so a symlinked
+  `_core` will NOT redirect `import vdjtools` to another checkout — one venv per checkout.
   Also: `cd` inside a backgrounded/`/tmp` command resets the shell cwd back to the MAIN repo, so
   relative-path writes silently land there. Use absolute paths for edits.
 - **Phase 1 (`feature/model-engine`) is functionally complete** — native nt/aa Pgen via the

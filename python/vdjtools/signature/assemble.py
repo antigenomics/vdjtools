@@ -16,6 +16,8 @@ IgG here" as the same statement.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import polars as pl
 
@@ -26,7 +28,12 @@ from . import layout as L
 #: Coverage level the Hill numbers are standardised to, per locus, until the reference artifact
 #: supplies measured ones. Deliberately low: attained Good-Turing coverage on real repertoires
 #: runs 0.24-0.58, so a textbook 0.95 would put every sample into extrapolation, where the
-#: estimator inflates diversity roughly tenfold. See SIGNATURE.md.
+#: estimator inflates diversity roughly tenfold.
+#:
+#: This is a **fallback, not a recommendation** -- it is one number for all seven loci, and the
+#: measured values are neither uniform nor assay-independent (TRB attains 0.408 in amplicon data
+#: and 0.126 in bulk blood RNA-seq). Pass measured constants via ``cstar=`` whenever a reference
+#: artifact supplies them; ``mir.signature.signature()`` does this for you. See ``docs/signature.rst``.
 DEFAULT_CSTAR = 0.20
 
 
@@ -41,7 +48,8 @@ def _locus_frames(sample) -> dict[str, pl.DataFrame]:
 
 def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DEFAULT_CSTAR,
          weight: str = "log2p1", pgen_q05: dict[str, float] | None = None,
-         kmer_spaces: dict | None = None, threads: int = 0) -> dict[str, float]:
+         kmer_spaces: dict | None = None, threads: int = 0,
+         prefiltered: bool = False) -> dict[str, float]:
     """The ``vsig`` half of one sample's signature, as ``{column_name: value}``.
 
     Args:
@@ -60,6 +68,14 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         threads: Worker threads for the Pgen batch; 0 = auto.
             Off by default so ``tier="full"`` still runs; on when a caller needs the guarantee
             that every declared column was actually computed.
+        prefiltered: Say ``True`` when the caller already removed non-functional rearrangements
+            upstream. ``vsig:qc:*:nonstd_aa_frac`` then reports ``nan`` -- a hole -- instead of a
+            confident floor value. This matters because the column is measured by comparing the
+            frame handed in against what survives ``sanitise``: on a pre-filtered input that
+            comparison yields exactly 0, which ``logit`` turns into a large negative number
+            meaning "this repertoire is exceptionally clean", when the truth is "we cannot tell".
+            Every other column is unaffected either way -- they are all computed on the surviving
+            rows, and pre-filtering does not change which rows survive.
 
     Returns:
         Every column :func:`vdjtools.signature.layout.columns` lists for ``tier`` and ``"vsig"``,
@@ -74,6 +90,7 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
     full = tier == "full"
     std = tier in ("standard", "full")
     reads: dict[str, float] = {}
+    measured_nonstd: dict[str, float] = {}
 
     for locus in L.LOCI:
         raw = frames.get(locus)
@@ -95,7 +112,10 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         stats = _stats(clean)
         level = cstar[locus] if isinstance(cstar, dict) else cstar
 
+        measured_nonstd[locus] = float(nonstd)
         _put(out, f"vsig:qc:{locus}", B.qc_block(raw, work, locus, nonstd))
+        if prefiltered:
+            out[f"vsig:qc:{locus}:nonstd_aa_frac"] = np.nan
         _put(out, f"vsig:depth:{locus}", B.depth_block(clean, stats))
         _put(out, f"vsig:clon:{locus}", B.clon_block(stats))
         _put(out, f"vsig:len:{locus}", B.len_block(work, tier_standard=std))
@@ -126,7 +146,34 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
 
     _put(out, "vsig:pair:-", B.pair_block(reads))
     out["vsig:qc:-:n_loci_present"] = float(len(reads))
+    _warn_if_prefiltered(measured_nonstd, prefiltered)
     return {k: out[k] for k in want}
+
+
+def _warn_if_prefiltered(measured: dict[str, float], declared: bool) -> None:
+    """Warn when every locus reports exactly zero non-functional weight.
+
+    A single locus can genuinely reach zero -- light chains do it routinely (measured on 1,168
+    blood samples from a clinical AIRR cohort: IGK 84 samples at exactly zero, 54 of them with 100+ clonotypes). Across
+    EVERY locus at once it does not happen: 0 of those 1,168 samples, the minimum being 5 of 7
+    loci carrying some. So the all-locus case is a reliable signal that somebody filtered
+    upstream, and a per-locus threshold is not -- which is why this warns on the conjunction and
+    why ``prefiltered`` is a parameter rather than something inferred.
+
+    A warning, not an error: a synthetic or already-curated frame is a legitimate input, and the
+    caller who knows that should pass ``prefiltered=True`` and get a hole instead of a floor.
+    """
+    if declared or len(measured) < 2:
+        return
+    if all(v == 0.0 for v in measured.values()):
+        warnings.warn(
+            f"every locus ({', '.join(sorted(measured))}) reports exactly zero non-functional "
+            "weight, which does not occur in unfiltered repertoire data. The input was almost "
+            "certainly filtered upstream. vsig:qc:*:nonstd_aa_frac is then measured against a "
+            "frame that has nothing left to drop and reports a confident floor value rather than "
+            "a hole -- pass prefiltered=True to get nan instead, or drop the qc block with a "
+            "preset (classify, transfer, compact all do). Every other column is unaffected.",
+            UserWarning, stacklevel=3)
 
 
 def _put(out: dict, prefix: str, values: dict) -> None:

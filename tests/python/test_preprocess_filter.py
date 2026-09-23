@@ -2,6 +2,7 @@
 import math
 
 import polars as pl
+import pytest
 
 from vdjtools.io import schema as S
 from vdjtools import preprocess as pp
@@ -91,3 +92,80 @@ def test_filter_segment_matches_a_gene_named_only_in_a_tie():
     # keep=False removes it (the legacy --negative path must also see the tie)
     dropped = filter_segment(df, v=["IGHV3-23D"], keep=False)
     assert dropped.height == 1 and dropped["v_call"][0] == "IGHV1-2*02"
+
+
+# ------------------------------------------------- the three axes, kept apart (2026-08-20)
+
+
+def _f(**kw):
+    base = dict(junction_aa=["CASSIRSSYEQYF", "CASS*YEQYF", "CASS_YEQYF"],
+                duplicate_count=[100, 50, 50], frequency=[0.5, 0.25, 0.25])
+    base.update(kw)
+    return pl.DataFrame(base)
+
+
+class TestFilterProductive:
+    def test_derives_from_junction_aa_when_no_airr_columns(self):
+        from vdjtools.preprocess import filter_productive, productive_mask
+        _, src = productive_mask(_f())
+        assert src == "junction_aa"
+        assert filter_productive(_f())["junction_aa"].to_list() == ["CASSIRSSYEQYF"]
+
+    def test_the_files_productive_column_wins_over_the_junction(self):
+        """The whole point of reading the annotation: the file may disagree, and it is right."""
+        from vdjtools.preprocess import filter_productive, productive_mask
+        d = _f(productive=[False, True, True])
+        _, src = productive_mask(d)
+        assert src == "productive"
+        assert filter_productive(d)["junction_aa"].to_list() == ["CASS*YEQYF", "CASS_YEQYF"]
+
+    def test_components_used_when_the_composite_is_absent(self):
+        from vdjtools.preprocess import filter_productive, productive_mask
+        d = _f(stop_codon=[False, True, False], vj_in_frame=[True, True, False])
+        _, src = productive_mask(d)
+        assert src == "stop_codon+vj_in_frame"
+        assert filter_productive(d)["junction_aa"].to_list() == ["CASSIRSSYEQYF"]
+
+    def test_recompute_frequencies_is_a_switch(self):
+        from vdjtools.preprocess import filter_productive
+        assert filter_productive(_f())["frequency"].to_list() == [1.0]
+        assert filter_productive(_f(), recompute_frequencies=False)["frequency"].to_list() == [0.5]
+
+    def test_nonproductive_is_the_complement(self):
+        from vdjtools.preprocess import filter_productive
+        assert filter_productive(_f(), keep="nonproductive")["junction_aa"].to_list() == [
+            "CASS*YEQYF", "CASS_YEQYF"]
+
+    def test_legacy_alias_warns_but_works(self):
+        from vdjtools.preprocess import filter_functional
+        with pytest.warns(DeprecationWarning, match="filter_productive"):
+            assert filter_functional(_f(), keep="coding").height == 1
+
+
+class TestFilterLength:
+    def test_bounds_are_inclusive(self):
+        from vdjtools.preprocess import filter_length
+        d = pl.DataFrame({"junction_aa": ["C" * 4, "C" * 5, "C" * 60, "C" * 61],
+                          "duplicate_count": [1] * 4, "frequency": [0.25] * 4})
+        assert filter_length(d)["junction_aa"].str.len_chars().to_list() == [5, 60]
+
+    def test_outside_is_the_complement_and_takes_the_nulls(self):
+        from vdjtools.preprocess import filter_length
+        d = pl.DataFrame({"junction_aa": ["C" * 4, "C" * 10, None],
+                          "duplicate_count": [1] * 3, "frequency": [0.3] * 3})
+        assert filter_length(d, keep="outside").height == 2
+
+    def test_min_above_max_raises(self):
+        from vdjtools.preprocess import filter_length
+        with pytest.raises(ValueError, match="exceeds"):
+            filter_length(_f(), min_len=30, max_len=10)
+
+
+class TestFilterFunctionalGenes:
+    def test_an_unresolvable_gene_is_kept_not_dropped(self):
+        """A name we do not recognise is a vocabulary gap, never evidence of a pseudogene."""
+        from vdjtools.preprocess import filter_functional_genes
+        d = pl.DataFrame({"v_call": ["TRBV20-1", "NOT-A-REAL-GENE"], "j_call": ["TRBJ2-2"] * 2,
+                          "junction_aa": ["CASSIRSSYEQYF"] * 2,
+                          "duplicate_count": [10, 10], "frequency": [0.5, 0.5]})
+        assert filter_functional_genes(d, locus="TRB").height == 2

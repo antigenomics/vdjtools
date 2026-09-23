@@ -228,3 +228,35 @@ def test_alice_command(tmp_path, gen):
     r = runner.invoke(app, ["alice", str(p), "--locus", "TRB"])
     assert r.exit_code == 0, r.stdout
     assert "pgen_ball" in r.stdout and "q_value" in r.stdout
+
+
+def test_correct_vj_writes_usage_and_corrected_tables(tmp_path, gen):
+    """`correct-vj` is the CLI face of the V/J-usage batch correction (Vlasova et al. 2026).
+
+    Both label forms are exercised, because the TSV branch matches on the FILE STEM and that is
+    the part a caller gets wrong silently -- a metadata table keyed on anything else simply finds
+    no batch for any sample.
+    """
+    paths = []
+    for i in range(4):
+        p = tmp_path / f"s{i}.tsv"
+        _write_airr(p, gen, seed=70 + i)
+        paths.append(str(p))
+
+    usage, outdir = tmp_path / "usage.tsv", tmp_path / "corrected"
+    r = runner.invoke(app, ["correct-vj", *paths, "-b", "A,A,B,B",
+                            "--transform", "sigmoid",
+                            "--usage-out", str(usage), "--outdir", str(outdir)])
+    assert r.exit_code == 0, r.stdout
+    assert pl.read_csv(usage, separator="\t").height > 0
+    assert sorted(p.name for p in outdir.glob("*.tsv")) == [f"s{i}.corrected.tsv" for i in range(4)]
+
+    meta = tmp_path / "meta.tsv"
+    pl.DataFrame({"sample_id": [f"s{i}" for i in range(4)],
+                  "batch": ["A", "A", "B", "B"]}).write_csv(meta, separator="\t")
+    r = runner.invoke(app, ["correct-vj", *paths, "-b", str(meta), "--usage-out", str(tmp_path / "u2.tsv")])
+    assert r.exit_code == 0, r.stdout
+
+    # one sample is not a between-batch quantity, and a short label list is a caller error
+    assert runner.invoke(app, ["correct-vj", paths[0], "-b", "A"]).exit_code != 0
+    assert runner.invoke(app, ["correct-vj", *paths, "-b", "A,B"]).exit_code != 0

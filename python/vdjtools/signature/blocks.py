@@ -35,6 +35,11 @@ from . import transform as T
 #: reported as ``qc:*:nonstd_aa_frac`` rather than logged, because a collaborator needs to see it.
 VALID_AA = r"^[ACDEFGHIKLMNPQRSTVWY]+$"
 
+#: The 20 amino acids plus the two characters a WELL-FORMED AIRR table can legitimately carry:
+#: ``*`` for a stop codon, ``_`` for the legacy out-of-frame marker. A junction outside this is a
+#: broken file, not a kind of receptor -- see :func:`sanitise`.
+PARSEABLE_AA = r"^[ACDEFGHIKLMNPQRSTVWY*_]+$"
+
 #: Isotype classes, and the constant-gene prefixes that map onto them. ``IGHGP`` is a
 #: pseudogene and ``IGHC`` is ambiguous, so neither is called.
 ISOTYPES: dict[str, tuple[str, ...]] = {
@@ -68,14 +73,68 @@ PAIRS: tuple[tuple[str, str], ...] = (
 )
 
 
-def sanitise(df: pl.DataFrame) -> tuple[pl.DataFrame, float]:
-    """Drop unusable clonotypes; return the frame and the dropped **weight** fraction.
+def assert_parseable(df: pl.DataFrame) -> None:
+    """Raise if any ``junction_aa`` is not a parseable amino-acid string.
+
+    This is a **data-integrity gate, not a filter**, and it is the first of the three axes this
+    module has to keep apart:
+
+    1. *parseable* — can we read the string at all? (here)
+    2. *productive* — does the rearrangement encode a chain? (AIRR; :func:`filter_productive`)
+    3. *functional* — is the germline gene real? (IMGT F/ORF/P; :func:`filter_functional_genes`)
+
+    A junction over the 20 amino acids plus the two sanctioned markers ``*`` (stop codon) and ``_``
+    (legacy out-of-frame) is parseable. Anything else — an ambiguity code ``X``/``B``/``Z``, a
+    lowercase residue, an empty string, a stray character — means the table is damaged or was
+    written by something that did not agree on the alphabet. Silently dropping those rows would
+    hide a broken input *and* inflate the reported non-productive fraction with junk.
+
+    Measured across 6,047,716 rows of a clinical AIRR store: zero violations, and zero ``_``. The
+    gate therefore costs nothing on well-formed data and is only ever reached by a real problem.
+
+    Raises:
+        ValueError: If any junction carries an unparseable character.
+    """
+    if df.height == 0:
+        return
+    bad = df.filter(pl.col(JUNCTION_AA).is_not_null()
+                    & ~pl.col(JUNCTION_AA).str.contains(PARSEABLE_AA))
+    if bad.height:
+        ex = bad[JUNCTION_AA].unique().head(5).to_list()
+        raise ValueError(
+            f"{JUNCTION_AA} has {bad.height} of {df.height} unparseable value(s): outside the 20 "
+            f"amino acids and outside '*' and '_', e.g. {ex}. A well-formed AIRR table carries "
+            "nothing else, so this is a data problem rather than a filtering decision. Fix the "
+            "source, or call sanitise(strict=False) to drop them.")
+
+
+def sanitise(df: pl.DataFrame, *, strict: bool = True) -> tuple[pl.DataFrame, float]:
+    """Drop non-productive clonotypes; return the frame and the dropped **weight** fraction.
 
     Dropped by weight, not by row: losing one dominant clone matters more than losing fifty
     singletons, and the row fraction would hide that.
+
+    Equivalent to :func:`assert_parseable` followed by
+    ``filter_productive(df, recompute_frequencies=False)``, plus the dropped-weight bookkeeping
+    that ``vsig:qc:*:nonstd_aa_frac`` reports. It does **not** recompute ``frequency`` — the
+    signature overwrites that column with its own clone weight in :func:`work_frame` immediately
+    afterwards, so renormalising here would be work thrown away.
+
+    Args:
+        df: A clonotype frame.
+        strict: Raise on unparseable characters (see :func:`assert_parseable`). Set ``False`` to
+            drop them as before, for a corpus known to carry ambiguity codes.
+
+    Returns:
+        ``(kept_frame, dropped_weight_fraction)``.
+
+    Raises:
+        ValueError: If ``strict`` and any junction is unparseable.
     """
     if df.height == 0:
         return df, 0.0
+    if strict:
+        assert_parseable(df)
     total = float(df[COUNT].sum())
     keep = df.filter(
         (pl.col(COUNT) > 0)

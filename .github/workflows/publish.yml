@@ -62,8 +62,18 @@ jobs:
     # The publish gate. `needs:` cannot reference another workflow, so CI's matrix (ci.yml, on
     # push) cannot gate this one -- and it did not: 3.9.1 uploaded to PyPI while CI was still in
     # its Test step. Same SHA, so CI covers the code, but nothing enforced the ORDER. One job on
-    # one interpreter, running in parallel with the wheel builds, costs no extra wall time and
-    # makes a green suite a precondition for upload rather than a race.
+    # one interpreter makes a green suite a precondition for upload rather than a race.
+    #
+    # It does NOT come for free, contrary to what this comment claimed until 3.9.3. Measured on the
+    # 3.9.2 release run: wheels finished at +6m06s and `publish` started at +32m19s, because this
+    # job took 31m18s -- 51 s of install and 30m21s of pytest. The gate added ~25 min of wall time
+    # to every release (3.9.1, before it existed, took 15m26s end to end).
+    #
+    # So it now skips `heavy` as well as `slow`. That is 10 tests -- test_gene_prior (4 full
+    # infer_native EM runs over the 89-allele TRB locus), test_viterbi's [TRB] params and chosen-D
+    # test (the pure-Python reference DP, ~600x slower than native), and one 2M-read replicate-pair
+    # case in test_dynamics_paired. Nothing loses coverage: ci.yml runs the full suite on every push
+    # and PR to the same SHA. Only the release path is trimmed.
     name: Test before publishing
     runs-on: ubuntu-latest
     steps:
@@ -76,7 +86,7 @@ jobs:
         # central correctness claim. Without it the gate would be green on a suite that skipped.
         run: pip install -e ".[test,oracle,overlap,sc]"
       - name: Test
-        run: pytest tests/python -q
+        run: pytest tests/python -q -m "not slow and not heavy"
       - name: Assert the OLGA oracle suite actually ran (guard against silent skip)
         run: python -c "import olga.load_model"
 

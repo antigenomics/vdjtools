@@ -17,7 +17,16 @@ from vdjtools.model.pgen import pgen_nt, prepare
 from vdjtools.model.viterbi import (best_scenario, codon_options, infer_nt,
                                     infer_nt_bruteforce)
 
+#: Plain locus names. The ``preps`` fixture loads these, so they must stay strings.
 LOCI = ("TRA", "TRB")
+#: The same loci as parameters, with ``TRB`` marked ``heavy``. The [TRB] half of every parametrized
+#: test below walks 200 generated sequences through the PURE-PYTHON reference scenario DP
+#: (viterbi.py: ~600x slower than native), costing 104 s against 0.4 s for the [TRA] twins -- VJ has
+#: no D enumeration. Marking only that param keeps both loci covered in ci.yml while the release gate
+#: skips the expensive half. Kept separate from LOCI because a pytest.param is not a str: passing one
+#: to load_bundled raises AttributeError inside fixture setup, which surfaces as a collection error
+#: on *every* test using the fixture, TRA included.
+LOCUS_PARAMS = ("TRA", pytest.param("TRB", marks=pytest.mark.heavy))
 
 
 @pytest.fixture(scope="module")
@@ -39,7 +48,7 @@ def test_codon_options_are_strings_and_complete():
     assert codon_options("X") == [[]]          # unknown residue -> no options, never a guess
 
 
-@pytest.mark.parametrize("locus", LOCI)
+@pytest.mark.parametrize("locus", LOCUS_PARAMS)
 def test_best_scenario_spans_really_are_germline(preps, locus):
     """The whole point of the markup: the span called V must BE the V germline, and likewise J/D.
 
@@ -64,7 +73,7 @@ def test_best_scenario_spans_really_are_germline(preps, locus):
     assert n > 100, f"only {n} scenarios scored — the fixture is not exercising anything"
 
 
-@pytest.mark.parametrize("locus", LOCI)
+@pytest.mark.parametrize("locus", LOCUS_PARAMS)
 def test_a_single_scenario_never_exceeds_the_marginal(preps, locus):
     """WARNING: `scenario_p <= pgen_nt`. A maximum cannot exceed the sum it is taken over, so a violation
     means the scenario walk and the forward DP have diverged — the cheapest catch there is."""
@@ -135,7 +144,7 @@ def test_out_of_frame_is_refused_not_guessed(preps):
         assert len(got.cdr3_nt) == 3 * len(r["junction_aa"])
 
 
-@pytest.mark.parametrize("locus", LOCI)
+@pytest.mark.parametrize("locus", LOCUS_PARAMS)
 def test_infer_nt_reproduces_the_exact_oracle(preps, locus):
     """WARNING: The headline contract: on every record the exponential oracle can actually resolve,
     ``infer_nt`` must return the same sequence.
@@ -172,7 +181,7 @@ def test_infer_nt_reproduces_the_exact_oracle(preps, locus):
     assert tested >= 3, f"only {tested} records small enough to brute-force — widen the fixture"
 
 
-@pytest.mark.parametrize("locus", LOCI)
+@pytest.mark.parametrize("locus", LOCUS_PARAMS)
 def test_infer_nt_returns_a_sequence_that_translates_back(preps, locus):
     """Whatever else it does, the answer must encode the amino acids it was asked about, be
     explicable under the model, and carry a markup consistent with its own sequence."""
@@ -298,6 +307,7 @@ def test_keep_widens_the_pool_without_changing_the_answer(preps):
         assert wide.pgen >= narrow.pgen * (1 - 1e-9)
 
 
+@pytest.mark.heavy   # 25.9 s: TRB-only, same pure-Python reference path as the [TRB] params
 def test_the_chosen_D_is_genomically_possible_with_the_chosen_J(preps):
     """WARNING: Regression: an earlier draft picked the longest exact D substring and IGNORED ``j``.
 

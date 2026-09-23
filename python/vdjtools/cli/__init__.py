@@ -248,28 +248,147 @@ def downsample(
 def filter_(
     input: Path = typer.Argument(..., help="Clonotype sample file."),
     fmt: str = _FMT, out: Optional[Path] = _OUT,
-    coding: bool = typer.Option(False, "--coding", help="Keep only coding (in-frame, stop-free) clonotypes."),
-    noncoding: bool = typer.Option(False, "--noncoding", help="Keep only NON-coding clonotypes (the complement)."),
+    productive: bool = typer.Option(False, "--productive", help="Keep only AIRR-productive rearrangements (in-frame, stop-free)."),
+    nonproductive: bool = typer.Option(False, "--nonproductive", help="Keep only NON-productive rearrangements (the complement)."),
+    functional_genes: bool = typer.Option(False, "--functional-genes", help="Keep only rearrangements whose V/J are IMGT-functional (F). A DIFFERENT axis from --productive."),
+    keep_orf: bool = typer.Option(False, "--keep-orf", help="With --functional-genes: keep IMGT ORF alleles as well as F."),
+    recompute_frequencies: bool = typer.Option(True, "--recompute-frequencies/--keep-frequencies", help="Renormalise `frequency` over the survivors (default), or leave the file's own frequencies untouched."),
+    coding: bool = typer.Option(False, "--coding", hidden=True, help="Deprecated alias for --productive."),
+    noncoding: bool = typer.Option(False, "--noncoding", hidden=True, help="Deprecated alias for --nonproductive."),
+    min_len: Optional[int] = typer.Option(None, "--min-len", help="Shortest junction_aa to keep, INCLUSIVE (default bound 5)."),
+    max_len: Optional[int] = typer.Option(None, "--max-len", help="Longest junction_aa to keep, INCLUSIVE (default bound 60)."),
     min_freq: Optional[float] = typer.Option(None, "--min-freq", help="Keep clonotypes with frequency >= this."),
     v: Optional[str] = typer.Option(None, "--v", help="Comma-separated V segments (prefix ok)."),
     j: Optional[str] = typer.Option(None, "--j", help="Comma-separated J segments (prefix ok)."),
     remove: bool = typer.Option(False, "--remove", help="With --v/--j: remove the listed segments instead of keeping them."),
 ) -> None:
-    """Filter clonotypes: coding / non-coding, by frequency, and/or by V/J segment."""
+    """Filter clonotypes: productive / non-productive, IMGT-functional genes, frequency, V/J segment.
+
+    Two DIFFERENT axes, deliberately separate flags. `--productive` is a property of the
+    REARRANGEMENT (AIRR: in frame, no stop codon); `--functional-genes` is a property of the
+    GERMLINE GENE it uses (IMGT: F / ORF / P). A productive rearrangement can use a pseudogene V.
+    """
     from vdjtools import preprocess
     from vdjtools.io.batch import read
 
-    if coding and noncoding:
-        _err("--coding and --noncoding are mutually exclusive")
+    if coding:
+        typer.echo("[vdjtools] --coding is deprecated; use --productive", err=True)
+        productive = True
+    if noncoding:
+        typer.echo("[vdjtools] --noncoding is deprecated; use --nonproductive", err=True)
+        nonproductive = True
+    if productive and nonproductive:
+        _err("--productive and --nonproductive are mutually exclusive")
     df = read(input, fmt=fmt)
-    if coding or noncoding:
-        df = preprocess.filter_functional(df, keep="coding" if coding else "noncoding")
+    if productive or nonproductive:
+        _, src = preprocess.productive_mask(df)
+        typer.echo(f"[vdjtools] productivity read from: {src}", err=True)
+        df = preprocess.filter_productive(
+            df, keep="productive" if productive else "nonproductive",
+            recompute_frequencies=recompute_frequencies)
+    if functional_genes:
+        df = preprocess.filter_functional_genes(
+            df, keep=("F", "ORF") if keep_orf else ("F",),
+            recompute_frequencies=recompute_frequencies)
+    if min_len is not None or max_len is not None:
+        from vdjtools.preprocess.filter import MAX_JUNCTION_AA, MIN_JUNCTION_AA
+        df = preprocess.filter_length(
+            df, min_len=MIN_JUNCTION_AA if min_len is None else min_len,
+            max_len=MAX_JUNCTION_AA if max_len is None else max_len,
+            recompute_frequencies=recompute_frequencies)
     if min_freq is not None:
         df = preprocess.filter_frequency(df, min_freq=min_freq)
     if v or j:
         df = preprocess.filter_segment(df, v=v.split(",") if v else None,
                                        j=j.split(",") if j else None, keep=not remove)
     _write(df, out)
+
+
+@app.command(name="correct-vj")
+def correct_vj(
+    samples: list[Path] = typer.Argument(..., help="Two or more clonotype sample files, one per sample."),
+    batches: str = typer.Option(..., "--batches", "-b", help="Comma-separated batch label per sample, in the same order as the files; or a TSV with sample_id/batch columns."),
+    fmt: str = _FMT,
+    outdir: Optional[Path] = typer.Option(None, "--outdir", help="Write one corrected clonotype table per sample here. Without it only the usage table is written."),
+    usage_out: Optional[Path] = typer.Option(None, "--usage-out", help="Write the per-sample corrected V/J usage table here."),
+    transform: str = typer.Option("location", "--transform", help="'location' (ComBat location term) or 'sigmoid' (sigma-standardised z-score, Vlasova et al. 2026)."),
+    scope: str = typer.Option("vj", "--scope", help="Correction key: vj | v | j."),
+    z_cap: float = typer.Option(6.0, "--z-cap", help="With --transform sigmoid: cap |Z| at this."),
+    winsor_q: Optional[float] = typer.Option(None, "--winsor-q", help="Winsorize the per-batch mean/sigma at this quantile. Default off, matching the published method; 0.025 is a robustness knob for shallow/RNA-seq repertoires."),
+    unweighted: bool = typer.Option(False, "--unweighted", help="Count clonotypes rather than reads when building usage."),
+    rescale: bool = typer.Option(False, "--rescale", help="Deterministically rescale instead of roulette-wheel resampling."),
+    seed: int = typer.Option(0, "--seed", help="Seed for the resample."),
+) -> None:
+    """Batch-correct V/J gene usage across samples, and optionally rewrite the clonotype tables.
+
+    Different batches carry systematic V/J usage bias (primer mixes, amplification, extraction).
+    Two transforms:
+
+    \b
+      location  the location term of ComBat on usage log-probabilities:
+                log p - mu_batch + mu_grand.  Location only, no scale term.
+      sigmoid   the sigma-standardised, grand-mean-preserving z-score:
+                Z = (log p - mu_batch) / sigma_batch, capped at +-z_cap, then
+                P = 2*P_avg / (1 + exp(-Z)).  Corrects a batch that is merely
+                NOISIER in a gene, which the location adjustment cannot.
+
+    NAME THE TECHNICAL VARIABLE. Point --batches at a primer mix, a run, an extraction protocol.
+    Pointing it at a study identifier that is collinear with the biology being measured removes
+    the effect along with the batch, and nothing reports that it happened.
+    """
+    from vdjtools import preprocess
+    from vdjtools.io.batch import read
+
+    if len(samples) < 2:
+        _err("correct-vj needs at least two samples — a batch effect is a between-batch quantity")
+    if transform not in ("location", "sigmoid"):
+        _err(f"--transform must be 'location' or 'sigmoid'; got {transform!r}")
+
+    labels = _batch_labels(batches, samples)
+    frames = []
+    for path, batch in zip(samples, labels):
+        df = read(path, fmt=fmt)
+        frames.append(df.with_columns(pl.lit(path.stem).alias("sample_id"),
+                                      pl.lit(batch).alias("batch")))
+    _info(f"{len(frames)} samples over {len(set(labels))} batches, transform={transform}")
+
+    usage = preprocess.correct_vj_usage(
+        frames, batch_col="batch", weighted=not unweighted, transform=transform,
+        z_cap=z_cap, winsor_q=winsor_q)
+    if usage_out is not None:
+        _write(usage, usage_out)
+    elif outdir is None:
+        _write(usage, None)
+
+    if outdir is not None:
+        outdir.mkdir(parents=True, exist_ok=True)
+        for path, df in zip(samples, frames):
+            sid = path.stem
+            corrected = preprocess.apply_vj_correction(
+                df.drop(["sample_id", "batch"]), usage, scope=scope,
+                weighted=not unweighted, resample=not rescale, sample_id=sid, seed=seed)
+            _write(corrected, outdir / f"{sid}.corrected.tsv")
+
+
+def _batch_labels(batches: str, samples: "list[Path]") -> "list[str]":
+    """A batch label per sample, from a comma-separated list or a two-column TSV."""
+    p = Path(batches)
+    if p.exists():
+        meta = pl.read_csv(p, separator="\t")
+        cols = {c.lower(): c for c in meta.columns}
+        sid_col = cols.get("sample_id") or cols.get("sample")
+        b_col = cols.get("batch")
+        if not sid_col or not b_col:
+            _err(f"{batches!r} needs sample_id and batch columns; have {meta.columns}")
+        m = dict(zip(meta[sid_col].to_list(), meta[b_col].to_list()))
+        missing = [s.stem for s in samples if s.stem not in m]
+        if missing:
+            _err(f"no batch for {missing[:5]} in {batches!r} (matched on file stem)")
+        return [str(m[s.stem]) for s in samples]
+    labels = [b.strip() for b in batches.split(",") if b.strip()]
+    if len(labels) != len(samples):
+        _err(f"--batches has {len(labels)} labels for {len(samples)} samples")
+    return labels
 
 
 @app.command()
@@ -828,10 +947,15 @@ def model_build(
 ) -> None:
     """Build models from the full AIRR read corpus: fetch, arda-map, then EM — several chains at once.
 
-    This is the real training path (raw FASTQ from the ``isalgo/airr_model_read`` dataset), so it
-    needs HuggingFace access and arda's mmseqs2. Mapping is minutes per chain and EM on a D-bearing
-    locus can be far longer, so **use ``-v``** — without it the whole run is silent until a chain
-    finishes, and a slow fit is indistinguishable from a stuck one.
+    This is the real training path (raw FASTQ from ``isalgo/airr_model_read``) and needs arda's
+    mmseqs2. Mapping is minutes per chain and EM on a D-bearing locus can be far longer, so **use
+    ``-v``** — without it the whole run is silent until a chain finishes, and a slow fit is
+    indistinguishable from a stuck one.
+
+    LAB-ONLY: ``isalgo/airr_model_read`` is a PRIVATE HuggingFace dataset, so without access this
+    command stops at a 401. That is expected outside the lab and is not a bug. The bundled models
+    ship with vdjtools, are the versioned reference, and need no rebuild — ``vdjtools models``
+    lists them.
     """
     from vdjtools.model.data import build_all
 

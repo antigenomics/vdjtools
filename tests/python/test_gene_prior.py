@@ -14,6 +14,11 @@ from vdjtools.model import load_bundled
 from vdjtools.model.generate import generate
 from vdjtools.model.infer import _functional_support, infer_native
 
+# Every test here runs a full infer_native EM over the 89-allele bundled TRB locus: 162.9 s
+# measured locally, and worse on a 4-vCPU runner because the C++ E-step is thread-parallel.
+# That is 42% of the whole suite, so the release gate skips them; ci.yml still runs them.
+pytestmark = pytest.mark.heavy
+
 
 @pytest.fixture(scope="module")
 def trb():

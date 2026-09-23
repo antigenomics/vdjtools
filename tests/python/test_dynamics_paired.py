@@ -128,6 +128,7 @@ def test_downscale_is_deterministic_not_a_resample():
 
 # --- p-value calibration (the acceptance test, thesis Fig. 2.13) ---------------------------
 
+@pytest.mark.heavy   # 25.4 s: builds a 200k/2M-read replicate pair plus a negative control
 def test_pvalues_are_calibrated_on_a_replicate_pair_and_skewed_without_downscaling():
     # THE gate. On a replicate pair there are no true dynamics, so every "significant" clone
     # is a false positive and the p-values must not pile up near 0.

@@ -197,13 +197,25 @@ depth, error-correction, filtering, and pooling/joining:
    from vdjtools import preprocess
 
    preprocess.downsample(sample, 1000)              # resample to 1000 reads (numpy multinomial)
-   preprocess.filter_functional(sample)             # drop out-of-frame / stop-codon clonotypes
+   preprocess.filter_productive(sample)             # AIRR: drop out-of-frame / stop-codon
+   preprocess.filter_functional_genes(sample)       # IMGT: drop pseudogene / ORF V and J
+   preprocess.filter_length(sample)                 # junction_aa 5..60 aa, inclusive
    preprocess.filter_frequency(sample, min_freq=1e-4)
    preprocess.correct(sample, max_mismatches=2)     # collapse likely sequencing errors
+
+   # cross-batch V/J-usage bias
+   usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")
+   fixed = preprocess.apply_vj_correction(sample, usage, sample_id="A0")
 
    # combine samples: pooled clonotype table, or an incidence/frequency join
    preprocess.pool_samples([a, b, c])
    preprocess.join_samples([a, b, c], min_samples=2)   # clonotypes seen in >=2 samples
+
+.. seealso::
+
+   :doc:`preprocessing` — the whole pre-processing surface, including why *productive* (the
+   rearrangement, AIRR) and *functional* (the germline gene, IMGT) are different questions, and
+   how ``frequency`` is handled at every step.
 
 Cross-batch V/J-usage bias is corrected in two steps — batch-correct the usage, then push it
 back onto each sample's clonotype table:

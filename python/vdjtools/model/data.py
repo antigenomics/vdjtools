@@ -49,10 +49,27 @@ ORGANISM = {"human": "human", "human_fetal": "human", "mouse": "mouse"}
 
 
 def fetch_fastq(group: str, chain: str, label: str, *, repo: str = MODEL_READS_REPO) -> str:
-    """Download one ``{group}/{CHAIN}.{label}.fq.gz`` from the dataset; return its local path."""
+    """Download one ``{group}/{CHAIN}.{label}.fq.gz`` from the dataset; return its local path.
+
+    Raises:
+        PermissionError: If the dataset is not readable with the current credentials. It is
+            **private**, so that is the expected outcome for anyone outside the lab, and the bare
+            ``huggingface_hub`` 401 does not say which repo it means or what to do instead.
+    """
     from huggingface_hub import hf_hub_download
 
-    return hf_hub_download(repo_id=repo, filename=f"{group}/{chain}.{label}.fq.gz", repo_type="dataset")
+    try:
+        return hf_hub_download(repo_id=repo, filename=f"{group}/{chain}.{label}.fq.gz",
+                               repo_type="dataset")
+    except Exception as e:                        # 401/403 from a private repo, or no token at all
+        if "401" not in str(e) and "403" not in str(e) and "gated" not in str(e).lower():
+            raise
+        raise PermissionError(
+            f"{repo!r} is a PRIVATE HuggingFace dataset and your credentials cannot read it. "
+            "This is only needed to RETRAIN the recombination models from raw reads -- the "
+            "bundled models ship with vdjtools, are the versioned reference, and need no rebuild "
+            "(see `vdjtools models`). This is expected outside the lab and is not a bug."
+        ) from e
 
 
 def _subsample_fastq(src: str | Path, dst: str | Path, n: int) -> None:

@@ -94,7 +94,9 @@ Capabilities (see the :doc:`API reference <api>`):
 - **Stats** — diversity, spectratype, V/J/VJ usage.
 - **Features** — CDR physicochemical profiles, k-mer / V+k-mer summaries.
 - **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree), similarity-aware overlap, clustering.
-- **Preprocess** — downsampling, error-correction, batch-effect correction, pooling/joining.
+- **Preprocess** (:doc:`preprocessing`) — format conversion, the three filtering axes
+  (AIRR productivity, IMGT gene functionality, length), frequency handling, downsampling,
+  error-correction, V/J-usage batch correction, pooling/joining.
 - **Biomarker** — incidence-based association (Fisher) and metaclonotype grouping.
 - **Dynamics** — longitudinal clonotype tracking: paired within-donor expansion testing, the VDJtrack
   size-bucket recapture model, metaclonotype-grouped testing, and an edgeR NB-exact caller.
@@ -103,10 +105,38 @@ Capabilities (see the :doc:`API reference <api>`):
 
 .. toctree::
    :hidden:
+   :caption: Start here
+   :maxdepth: 2
 
    self
    usage
+   preprocessing
+
+.. toctree::
+   :hidden:
+   :caption: Repertoire signatures
+   :maxdepth: 2
+
+   signature
+
+.. toctree::
+   :hidden:
+   :caption: Models and single cell
+   :maxdepth: 2
+
    model
    singlecell
-   signature
+
+.. toctree::
+   :hidden:
+   :caption: Worked examples
+   :maxdepth: 2
+
+   notebooks
+
+.. toctree::
+   :hidden:
+   :caption: Reference
+   :maxdepth: 2
+
    api

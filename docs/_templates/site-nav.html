@@ -1,0 +1,14 @@
+{#-
+  Full site tree in the left sidebar.
+
+  pydata-sphinx-theme's stock `sidebar-nav-bs` renders only the *children* of the current
+  top-level page. Most pages here are top-level siblings the theme has already put in the navbar,
+  so that component emits a bare "Section Navigation" heading with nothing under it -- scenery,
+  not navigation. This renders the whole captioned tree instead, which is what a reader moving
+  between `signature` and `usage` actually needs.
+
+  Same template as `seqtree` and `mhcmatch`, whose docs these are being brought into line with.
+-#}
+<nav class="bd-links bd-links--full" id="bd-docs-nav" aria-label="Site navigation">
+  {{ toctree(collapse=False, includehidden=True, titles_only=True, maxdepth=2) }}
+</nav>
