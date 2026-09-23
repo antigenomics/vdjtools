@@ -3,6 +3,32 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.12.0 — 2026-09-24
+
+### Changed — the docs tell you where the signature is
+
+The signature pages were written, committed and live, and nobody could find them: the left sidebar
+was a flat wall of page titles in source order, so `signature` sat in it indistinguishable from
+everything else. `index.rst` now carries captioned toctrees — **Start here**, **Repertoire
+signatures**, **Models and single cell**, **Worked examples**, **Reference** — and the theme is
+configured to render that structure rather than flatten it, matching `seqtree` and `mhcmatch`.
+Adds the `site-nav` sidebar template and the card CSS those two already use.
+
+### Added — the end-to-end recipe, and a notebooks page
+
+`docs/signature.rst` now answers the question people actually ask: a directory of per-sample AIRR
+TSVs plus your own metadata sheet, to one table you can join. `sample_id` is the file name up to
+the first dot, so naming files after the key your metadata already uses means the join needs no
+mapping table.
+
+`docs/notebooks.rst` links the example notebooks, which the docs did not reference at all.
+
+### Changed — no worktrees
+
+`CLAUDE.md` now says branches only. Work committed under a gitignored `.claude/worktrees/` is
+invisible from the repo root and effectively unbacked, and a branch held by a worktree cannot be
+checked out in the main repo.
+
 ## 3.11.0 — 2026-08-20
 
 ### Added — `vdjtools correct-vj`, and a documented pre-processing surface
