@@ -1,0 +1,61 @@
+
+/* ---- notebook cards and the full-tree sidebar, shared with mhcmatch/seqtree ---- */
+.proj-card-grid {
+  display: grid;
+  /* auto-fit, not a fixed column count: five cards in `repeat(4, 1fr)` left the fifth
+     stranded alone on a second row. */
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+/* Every link state is pinned. The theme's `a:visited` (specificity 0,1,1) outranks a bare
+   `.proj-card` (0,1,0), so without this a card changed colour once you had visited its target
+   -- which made whichever page you had not read yet the odd one out. */
+.proj-card,
+.proj-card:link,
+.proj-card:visited,
+.proj-card:hover,
+.proj-card:focus {
+  display: block;
+  border: 1px solid var(--pst-color-border);
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  text-decoration: none;
+  color: var(--pst-color-text-base);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.proj-card:hover,
+.proj-card:focus {
+  border-color: var(--pst-color-primary);
+  transform: translateY(-2px);
+}
+.proj-card h3,
+.proj-card:visited h3 { margin: 0 0 0.3rem; font-size: 1rem; color: var(--pst-color-text-base); }
+.proj-card p,
+.proj-card:visited p { margin: 0; font-size: 0.9rem; color: var(--pst-color-text-muted); }
+@media (max-width: 900px) {
+  .proj-card-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* Left sidebar: the full site tree (see docs/_templates/site-nav.html). The stock component
+   showed a bare "Section Navigation" heading with nothing under it, because most pages here are
+   top-level toctree siblings and therefore have no children to list. */
+.bd-links--full .caption-text {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pst-color-text-muted);
+}
+.bd-links--full > ul { padding-left: 0; }
+.bd-links--full ul { list-style: none; margin: 0 0 1.1rem; padding-left: 0; }
+.bd-links--full li { margin: 0.1rem 0; }
+.bd-links--full a {
+  display: block;
+  padding: 0.2rem 0;
+  font-size: 0.9rem;
+  color: var(--pst-color-text-muted);
+  text-decoration: none;
+}
+.bd-links--full a:hover { color: var(--pst-color-primary); }
+.bd-links--full li.current > a { color: var(--pst-color-primary); font-weight: 600; }

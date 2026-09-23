@@ -105,11 +105,38 @@ Capabilities (see the :doc:`API reference <api>`):
 
 .. toctree::
    :hidden:
+   :caption: Start here
+   :maxdepth: 2
 
    self
    usage
    preprocessing
+
+.. toctree::
+   :hidden:
+   :caption: Repertoire signatures
+   :maxdepth: 2
+
+   signature
+
+.. toctree::
+   :hidden:
+   :caption: Models and single cell
+   :maxdepth: 2
+
    model
    singlecell
-   signature
+
+.. toctree::
+   :hidden:
+   :caption: Worked examples
+   :maxdepth: 2
+
+   notebooks
+
+.. toctree::
+   :hidden:
+   :caption: Reference
+   :maxdepth: 2
+
    api
