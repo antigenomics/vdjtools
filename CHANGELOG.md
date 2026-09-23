@@ -3,6 +3,27 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.12.1 — 2026-09-24
+
+### Fixed — a k-mer space no longer loads through `pickle`
+
+`save_kmer_spaces` stored the locus list and the V-gene list as `dtype=object`, so
+`load_kmer_spaces` had to pass `allow_pickle=True` — which makes **reading a space someone sent
+you arbitrary code execution**. These files exist to travel; that is their entire purpose, so the
+loader has to be safe on a file it did not write. Strings are now fixed-width unicode (`<U`) and
+the loader passes `allow_pickle=False`.
+
+A space written before this release carries object arrays and will now raise on load, with numpy's
+own message naming the cause. Re-save it with `save_kmer_spaces` to convert.
+
+### Changed — spaces are stored in float32, halving them
+
+The IDF vector and the rotation are stored as float32 rather than float64. Measured across all
+seven loci, projecting a repertoire through the float32 basis instead of the float64 one moves the
+result by at most **4.9e-9 relative** — nine orders of magnitude below the noise in any repertoire
+measurement — and it takes the fitted artifact from **14.2 MiB to 7.0 MiB**, which is the
+difference between shipping it inside a wheel and not shipping it at all.
+
 ## 3.12.0 — 2026-09-24
 
 ### Changed — the docs tell you where the signature is
