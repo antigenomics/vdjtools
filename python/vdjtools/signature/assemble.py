@@ -28,7 +28,12 @@ from . import layout as L
 #: Coverage level the Hill numbers are standardised to, per locus, until the reference artifact
 #: supplies measured ones. Deliberately low: attained Good-Turing coverage on real repertoires
 #: runs 0.24-0.58, so a textbook 0.95 would put every sample into extrapolation, where the
-#: estimator inflates diversity roughly tenfold. See SIGNATURE.md.
+#: estimator inflates diversity roughly tenfold.
+#:
+#: This is a **fallback, not a recommendation** -- it is one number for all seven loci, and the
+#: measured values are neither uniform nor assay-independent (TRB attains 0.408 in amplicon data
+#: and 0.126 in bulk blood RNA-seq). Pass measured constants via ``cstar=`` whenever a reference
+#: artifact supplies them; ``mir.signature.signature()`` does this for you. See ``docs/signature.rst``.
 DEFAULT_CSTAR = 0.20
 
 

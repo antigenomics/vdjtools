@@ -174,6 +174,43 @@ A locus that was not sequenced, or a statistic the sample is too shallow to esti
 plus a ``vsig:mask:`` column. A model that reads "absent" as "zero" reads an unsequenced chain as a
 biological finding.
 
+The coverage level the diversity columns are compared at
+--------------------------------------------------------
+
+Every Hill number in the ``vsig:div:`` block is reported at a **standardised coverage** ``C*``
+rather than at a standardised read count — two samples are only comparable if the same fraction of
+their populations has been seen. Which ``C*`` is therefore load-bearing, and it is not one number.
+
+``DEFAULT_CSTAR = 0.20`` is a **fallback**, used when no measured constants are supplied. It is
+deliberately low: attained Good-Turing coverage on real repertoires runs 0.24–0.58, so a textbook
+0.95 would put essentially every sample into extrapolation, where the estimator inflates diversity
+roughly tenfold. Being below what samples attain is the safe direction.
+
+The measured values are neither uniform across loci nor independent of assay:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 22 22
+
+   * - locus
+     - amplicon TCR
+     - bulk blood RNA-seq
+   * - TRA
+     - 0.545
+     - 0.129
+   * - TRB
+     - 0.408
+     - 0.126
+
+A **3.2× difference on the same locus**, purely from how the library was made. Pass measured
+constants with ``cstar=`` whenever a reference artifact supplies them —
+:func:`mir.signature.signature` does it for you, selecting the reference by assay. Using a ``C*``
+above what your samples attain is the failure mode worth avoiding; the fallback errs the other way
+on purpose.
+
+A locus with no measured ``C*`` falls back to a coverage level no finite sample attains, so its
+``div:`` columns come back ``nan``. If a whole locus of diversity columns is empty, this is why.
+
 The signature filters for you — do not pre-filter
 -------------------------------------------------
 
