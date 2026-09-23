@@ -47,6 +47,51 @@ input), and **transfer** (for a model that must work on another lab's samples). 
    residues short everywhere, which shifts the length, k-mer and Pgen features. Check your headers
    before you trust a matrix.
 
+A folder of AIRR files, and a table you can join
+------------------------------------------------
+
+The complete recipe. Input: a directory of per-sample AIRR TSVs plus your own metadata sheet.
+Output: one TSV, one row per sample, joinable on ``sample_id``.
+
+.. code-block:: bash
+
+   vdjtools signature --preset classify samples/*.tsv -o vsig.tsv
+
+``sample_id`` is the file name up to the first dot, so ``samples/SRR8364167.tsv`` becomes
+``SRR8364167``. Name your files after the key your metadata already uses and the join needs no
+mapping table:
+
+.. code-block:: python
+
+   import polars as pl
+
+   sig  = pl.read_csv("vsig.tsv", separator="\t")
+   meta = pl.read_csv("meta.tsv", separator="\t")      # your own sheet
+   sig.join(meta, left_on="sample_id", right_on="Run", how="left") \
+      .write_csv("signature_with_metadata.tsv", separator="\t")
+
+**This command emits the statistics half only.** For most modelling you want both halves, which is
+one command in mirpy and produces the same ``sample_id`` and the same column names:
+
+.. code-block:: bash
+
+   pip install mirpy-lib
+   mir signature --preset classify samples/*.tsv -o both.tsv
+
+A preset spanning both halves keeps only its ``vsig:`` columns here and says so on stderr, because
+silently returning half of what was asked for is worse than saying it. See :doc:`notebooks` for the
+runnable end-to-end version on a real 1,764-sample cohort.
+
+Raw block values
+----------------
+
+``--standardize none`` (``mir signature``) or the un-rescaled block output emits every column in its
+own units, before reference standardisation -- raw counts, fractions and Hill numbers. Use it when
+you are building a within-cohort model and do not need cross-cohort comparability. It is also why a
+locus with no coverage constant in the bundled reference still returns diversity numbers this way:
+raw Hill numbers need no ``C*``, so all seven loci are populated. What you give up is exactly what
+standardisation buys -- a column that means the same thing in your matrix and a collaborator's.
+
 The Python API
 --------------
 
