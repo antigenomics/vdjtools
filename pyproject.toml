@@ -46,7 +46,11 @@ dependencies = [
     # metaclonotypes -- all advertised capabilities, and none has a fallback. Cheap: seqtree
     # itself has ZERO runtime deps and the same wheel matrix as vdjtools; vdjmatch is a
     # pure-python wheel needing only polars (ours) + seqtree. Both are imported lazily.
-    "seqtree>=0.6.1",   # 0.6.1 fixes a corrupted MJ A-N contact energy (structural()) and names the bad sequence in gapblock's alphabet error
+    # 1.0.0 is where seqtree began guaranteeing semver, so a `>=1.0.0` floor is the first one
+    # that actually bounds what pip may resolve; the pre-1.0 floor let it pick releases
+    # nothing here has been run against. (0.6.1, the old floor, fixed a corrupted MJ A-N
+    # contact energy in structural() and named the bad sequence in gapblock's alphabet error.)
+    "seqtree>=1.0.0",
     "vdjmatch>=0.1.2",  # 0.1.2 fixes cluster.overlap() raising SchemaError on zero fuzzy matches
     # We declare huggingface_hub OURSELVES rather than borrowing seqtree's `[control]` extra:
     # it is genuinely OUR dependency (model/data.py imports hf_hub_download directly), and

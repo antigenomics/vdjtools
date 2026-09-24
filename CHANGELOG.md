@@ -3,6 +3,16 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## Unreleased
+
+### Changed — the seqtree floor is 1.0.0
+
+`seqtree>=0.6.1` predated seqtree's semver guarantee, which starts at 1.0.0, so the floor did not
+actually bound what pip could resolve. Both the full suite (1,189 tests) and the docs build are
+green against seqtree 1.0.0, vdjmatch 0.3.1 and arda-mapper 2.23.0; only the seqtree floor moves,
+because the vdjmatch and arda floors each pin a specific fix and raising them would exclude working
+versions for no stated reason.
+
 ## 3.13.0 — 2026-09-24
 
 ### Added — the channel vocabulary
