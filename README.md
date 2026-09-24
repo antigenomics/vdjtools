@@ -27,7 +27,7 @@ Built on the antigenomics ecosystem:
 [vdjmatch](https://github.com/antigenomics/vdjmatch) (overlap + TCRnet),
 [arda](https://github.com/antigenomics/arda) (AIRR annotation + markup repair).
 
-> **Status: `v3.12.1`** — the native V(D)J model engine plus the full analytics suite (diversity,
+> **Status: stable** (version: the PyPI badge above). The native V(D)J model engine plus the full analytics suite (diversity,
 > overlap/TCRnet, preprocessing, biomarkers, single-cell), **longitudinal clonotype dynamics**
 > (paired expansion testing + the VDJtrack recapture model), CDR features, and legacy-format
 > ingestion (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype

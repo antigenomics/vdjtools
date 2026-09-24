@@ -65,7 +65,32 @@ log "$PIP install -e .[dev,test] (builds _core)"
 $PIP install -e "$ROOT[dev,test]"
 
 # --- 4. verification -------------------------------------------------------
-python -c "import vdjtools, vdjtools._core as c; print('vdjtools', vdjtools.__version__, '| _core', c.version())"
+# The compiled ext, the bundled models and the signature contract: three things a broken
+# checkout loses silently, and `import vdjtools` alone catches none of them.
+python - <<'PY'
+import vdjtools
+import vdjtools._core as core
+from vdjtools.model import load_bundled
+from vdjtools.signature import CHANNELS, channels, columns
+
+LOCI = ("TRA", "TRB", "TRG", "TRD", "IGH", "IGK", "IGL")
+missing = []
+for locus in LOCI:
+    try:
+        load_bundled(locus, source="olga")
+    except Exception as exc:
+        missing.append(f"{locus} ({type(exc).__name__})")
+
+n_full = len(columns("full"))
+n_chan = len(channels("full"))
+print(f"vdjtools {vdjtools.__version__} | _core {core.version()}")
+print(f"  models:    {len(LOCI) - len(missing)}/{len(LOCI)} bundled loci load")
+print(f"  signature: {n_full} full columns in {n_chan} channels")
+if missing:
+    raise SystemExit("  MISSING bundled models: " + ", ".join(missing))
+if n_chan != len(set(CHANNELS) & set(channels("full"))):
+    raise SystemExit("  channel vocabulary does not cover the emitted columns")
+PY
 
 if [ "$DO_TESTS" -eq 1 ]; then
   log "running fast tests"
