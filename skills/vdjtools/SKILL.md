@@ -19,6 +19,25 @@ Public API surface of **vdjtools v2** — a Python + C++ (pybind11 `_core`) rewr
 repertoire analysis on the **AIRR schema + polars**. Check here for an existing function before
 writing new code. Keep this file current when a subpackage's public API changes.
 
+## Where the detail lives
+
+This file is the **API surface and the traps** — what to import, what to call, and what produces a
+silently wrong answer. It does not repeat the reference documentation.
+
+| You need | Go to |
+|---|---|
+| Runnable walkthroughs, every module | https://docs.isalgo.dev/vdjtools/usage.html |
+| Every symbol, autodoc'd | https://docs.isalgo.dev/vdjtools/api.html |
+| The V(D)J model engine | https://docs.isalgo.dev/vdjtools/model.html |
+| Pre-processing and the three filter axes | https://docs.isalgo.dev/vdjtools/preprocessing.html |
+| The portable signature | https://docs.isalgo.dev/vdjtools/signature.html |
+| The channel vocabulary | https://docs.isalgo.dev/vdjtools/channels.html |
+| Single-cell and scverse interop | https://docs.isalgo.dev/vdjtools/singlecell.html |
+| Worked notebooks | https://docs.isalgo.dev/vdjtools/notebooks.html |
+| How to work in this repo, open loops | `CLAUDE.md` |
+| Dataset provenance and numbers of record | `SOURCES.md` |
+| Release-by-release narrative | `CHANGELOG.md` |
+
 ## Canonical data model
 
 Every reader emits and every analysis consumes one flat **clonotype frame** (`vdjtools.io.schema`):
@@ -178,68 +197,58 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
 `physchem_profile` (region × property), `kmer_profile`, `v_kmer_c_profile`, `load_property_table`,
 `DEFAULT_PROPERTIES`.
 
-### `vdjtools.signature` — VSIG, the statistics half of the portable repertoire signature
-One repertoire → a fixed, **named, positional** vector a collaborator can compute from their own
-AIRR files and feed straight to a learner. The other half (geometry of the prototype-sum measure)
-is `mir.signature`; both sit in one column contract, which lives **here** because mirpy depends on
-vdjtools and not the reverse.
+### `vdjtools.signature` — VSIG, the statistics half of the portable signature
+
+Full reference: **https://docs.isalgo.dev/vdjtools/signature.html** and
+**https://docs.isalgo.dev/vdjtools/channels.html**. The other half (embedding geometry) is
+`mir.signature`; both sit on one contract, which lives **here** because mirpy depends on vdjtools
+and not the reverse.
 
 ```python
-from vdjtools.signature import vsig, vsig_cohort, columns, describe
+from vdjtools.signature import (vsig, vsig_cohort, columns, describe,
+                                channels, channel, channel_table, CHANNELS)
 v = vsig({"TRB": df}, tier="standard")        # {column: value}, in layout order
 describe("standard")                          # the column dictionary
+channel_table("standard")                     # the channel vocabulary
 ```
-- `layout` — the contract. `LOCI`, `TIERS` (`core`/`standard`/`full`, each an exact **index
-  subset** of the next), `columns(tier, sig)`, `index()`, `describe()`, `parse()`, `register()`,
-  `Block`, `feats()`. Transforms are declared **per feature**, not per block: a clonality block
-  legitimately mixes a CLR-transformed composition with a logit-transformed proportion.
-- `transform` — the variance-stabilising layer, each choice denominator-aware because the
-  alternative silently lies about shallow samples: `logit` (Haldane–Anscombe), `arcsine`
-  (Anscombe), `clr` (multiplicative zero replacement, **capped** so a shallow composition cannot
-  consume itself), `log10`, `log1p`, `reference_z`, `robust_loc_scale`, `magnitude_scale`.
-  `clr` ships *k−1* parts: all *k* are linearly dependent and would be a guaranteed zero
-  eigenvalue in any PCA.
-- `blocks` — `sanitise`, `work_frame`, then `qc_block`, `depth_block`, `div_block`, `clon_block`,
-  `len_block`, `iso_block`, `shm_block`, `pair_block`, `aa_block`, `pchem_block`, `pgen_block`.
-  `estimable()` **refuses** rather than extrapolates: real repertoires attain Good–Turing coverage
+```bash
+vdjtools signature *.tsv --tier standard -o vsig.parquet
+vdjtools signature --describe                 # column dictionary; reads no input
+vdjtools signature --channels                 # channel vocabulary; reads no input
+vdjtools presets                              # the 8 named column subsets, ranked
+```
+
+**Submodules.** `layout` is the contract — `LOCI`, `TIERS`, `columns(tier, sig)`, `index()`,
+`describe()`, `parse()`, `register()`, `Block`, `feats()`, plus the channel API. `transform` is
+the variance-stabilising layer (`logit` Haldane–Anscombe, `arcsine` Anscombe, `clr`, `log10`,
+`log1p`, `reference_z`, `robust_loc_scale`, `magnitude_scale`). `blocks` holds `sanitise`,
+`work_frame` and the per-block builders. `assemble` holds `vsig` / `vsig_cohort`.
+
+**Presets are the entry point to recommend**, not hand-picked columns: `compact` (86),
+`classify` (615), `transfer` (550), `geometry` (514), `statistics` (101), `bcell` (271),
+`full` (1403, feature selection only), `nuisance` (73, ranked *avoid* — a control). They resolve
+from the frozen layout alone. `vdjtools presets NAME` prints one in full.
+
+**Channels** are the second field of a column name — the named group measuring one thing, and the
+level a finding is stated at. `channels(tier, sig, columns=…, per_locus=…)` returns the
+name→column-index map, disjoint and exhaustive; `channel_table(tier)` is one row per channel.
+Keys carry their half (`vsig:div` vs `rsig:div` are different measurements of the same idea).
+Feed the map to `mir.signature.channel_spec` / `mir.explain.channel_report` to ask which channel
+carries a signal.
+
+#### Traps
+
+- **Transforms are declared per feature, not per block.** A clonality block legitimately mixes a
+  CLR-transformed composition with a logit-transformed proportion.
+- **`clr` ships *k−1* parts.** All *k* are linearly dependent and would be a guaranteed zero
+  eigenvalue in any PCA. It is also capped, so a shallow composition cannot consume itself.
+- **`estimable()` refuses rather than extrapolates.** Real repertoires attain Good–Turing coverage
   0.24–0.58, so a textbook `C*=0.95` puts every sample into extrapolation, where diversity
   inflates roughly tenfold.
-- `assemble` — `vsig`, `vsig_cohort`. Pass **`threads=1`** when running inside your own process
-  pool: the default 0 means "all cores" *per worker*.
-- `channels` — the **channel vocabulary**, the interpretive layer over the contract. A column is
-  `<sig>:<channel>:<locus>:<feature>`; the channel is the named group of columns that measures one
-  thing, and the level a finding is stated at. `CHANNELS` (name → what it measures, 20 entries),
-  `channel(column)`, `channels(tier, sig, columns=…, per_locus=…)` → name → column indices
-  (disjoint and exhaustive), `channel_table(tier)` → one row per channel. A channel key always
-  carries its half (`vsig:div` vs `rsig:div`) because block names collide across the two. Feed
-  `channels()` to `mir.signature.channel_spec` / `mir.explain.channel_report` to ask which channel
-  carries a signal. `attributable` (clonotype pre-image; only the `rsig` geometry blocks) is
-  declared on the `Block`, never inferred from the name.
-- CLI: `vdjtools signature *.tsv --tier standard -o vsig.parquet`, `vdjtools signature --describe`
-  (column dictionary), `vdjtools signature --channels` (channel vocabulary). Both read no input.
-
-**Feature presets — the entry point to recommend to a collaborator.** `vdjtools.signature.presets` names
-and ranks the useful column subsets so nobody picks columns by hand:
-
-| preset | rank | columns | use it for |
-|---|---|---|---|
-| `compact` | recommended | 152 | first look; small cohorts; features must stay well under n |
-| `transfer` | recommended | 550 | the model must run on another lab's samples |
-| `classify` | recommended | 615 | general supervised work when train/test share a protocol |
-| `statistics` | specific | 101 | no embedding available; textbook-defined features only |
-| `bcell` | specific | 286 | BCR work — Ig loci with SHM and isotype |
-| `geometry` | specific | 514 | batch is the adversary; blood↔tissue comparisons |
-| `full` | specific | 1403 | feature selection, NOT fitting — measured worse than a good subset |
-| `nuisance` | **avoid** | 73 | a control: depth/mask/QC only. If your model matches it, it reads library prep |
-
-```bash
-vdjtools presets                 # the table, with rankings
-vdjtools presets transfer        # one preset in full: features, how computed, use cases, caveats
-```
-
-Presets resolve from the frozen layout alone — no corpus, no fitted artifact — so two people
-selecting the same preset get identical columns in identical order.
-
+- **Pass `threads=1`** to `vsig` inside your own process pool: the default 0 means all cores *per
+  worker*.
+- **A tier is an index subset, not a filter.** Column *i* means the same thing at every tier and in
+  anyone else's matrix. Changing a name is a breaking change, not an edit.
 
 ### `vdjtools.overlap` — overlap + TCRnet (delegates to vdjmatch/seqtree)
 `overlap_metrics`, `overlap_pair`, `DEFAULT_KEY`; `fuzzy_overlap`, `fuzzy_overlap_metrics`;
