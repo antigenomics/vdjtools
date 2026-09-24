@@ -1,3 +1,18 @@
+---
+name: vdjtools
+description: >-
+  The public API of vdjtools v2 (PyPI `vdjtools`) — TCR/BCR immune-repertoire analysis on the AIRR
+  schema with polars, plus a native C++ V(D)J recombination engine. Use when reading or converting
+  repertoire files (MiXCR, immunoSEQ, AIRR, MiGEC, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda),
+  computing diversity, segment usage, spectratype or repertoire overlap/TCRnet, pre-processing a
+  cohort (filter, downsample, error-correct, batch-correct, pool), computing generation probability
+  (Pgen), generating synthetic repertoires, inferring or inspecting a recombination model, testing
+  longitudinal clonotype expansion, running incidence biomarker association, handling single-cell
+  (10x / AIRR Cell / scirpy / Dandelion) receptor data, or emitting the portable repertoire
+  signature and its channel vocabulary. Covers what each subpackage exposes, which function to
+  reach for, and the invariants that have produced silent wrong answers when broken.
+---
+
 # SKILL: vdjtools (v2)
 
 Public API surface of **vdjtools v2** — a Python + C++ (pybind11 `_core`) rewrite for TCR/BCR
@@ -191,7 +206,17 @@ describe("standard")                          # the column dictionary
   inflates roughly tenfold.
 - `assemble` — `vsig`, `vsig_cohort`. Pass **`threads=1`** when running inside your own process
   pool: the default 0 means "all cores" *per worker*.
-- CLI: `vdjtools signature *.tsv --tier standard -o vsig.parquet`, `vdjtools signature --describe`.
+- `channels` — the **channel vocabulary**, the interpretive layer over the contract. A column is
+  `<sig>:<channel>:<locus>:<feature>`; the channel is the named group of columns that measures one
+  thing, and the level a finding is stated at. `CHANNELS` (name → what it measures, 20 entries),
+  `channel(column)`, `channels(tier, sig, columns=…, per_locus=…)` → name → column indices
+  (disjoint and exhaustive), `channel_table(tier)` → one row per channel. A channel key always
+  carries its half (`vsig:div` vs `rsig:div`) because block names collide across the two. Feed
+  `channels()` to `mir.signature.channel_spec` / `mir.explain.channel_report` to ask which channel
+  carries a signal. `attributable` (clonotype pre-image; only the `rsig` geometry blocks) is
+  declared on the `Block`, never inferred from the name.
+- CLI: `vdjtools signature *.tsv --tier standard -o vsig.parquet`, `vdjtools signature --describe`
+  (column dictionary), `vdjtools signature --channels` (channel vocabulary). Both read no input.
 
 **Feature presets — the entry point to recommend to a collaborator.** `vdjtools.signature.presets` names
 and ranks the useful column subsets so nobody picks columns by hand:
@@ -318,7 +343,8 @@ compare compare-pgen loglik log`. A model is named as a directory **or** as
 `LOCUS[:source[:organism]]` (`TRB`, `TRB:learned`, `TRA:arda:mouse`). **`model check` exits 1 on any
 error-severity issue**, so it works as a build gate. Data: **`convert`** (any format →
 canonical), **`downsample`**, **`filter`** (`--coding`/`--noncoding`/`--min-freq`/`--v`/`--j`),
-**`pool`** (`--join`). Analytics: `diversity`, `overlap`, `segment-usage`, `spectratype`.
+**`pool`** (`--join`). Analytics: `diversity`, `overlap`, `segment-usage`, `spectratype`. Signature: **`signature`**
+(`--preset`/`--tier`, `--describe`, `--channels`) and **`presets`**.
 Longitudinal/enrichment: `dynamics`, `tcrnet`, `alice`. Inputs auto-detected; **`-o` is
 format-aware** — `.parquet`/`.pq` → Parquet, else TSV (or stdout). The per-sample analytics
 commands take **`--threads N`** (parallel over samples, `map_samples`) and **`--cohort DIR`** (one

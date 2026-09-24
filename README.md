@@ -27,7 +27,7 @@ Built on the antigenomics ecosystem:
 [vdjmatch](https://github.com/antigenomics/vdjmatch) (overlap + TCRnet),
 [arda](https://github.com/antigenomics/arda) (AIRR annotation + markup repair).
 
-> **Status: `v3.0.0`** — the native V(D)J model engine plus the full analytics suite (diversity,
+> **Status: `v3.12.1`** — the native V(D)J model engine plus the full analytics suite (diversity,
 > overlap/TCRnet, preprocessing, biomarkers, single-cell), **longitudinal clonotype dynamics**
 > (paired expansion testing + the VDJtrack recapture model), CDR features, and legacy-format
 > ingestion (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype
@@ -91,79 +91,40 @@ extension. MMseqs2 is arda's aligner, needed **only** for the annotation path an
 round-trip tests — `brew install mmseqs2`, or use the optional `environment.yml` conda env which
 bundles it.
 
-## Quickstart — recombination model engine
+## Where to start
 
-Precomputed models for all **7 human loci** ship in the wheel — no OLGA or download needed:
+| You want to | Go to |
+|---|---|
+| Load samples and run diversity / overlap / usage | [Quickstart](#quickstart) · [User guide](https://docs.isalgo.dev/vdjtools/usage.html) |
+| Clean, filter, downsample, batch-correct a cohort | [Pre-processing](https://docs.isalgo.dev/vdjtools/preprocessing.html) |
+| Pgen, V(D)J markup, generate sequences, fit a model | [Model engine](#recombination-model-engine) · [Models](https://docs.isalgo.dev/vdjtools/model.html) |
+| One fixed feature vector per sample, for a classifier | [Repertoire signatures](#repertoire-signatures-extended) · [Signature](https://docs.isalgo.dev/vdjtools/signature.html) |
+| Single-cell / 10x / scirpy / Dandelion interop | [Single cell](https://docs.isalgo.dev/vdjtools/singlecell.html) |
+| Worked examples as notebooks | [Notebook gallery](https://docs.isalgo.dev/vdjtools/notebooks.html) |
 
-```python
-from vdjtools.model import load_bundled, native
-from vdjtools.model.generate import generate
+## Quickstart
 
-model = load_bundled("TRB", source="olga")     # or source="learned" (fit to real repertoires)
-
-native.pgen_nt(model, "TGTGCCAGCAGC...")        # nucleotide generation probability (native C++)
-native.pgen_aa(model, "CASSLAPGATNEKLFF")       # amino-acid Pgen (codon-marginalised)
-native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # + the whole Hamming-1 ball
-native.pgen_aa_batch(model, seqs, mismatches=1, threads=0)  # Pgen over many CDR3s, thread-parallel (~11×)
-generate(model, 1000, seed=1)                    # sample a repertoire -> polars DataFrame
-                                                # seed= is process-stable from 3.3.0
-```
-
-Where Pgen *sums* over recombination scenarios, `model.viterbi` takes the **argmax** — the single
-most likely one, which is the V/D/J boundary markup:
+Read any format, get one canonical AIRR frame, and run the analyses the tool is for:
 
 ```python
-from vdjtools.model import best_scenario
+from vdjtools import io as vio, stats, overlap
 
-sc = best_scenario(model, "TGTGCCAGCAGCTTAGGGACAGGGGGCTACGAGCAGTACTTC",
-                   v="TRBV19*01", j="TRBJ2-7*01")     # ALLELE names, as the model's tables are
+sample = vio.read("clones.tsv")                 # MiXcr / immunoSEQ / AIRR / Parquet / native — sniffed
+cohort = vio.read_samples(vio.read_metadata("metadata.txt"), base_dir="samples/")
 
-sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, in CDR3-nt space
-# -> 8, 'TRBD1*01', 15, 24, 26
+stats.diversity.diversity_stats(sample)         # richness, Chao, Shannon, Simpson, d50
+stats.usage.segment_usage(sample, segment="v")  # V / J / VJ usage
+stats.spectratype.spectratype(sample)           # junction-length spectrum
+overlap.overlap_matrix(cohort)                  # pairwise repertoire overlap
 ```
 
-It reuses the same tables and the same loops as `pgen_nt`, so the chosen D obeys `P(D|J)` — a
-TRBD2–TRBJ1 pair is genomically impossible and cannot be called.
-
-`infer_nt` goes the other way, reconstructing a **nucleotide** CDR3 from an amino-acid one — the
-VDJdb case, where a record carries `(V, J, CDR3aa)` and no nucleotides:
-
-```python
-from vdjtools.model import infer_nt
-
-sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
-sc.cdr3_nt, sc.pgen, sc.margin        # sequence, its exact Pgen, and how far ahead of the runner-up
-```
-
-Germline positions are pinned to their segment; each free N-region position takes the nucleotide the
-insertion model prefers. It reproduces the exponential brute-force oracle exactly on every record
-the oracle can resolve (25/25 TRG, 19/19 TRA) — fixing the germline trim first and then picking the
-best codon per residue only manages 9/25 and 4/19, because a trim chosen before the codons pins a
-codon the true optimum would have trimmed away.
-
-The search is native (the same Pi_L·Pi_R transfer matrix as `pgen_aa`, with `max` for the sums):
-**2.5 ms per human TRB CDR3, 0.5 ms per TRA** — all 80k VDJdb records in about 3 minutes. `v=`/`j=`
-take one allele, several (a list or the comma-separated string an ambiguous `v_call` carries), or
-nothing at all, in which case the DP marginalizes over every gene at essentially no extra cost.
-
-Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
-OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon — both escaped
-selection, which is all a generative model needs) with `model.infer.infer_native`.
-
-Explore any model's recombination **Bayes net** interactively (entropy, mutual information, marginals):
+The same thing without Python at all:
 
 ```bash
-pip install "vdjtools[examples]"
-marimo edit examples/model_explorer.py
+vdjtools diversity     sampleA.tsv sampleB.tsv -o diversity.tsv
+vdjtools overlap       *.tsv -o overlap.tsv
+vdjtools segment-usage -m metadata.txt --base-dir samples/ -t 0 -o usage.tsv
 ```
-
-Interactive **marimo** notebooks (data auto-loads from HuggingFace, or a local `~/hf/` copy):
-
-- `examples/vaccination_tracking.py` — clonotype **tracking** + the recapture model across
-  yellow-fever / influenza / TBE vaccination time courses (`vdjtools.dynamics`).
-- `examples/aging.py` — cohort-**streaming** diversity, clone-size and spectratype vs age.
-- `examples/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 **"AS27" motif**: disease vs HLA-B27 carriage.
-- `examples/biomarker_explorer.py` — Emerson public-TCR association + co-occurrence.
 
 ## Command line
 
@@ -217,12 +178,8 @@ vdjtools spectratype    *.tsv -o spectra.tsv
 vdjtools diversity      -m metadata.txt --base-dir samples/ --threads 8 -o div.tsv   # parallel cohort
 vdjtools spectratype    --cohort cohort_parquet/ -o spectra.tsv                       # one streamed pass
 
-# the portable signature — one fixed, named, positional feature vector per sample
+# the portable signature — one fixed, named feature vector per sample (see below)
 vdjtools signature      --preset classify -m metadata.txt --base-dir samples/ -o sig.tsv
-vdjtools signature      --preset compact *.tsv -t 0 -o vsig.parquet      # -t 0 = every core
-vdjtools presets                                          # the named feature sets, ranked
-vdjtools presets classify                                 # what one preset is, and when to use it
-vdjtools signature      --describe --preset classify      # the column dictionary; reads no input
 
 # longitudinal — paired within-donor expansion test between two timepoints
 vdjtools dynamics day0.tsv day15.tsv -o tracked.tsv
@@ -324,6 +281,111 @@ biomarker.cooccurrence(cohort, chain_a="TRA", chain_b="TRB", evalue=True)
 
 sc.paired_pgen(sc.pair_chains(sc.read_10x("filtered_contig_annotations.csv")))  # pgen_alpha·pgen_beta
 ```
+
+## Repertoire signatures (extended)
+
+An **optional** layer on top of the analytics above, for when the question is a *model* rather than
+a statistic: one AIRR sample in, one fixed-width, named, already-standardised feature vector out —
+so your matrix and a collaborator's are the same coordinate system, computed independently, with no
+scaler of your own.
+
+```bash
+vdjtools signature --preset classify -m metadata.txt --base-dir samples/ -o vsig.tsv
+vdjtools presets                       # the named feature sets, ranked
+vdjtools signature --describe          # the exact columns, reading no input
+vdjtools signature --channels          # the channel vocabulary — what each group of columns measures
+```
+
+```python
+from vdjtools.signature import vsig, vsig_cohort, channels, describe
+```
+
+Columns are `<sig>:<channel>:<locus>:<feature>`, and the tiers `core` (152) ⊂ `standard` (688) ⊂
+`full` (1403) are exact index subsets of one frozen order. The second field is the **channel** — the
+named group of columns that measures one thing, and the level a finding is stated at ("the groups
+separate in IGH diversity"). Twenty channels cover the whole vector.
+
+This command emits the statistics half (`vsig`). The geometry half (`rsig`) needs the prototype
+embedding and lives in [mirpy](https://github.com/antigenomics/mirpy) — `mir signature` emits both
+as one vector, which is usually what you want.
+
+Full documentation, including which scale reference to use and what "weighted" means:
+[**Signature**](https://docs.isalgo.dev/vdjtools/signature.html) ·
+[**Channels**](https://docs.isalgo.dev/vdjtools/channels.html)
+
+## Recombination model engine
+
+Precomputed models for all **7 human loci** ship in the wheel — no OLGA or download needed:
+
+```python
+from vdjtools.model import load_bundled, native
+from vdjtools.model.generate import generate
+
+model = load_bundled("TRB", source="olga")     # or source="learned" (fit to real repertoires)
+
+native.pgen_nt(model, "TGTGCCAGCAGC...")        # nucleotide generation probability (native C++)
+native.pgen_aa(model, "CASSLAPGATNEKLFF")       # amino-acid Pgen (codon-marginalised)
+native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # + the whole Hamming-1 ball
+native.pgen_aa_batch(model, seqs, mismatches=1, threads=0)  # Pgen over many CDR3s, thread-parallel (~11×)
+generate(model, 1000, seed=1)                    # sample a repertoire -> polars DataFrame
+                                                # seed= is process-stable from 3.3.0
+```
+
+Where Pgen *sums* over recombination scenarios, `model.viterbi` takes the **argmax** — the single
+most likely one, which is the V/D/J boundary markup:
+
+```python
+from vdjtools.model import best_scenario
+
+sc = best_scenario(model, "TGTGCCAGCAGCTTAGGGACAGGGGGCTACGAGCAGTACTTC",
+                   v="TRBV19*01", j="TRBJ2-7*01")     # ALLELE names, as the model's tables are
+
+sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, in CDR3-nt space
+# -> 8, 'TRBD1*01', 15, 24, 26
+```
+
+It reuses the same tables and the same loops as `pgen_nt`, so the chosen D obeys `P(D|J)` — a
+TRBD2–TRBJ1 pair is genomically impossible and cannot be called.
+
+`infer_nt` goes the other way, reconstructing a **nucleotide** CDR3 from an amino-acid one — the
+VDJdb case, where a record carries `(V, J, CDR3aa)` and no nucleotides:
+
+```python
+from vdjtools.model import infer_nt
+
+sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
+sc.cdr3_nt, sc.pgen, sc.margin        # sequence, its exact Pgen, and how far ahead of the runner-up
+```
+
+Germline positions are pinned to their segment; each free N-region position takes the nucleotide the
+insertion model prefers. It reproduces the exponential brute-force oracle exactly on every record
+the oracle can resolve (25/25 TRG, 19/19 TRA) — fixing the germline trim first and then picking the
+best codon per residue only manages 9/25 and 4/19, because a trim chosen before the codons pins a
+codon the true optimum would have trimmed away.
+
+The search is native (the same Pi_L·Pi_R transfer matrix as `pgen_aa`, with `max` for the sums):
+**2.5 ms per human TRB CDR3, 0.5 ms per TRA** — all 80k VDJdb records in about 3 minutes. `v=`/`j=`
+take one allele, several (a list or the comma-separated string an ambiguous `v_call` carries), or
+nothing at all, in which case the DP marginalizes over every gene at essentially no extra cost.
+
+Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
+OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon — both escaped
+selection, which is all a generative model needs) with `model.infer.infer_native`.
+
+Explore any model's recombination **Bayes net** interactively (entropy, mutual information, marginals):
+
+```bash
+pip install "vdjtools[examples]"
+marimo edit examples/model_explorer.py
+```
+
+Interactive **marimo** notebooks (data auto-loads from HuggingFace, or a local `~/hf/` copy):
+
+- `examples/vaccination_tracking.py` — clonotype **tracking** + the recapture model across
+  yellow-fever / influenza / TBE vaccination time courses (`vdjtools.dynamics`).
+- `examples/aging.py` — cohort-**streaming** diversity, clone-size and spectratype vs age.
+- `examples/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 **"AS27" motif**: disease vs HLA-B27 carriage.
+- `examples/biomarker_explorer.py` — Emerson public-TCR association + co-occurrence.
 
 ## Performance
 

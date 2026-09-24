@@ -260,3 +260,15 @@ def test_correct_vj_writes_usage_and_corrected_tables(tmp_path, gen):
     # one sample is not a between-batch quantity, and a short label list is a caller error
     assert runner.invoke(app, ["correct-vj", paths[0], "-b", "A"]).exit_code != 0
     assert runner.invoke(app, ["correct-vj", *paths, "-b", "A,B"]).exit_code != 0
+
+
+def test_signature_channels_reads_no_input(tmp_path):
+    """The vocabulary describes the contract, not the data, so it prints without a sample."""
+    out = tmp_path / "chan.tsv"
+    res = CliRunner().invoke(app, ["signature", "--channels", "-o", str(out)])
+    assert res.exit_code == 0, res.output
+    rows = out.read_text().strip().split("\n")
+    assert rows[0].split("\t")[:3] == ["channel", "sig", "block"]
+    assert any(r.startswith("vsig:div\t") for r in rows)
+    # Every channel carries its one-line meaning; an unexplained name is not a vocabulary.
+    assert all(len(r.split("\t")[-1]) > 10 for r in rows[1:])

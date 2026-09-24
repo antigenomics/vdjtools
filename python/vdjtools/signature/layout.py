@@ -311,6 +311,11 @@ def columns(tier: str = "standard", sig: str | None = None,
     return [c for b in sel for c in b.columns(tier)]
 
 
+#: ``columns`` the function, kept reachable from ``channels(columns=...)`` where the keyword
+#: argument shadows it.
+_all_columns = columns
+
+
 def index(tier: str = "core", sig: str | None = None) -> list[int]:
     """Positions of ``tier``'s columns within the full-width layout of the same ``sig``.
 
@@ -353,6 +358,113 @@ def parse(column: str) -> tuple[str, str, str, str]:
         raise ValueError(f"malformed signature column {column!r}: expected "
                          "'<sig>:<block>:<locus>:<feature>'")
     return parts[0], parts[1], parts[2], parts[3]
+
+
+# --------------------------------------------------------------------------------- channels
+#: The channel vocabulary: ``"<sig>:<channel>"`` -> the one quantity that channel measures.
+#:
+#: A **channel** is the named group of columns a signature column's second field selects. It is
+#: the unit of interpretation: a model that separates two groups separates them *in a channel*,
+#: so "the classifier found something" becomes a sentence with a noun in it. The vocabulary is a
+#: property of the contract, not of any corpus — the same twenty names describe every sample
+#: anyone emits, which is what lets two labs compare not just numbers but *findings*.
+#:
+#: Channels are disjoint and exhaustive: every emitted column belongs to exactly one, so a set of
+#: per-channel shares sums over the whole vector with nothing left over. A channel spans loci —
+#: ``vsig:div`` is the diversity channel of all seven — and :func:`channels` keys by locus too
+#: when asked, because "IGH diversity moved, TRB diversity did not" is usually the finding.
+CHANNELS: dict[str, str] = {
+    "vsig:mask": "Which loci and which statistics this sample can support at all.",
+    "vsig:qc": "How far the annotation had to reach: unrecognised V/J calls, non-standard residues.",
+    "vsig:depth": "How much was sequenced — reads, observed richness, unseen-species mass.",
+    "vsig:div": "Diversity at a fixed coverage level: Hill numbers, clonality, d50.",
+    "vsig:clon": "Clonal dominance — the size of the largest clones as a share of the sample.",
+    "vsig:len": "Junction length distribution: mean, spread, asymmetry.",
+    "vsig:pair": "Relative yield between loci from one library — the alpha/beta, gamma/delta, B/T ratios.",
+    "vsig:iso": "Isotype composition of the IGH repertoire (class-switch state).",
+    "vsig:shm": "Somatic hypermutation load — mean V identity to germline.",
+    "vsig:pgen": "How typical the repertoire's rearrangements are under the V(D)J model.",
+    "vsig:kmer": "V-gene-and-junction k-mer composition, projected onto a frozen basis.",
+    "vsig:aa": "Amino-acid composition of the junction.",
+    "vsig:pchem": "Physicochemical profile of the junction (charge, hydrophobicity, bulk).",
+    "rsig:depth": "Depth as the geometry sees it: effective clone count and observed mass.",
+    "rsig:div": "Sequence-aware dispersion — Rao entropy, which a Hill number cannot express.",
+    "rsig:band": "Shares of the repertoire held by clone-size bands and by isotype.",
+    "rsig:contrast": "Signed deviation from unselected V(D)J output — the selection imprint.",
+    "rsig:phiv": "Where the repertoire sits in V-gene coordinates.",
+    "rsig:phij": "Where the repertoire sits in J-gene coordinates.",
+    "rsig:phic": "Where the repertoire sits in junction coordinates.",
+}
+
+
+def channel(column: str) -> str:
+    """The channel a column belongs to — ``"<sig>:<block>"``.
+
+    Args:
+        column: A signature column name.
+
+    Returns:
+        The channel key, e.g. ``"vsig:div"`` for ``"vsig:div:TRB:1D_c"``.
+    """
+    sig, block, _, _ = parse(column)
+    return f"{sig}:{block}"
+
+
+def channels(tier: str = "standard", sig: str | None = None, *,
+             columns: list[str] | None = None,
+             per_locus: bool = False) -> dict[str, list[int]]:
+    """Channel name -> its column indices, the map a bare feature matrix does not carry.
+
+    Feed it straight to :class:`mir.explain.ChannelSpec` to ask which channel carries a signal
+    (``mir.signature.channel_spec`` does exactly that).
+
+    Args:
+        tier: Tier to index, when ``columns`` is not given.
+        sig: Restrict to one half (``"vsig"`` / ``"rsig"``), when ``columns`` is not given.
+        columns: Index *these* columns instead — a preset's selection, or the columns of a frame
+            you already have. Indices are positions in this list.
+        per_locus: Key by ``"<sig>:<channel>:<locus>"`` rather than ``"<sig>:<channel>"``, so a
+            finding can name the locus it is in. Non-per-locus channels keep :data:`NO_LOCUS`.
+
+    Returns:
+        ``{channel: [column index, ...]}`` in emitted order. Disjoint and exhaustive over the
+        columns indexed, so the index lists partition ``range(len(columns))``.
+    """
+    cols = list(columns) if columns is not None else _all_columns(tier, sig)
+    out: dict[str, list[int]] = {}
+    for i, c in enumerate(cols):
+        s, block, loc, _ = parse(c)
+        key = f"{s}:{block}:{loc}" if per_locus else f"{s}:{block}"
+        out.setdefault(key, []).append(i)
+    return out
+
+
+def channel_table(tier: str = "standard", sig: str | None = None):
+    """One row per channel — the vocabulary, sized for what ``tier`` actually emits.
+
+    Args:
+        tier: Tier to size against.
+        sig: Restrict to one half (``"vsig"`` / ``"rsig"``).
+
+    Returns:
+        A ``pl.DataFrame`` with ``channel, sig, block, n_columns, loci, attributable, measures``.
+        ``attributable`` says whether "which clonotypes drive this" is a well-posed question —
+        true only where the channel has a clonotype pre-image. A Hill number does not, so asking
+        is a category error rather than an unanswered question.
+    """
+    import polars as pl
+
+    names = _all_columns(tier, sig)
+    idx = channels(tier, sig)
+    attr = {f"{b.sig}:{b.name}": b.attributable for b in registry(sig)}
+    rows = []
+    for name, cols in idx.items():
+        sig_, block = name.split(":")
+        rows.append({"channel": name, "sig": sig_, "block": block, "n_columns": len(cols),
+                     "loci": len({parse(names[i])[2] for i in cols}),
+                     "attributable": attr[name],
+                     "measures": CHANNELS.get(name, "")})
+    return pl.DataFrame(rows)
 
 
 def _demo() -> None:

@@ -448,6 +448,9 @@ def signature(
                                               "Overrides --tier and selects the columns."),
     describe: bool = typer.Option(False, "--describe",
                                   help="Print the column dictionary for --tier and exit."),
+    channels: bool = typer.Option(False, "--channels",
+                                  help="Print the channel vocabulary for --tier and exit -- one "
+                                       "row per named group of columns, and what it measures."),
     threads: int = _THREADS, out: Optional[Path] = _OUT,
 ) -> None:
     """One repertoire in, one row of named features out — ready for a classifier.
@@ -469,6 +472,9 @@ def signature(
     \b
       # the exact columns you will get, reading no input at all
       vdjtools signature --preset classify --describe
+    \b
+      # the twenty channels those columns group into, and what each measures
+      vdjtools signature --channels
 
     \b
     PICK A PRESET rather than columns by hand (`vdjtools presets` lists all):
@@ -519,6 +525,12 @@ def signature(
 
     if tier not in L.TIERS:
         _err(f"--tier must be one of {L.TIERS}; got {tier!r}")
+    if channels:
+        # The vocabulary, not the dictionary: one row per channel rather than per column. This is
+        # the level a finding is stated at -- "IGH diversity separates the groups" -- so it is
+        # worth printing on its own rather than making the reader group 688 rows by hand.
+        _write(L.channel_table(tier), out)
+        return
     if describe:
         # The column dictionary for what will actually be emitted, preset or tier.
         d = L.describe(tier)

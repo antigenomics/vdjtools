@@ -3,6 +3,52 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.13.0 — 2026-09-24
+
+### Added — the channel vocabulary
+
+A signature column has always been named `<sig>:<block>:<locus>:<feature>`, and the second field
+has always been the unit of interpretation. It had no name and no API, so a caller who wanted "the
+diversity columns" reconstructed the grouping by string-splitting, and a finding came out as
+"column 412 moved" rather than as a sentence.
+
+The field is now called the **channel** and is addressable:
+
+- `CHANNELS` — the vocabulary, 20 entries, each channel to the one quantity it measures.
+- `channel(column)` — the channel a column belongs to.
+- `channels(tier, sig, columns=…, per_locus=…)` — channel to column indices, over any column list,
+  optionally keyed per locus. **Disjoint and exhaustive**, so per-channel shares sum over the whole
+  vector with nothing left over; a test asserts the partition at every tier.
+- `channel_table(tier)` — one row per channel: width, loci, attributability, what it measures.
+- `vdjtools signature --channels` — the same table from the command line, reading no input.
+
+A channel key carries its half (`vsig:div`, not `div`): `depth` and `div` are declared on **both**
+halves and are different measurements of the same idea, not duplicates. `attributable` — whether
+"which clonotypes drive this" is a well-posed question — is read off the `Block` where it was
+declared at build time, never inferred from a name.
+
+The map is what `mir.signature.channel_spec` feeds to `mir.explain.channel_report`, which is how a
+model's "it separates the groups" becomes "IGH diversity and isotype composition carry it".
+
+### Changed — the README leads with what most people run
+
+Repertoire analytics now opens the README, with a **Where to start** table routing to the docs
+page for each task; the recombination model engine moved below the Python API, and the portable
+signature became its own clearly-marked **extended** section linking to
+[Signature](https://docs.isalgo.dev/vdjtools/signature.html) and the new
+[Channels](https://docs.isalgo.dev/vdjtools/channels.html) page.
+
+### Fixed — the docs site showed the wrong version
+
+`docs/conf.py` hard-coded `3.6.1`, so every page rendered that in its header through six minor
+releases. It now reads `vdjtools.__version__`.
+
+### Fixed — the coverage constants quoted in the docs
+
+The `cstar` table for TRA/TRB compared 0.545/0.408 against 0.129/0.126, quoted from a pre-3.11
+fit. The references that actually ship carry 0.1230/0.1072 for bulk RNA-seq, so the amplicon-vs-
+RNA-seq gap on TRB is **3.8x**, not 3.2x.
+
 ## 3.12.1 — 2026-09-24
 
 ### Fixed — a k-mer space no longer loads through `pickle`

@@ -7,6 +7,13 @@ embedding geometry; the two are namespaced so they concatenate on ``sample_id`` 
 and the shared contract machinery (column layout, transform registry, frozen-reference rescaling)
 lives here, in vdjtools, because mirpy depends on vdjtools and not the reverse.
 
+.. note::
+
+   Columns are named ``<sig>:<channel>:<locus>:<feature>``. The **channel** is the second field —
+   the named group of columns that measures one thing, and the level a finding is usually stated
+   at ("the groups separate in IGH diversity"). :doc:`channels` is the vocabulary: twenty names,
+   what each measures, and how to ask which one carries your signal.
+
 Quickstart — one command
 ------------------------
 
@@ -241,13 +248,13 @@ The measured values are neither uniform across loci nor independent of assay:
      - amplicon TCR
      - bulk blood RNA-seq
    * - TRA
-     - 0.545
-     - 0.129
+     - 0.5451
+     - 0.1230
    * - TRB
-     - 0.408
-     - 0.126
+     - 0.4080
+     - 0.1072
 
-A **3.2× difference on the same locus**, purely from how the library was made. Pass measured
+A **3.8x difference on the same locus**, purely from how the library was made. Pass measured
 constants with ``cstar=`` whenever a reference artifact supplies them —
 :func:`mir.signature.signature` does it for you, selecting the reference by assay. Using a ``C*``
 above what your samples attain is the failure mode worth avoiding; the fallback errs the other way

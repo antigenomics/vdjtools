@@ -118,6 +118,7 @@ Capabilities (see the :doc:`API reference <api>`):
    :maxdepth: 2
 
    signature
+   channels
 
 .. toctree::
    :hidden:

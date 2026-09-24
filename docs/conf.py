@@ -1,9 +1,13 @@
 """Sphinx configuration for the vdjtools documentation."""
 
+# Read the version from the installed package rather than repeating it here: this file said
+# 3.6.1 through six minor releases, so every docs page carried a wrong version in its header.
+from vdjtools import __version__
+
 project = "vdjtools"
 author = "ISALGO laboratory"
 copyright = "2026, ISALGO laboratory"
-version = release = "3.6.1"
+version = release = __version__
 
 extensions = [
     "sphinx.ext.autodoc",

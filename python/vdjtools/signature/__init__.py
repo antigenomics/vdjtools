@@ -3,11 +3,15 @@
 See :mod:`vdjtools.signature.layout` for what a signature is and how columns are named.
 """
 from .layout import (
+    CHANNELS,
     LOCI,
     NO_LOCUS,
     TIERS,
     TRANSFORMS,
     Block,
+    channel,
+    channel_table,
+    channels,
     columns,
     describe,
     feats,
@@ -37,6 +41,10 @@ __all__ = [
     "TIERS",
     "TRANSFORMS",
     "Block",
+    "CHANNELS",
+    "channel",
+    "channel_table",
+    "channels",
     "arcsine",
     "registry",
     "clr",
