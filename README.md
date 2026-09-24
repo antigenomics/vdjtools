@@ -27,7 +27,8 @@ Built on the antigenomics ecosystem:
 [vdjmatch](https://github.com/antigenomics/vdjmatch) (overlap + TCRnet),
 [arda](https://github.com/antigenomics/arda) (AIRR annotation + markup repair).
 
-> **Status: stable** (version: the PyPI badge above). The native V(D)J model engine plus the full analytics suite (diversity,
+> **Status: stable** (version: the PyPI badge above). The native V(D)J model engine plus the
+> full analytics suite (diversity,
 > overlap/TCRnet, preprocessing, biomarkers, single-cell), **longitudinal clonotype dynamics**
 > (paired expansion testing + the VDJtrack recapture model), CDR features, and legacy-format
 > ingestion (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype
@@ -369,7 +370,8 @@ take one allele, several (a list or the comma-separated string an ambiguous `v_c
 nothing at all, in which case the DP marginalizes over every gene at essentially no extra cost.
 
 Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
-OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon — both escaped
+OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon
+— both escaped
 selection, which is all a generative model needs) with `model.infer.infer_native`.
 
 Explore any model's recombination **Bayes net** interactively (entropy, mutual information, marginals):
@@ -405,12 +407,16 @@ Nucleotide Pgen (via the same transfer-matrix DP as the aa path — an in-frame 
 one codon fixed per position) is exact vs OLGA across all loci. Batched Pgen / 1-mismatch over many
 CDR3s parallelises over sequences (`native.pgen_aa_batch`, **~11× on 16 cores**, bitwise-identical to
 the serial result); the EM E-step parallelises over reads (~6.7× on 8 threads); diversity/rarefaction
-run on a native iNEXT kernel (bootstrap + parallel batch). Memory
-stays light — **~63 MB** resident for `import vdjtools` plus one loaded model, **~123 MB** with all
-seven bundled models resident. Reproduce with `~/vcs/projects/2026-vdjtools-benchmark/bench/bench_pgen.py` and the `test_*_benchmark.py`
-suites (`RUN_BENCHMARK=1`).
+run on a native iNEXT kernel (bootstrap + parallel batch). Memory stays light — **~63 MB**
+resident for `import vdjtools` plus one loaded model, **~123 MB** with all seven bundled models
+resident. Reproduce the in-repo half with `RUN_BENCHMARK=1 pytest tests/python -k benchmark`;
+the standalone Pgen harness lives in the separate `2026-vdjtools-benchmark` repository.
 
-## Capabilities (see the [User guide](https://docs.isalgo.dev/vdjtools/usage.html) and the [API reference](https://docs.isalgo.dev/vdjtools/))
+## Capabilities
+
+Reference: the [User guide](https://docs.isalgo.dev/vdjtools/usage.html) walks through every
+module with runnable examples; the [API reference](https://docs.isalgo.dev/vdjtools/) documents
+every symbol.
 
 - **IO** — canonical clonotype frame on AIRR **junction** columns (`junction_nt` / `junction_aa`);
   readers for native vdjtools, AIRR Rearrangement TSV, and Parquet, plus format-detecting converters
@@ -436,7 +442,9 @@ suites (`RUN_BENCHMARK=1`).
 - **Features** — CDR physicochemical profiles, k-mer / V+k-mer summaries.
 - **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree), similarity-aware overlap, clustering.
 - **Preprocess** — downsampling, error-correction, VJ-usage batch-effect correction, pooling/joining.
-- **Biomarker** — incidence association (Fisher / χ² / Bayesian / permutation) vs binary / HLA-allele / CMH-stratified conditions; α-β & same-chain co-occurrence pairing; metaclonotypes.
+- **Biomarker** — incidence association (Fisher / χ² / Bayesian / permutation) against binary,
+  per-HLA-allele or CMH-stratified conditions; α-β and same-chain co-occurrence pairing;
+  metaclonotypes.
 - **Dynamics** — longitudinal clonotype tracking between timepoints: the paired within-donor
   expansion test (emergent / expanded / persistent / contracted / vanishing), the VDJtrack
   size-bucket **recapture model**, metaclonotype-grouped testing, and an edgeR NB-exact caller
