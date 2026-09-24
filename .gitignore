@@ -53,3 +53,8 @@ htmlcov/
 
 data_dump/*
 !data_dump/.gitkeep
+# Example/notebook exports that land in the cwd when run from the repo root. One of these
+# (a 6 MB scRepertoire TSV) rode into master inside an unrelated `git add -A` docs commit.
+screpertoire_airr.tsv
+*.h5ad
+*.h5ddl

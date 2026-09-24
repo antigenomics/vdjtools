@@ -174,13 +174,17 @@ def _(cells, mo, sc):
 
 
 @app.cell
-def _(cells, mo, sc):
-    sc.write_screpertoire(cells, "screpertoire_airr.tsv")
+def _(Path, cells, mo, sc):
+    # Under ./data_dump/ (gitignored), not the cwd: run from the repo root and a bare filename
+    # drops a 6 MB export into the working tree, where `git add -A` will happily commit it.
+    _out = Path(__file__).resolve().parents[1] / "data_dump"
+    _out.mkdir(exist_ok=True)
+    sc.write_screpertoire(cells, _out / "screpertoire_airr.tsv")
     mo.md(
         "## 6. scRepertoire (R)\n\n"
-        "Export only — no R ships with vdjtools. Wrote `screpertoire_airr.tsv`:\n\n"
+        "Export only — no R ships with vdjtools. Wrote `data_dump/screpertoire_airr.tsv`:\n\n"
         "```r\n"
-        'contigs  <- loadContigs("screpertoire_airr.tsv", format = "AIRR")\n'
+        'contigs  <- loadContigs("data_dump/screpertoire_airr.tsv", format = "AIRR")\n'
         "combined <- combineTCR(contigs)\n"
         "seurat   <- combineExpression(combined, seurat)\n"
         "```\n\n"
