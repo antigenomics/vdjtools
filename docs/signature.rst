@@ -115,6 +115,32 @@ Columns are named ``vsig:<block>:<locus>:<feature>``. Tiers ``core`` / ``standar
 **exact index subsets** of one frozen layout — a narrower tier is a slice of a wider one, never a
 differently-computed number.
 
+Running a cohort
+~~~~~~~~~~~~~~~~
+
+Use :func:`vdjtools.io.map_samples`, which is what the CLI does: it reads each sample **inside**
+the worker and discards the clonotype frame as soon as the reduction is done, so peak memory is
+``O(workers)`` samples rather than the whole cohort.
+
+.. code-block:: python
+
+   import functools
+   from vdjtools.io import map_samples
+   from vdjtools.signature import vsig
+
+   fn = functools.partial(vsig, tier="standard", threads=1)   # 1: the pool is the parallelism
+   rows = map_samples(fn, [(sid, path), ...])
+
+Threads, not processes, and that is not an oversight — ``vsig``'s cost is native Pgen plus polars,
+and both release the GIL. **Measured** on 32 samples of 10,000 clonotypes, 16 cores: 25.46 s at one
+worker, 12.39 s at two, 6.40 s at four, 3.51 s at eight — **2.05x / 3.98x / 7.26x**. There is
+nothing to gain from forking here, and no pickling to pay for.
+
+``workers=None`` (the default) asks :func:`vdjtools.cores.available_cores`, which is the count this
+process is *allowed*: under ``srun -c 8`` on a 40-core node ``os.cpu_count()`` says 40 and the
+answer is 8. Pass ``threads=1`` to ``vsig`` itself so its own Pgen batch does not compete with the
+pool that is already using every core.
+
 .. contents::
    :local:
    :depth: 1
