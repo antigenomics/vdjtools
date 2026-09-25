@@ -131,6 +131,54 @@ merge into `dev`, delete the branch.
   affected model's own posterior.** Compare against a reference fit that does not share the defect
   (here `arda` vs `learned`), or against pre-EM read counts.
 
+## Pools and caches: the standing audit
+
+Both buy speed by not doing the work, and both fail looking like success. Audited 2026-09-25 with
+measurements; re-run the measurement before changing any of it.
+
+**Every thread pool here wraps a call that releases the GIL, and each is measured, not asserted.**
+
+| site | what it wraps | measured | verdict |
+|---|---|---|---|
+| `io/batch.py` `map_samples` | polars read + reduce | 2.24x / 3.49x / 3.85x at 2 / 4 / 8 workers, 64x10k samples | real; ceiling ~4x because polars already threads each read |
+| `model/score.py` `_pgen_nt_many` | `native.pgen_nt` | 1.92x / 3.68x / 6.92x / 11.4x at 2 / 4 / 8 / 16 threads, 256 TRB | real; pinned by `test_thread_scaling.py` |
+| `model/data.py` `build_all` | arda subprocess + `native.estep_batch` | structural: both release the GIL (`_bindings.cpp:134`) | real; `workers` defaults to `cpu_count//2` so each build keeps E-step cores |
+
+**No pool here has a serial fallback, deliberately.** A pool that cannot start must raise. A
+correctness-preserving `except ...: <serial loop>` makes a dead pool indistinguishable from a slow
+one -- that construct is what hid a 20x regression in `mir.signature.signature_cohort`, where two
+workers "bought 6%" and both timings were in fact serial. `build_all`'s per-job `except` is a
+different thing and is fine: it catches one chain's build failing, reports it as `{"error": ...}`,
+and never touches pool startup.
+
+**Cost is per-locus and the pool threshold depends on it.** A V/J-marginalized nt Pgen is 0.01 ms
+on TRG and 0.02 ms on TRA against 36.88 ms on TRB and 40.70 ms on TRD -- the D-D sum is the whole
+cost. A scaling test written on a VJ chain measures pool startup and reports a slowdown.
+
+**Every `lru_cache` loads a frozen artifact; none memoises a computation.** That is the line: keyed
+on the artifact's identity, bounded, and the artifact cannot change within a process.
+
+| cache | key | bound | covers every input? |
+|---|---|---|---|
+| `signature/blocks.py` `_bundled_model` | `locus` | 8 | yes -- shipped model per locus, 7 human loci |
+| `io/convert.py` `_adaptive_map` | none | 1 | yes -- one shipped TSV |
+| `features/physchem.py` `load_property_table` | none | 1 | yes -- one shipped table |
+| `model/reference.py` `load_germline` | `(locus, organism)` | 16 | yes -- arda resource |
+| `model/reference.py` `load_full_vj_germline` | `organism` | 4 | yes -- arda resource |
+| `model/reference.py` `arda_full_germline` | `(locus, organism)` | 8 | yes -- arda resource |
+| `model/viterbi.py` `_PREP_CACHE` | `id(model)`, **verified** | 8 (was unbounded) | yes -- the model ref is stored and identity-checked |
+
+Three of these return a **mutable dict** (`_adaptive_map`, `load_full_vj_germline`,
+`arda_full_germline`) and one a `Model`; no caller mutates them (checked) and none copies
+defensively, because a copy per call would cost more than the cache saves. A caller that mutates a
+returned dict poisons the cache for the process -- treat them as read-only.
+
+`_PREP_CACHE`'s bound is load-bearing twice over, not once. The obvious reason is memory: each
+entry pins a whole `Model`. The subtle one is that pinning the model is also what keeps the
+`id()` key honest -- an id can only be reused once its owner is collected, so the strong reference
+is what makes the `is` check meaningful. Eviction must therefore drop the id and the model
+together, which is why it clears rather than evicting one entry.
+
 ## Never regenerate a bundled model unless a germline entering it changed
 
 **If no germline entering a locus changed, that locus's model cannot change — regenerating it is

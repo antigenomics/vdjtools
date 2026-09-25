@@ -3,6 +3,83 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.14.0 — 2026-09-25
+
+### Fixed — a duplicated amino-acid clonotype key is now a hard failure
+
+A frame with no `junction_nt` that repeats `(junction_aa, v_call, j_call, c_call)` cannot say
+whether those rows are two nucleotide clonotypes encoding one peptide, or one clonotype the export
+duplicated. Richness, clonality, Shannon and top-clone fraction all differ between the two
+readings, and until now the library counted rows and picked the first reading in silence: the four
+rows below returned `observed_diversity = 4`, with no warning, from `diversity_stats`,
+`diversity_cohort` and the whole signature path.
+
+```
+CASSLGQGAYEQYF  TRBV5-1*01  TRBJ2-7*01  TRBC2  7
+CASSLGQGAYEQYF  TRBV5-1*01  TRBJ2-7*01  TRBC2  3
+CASSPRTGELFF    TRBV7-9*01  TRBJ2-2*01  TRBC2  5
+CASSQDRGNTIYF   TRBV4-1*01  TRBJ1-3*01  TRBC2  2
+```
+
+**Measured cost of the silence.** Two exports of the same samples, one collapsed to the
+amino-acid key and one not, went through the same estimators without complaint. Richness differed
+by **1.5% overall and 5.0% in IGK**, and the affected samples then sat **3-5 robust-SD from the
+rest of the cohort** on exactly the diversity and clonality columns — read as biology until the two
+exports were diffed.
+
+New in `vdjtools.io.schema`, and re-exported from `vdjtools.io`:
+
+- `assert_resolvable(df, name=…)` — the gate. Raises, naming the sample, the offending keys, and
+  both legitimate resolutions.
+- `duplicate_keys(df)` — the repeated keys and how many rows each covers, worst first.
+- `collapse_duplicates(df)` — the deliberate sum, recomputing `frequency`.
+- `has_nt_resolution(df)` — whether `junction_nt` can tell two rows apart.
+- `resolve_duplicates(df, on_duplicate)` — the policy dispatcher.
+
+`diversity_stats`, `diversity_cohort` and `vdjtools.signature.blocks.sanitise` all gained
+`on_duplicate="error"` (default) / `"sum"`. **The default is `error`**: the frame cannot answer the
+question, so the library must not answer it either.
+
+Two things deliberately do not trip the gate. A frame carrying `junction_nt` is never rejected —
+the duplicates are then real and the key that resolves them is present. And an all-null
+`junction_nt` column does **not** count as resolution: a schema-conformant frame always has the
+column and an amino-acid-collapsed export fills it entirely with nulls, so presence alone would
+have let the filed case straight through.
+
+The cohort check stays lazy. It is one streamed `group_by` over
+`(sample_id, junction_aa, v_call, j_call, c_call)`, filtered to the offending keys before
+collection, and skipped entirely on a cohort that carries `junction_nt`.
+
+### Changed — `_PREP_CACHE` is bounded
+
+`model/viterbi.py`'s prepared-model cache is keyed on `id(model)` and already stored and verified
+the model reference, so it never returned another model's entry. It was unbounded, which leaked one
+pinned `Model` per model ever prepared. Now capped at 8. The bound is load-bearing twice: pinning
+the model is also what keeps the `id()` key honest, since an id can only be reused once its owner
+is collected — so eviction has to drop the id and the model together.
+
+### Audited — every pool and every cache, with measurements
+
+Recorded in `CLAUDE.md` under "Pools and caches: the standing audit". All three thread pools wrap a
+call that releases the GIL and all three are genuinely parallel:
+
+| site | measured |
+|---|---|
+| `map_samples` | 2.24x / 3.49x / 3.85x at 2 / 4 / 8 workers (64 samples x 10k clonotypes) |
+| `_pgen_nt_many` | 1.92x / 3.68x / 6.92x / 11.4x at 2 / 4 / 8 / 16 threads (256 TRB junctions) |
+| `build_all` | structural — arda is a subprocess, `native.estep_batch` releases the GIL |
+
+`map_samples` tops out near 4x rather than 16x because polars already multithreads each read; past
+four workers the pool competes with polars' own thread pool for the same cores.
+
+`tests/python/test_thread_scaling.py` pins the `_pgen_nt_many` claim so it fails loudly if the GIL
+guard is ever dropped. It runs on **TRB** on purpose: a V/J-marginalized nt Pgen costs 0.01 ms on
+TRG and 0.02 ms on TRA against 36.88 ms on TRB and 40.70 ms on TRD, so the same test written on a
+VJ chain measures pool startup and reports a 0.83x *slowdown*.
+
+Every `lru_cache` in the package loads a frozen artifact keyed on that artifact's identity, and
+every one is bounded; none memoises a computation whose inputs are not fully in the key.
+
 ## Unreleased
 
 ### Changed — the seqtree floor is 1.0.0

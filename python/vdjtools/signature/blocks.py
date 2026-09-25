@@ -23,6 +23,7 @@ from ..io.schema import (
     J_CALL,
     JUNCTION_AA,
     V_CALL,
+    resolve_duplicates,
     strip_allele,
 )
 from . import transform as T
@@ -108,7 +109,8 @@ def assert_parseable(df: pl.DataFrame) -> None:
             "source, or call sanitise(strict=False) to drop them.")
 
 
-def sanitise(df: pl.DataFrame, *, strict: bool = True) -> tuple[pl.DataFrame, float]:
+def sanitise(df: pl.DataFrame, *, strict: bool = True,
+             on_duplicate: str = "error") -> tuple[pl.DataFrame, float]:
     """Drop non-productive clonotypes; return the frame and the dropped **weight** fraction.
 
     Dropped by weight, not by row: losing one dominant clone matters more than losing fifty
@@ -124,12 +126,18 @@ def sanitise(df: pl.DataFrame, *, strict: bool = True) -> tuple[pl.DataFrame, fl
         df: A clonotype frame.
         strict: Raise on unparseable characters (see :func:`assert_parseable`). Set ``False`` to
             drop them as before, for a corpus known to carry ambiguity codes.
+        on_duplicate: What to do when the frame has no ``junction_nt`` and repeats an amino-acid
+            clonotype key -- ``"error"`` (default, see
+            :func:`~vdjtools.io.schema.assert_resolvable`) or ``"sum"`` to add the counts together
+            deliberately. The default is ``"error"`` because the two readings give different
+            richness and clonality and the frame cannot say which is meant.
 
     Returns:
         ``(kept_frame, dropped_weight_fraction)``.
 
     Raises:
-        ValueError: If ``strict`` and any junction is unparseable.
+        ValueError: If ``strict`` and any junction is unparseable, or if the frame repeats an
+            unresolvable amino-acid clonotype key and ``on_duplicate="error"``.
     """
     if df.height == 0:
         return df, 0.0
@@ -141,6 +149,11 @@ def sanitise(df: pl.DataFrame, *, strict: bool = True) -> tuple[pl.DataFrame, fl
         & pl.col(JUNCTION_AA).is_not_null()
         & pl.col(JUNCTION_AA).str.contains(VALID_AA)      # anchored: a match, not a search
     )
+    # AFTER the filter, not before. The question the gate asks -- "are these two rows one
+    # clonotype or two?" -- is only worth asking about rows that reach the estimators. A frame
+    # whose duplicates are all non-productive has no ambiguity to resolve, it has junk to drop,
+    # and raising on it would turn a locus that is supposed to mask out into an error.
+    keep = resolve_duplicates(keep, on_duplicate)
     kept = float(keep[COUNT].sum()) if keep.height else 0.0
     return keep, (1.0 - kept / total) if total > 0 else 0.0
 

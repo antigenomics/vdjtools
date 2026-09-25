@@ -14,7 +14,13 @@ import math
 import numpy as np
 import polars as pl
 
-from ..io.schema import COUNT
+from ..io.schema import (
+    AA_CLONOTYPE_KEY,
+    COUNT,
+    column_names,
+    has_nt_resolution,
+    resolve_duplicates,
+)
 
 
 def _counts(df: pl.DataFrame) -> np.ndarray:
@@ -219,19 +225,30 @@ def d50(counts: np.ndarray, fraction: float = 0.5) -> float:
     return 1.0 - k / sobs
 
 
-def diversity_stats(df: pl.DataFrame, extrapolate_to: int | None = None) -> pl.DataFrame:
+def diversity_stats(df: pl.DataFrame, extrapolate_to: int | None = None, *,
+                    on_duplicate: str = "error") -> pl.DataFrame:
     """Compute all diversity estimators for a clonotype frame as a one-row frame.
 
     Args:
         df: A clonotype frame (one row per clonotype) with ``duplicate_count``.
         extrapolate_to: Target depth for ``chaoE`` (see :func:`chao_e`; defaults
             to ``2*n``).
+        on_duplicate: ``"error"`` (default) or ``"sum"``. Every estimator here reads the frame as
+            one row per clonotype; a frame with no ``junction_nt`` that repeats an amino-acid
+            clonotype key breaks that premise and is rejected rather than counted as written --
+            see :func:`~vdjtools.io.schema.assert_resolvable`, which was added after exactly this
+            went unnoticed and moved measured richness by 1.5%.
 
     Returns:
         A single-row ``pl.DataFrame`` with columns ``reads, observed_diversity,
         chao1, chaoE, efron_thisted, shannon_wiener, normalized_shannon_wiener,
         inverse_simpson, d50``.
+
+    Raises:
+        ValueError: If the frame repeats an unresolvable amino-acid clonotype key and
+            ``on_duplicate="error"``.
     """
+    df = resolve_duplicates(df, on_duplicate)
     counts = _counts(df)
     return pl.DataFrame({
         "reads": [int(counts.sum())],
@@ -246,8 +263,41 @@ def diversity_stats(df: pl.DataFrame, extrapolate_to: int | None = None) -> pl.D
     })
 
 
+def _resolve_cohort_duplicates(lf: pl.LazyFrame, sample_col: str, on_duplicate: str) -> pl.LazyFrame:
+    """Apply an ``on_duplicate`` policy across a whole cohort, without leaving the lazy path.
+
+    The eager :func:`~vdjtools.io.schema.resolve_duplicates` would force the cohort into memory,
+    which is the one thing :func:`diversity_cohort` exists to avoid. Both branches stay lazy: the
+    check is a streamed ``group_by`` whose result is filtered down to the offending keys before
+    it is collected, and the collapse is a streamed ``group_by`` that replaces the frame.
+    """
+    have = set(column_names(lf))
+    key = [c for c in AA_CLONOTYPE_KEY if c in have]
+    if not key or sample_col not in have or has_nt_resolution(lf):
+        return lf
+    if on_duplicate == "sum":
+        others = [c for c in column_names(lf) if c not in {sample_col, *key, COUNT}]
+        return (lf.group_by([sample_col, *key])
+                  .agg(pl.col(COUNT).sum(), *[pl.col(c).first() for c in others]))
+    if on_duplicate != "error":
+        raise ValueError(f'on_duplicate must be "error" or "sum", got {on_duplicate!r}')
+    dup = (lf.group_by([sample_col, *key]).agg(pl.len().alias("n"))
+             .filter(pl.col("n") > 1).head(3).collect(engine="streaming"))
+    if dup.height:
+        row = dup.row(0)
+        raise ValueError(
+            f"sample {row[0]!r} repeats the amino-acid clonotype key "
+            f"{' '.join(str(v) for v in row[1:-1])} on {row[-1]} rows, and the cohort has no "
+            "junction_nt to tell them apart. Richness, clonality, Shannon and top-clone fraction "
+            "all differ between the two readings of that, so it is a question about the data "
+            "rather than a default to pick: supply junction_nt, or pass on_duplicate=\"sum\" to "
+            "add the counts together deliberately.")
+    return lf
+
+
 def diversity_cohort(cohort, extrapolate_to: int | None = None, *,
-                     sample_col: str = "sample_id") -> pl.DataFrame:
+                     sample_col: str = "sample_id",
+                     on_duplicate: str = "error") -> pl.DataFrame:
     """Per-sample :func:`diversity_stats` for a whole cohort, low peak memory + exact.
 
     Collapses the cohort to each sample's **count-frequency spectrum** in one streamed
@@ -265,12 +315,22 @@ def diversity_cohort(cohort, extrapolate_to: int | None = None, *,
             ``pl.DataFrame``.
         extrapolate_to: Target depth for ``chaoE`` (see :func:`diversity_stats`).
         sample_col: The per-sample id column (default ``"sample_id"``).
+        on_duplicate: ``"error"`` (default) or ``"sum"``, applied **per sample** -- see
+            :func:`diversity_stats`. Checking costs one extra streamed ``group_by`` over
+            ``(sample_id, junction_aa, v_call, j_call, c_call)``, skipped entirely on a cohort
+            that carries ``junction_nt``, where a repeated amino-acid key is resolvable and so
+            not an error at all.
 
     Returns:
         One row per sample: ``sample_id`` followed by the :func:`diversity_stats`
         columns, in first-appearance order of ``sample_id``.
+
+    Raises:
+        ValueError: If any sample repeats an unresolvable amino-acid clonotype key and
+            ``on_duplicate="error"``.
     """
     lf = cohort if isinstance(cohort, pl.LazyFrame) else cohort.lazy()
+    lf = _resolve_cohort_duplicates(lf, sample_col, on_duplicate)
     # Sort the (tiny) spectrum by sample_col so partition order — and thus output row
     # order — is deterministic (sample_id-sorted), independent of scan/group_by order.
     spectrum = (lf.filter(pl.col(COUNT) > 0)

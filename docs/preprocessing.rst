@@ -59,6 +59,42 @@ directory of samples; :func:`vdjtools.io.iter_samples` and :func:`vdjtools.io.ma
 them one at a time when the cohort does not fit in memory.
 
 
+.. _duplicate-clonotype-keys:
+
+One row per clonotype — the premise every estimator rests on
+------------------------------------------------------------
+
+Diversity, clonality and the whole signature read a clonotype frame as **one row per clonotype**.
+A frame with no ``junction_nt`` that repeats ``(junction_aa, v_call, j_call, c_call)`` breaks that
+premise, and it cannot say how: those two rows are either two nucleotide clonotypes encoding the
+same peptide, or one clonotype an export split. Richness, clonality, Shannon and top-clone
+fraction all differ between the two readings.
+
+Since 3.14.0 the library refuses rather than picking one. :func:`vdjtools.io.schema.assert_resolvable`
+is the gate; ``diversity_stats``, ``diversity_cohort`` and
+:func:`vdjtools.signature.blocks.sanitise` all take ``on_duplicate="error"`` (the default) or
+``"sum"``.
+
+.. code-block:: python
+
+   from vdjtools.io.schema import duplicate_keys, collapse_duplicates
+   from vdjtools.stats.diversity import diversity_stats
+
+   duplicate_keys(df)                          # which keys repeat, and over how many rows
+   diversity_stats(df, on_duplicate="sum")     # add the counts together, deliberately
+   diversity_stats(collapse_duplicates(df))    # the same thing, done once up front
+
+Two cases deliberately do **not** trip it. A frame carrying ``junction_nt`` is never rejected — the
+duplicates are then real and the key that resolves them is present. And in the signature path the
+check runs *after* non-productive rows are dropped, so a locus of junk masks out as it always did
+rather than becoming an error.
+
+Why it is an error and not a warning: two exports of one cohort, one collapsed to the amino-acid
+key and one not, went through the same estimators without complaint. Richness differed by 1.5%
+overall and 5.0% in IGK, and the affected samples then sat 3–5 robust-SD from the rest of the
+cohort on exactly the diversity and clonality columns — which read as biology until the two exports
+were diffed.
+
 .. _filtering-three-axes:
 
 Filtering — three axes, and they are not the same axis

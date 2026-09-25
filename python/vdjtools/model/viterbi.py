@@ -64,6 +64,16 @@ __all__ = ["Scenario", "best_scenario", "infer_nt", "infer_nt_bruteforce", "codo
 #: ``id(model) -> (model, prepared)``. The model reference is stored *and verified*, not just its
 #: id: CPython reuses ids, and a stale hit across a TRB->TRD switch in one process is exactly the
 #: bug already recorded against ``native.pack``.
+#:
+#: Bounded, and the bound is load-bearing for two reasons rather than one. The obvious one is
+#: memory: every entry pins its whole :class:`Model` alive, so an unbounded dict leaks one model
+#: per model ever prepared. The subtler one is that holding the model alive is also what keeps the
+#: id-verification honest -- an id can only be reused once its owner is collected, and a strong
+#: reference here prevents that for as long as the entry lives. Eviction therefore has to drop the
+#: model reference and the id together, which is what replacing the whole dict does.
+_PREP_CACHE_MAX = 8
+
+#: See :data:`_PREP_CACHE_MAX`. Keyed on ``id(model)``, verified against the stored model.
 _PREP_CACHE: dict = {}
 
 
@@ -79,6 +89,10 @@ def _prep(m) -> _Prepared:
     if hit is not None and hit[0] is m:
         return hit[1]
     p = prepare(m)
+    if len(_PREP_CACHE) >= _PREP_CACHE_MAX:
+        # Clear rather than evict one: the realistic access pattern is a handful of models used
+        # in a loop, where LRU bookkeeping buys nothing and the next few calls just re-prepare.
+        _PREP_CACHE.clear()
     _PREP_CACHE[id(m)] = (m, p)
     return p
 

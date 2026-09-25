@@ -141,10 +141,20 @@ def _pgen_nt_many(model: Model, seqs: list[str], vres: list, jres: list,
                   threads: int) -> list[float]:
     """Nucleotide Pgen over many sequences, threaded.
 
-    There is no native nt batch entry point, but the ``pgen_nt`` binding releases the GIL, so a
-    plain thread pool gets the same parallelism. Worth it: a V/J-marginalized nt Pgen sums over
-    every V and J and costs tens of milliseconds, which is minutes for a Monte-Carlo diversity
-    estimate on one core.
+    There is no native nt batch entry point, but the ``pgen_nt`` binding releases the GIL
+    (``py::call_guard<py::gil_scoped_release>`` in ``src/_bindings.cpp``), so a plain thread pool
+    gets the same parallelism. Worth it: a V/J-marginalized nt Pgen sums over every V and J and
+    costs tens of milliseconds, which is minutes for a Monte-Carlo diversity estimate on one core.
+
+    **Measured**, 256 generated TRB junctions on 16 cores: 8.08 s at one thread, 4.21 s at two,
+    2.19 s at four, 1.17 s at eight, 0.71 s at sixteen -- 1.92x / 3.68x / 6.92x / 11.4x. Doubling
+    the workers roughly halves the wall time, which is the whole test of whether a pool is
+    parallelism or decoration; ``tests/python/test_thread_scaling.py`` runs a smaller version of it
+    so the claim fails loudly if the GIL guard is ever dropped.
+
+    The cost is per-locus, not uniform: a VJ chain marginalizes in 0.01-0.02 ms (TRG, TRA) against
+    36.88 ms on TRB and 40.70 ms on TRD, because the D-D sum is where the time goes. On a VJ chain
+    the pool is pure startup cost -- which is what ``_NT_THREAD_MIN`` is really guarding.
     """
     if threads == 1 or len(seqs) < _NT_THREAD_MIN:
         return [native.pgen_nt(model, s, a, b) for s, a, b in zip(seqs, vres, jres)]
