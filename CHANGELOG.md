@@ -3,6 +3,17 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.14.1 — 2026-09-25
+
+### Fixed — `on_duplicate` now reaches the signature path and both CLI commands
+
+3.14.0's error message tells the caller to `pass on_duplicate="sum"`, and there was no way to do
+it: `sanitise` took the argument, `vsig` did not, and neither `vdjtools diversity` nor
+`vdjtools signature` exposed a flag. The only route through was to collapse every locus frame by
+hand before calling, which is unworkable over a cohort. `vsig(..., on_duplicate=…)` now forwards
+it (and so does `vsig_cohort`), and both commands take `--on-duplicate error|sum`. A message that
+names a fix the caller cannot apply is barely better than the silence it replaced.
+
 ## 3.14.0 — 2026-09-25
 
 ### Fixed — a duplicated amino-acid clonotype key is now a hard failure

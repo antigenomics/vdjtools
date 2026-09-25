@@ -202,6 +202,11 @@ _THREADS = typer.Option(
     0, "--threads", "-t",
     help="Worker threads over samples (0 = all cores). Lower to core count if compute-bound.",
 )
+_ONDUP = typer.Option(
+    "error", "--on-duplicate",
+    help="A frame with no junction_nt that repeats (junction_aa, v_call, j_call, c_call) cannot "
+         "say whether those rows are two clonotypes or one: error (default) refuses, sum adds "
+         "the counts together.")
 _COHORT = typer.Option(
     None, "--cohort",
     help="Pre-ingested parquet cohort dir (vdjtools.io.ingest_cohort): one streamed "
@@ -419,19 +424,23 @@ def diversity(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
     fmt: str = _FMT, threads: int = _THREADS, cohort: Optional[Path] = _COHORT,
-    out: Optional[Path] = _OUT,
+    on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
     """Per-sample diversity (observed richness, Chao, Efron-Thisted, Shannon, Simpson, d50)."""
+    import functools
+
     from vdjtools.io.batch import map_samples
     from vdjtools.stats.diversity import diversity_cohort, diversity_stats
 
     if cohort is not None:
         from vdjtools.io.cohort import scan_cohort
-        _write(diversity_cohort(scan_cohort(cohort, join_metadata=False)), out)
+        _write(diversity_cohort(scan_cohort(cohort, join_metadata=False),
+                                on_duplicate=on_duplicate), out)
         return
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
+    fn = functools.partial(diversity_stats, on_duplicate=on_duplicate)
     rows = [_tag(res, sid) for sid, res in
-            map_samples(diversity_stats, items, fmt=fmt, workers=threads or None)]
+            map_samples(fn, items, fmt=fmt, workers=threads or None)]
     _write(pl.concat(rows, how="vertical_relaxed"), out)
 
 
@@ -451,7 +460,7 @@ def signature(
     channels: bool = typer.Option(False, "--channels",
                                   help="Print the channel vocabulary for --tier and exit -- one "
                                        "row per named group of columns, and what it measures."),
-    threads: int = _THREADS, out: Optional[Path] = _OUT,
+    threads: int = _THREADS, on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
     """One repertoire in, one row of named features out — ready for a classifier.
 
@@ -540,7 +549,8 @@ def signature(
     from vdjtools.io.batch import map_samples
 
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
-    fn = functools.partial(vsig, tier=tier, weight=weight, threads=1)
+    fn = functools.partial(vsig, tier=tier, weight=weight, threads=1,
+                           on_duplicate=on_duplicate)
     # `v_identity` is the one field the signature needs that the canonical schema does not
     # carry, so it has to be asked for by name. Without it the SHM block is not merely absent
     # but uncomputable, and ships as a permanently-nan column on files that do have it.

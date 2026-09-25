@@ -119,3 +119,28 @@ def test_an_unknown_policy_is_rejected_rather_than_ignored():
                      REPRODUCER.with_columns(pl.lit("S1").alias("sample_id")), on_duplicate="drop")):
         with pytest.raises(ValueError, match='"error" or "sum"'):
             call()
+
+
+def test_the_policy_reaches_vsig_and_therefore_the_whole_signature_path():
+    """The error message tells the caller to pass ``on_duplicate="sum"`` -- so it must be passable.
+
+    Without this the message is a dead end: ``sanitise`` took the argument but ``vsig`` did not,
+    so the only route through was to collapse every locus frame by hand before calling.
+    """
+    from vdjtools.signature.assemble import vsig
+
+    sample = {"TRB": REPRODUCER}
+    with pytest.raises(ValueError, match="no junction_nt"):
+        vsig(sample)
+    assert vsig(sample, on_duplicate="sum")["vsig:mask:TRB:present"] == 1.0
+
+
+def test_both_clis_expose_the_flag_the_error_message_names():
+    from typer.main import get_command
+
+    from vdjtools.cli import app
+
+    cmds = get_command(app).commands
+    for name in ("diversity", "signature"):
+        flags = {o for p in cmds[name].params for o in getattr(p, "opts", [])}
+        assert "--on-duplicate" in flags, f"vdjtools {name} cannot pass the policy the error names"

@@ -49,7 +49,7 @@ def _locus_frames(sample) -> dict[str, pl.DataFrame]:
 def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DEFAULT_CSTAR,
          weight: str = "log2p1", pgen_q05: dict[str, float] | None = None,
          kmer_spaces: dict | None = None, threads: int = 0,
-         prefiltered: bool = False) -> dict[str, float]:
+         prefiltered: bool = False, on_duplicate: str = "error") -> dict[str, float]:
     """The ``vsig`` half of one sample's signature, as ``{column_name: value}``.
 
     Args:
@@ -76,13 +76,18 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
             meaning "this repertoire is exceptionally clean", when the truth is "we cannot tell".
             Every other column is unaffected either way -- they are all computed on the surviving
             rows, and pre-filtering does not change which rows survive.
+        on_duplicate: What to do with a locus frame that has no ``junction_nt`` and repeats an
+            amino-acid clonotype key -- ``"error"`` (default) or ``"sum"``. See
+            :func:`vdjtools.io.schema.assert_resolvable`. The check runs *after* non-productive
+            rows are dropped, so a locus of junk still masks out rather than raising.
 
     Returns:
         Every column :func:`vdjtools.signature.layout.columns` lists for ``tier`` and ``"vsig"``,
         in that order, with ``nan`` where the sample could not support one.
 
     Raises:
-        ValueError: If ``tier`` is unknown.
+        ValueError: If ``tier`` is unknown, or a locus repeats an unresolvable amino-acid
+            clonotype key and ``on_duplicate="error"``.
     """
     want = L.columns(tier, "vsig")
     out = dict.fromkeys(want, np.nan)
@@ -100,7 +105,7 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
             out[f"vsig:mask:{locus}:estimable"] = 0.0
             continue
 
-        clean, nonstd = B.sanitise(raw)
+        clean, nonstd = B.sanitise(raw, on_duplicate=on_duplicate)
         if clean.height == 0:
             out[f"vsig:mask:{locus}:estimable"] = 0.0
             out[f"vsig:qc:{locus}:nonstd_aa_frac"] = B.qc_block(
