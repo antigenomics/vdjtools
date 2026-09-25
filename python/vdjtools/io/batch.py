@@ -296,10 +296,11 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
             clonotype frame (e.g. :func:`vdjtools.stats.diversity.diversity_stats`).
         items: Iterable of ``(sample_id, path)`` pairs (e.g. from a metadata sheet).
         fmt: Reader format passed to :func:`read` (``"auto"`` sniffs each file).
-        workers: Max worker threads. ``None`` uses the pool default
-            (``min(32, os.cpu_count() + 4)``); pass a smaller value if ``fn`` is
-            compute-bound, to avoid oversubscribing polars' own thread pool. Four is already at
-            the measured ceiling above; more is not faster and is occasionally slower.
+        workers: Max worker threads. ``None`` uses
+            :func:`vdjtools.cores.available_cores` capped at the number of samples -- the cores
+            this process may actually use, which under ``srun -c 8`` on a 40-core node is 8 and
+            not 40. Four is already at the measured ceiling above; more is not faster and is
+            occasionally slower.
         keep: Non-canonical columns to preserve, passed to :func:`read`. Without it a
             reduction needing a field outside the canonical eight — ``v_identity`` for
             the SHM block — gets a frame that never carried it, and reports a hole
@@ -310,6 +311,13 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
         (input/metadata order, regardless of which sample finishes first).
     """
     items = list(items)
+    if workers is None:
+        # NOT the pool default (min(32, os.cpu_count() + 4)): os.cpu_count() is the machine's core
+        # count, not this process's allowance, so under `srun -c 8` on a 40-core node the default
+        # asks for 36 threads to share 8 cores. The measured ceiling here is ~4x anyway.
+        from ..cores import available_cores
+
+        workers = min(available_cores(), max(1, len(items)))
 
     def work(item):
         sid, path = item

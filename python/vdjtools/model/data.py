@@ -465,8 +465,10 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
     Args:
         chains: Chains to build. Defaults to all seven.
         groups: Organism groups to build each chain for.
-        workers: Concurrent builds. ``None`` = ``min(len(jobs), cpu_count // 2)``, leaving cores
-            for each build's own E-step threads.
+        workers: Concurrent builds. ``None`` = ``min(len(jobs), available_cores() // 2)``, leaving
+            cores for each build's own E-step threads. The count is the one this process may
+            actually use (see :func:`vdjtools.cores.available_cores`), not the machine's -- under
+            ``srun -c 8`` on a 40-core node those differ by 5x.
         out_dir: If given, each model is saved to ``out_dir/{group}_{chain}/``.
         **kw: Passed to :func:`build_model` (``iters``, ``tol``, ``cap``, ``gene_prior``, ...).
 
@@ -479,13 +481,14 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
         >>> results = build_all(["TRB", "TRA"], workers=2, out_dir="models")
         >>> pl.DataFrame([r["stats"] for r in results.values() if "stats" in r])
     """
-    import os
     from concurrent.futures import ThreadPoolExecutor
+
+    from ..cores import available_cores
 
     jobs = [(g, c) for g in groups for c in chains]
     if not jobs:
         return {}
-    n_workers = workers or max(1, min(len(jobs), (os.cpu_count() or 4) // 2))
+    n_workers = workers or max(1, min(len(jobs), available_cores(4) // 2))
 
     def one(job):
         group, chain = job

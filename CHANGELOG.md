@@ -3,6 +3,38 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.14.2 — 2026-09-25
+
+### Fixed — pools were sized off the machine's cores, not this process's
+
+`os.cpu_count()` reports the machine. It is not what a process is allowed to use, and everywhere
+repertoire analysis actually runs, the two differ. Measured on an Aldan-3 `medium` node allocated
+with `srun -c 8`:
+
+| | |
+|---|---:|
+| `os.cpu_count()` | **40** |
+| `len(os.sched_getaffinity(0))` | **8** |
+| `os.process_cpu_count()` | 8 |
+
+Every pool here sized itself off the first number, so an eight-core allocation started up to 40
+workers. That is not merely wasteful: each worker pays a fresh interpreter and a fresh load of the
+frozen artifacts, so on a 32 GB box it is several GB of overhead competing for cores that do not
+exist, and it can take the machine out of memory on a cohort that would otherwise have fitted five
+times over.
+
+New `vdjtools.cores.available_cores()` takes the **smallest** of the affinity mask
+(`os.process_cpu_count()` on 3.13+, else `os.sched_getaffinity`), the cgroup CFS quota, and
+`os.cpu_count()`. Affinity and quota constrain independently and a box can carry both:
+`docker run --cpuset-cpus` shows in the affinity mask, `--cpus=N` does **not** — it is a bandwidth
+quota, invisible to every API except the cgroup file. Kubernetes CPU limits are the same
+mechanism, which is why the cgroup read is there rather than trusting affinity alone.
+
+Used at every pool-sizing site: `model/score.py` (`_pgen_nt_many`), `model/data.py` (`build_all`)
+and `io/batch.py` (`map_samples`, which had been leaving `ThreadPoolExecutor` to its own
+`min(32, os.cpu_count() + 4)` default — 36 threads for 8 cores on that node). A test walks the
+package and fails on any new bare `os.cpu_count()`, so a future site cannot quietly re-create it.
+
 ## 3.14.1 — 2026-09-25
 
 ### Fixed — `on_duplicate` now reaches the signature path and both CLI commands

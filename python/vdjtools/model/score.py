@@ -158,11 +158,12 @@ def _pgen_nt_many(model: Model, seqs: list[str], vres: list, jres: list,
     """
     if threads == 1 or len(seqs) < _NT_THREAD_MIN:
         return [native.pgen_nt(model, s, a, b) for s, a, b in zip(seqs, vres, jres)]
-    import os
     from concurrent.futures import ThreadPoolExecutor
 
+    from ..cores import available_cores
+
     native.pack(model)  # populate the pack cache once, before the workers race for it
-    n_workers = threads if threads > 0 else max(1, (os.cpu_count() or 2) - 2)
+    n_workers = threads if threads > 0 else max(1, available_cores(2) - 2)
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         return list(pool.map(lambda t: native.pgen_nt(model, t[0], t[1], t[2]),
                              zip(seqs, vres, jres)))
