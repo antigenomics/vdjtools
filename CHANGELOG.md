@@ -3,6 +3,25 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.15.0 — 2026-09-25
+
+### Added — one process pool, in one place
+
+`vdjtools.signature.cohort` holds `slices()` and `parallel_rows()`: contiguous chunks, one task
+per worker, `spawn` (polars cannot be combined with `fork`), and **no serial fallback** — a pool
+that cannot start raises with the two fixes named. Three callers share it: `vsig_cohort` here,
+`rsig_cohort` and `signature_cohort` in mirpy. Previously only mirpy had a pool and vdjtools had
+none.
+
+`vsig_cohort` gains `n_jobs` (default `1`, `0` = every core this process may use) and accepts a
+zero-argument callable per sample, which defers the read into the worker and keeps peak memory at
+`O(n_jobs)` samples rather than the whole cohort.
+
+### Changed — the `signature` help no longer misdescribes mirpy
+
+It said `mir signature --preset classify ...` "emits both halves as one vector". As of mirpy
+3.18.0 it emits the geometry half only — one tool per half, joined on `sample_id`.
+
 ## 3.14.2 — 2026-09-25
 
 ### Fixed — pools were sized off the machine's cores, not this process's

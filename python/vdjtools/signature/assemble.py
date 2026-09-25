@@ -203,19 +203,34 @@ def _stats(df: pl.DataFrame) -> dict[str, float]:
             "top_clone_fraction": float(a.max() / a.sum()) if a.sum() else 0.0}
 
 
-def vsig_cohort(samples, *, tier: str = "standard", **kw):
+def _one_vsig(item, tier, kw):
+    """One sample's vsig row. Module-level so a worker process can unpickle it."""
+    sid, s = item
+    return {"sample_id": sid, **vsig(s, tier=tier, **kw)}
+
+
+def vsig_cohort(samples, *, tier: str = "standard", n_jobs: int = 1, **kw):
     """Assemble a whole cohort into one frame: ``sample_id`` plus the ``vsig`` columns.
 
     Args:
-        samples: ``{sample_id: sample}`` or an iterable of ``(sample_id, sample)``.
+        samples: ``{sample_id: sample}`` or an iterable of ``(sample_id, sample)``. A value may
+            be a zero-argument callable returning the sample, which defers the read into the
+            worker and keeps peak memory at ``O(n_jobs)`` samples rather than the whole cohort.
         tier: Passed to :func:`vsig`.
+        n_jobs: Worker processes; ``1`` (default) stays in-process, ``0`` uses every core this
+            process may use. Pass ``threads=1`` in ``kw`` so vsig's own Pgen threads do not
+            compete with the pool.
         **kw: Passed to :func:`vsig`.
 
     Returns:
         A ``pl.DataFrame``, one row per sample, columns in layout order.
     """
-    items = samples.items() if isinstance(samples, dict) else samples
-    rows = [{"sample_id": sid, **vsig(s, tier=tier, **kw)} for sid, s in items]
+    import functools
+
+    from .cohort import parallel_rows
+
+    items = list(samples.items() if isinstance(samples, dict) else samples)
+    rows = parallel_rows(items, functools.partial(_one_vsig, tier=tier, kw=kw), n_jobs)
     if not rows:
         return pl.DataFrame(schema={"sample_id": pl.Utf8})
     return pl.DataFrame(rows).select(["sample_id", *L.columns(tier, "vsig")])

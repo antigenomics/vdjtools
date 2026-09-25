@@ -495,11 +495,11 @@ def signature(
 
     THE OTHER HALF: this command is statistics only. The geometry half
     (`rsig`) needs the prototype embedding and ships in mirpy --
-    `mir signature --preset classify ...` emits both halves as one vector,
-    which is what you usually want for a classifier. A preset spanning both
-    halves keeps only its `vsig:` columns here and says so on stderr,
-    because silently returning half of what was asked for is worse than
-    saying it.
+    `mir signature ...` emits it, and nothing else. One tool per half: run
+    both and join on `sample_id` for the full vector. A preset spanning both
+    halves keeps only its `vsig:` columns here and says so on stderr (mirpy
+    does the mirror image), because silently returning half of what was
+    asked for is worse than saying it.
 
     \b
     GOTCHAS
