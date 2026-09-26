@@ -68,6 +68,11 @@ double p_insert(const std::vector<double>& p_len, const std::vector<double>& R,
     return p;
 }
 
+// NOTE: the aa DP's prefix-sharing trick does not apply here and was measured not to be the cost.
+// This inner match loop exits on the first mismatching nucleotide, so a 3' trim that fails costs
+// one comparison, not len(D). What makes a V/J-marginalized nt Pgen expensive (36.9 ms/junction on
+// TRB, 40.7 on TRD, measured 2026-09-25) is the V x J enumeration wrapped around this call, not
+// the D state space inside it.
 // Sum over D, its 5'/3' trims and its position of P(D|J) * P(delD|D) * Pins(VD) * Pins(DJ).
 double d_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
     double total = 0.0;
@@ -474,10 +479,30 @@ double combine_tm(const std::vector<double>& dp, const double* rb, int p, const 
     return tot;
 }
 
+// One fixed germline nucleotide ``nt`` at CDR3 position ``mm``, through the 25-state DP. False
+// when the codon masks leave no mass: every longer prefix is then zero too, so callers break.
+inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt, int mm,
+                       const uint64_t* allowed) {
+    bool ce = (mm % 3 == 2);
+    uint64_t am = allowed[mm / 3];
+    std::fill(ndp.begin(), ndp.end(), 0.0);
+    bool any = false;
+    for (int s = 0; s < 25; ++s) {
+        double w = dp[s];
+        if (w == 0.0) continue;
+        int p1 = s / 5 - 1, p2 = s % 5 - 1;
+        if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
+        ndp[sidx(nt, p1)] += w;
+        any = true;
+    }
+    dp.swap(ndp);
+    return any;
+}
+
 double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
     int N = 3 * alen;
-    std::vector<double> Lf, Rb;
-    std::vector<char> lf_any, rb_any;
+    std::vector<double> Lf, Rb, res;
+    std::vector<char> lf_any, rb_any, live;
     mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);
     double total = 0.0;
     std::vector<double> dp(25), ndp(25);
@@ -485,63 +510,58 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
         mk_right_tm(m, allowed, N, D, j_idx, Rb, rb_any);
         const auto& cutd = m.cut_d[D];
         int Ld = cutd.size();
+        const double* del_row = &m.del_d[D * m.nbins_d5 * m.nbins_d3];
         for (int idx5 = 0; idx5 <= Ld && idx5 < m.nbins_d5; ++idx5) {
-            for (int idx3 = 0; idx3 <= Ld - idx5 && idx3 < m.nbins_d3; ++idx3) {
-                double pdel = m.del_d[(D * m.nbins_d5 + idx5) * m.nbins_d3 + idx3];
+            // The D emitted by trim (idx5, idx3) is a PREFIX of the one emitted by (idx5, idx3-1),
+            // so one forward pass covers every 3' trim of this (D, idx5) and the len(D) factor
+            // leaves the cost. The smallest 3' trim carrying mass fixes how far to walk.
+            int hi3 = std::min(Ld - idx5, m.nbins_d3 - 1), ld_hi = -1;
+            for (int idx3 = 0; idx3 <= hi3; ++idx3)
+                if (del_row[idx5 * m.nbins_d3 + idx3] != 0.0) { ld_hi = Ld - idx5 - idx3; break; }
+            if (ld_hi < 0) continue;  // no live trim for this 5' cut
+            live.assign(ld_hi + 1, 0);
+            for (int idx3 = 0; idx3 <= hi3; ++idx3)
+                if (del_row[idx5 * m.nbins_d3 + idx3] != 0.0) live[Ld - idx5 - idx3] = 1;
+            res.assign((ld_hi + 1) * (N + 1), 0.0);
+            for (int pos = 1; pos <= N; ++pos) {
+                if (!lf_any[pos]) continue;
+                for (int s = 0; s < 25; ++s) dp[s] = Lf[pos * 25 + s];
+                for (int ld = 0; ld <= ld_hi && pos + ld <= N; ++ld) {
+                    if (ld > 0 && !thread_one(dp, ndp, cutd[idx5 + ld - 1], pos + ld - 1, allowed))
+                        break;  // mass gone; every longer prefix stays 0 and res is pre-zeroed
+                    int p = pos + ld;
+                    if (live[ld] && rb_any[p])
+                        res[ld * (N + 1) + pos] = combine_tm(dp, &Rb[p * 25], p, allowed);
+                }
+            }
+            // Second pass, in the ORIGINAL (idx3 ascending, pos ascending) order. That is what
+            // keeps `total` bitwise identical rather than merely equal to 1e-16 -- summing
+            // straight out of the walk reassociates, and vsig:pgen:*:frac_atypical is compared
+            // against a frozen pgen_q05 reference where a last-bit move is a data bug.
+            for (int idx3 = 0; idx3 <= hi3; ++idx3) {
+                double pdel = del_row[idx5 * m.nbins_d3 + idx3];
                 if (pdel == 0.0) continue;
                 int ld = Ld - idx5 - idx3;
-                for (int pos = 1; pos <= N - ld; ++pos) {
-                    if (!lf_any[pos]) continue;
-                    int p = pos + ld;
-                    if (p > N || !rb_any[p]) continue;
-                    for (int s = 0; s < 25; ++s) dp[s] = Lf[pos * 25 + s];
-                    bool ok = true;
-                    for (int k = 0; k < ld; ++k) {  // thread the fixed D germline nt
-                        int mm = pos + k, nt = cutd[idx5 + k];
-                        bool ce = (mm % 3 == 2);
-                        uint64_t am = allowed[mm / 3];
-                        std::fill(ndp.begin(), ndp.end(), 0.0);
-                        bool any = false;
-                        for (int s = 0; s < 25; ++s) {
-                            double w = dp[s];
-                            if (w == 0.0) continue;
-                            int p1 = s / 5 - 1, p2 = s % 5 - 1;
-                            if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
-                            ndp[sidx(nt, p1)] += w;
-                            any = true;
-                        }
-                        dp.swap(ndp);
-                        if (!any) { ok = false; break; }
-                    }
-                    if (ok) total += pdel * combine_tm(dp, &Rb[p * 25], p, allowed);
-                }
+                const double* r = &res[ld * (N + 1)];
+                for (int pos = 1; pos <= N - ld; ++pos) total += pdel * r[pos];
             }
         }
     }
     return total;
 }
 
+// NOTE: `combine_tm` is the bottleneck now that the D walk shares its prefixes -- unchanged at
+// ~437k calls per 20-aa IGH junction against 588k threading steps. The available win is hoisting
+// its per-boundary reduction (rb -> 4 or 16 numbers, loop-invariant in dp) out to one pass per
+// (D, p), worth roughly another 2x. It is NOT free: that regroups the sum, so Pgen moves in the
+// last ~1e-16 and the bitwise gate on `tests/python/fixtures/pgen_golden.json` has to be relaxed
+// to a tolerance. Its own piece of work, with its own concordance run.
 // Thread a fixed germline block g[0..ld) starting at CDR3 position `start` forward through the
 // codon-constrained state DP (25 states). Returns false if the codon masks kill all mass.
 inline bool thread_fixed(std::vector<double>& dp, std::vector<double>& ndp,
                          const int8_t* g, int ld, int start, const uint64_t* allowed) {
-    for (int k = 0; k < ld; ++k) {
-        int mm = start + k, nt = g[k];
-        bool ce = (mm % 3 == 2);
-        uint64_t am = allowed[mm / 3];
-        std::fill(ndp.begin(), ndp.end(), 0.0);
-        bool any = false;
-        for (int s = 0; s < 25; ++s) {
-            double w = dp[s];
-            if (w == 0.0) continue;
-            int p1 = s / 5 - 1, p2 = s % 5 - 1;
-            if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
-            ndp[sidx(nt, p1)] += w;
-            any = true;
-        }
-        dp.swap(ndp);
-        if (!any) return false;
-    }
+    for (int k = 0; k < ld; ++k)
+        if (!thread_one(dp, ndp, g[k], start + k, allowed)) return false;
     return true;
 }
 
@@ -579,6 +599,11 @@ void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64
     }
 }
 
+// NOTE: both D loops below carry the same nested-prefix redundancy `pgen_aa_vdj` just shed, and
+// the D2 loop would take the same two-pass treatment. Left alone on purpose: every bundled model
+// reports P(n_D=2) = 0, so nothing shipped reaches this function. The D1 loop is also harder --
+// it accumulates into the shared `Mf` through `extend_ins_into`, so preserving the summation
+// order (and with it bitwise equality) is a different problem from the single-D case.
 // Tandem (n_D=2) aa Pgen middle: V+insVD (Lf, reused) → D1 → insDD (Mf) → D2 → insDJ+J (Rb per J).
 // P(D1|J) couples D1 to J, so J is looped explicitly (few J on the D-bearing loci) and its P(J),
 // P(delJ), insDJ+J go into a D-less right DP; P(D1|J)·P(D2|D1) apply at the D placements. Matches
@@ -863,6 +888,11 @@ double accum_vj(const PackedModel& m, int v, int j, int div, int dij,
     return w;
 }
 
+// NOTE: same nested-prefix structure as `pgen_aa_vdj`, deliberately not restructured. The output
+// here is soft counts spread across a dozen accumulator arrays rather than one scalar, so the
+// order-preserving second pass that keeps Pgen bitwise identical has no cheap analogue; the tests
+// pin these at atol=1e-12, not bitwise. It runs during model regeneration on Aldan-3, not in the
+// signature hot path.
 double accum_vdj(const PackedModel& m, int j, int v, int div, int dij,
                  const int8_t* mid, int mlen, double base, const std::vector<int>& dm, Counts& c) {
     int nD = m.nD();

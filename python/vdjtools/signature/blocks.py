@@ -512,39 +512,45 @@ def pgen_block(df: pl.DataFrame, locus: str, *, q05: float | None = None,
     Subsampled deterministically to ``n_max`` junctions by :func:`pgen_junctions`, which the
     frozen ``q05`` reference must also use.
 
-    WARNING: **this block is ~96% of vsig's cost on a seven-locus sample, almost all of it IGH,
-    and that is the D trim state space — not the V/J marginalisation.** Measured 2026-09-26,
+    WARNING: **this block dominates vsig on a seven-locus sample, almost all of it IGH, and that
+    is the D trim state space -- not the V/J marginalisation.** Measured 2026-09-26 on 3.17.0,
     250 junctions per locus off the bundled models, ``threads=0``:
 
     ===== ============= ============= ========= ==================
-    locus marginal µs/j conditioned   speedup   D states (p > 0)
+    locus marginal us/j conditioned   speedup   D states (p > 0)
     ===== ============= ============= ========= ==================
-    IGH   2675          2767          **1.0x**  9,212
-    TRD   146           135           1.1x      455
-    TRB   85            74            1.1x      297
-    TRA   108           4             26.9x     0 (no D)
-    TRG   16           4              4.0x      0 (no D)
-    IGK   10            2             3.9x      0 (no D)
-    IGL   10            2             4.3x      0 (no D)
+    IGH   698           642           **1.1x**  9,212
+    TRD   53            57            0.9x      455
+    TRB   26            24            1.1x      297
+    TRA   97            4             25.4x     0 (no D)
+    TRG   13            3             3.8x      0
+    IGK   9             2             3.8x      0
+    IGL   9             2             3.9x      0
     ===== ============= ============= ========= ==================
 
-    Conditioning on the observed V/J buys **nothing** on the loci that cost anything: IGH is
-    1.0x. It is a large win only on the D-less loci, which together are under 2% of the bill.
-    IGH costs 31x TRB because it has 31x the ``(D allele, ndel5, ndel3)`` states with non-zero
-    probability -- 9,212 against 297 -- exactly matching the 31x cost ratio. Nor do those states
-    collapse: they map to 8,910 distinct D emissions, a 1.0x reduction, so merging germline-
-    identical states is not a lever either. Neither is memoising per unique junction: IGH
-    deduplicates 1.0x on real cohorts.
+    Conditioning on the observed V/J buys **nothing** on the loci that cost anything -- IGH 1.1x,
+    TRB 1.1x, TRD 0.9x. It is a large win only on the D-less loci, which together are under 2% of
+    the bill. IGH costs 27x TRB because it has 31x the ``(D allele, ndel5, ndel3)`` states with
+    non-zero probability, 9,212 against 297. Nor do those states collapse: they map to 8,910
+    distinct D emissions, a 1.0x reduction. Neither is memoising per unique junction a lever:
+    IGH deduplicates 1.0x on real cohorts.
 
-    So there is no cheap exact win here, and three plausible-looking ones are already measured
-    dead. What *is* available: decline the block via ``columns=`` on :func:`~vdjtools.signature.
-    vsig` (the whole 96%), lower ``n_max`` (linear, but it is a different draw from the frozen
-    reference), or give the kernel cores -- ``threads`` scales 8.3x from 1 to all 16.
+    **3.17.0 took the one real win here.** For a fixed ``(D, 5' trim)`` the emissions at
+    successive 3' trims are nested *prefixes*, so the native DP now threads each D germline once
+    per 5' trim instead of once per 3' trim: IGH's 9,212 live states are 767 prefix chains, the
+    inner nucleotide steps drop 4,736,568 -> 588,010 at a 20-aa junction, and this block went
+    1,654 -> 539 ms/sample over 120 synthetic seven-locus samples (**3.1x**). Every Pgen value is
+    bitwise unchanged, verified on 1,708 of 1,708 float64 values, so nothing downstream moved.
 
-    A future speedup has to come from the native D DP itself, and it must hold the exact-Pgen
-    invariant. Do not "fix" this by conditioning on V/J: it changes the quantity ``frac_atypical``
-    is measured against, shifting every value by roughly -1 decade on IGH and -0.5 on the light
-    chains, and buys no time on the locus that costs the time.
+    What is left, in order: decline the block via ``columns=`` on :func:`~vdjtools.signature.vsig`
+    (still the whole of it), lower ``n_max`` (linear, but it is a different draw from the frozen
+    reference), or give the kernel cores -- ``threads`` scales 8.3x from 1 to all 16. The next
+    native win is ``combine_tm``, which is now the bottleneck; see its ``NOTE:`` in ``src/pgen.cpp``
+    for why it is not free.
+
+    Do not "fix" this by conditioning on V/J: it changes the quantity ``frac_atypical`` is measured
+    against, shifting every value by roughly -1 decade on IGH and -0.5 on the light chains, and
+    buys no time on the loci that cost the time.
     """
     from .cohort import in_pool_worker
     from ..model.native import pgen_aa_batch

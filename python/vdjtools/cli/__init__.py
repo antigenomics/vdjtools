@@ -519,10 +519,11 @@ def signature(
         every rank tested.
       * -t/--threads defaults to all cores. Inside your own process pool,
         pass -t 1 per worker.
-      * IGH Pgen is ~96% of this command's runtime, and it is the D trim
+      * IGH Pgen dominates this command's runtime, and it is the D trim
         state space (9,212 states vs TRB's 297), not anything tunable.
-        A preset that keeps no vsig:pgen column now skips the block
-        entirely; --pgen-n-max trades the rest linearly against noise.
+        3.17.0 made it 3.1x cheaper with no change to any value; a preset
+        that keeps no vsig:pgen column skips the block entirely, and
+        --pgen-n-max trades the rest linearly against noise.
     """
     from vdjtools import signature as S
     from vdjtools.signature import layout as L

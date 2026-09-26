@@ -3,6 +3,106 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.17.0 — 2026-09-26
+
+The Pgen block you cannot decline. 3.16.0 let a caller skip `vsig:pgen` entirely, which is 96.6% of
+a `standard`-tier seven-locus sample — but `--preset classify` and `--preset transfer`, the two
+`recommended` presets, both keep all seven loci of it and paid the full bill. The native D DP now
+costs 2.4-3.6x less on the D-bearing loci, and **every Pgen value it returns is bit-for-bit what
+3.16.0 returned.**
+
+### Changed — the D germline is threaded once per 5' trim, not once per 3' trim
+
+`pgen_aa_vdj` enumerated `(D allele, ndel5, ndel3)` states and re-threaded the surviving germline
+through the 25-state codon DP from scratch for each one. The emission at `idx3` is a **prefix** of
+the emission at `idx3 - 1` — the trims of one `(D, 5' cut)` are nested — so one forward pass now
+covers every 3' trim of that chain and the `len(D)` factor leaves the cost. The argmax mirror
+`best_vdj` has always done this; the sum never did.
+
+Inner nucleotide steps at a 20-aa junction, counted off the bundled models:
+
+| locus | D states, p > 0 | (D, 5' trim) chains | steps before | steps after | |
+|---|---:|---:|---:|---:|---|
+| IGH | 9,212 | 767 | 4,736,568 | 588,010 | **8.1x** |
+| TRD | 455 | 45 | 139,568 | 22,095 | 6.3x |
+| TRB | 297 | 38 | 107,087 | 21,147 | 5.1x |
+
+Wall clock, 250 junctions per locus drawn from the bundled `olga` model, 16-core M-series:
+
+| locus | mean junction | before, all cores | after | | before, 1 thread | after | |
+|---|---:|---:|---:|---|---:|---:|---|
+| IGH | 20.9 aa | 2,557 µs | 703 µs | **3.6x** | 30,106 µs | 7,859 µs | **3.8x** |
+| TRD | 18.8 aa | 155.3 µs | 64.8 µs | 2.4x | 1,400 µs | 557 µs | 2.5x |
+| TRB | 15.1 aa | 79.6 µs | 27.6 µs | 2.9x | 666 µs | 227 µs | 2.9x |
+| TRA | 14.2 aa | 113.0 µs | 108.5 µs | — | 923 µs | 912 µs | — |
+| TRG | 13.5 aa | 13.0 µs | 13.0 µs | — | 109 µs | 110 µs | — |
+| IGK | 11.4 aa | 9.1 µs | 8.8 µs | — | 67.0 µs | 68.6 µs | — |
+| IGL | 12.9 aa | 8.4 µs | 8.1 µs | — | 55.4 µs | 57.2 µs | — |
+
+The four VJ loci have no D and are the control: they do not move, which is what says the change is
+where it claims to be.
+
+End to end, which is the number the presets care about — **120 synthetic seven-locus samples** at
+the real cohort shape (median 1,388 clonotypes, 39x p05-p95 spread, 30% IGH / 27% TRB / 17% IGK /
+13% TRA / 10% IGL / 1% TRG / 0.3% TRD, 260,158 clonotypes in total), `--preset classify`, the
+`vsig` half, `threads=0`:
+
+| | before | after | |
+|---|---:|---:|---|
+| 120 samples, total | 198.5 s | 64.6 s | **3.1x** |
+| per sample | 1,654 ms | 539 ms | |
+
+A TRB-only benchmark cannot see any of this: IGH is ~96% of the bill and the other six loci
+together are the rest.
+
+Conditioning Pgen on the observed V/J is still not a lever, re-measured on this release: IGH 1.1x,
+TRB 1.1x, TRD 0.9x. It remains a large win only on the four D-less loci, which together cost under
+2% — and it would shift `log10 Pgen` by about -1 decade on IGH against a frozen reference. Slower
+where it matters and wrong everywhere.
+
+`combine_tm` is untouched and is now the bottleneck — ~437k calls per 20-aa IGH junction against
+588k threading steps — which is why the wall clock gains 3.6x where the steps gain 8.1x. Hoisting
+its per-boundary reduction is worth roughly another 2x and is **not** taken here: it regroups the
+sum, and that forfeits the guarantee below. It is noted at the call site with its cost.
+
+### The output is bitwise unchanged, and that is checked rather than asserted
+
+The rewrite is arranged in two passes: the walk records each join, then a second pass adds them into
+the total **in the original `(ndel3, position)` order**. Summing straight out of the walk would be
+correct to ~1e-16 and would still be wrong to ship, because `vsig:pgen:*:frac_atypical` is measured
+against a `pgen_q05` reference frozen outside the block — a last-bit move there is a silent data
+bug that lands in a plausible range, not a rounding detail.
+
+- **1,708 of 1,708 Pgen values identical**, compared as raw float64 bits across all 7 loci x both
+  `from_olga` (uncollapsed) and `load_bundled` (collapsed, the default) x `pgen_nt`, `pgen_aa`,
+  `pgen_aa(mismatches=1)`, V/J-agnostic and V/J-restricted. Collapsing changes the D-state
+  cardinality the DP walks, so both settings are covered.
+- **7-locus OLGA concordance reproduces `r(log10 Pgen) = 1.00000`** on nt and aa. IGH agrees with
+  OLGA to a max relative error of **1.0e-13 (nt) / 7.9e-14 (aa)**.
+
+### Added — `tests/python/fixtures/pgen_golden.json`, the first stored Pgen reference
+
+276 values over IGH/TRB/TRD as hex float64, so `test_pgen_d_prefix.py` compares with `==` rather
+than a tolerance. It exists because a tolerance measurably does not catch this class of bug:
+stopping the shared walk one nucleotide short — each chain loses its longest D — moves IGH Pgen by
+a **median relative error of 7.9e-7** over 12 bundled-model junctions, *under* the `rtol=1e-6` every
+OLGA-comparison test here uses, even though the worst junction moves 4.3%. The frozen reference
+catches that mutation on every value; an oracle comparison catches it only if the draw happens to
+include a long junction. Regenerate it only when a germline or a bundled model changes.
+
+`test_pgen_d_prefix.py` also closes a gap this change made untenable: **IGH had no OLGA comparison
+anywhere in the suite**, though it is the 9,212-state locus and 96% of the signature bill. It now
+has one at `rtol=1e-9`, nt and aa, on a length-spread draw rather than the shortest junctions.
+
+### Unchanged on purpose
+
+Three other sites carry the same nested-prefix structure and each now says at its own definition why
+it was left: `pgen_aa_vdj_dd` (no bundled model has `P(n_D=2) > 0`, and its D1 loop accumulates into
+a shared message array so order preservation is a different problem), `d_middle` (its match loop
+exits on the first mismatching nucleotide, so the redundancy is not its cost — the V x J enumeration
+around it is), and `accum_vdj` (soft counts, pinned at `atol=1e-12` rather than bitwise, and it runs
+only during model regeneration).
+
 ## 3.16.0 — 2026-09-26
 
 The signature hot path, measured rather than assumed. Headline: **`vsig:pgen` is 96.6% of a
