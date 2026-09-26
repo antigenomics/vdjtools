@@ -272,3 +272,37 @@ def test_signature_channels_reads_no_input(tmp_path):
     assert any(r.startswith("vsig:div\t") for r in rows)
     # Every channel carries its one-line meaning; an unexplained name is not a vocabulary.
     assert all(len(r.split("\t")[-1]) > 10 for r in rows[1:])
+    # ...and only this command's half. It used to list all twenty channels including the seven
+    # rsig ones, which `vdjtools signature` has not emitted since the 3.18.0 mirpy split.
+    assert not [r for r in rows[1:] if r.startswith("rsig:")], "rsig is mirpy's half"
+
+
+def test_signature_describe_lists_only_the_vsig_half(tmp_path):
+    """Same contract for the column dictionary: what you will get, not what exists."""
+    out = tmp_path / "cols.tsv"
+    res = CliRunner().invoke(app, ["signature", "--describe", "--tier", "standard", "-o",
+                                   str(out)])
+    assert res.exit_code == 0, res.output
+    rows = out.read_text().strip().split("\n")[1:]
+    assert {r.split("\t")[1] for r in rows} == {"vsig"}
+    assert len(rows) == 160
+
+
+def test_a_preset_with_no_pgen_column_does_not_compute_pgen(tmp_path, monkeypatch):
+    """`--preset` was a display filter; it is a work filter now.
+
+    `nuisance` is tier=full and keeps zero `vsig:pgen:` columns, so before this it computed all
+    seven loci of Pgen -- ~96% of the command's runtime -- and dropped every one of them.
+    Asserted by booby-trapping the block rather than by timing it.
+    """
+    from vdjtools.signature import blocks as B
+
+    src = tmp_path / "s1.tsv"
+    src.write_text("junction_aa\tv_call\tj_call\tduplicate_count\n"
+                   + "".join(f"CASS{'ACDEFGHIKLMNPQRSTVWY'[i % 20] * 3}YEQYF\tTRBV20-1\t"
+                             f"TRBJ2-2\t{i + 1}\n" for i in range(60)))
+    monkeypatch.setattr(B, "pgen_block", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("pgen_block ran for a preset that keeps no pgen column")))
+    res = CliRunner().invoke(app, ["signature", "--preset", "nuisance", str(src),
+                                   "-o", str(tmp_path / "out.tsv")])
+    assert res.exit_code == 0, res.output

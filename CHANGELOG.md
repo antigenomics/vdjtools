@@ -3,6 +3,130 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.16.0 — 2026-09-26
+
+The signature hot path, measured rather than assumed. Headline: **`vsig:pgen` is 96.6% of a
+`standard`-tier seven-locus sample**, essentially all of it IGH — and you can now decline it.
+
+### Added — `columns=` skips the work instead of dropping the result
+
+`vsig(columns=...)` and `vsig_cohort(columns=...)` take an explicit subset, intersected with the
+tier and returned in layout order. **A block whose columns are all excluded does not run.** That
+distinction is the whole feature: a select-and-drop would look identical in the output and save
+nothing.
+
+| what | before | after | |
+|---|---:|---:|---|
+| `standard` tier, one sample, no `vsig:pgen:` | 6,234 ms | 211 ms | **29.6x** |
+| `--preset nuisance` (`full` tier, zero pgen columns) | 1,283 ms | 41 ms | **31.0x** |
+
+Every column kept is bit-identical to the same column from a full run — pinned by
+`test_signature_columns.py`, which booby-traps each gated block in turn rather than timing it (a
+stopwatch cannot tell a skipped block from a fast one).
+
+`vdjtools signature --preset` now passes the preset's columns into the computation. It was a
+display filter; `nuisance` computed all seven loci of Pgen and threw every one of them away.
+
+### Added — `pgen_n_max` / `--pgen-n-max`
+
+How many junctions per locus the Pgen block measures. Cost is linear in it. **Not free**: mean and
+sd are unbiased at any *n*, but `pgen:*:frac_atypical` is compared against a frozen `pgen_q05`
+reference drawn at 2,000, and a different draw is a different quantity. The default is unchanged.
+
+### Fixed — the documented low-memory path did not work
+
+`vsig_cohort` and mirpy's `signature_cohort` both advertised a zero-argument callable per sample as
+the `O(n_jobs)`-memory path, but only mirpy's `_one_rsig` ever resolved one. Passing a callable
+died on `AttributeError: 'function' object has no attribute 'columns'`, so the documented path was
+unusable rather than merely slow. `signature.cohort.resolve_sample` is now the single definition,
+used by all three entry points.
+
+### Fixed — `signature --describe` and `--channels` described the other tool's output too
+
+Since the 3.18.0 mirpy split this command emits `vsig` only, but `--describe` still printed all 688
+columns and `--channels` all 20 channels. The one output whose entire job is "the exact columns you
+will get" was naming 528 columns you will not get. Both are filtered to this half; `mir signature`
+is the mirror image.
+
+### Changed — the Pgen cost is documented, and three proposed fixes are recorded as dead
+
+`pgen_block`'s docstring carried a diagnosis that measurement does not support: that V and J are
+marginalised for an API reason, read as though conditioning on the observed call were the blocked
+speedup. It is not. 250 junctions per locus, bundled models, `threads=0`:
+
+| locus | marginalised µs/junction | conditioned | speedup | D states, p > 0 |
+|---|---:|---:|---:|---:|
+| IGH | 2,675 | 2,767 | **1.0x** | **9,212** |
+| TRD | 146 | 135 | 1.1x | 455 |
+| TRB | 85 | 74 | 1.1x | 297 |
+| TRA | 108 | 4 | 26.9x | 0 |
+| TRG | 16 | 4 | 4.0x | 0 |
+| IGK | 10 | 2 | 3.9x | 0 |
+| IGL | 10 | 2 | 4.3x | 0 |
+
+Conditioning is a large win only on the four D-less loci, which together are under 2% of the bill.
+IGH costs 31x TRB because it has 31x the `(D allele, ndel5, ndel3)` states — 9,212 against 297,
+matching the cost ratio to the digit. It would also shift `log10 Pgen` by **-1.07 decades on IGH**
+against a frozen reference, so it is slower *and* wrong.
+
+Also measured and recorded as dead ends, so they are not re-derived: collapsing germline-identical
+D states (9,212 states -> 8,910 distinct emissions, **1.0x**), and memoising per unique junction
+(IGH deduplicates **1.0x** on real cohorts). A future win has to come from the native D DP, holding
+the exact-Pgen invariant.
+
+### Changed — the block that dominates once Pgen is declined, 4-17x faster
+
+With the Pgen block gone, `div_block` is **84% of everything that remains**, and essentially all
+of it was `stats.inext._rtd_moment` — a Python loop over the abundance *spectrum*, i.e. once per
+**distinct clone size** (~200 on a real locus), called **28 times per sample**: orders q=0 and
+q=1, floor and ceil of a non-integer `m`, seven loci. The loop body was a small numpy op, so the
+cost was round trips, not arithmetic.
+
+Now one flat pass: the ragged `k` ranges are flattened with `repeat`/`cumsum` and regrouped with
+`add.reduceat`, so each distinct count's terms are still summed among themselves before the
+groups are combined.
+
+| `div_block`, seven loci | before | after | |
+|---|---:|---:|---|
+| 415-clonotype sample | 58.3 ms | 3.4 ms | **17.1x** |
+| 4,863-clonotype sample | 286.9 ms | 70.8 ms | **4.1x** |
+
+The flat buffer is bounded (`_FLAT_TERMS`) and processed in chunks: unchunked, a 1.5M-read
+single-locus amplicon sample regressed ~18% against the old loop, because there the groups were
+already large enough that the loop was doing big numpy ops. Chunked it is a wash on that shape
+and 4-17x on ordinary repertoire samples.
+
+Worst relative difference against the loop it replaces: **1.5e-15** over 24
+(depth, order, size) combinations, and **1.0e-14** across every `vsig:div:*` column on real
+samples — floating-point reassociation, nothing more. `test_inext_vectorised.py` pins the
+equality rather than the time, because a speedup that moves a diversity value is worthless when
+the value is compared against a frozen scale reference.
+
+### Fixed — a pool worker asked for the whole machine's Pgen threads as well
+
+`vsig_cohort(n_jobs=N)` passes no `threads`, so each of the N workers asked for
+`hardware_concurrency - 2`: **224 Pgen threads on a 16-core box at `n_jobs=16`**. The pool and
+the kernel each sized themselves off the machine with nothing reconciling them. `pgen_block` now
+takes one thread when it is inside a pool worker (`signature.cohort.in_pool_worker`).
+
+### Added — `signature` says that its output is unstandardised
+
+`mir signature` standardises its half against a frozen scale reference. This command cannot: the
+reference ships in mirpy and the dependency runs the other way. So a plain join of the two CLI
+outputs is a **mixed-scale** matrix, and `vsig:pgen:*:frac_atypical` is `nan` without the
+reference's `pgen_q05`. Measured on one synthetic 600-clonotype TRB sample at `tier="core"`:
+`vsig:div:TRB:1D_c` reads 1.9502 standardised against 2.2495 raw.
+
+That gap is better said than discovered, so the command now says it on stderr and points at
+`mir.signature.signature_cohort()`, which applies the reference to both halves in one call.
+
+### Changed — `_bundled_model`'s cost, corrected by a factor of 5-10
+
+The docstring claimed 0.4-1.8 s per model, and that number was the stated justification for the
+cache. Measured: **51-268 ms per locus, 1.12 s for all seven** (TRG 51, TRB 83, IGL 100, TRD 119,
+TRA 239, IGK 259, IGH 268). The cache is still worth having and saves ~1.1 s per process — but it
+is per *process*, so every spawned worker pays it again.
+
 ## 3.15.0 — 2026-09-25
 
 ### Added — one process pool, in one place

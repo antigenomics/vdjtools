@@ -12,7 +12,31 @@ there are workers -- one task each, so that cost is paid once per worker and not
 """
 from __future__ import annotations
 
-__all__ = ["slices", "parallel_rows"]
+__all__ = ["slices", "parallel_rows", "resolve_sample"]
+
+
+def resolve_sample(sample):
+    """Call a deferred sample, so the read happens in the worker rather than the parent.
+
+    Every ``*_cohort`` accepts a zero-argument callable in place of a sample, which is what keeps
+    peak memory at ``O(n_jobs)`` samples instead of the whole cohort. Defined once here because
+    all three cohort entry points need it and two of them used to forget: a deferred sample
+    reached ``_locus_frames`` unresolved and died on ``'function' object has no attribute
+    'columns'``, which made the documented low-memory path unusable rather than merely slow.
+
+    A ``dict`` or ``DataFrame`` is never treated as deferred even if it were somehow callable --
+    the sample types come first, so this cannot misfire on a real sample.
+
+    NOTE: at ``n_jobs != 1`` the callable is **pickled**, so it must be picklable: a
+    ``functools.partial`` over a module-level function works, a lambda or a closure does not
+    (``AttributeError: Can't get local object ...``). That is why the CLIs build theirs with
+    ``functools.partial(_read_sample, paths)`` rather than a lambda.
+    """
+    import polars as pl
+
+    if callable(sample) and not isinstance(sample, (dict, pl.DataFrame, pl.LazyFrame)):
+        return sample()
+    return sample
 
 
 def slices(n: int, workers: int) -> list[tuple[int, int]]:
@@ -20,8 +44,26 @@ def slices(n: int, workers: int) -> list[tuple[int, int]]:
     return [(round(i * n / workers), round((i + 1) * n / workers)) for i in range(workers)]
 
 
+#: Set in every spawned worker. A pool worker must not also ask a threaded kernel for the whole
+#: machine: at ``n_jobs=cores`` that is cores x cores threads, and measured 2026-09-26 on mirpy's
+#: rsig it turned a 1.47x best case into 1.03x for 4.7x the CPU. Kernels that size themselves off
+#: the core count read this and take one thread instead. An env var rather than an argument
+#: because the reader is several frames down inside a third-party call.
+WORKER_ENV = "VDJTOOLS_POOL_WORKER"
+
+
+def in_pool_worker() -> bool:
+    """True inside a :func:`parallel_rows` worker process. Ask before claiming every core."""
+    import os
+
+    return bool(os.environ.get(WORKER_ENV))
+
+
 def _chunk(args):
     """One contiguous slice, start to finish, in one worker. ``fn`` must be picklable."""
+    import os
+
+    os.environ[WORKER_ENV] = "1"
     items, fn = args
     return [fn(it) for it in items]
 

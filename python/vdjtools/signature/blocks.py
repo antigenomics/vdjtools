@@ -451,11 +451,20 @@ def pchem_block(df: pl.DataFrame, regions=("all", "center")) -> dict[str, float]
 def _bundled_model(locus: str):
     """The bundled recombination model for one locus, loaded once per process.
 
-    Loading and collapsing a model costs 0.4-1.8 s; Pgen over the 2,000 junctions that follow
-    costs ~0.15 s. Without this, a corpus emission spends 80-95% of its time re-reading seven
-    files it already read, and a seven-locus sample pays it seven times over. Cached on the locus
-    name, which is the whole of the model's identity here — nothing in this module mutates the
-    returned model, and the eight slots cover every human locus with room to spare.
+    Loading and collapsing costs **51-268 ms per locus, 1.12 s for all seven** (measured
+    2026-09-26, 16-core M-series; TRG 51, TRB 83, IGL 100, TRD 119, TRA 239, IGK 259, IGH 268).
+    An earlier revision of this docstring claimed 0.4-1.8 s per model and that number was the
+    stated justification for the cache; it is 5-10x too high and predates the 3.x model format.
+
+    The cache is still worth having, but for a smaller reason than advertised: it saves ~1.1 s
+    per process, not most of the runtime. Pgen itself costs far more than the load (see
+    :func:`pgen_block`). Note the bound is **per process**, so every worker a pool spawns pays
+    the 1.12 s again -- at 16 workers that is ~18 s of pure re-initialisation, which is why
+    ``n_jobs`` buys much less than its worker count suggests.
+
+    Cached on the locus name, which is the whole of the model's identity here -- nothing in this
+    module mutates the returned model, and the eight slots cover every human locus with room to
+    spare.
     """
     from ..model.bundled import load_bundled
 
@@ -502,12 +511,53 @@ def pgen_block(df: pl.DataFrame, locus: str, *, q05: float | None = None,
 
     Subsampled deterministically to ``n_max`` junctions by :func:`pgen_junctions`, which the
     frozen ``q05`` reference must also use.
+
+    WARNING: **this block is ~96% of vsig's cost on a seven-locus sample, almost all of it IGH,
+    and that is the D trim state space — not the V/J marginalisation.** Measured 2026-09-26,
+    250 junctions per locus off the bundled models, ``threads=0``:
+
+    ===== ============= ============= ========= ==================
+    locus marginal µs/j conditioned   speedup   D states (p > 0)
+    ===== ============= ============= ========= ==================
+    IGH   2675          2767          **1.0x**  9,212
+    TRD   146           135           1.1x      455
+    TRB   85            74            1.1x      297
+    TRA   108           4             26.9x     0 (no D)
+    TRG   16           4              4.0x      0 (no D)
+    IGK   10            2             3.9x      0 (no D)
+    IGL   10            2             4.3x      0 (no D)
+    ===== ============= ============= ========= ==================
+
+    Conditioning on the observed V/J buys **nothing** on the loci that cost anything: IGH is
+    1.0x. It is a large win only on the D-less loci, which together are under 2% of the bill.
+    IGH costs 31x TRB because it has 31x the ``(D allele, ndel5, ndel3)`` states with non-zero
+    probability -- 9,212 against 297 -- exactly matching the 31x cost ratio. Nor do those states
+    collapse: they map to 8,910 distinct D emissions, a 1.0x reduction, so merging germline-
+    identical states is not a lever either. Neither is memoising per unique junction: IGH
+    deduplicates 1.0x on real cohorts.
+
+    So there is no cheap exact win here, and three plausible-looking ones are already measured
+    dead. What *is* available: decline the block via ``columns=`` on :func:`~vdjtools.signature.
+    vsig` (the whole 96%), lower ``n_max`` (linear, but it is a different draw from the frozen
+    reference), or give the kernel cores -- ``threads`` scales 8.3x from 1 to all 16.
+
+    A future speedup has to come from the native D DP itself, and it must hold the exact-Pgen
+    invariant. Do not "fix" this by conditioning on V/J: it changes the quantity ``frac_atypical``
+    is measured against, shifting every value by roughly -1 decade on IGH and -0.5 on the light
+    chains, and buys no time on the locus that costs the time.
     """
+    from .cohort import in_pool_worker
     from ..model.native import pgen_aa_batch
 
     nan = {"mean_log10": np.nan, "sd_log10": np.nan, "frac_atypical": np.nan}
     if df.height == 0:
         return nan
+    # `threads=0` means "hardware_concurrency - 2", which is right for one process and wrong for
+    # one of n_jobs workers: measured 2026-09-26, `vsig_cohort(n_jobs=16)` on a 16-core box asked
+    # for 16 x 14 = 224 Pgen threads, because the pool and the kernel each sized themselves off
+    # the machine with nothing reconciling them.
+    if threads == 0 and in_pool_worker():
+        threads = 1
     juncs = pgen_junctions(df, locus, n_max)
     try:
         p = np.asarray(pgen_aa_batch(_bundled_model(locus), juncs, v=None, j=None,

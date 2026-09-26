@@ -63,6 +63,12 @@ screpertoire_airr.tsv
 # These are the input to a release, not part of one: a filed bug report names the cohort the bug
 # was found on, which belongs in the private analysis repo and nowhere in a public history.
 /TODO.md
+/ISSUES*.md
 /NOTES.md
 /ROADMAP.md
 /STATUS.md
+
+# Session instructions: they name in-flight analyses and the
+# cohorts a bug was found on. Kept local, never in a published history.
+/CLAUDE.md
+/.claude/

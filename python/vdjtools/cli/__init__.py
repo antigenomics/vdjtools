@@ -200,7 +200,14 @@ _FMT = typer.Option("auto", "--format", help="auto | vdjtools | airr.")
 _OUT = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout).")
 _THREADS = typer.Option(
     0, "--threads", "-t",
-    help="Worker threads over samples (0 = all cores). Lower to core count if compute-bound.",
+    help="Worker threads over samples (0 = all cores). Threads, not processes: the heavy work "
+         "releases the GIL, so this is the knob that scales. Lower it only to share the box.",
+)
+_PGEN_N_MAX = typer.Option(
+    2000, "--pgen-n-max",
+    help="Junctions per locus the Pgen block measures (signature only). Cost is linear in it "
+         "and Pgen is ~96% of this command's work. 2000 matches the shipped references; lower "
+         "it and pgen:*:frac_atypical is a different draw from the reference it is compared to.",
 )
 _ONDUP = typer.Option(
     "error", "--on-duplicate",
@@ -460,7 +467,8 @@ def signature(
     channels: bool = typer.Option(False, "--channels",
                                   help="Print the channel vocabulary for --tier and exit -- one "
                                        "row per named group of columns, and what it measures."),
-    threads: int = _THREADS, on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
+    threads: int = _THREADS, pgen_n_max: int = _PGEN_N_MAX,
+    on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
     """One repertoire in, one row of named features out — ready for a classifier.
 
@@ -511,7 +519,12 @@ def signature(
         every rank tested.
       * -t/--threads defaults to all cores. Inside your own process pool,
         pass -t 1 per worker.
+      * IGH Pgen is ~96% of this command's runtime, and it is the D trim
+        state space (9,212 states vs TRB's 297), not anything tunable.
+        A preset that keeps no vsig:pgen column now skips the block
+        entirely; --pgen-n-max trades the rest linearly against noise.
     """
+    from vdjtools import signature as S
     from vdjtools.signature import layout as L
     from vdjtools.signature import presets as P
     from vdjtools.signature import vsig
@@ -538,19 +551,26 @@ def signature(
         # The vocabulary, not the dictionary: one row per channel rather than per column. This is
         # the level a finding is stated at -- "IGH diversity separates the groups" -- so it is
         # worth printing on its own rather than making the reader group 688 rows by hand.
-        _write(L.channel_table(tier), out)
+        _write(L.channel_table(tier).filter(pl.col("sig") == "vsig"), out)
         return
     if describe:
-        # The column dictionary for what will actually be emitted, preset or tier.
-        d = L.describe(tier)
+        # The column dictionary for what will actually be emitted, preset or tier. Filtered to
+        # this command's half: it emits vsig, so listing the rsig columns here described a vector
+        # it does not produce -- the one output whose whole job is "the exact columns you will
+        # get". `mir signature --describe` is the mirror image and lists rsig.
+        d = L.describe(tier).filter(pl.col("sig") == "vsig")
         _write(d.filter(pl.col('column').is_in(keep)) if keep else d, out)
         return
 
     from vdjtools.io.batch import map_samples
 
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
-    fn = functools.partial(vsig, tier=tier, weight=weight, threads=1,
-                           on_duplicate=on_duplicate)
+    # `columns=keep` is not cosmetic: it decides which blocks RUN. Without it a preset that keeps
+    # no vsig:pgen column still pays for Pgen and drops it -- and Pgen is ~96% of this half's
+    # cost on a seven-locus sample (`nuisance` is tier=full with 0 pgen columns, so it paid the
+    # entire bill for nothing).
+    fn = functools.partial(vsig, tier=tier, weight=weight, threads=1, columns=keep,
+                           pgen_n_max=pgen_n_max, on_duplicate=on_duplicate)
     # `v_identity` is the one field the signature needs that the canonical schema does not
     # carry, so it has to be asked for by name. Without it the SHM block is not merely absent
     # but uncomputable, and ships as a permanently-nan column on files that do have it.
@@ -559,6 +579,18 @@ def signature(
     if not rows:
         _err("no samples produced a signature")
     cols = keep if keep is not None else L.columns(tier, "vsig")
+    # The half `mir signature` emits arrives standardised against a frozen scale reference; this
+    # half does not, because the reference ships in mirpy and vdjtools cannot depend on it (the
+    # dependency runs the other way). Joining the two therefore gives a MIXED-SCALE matrix, and
+    # `vsig:pgen:*:frac_atypical` is nan without the reference's pgen_q05. That is a real gap and
+    # it is better said than discovered: measured on one synthetic 600-clonotype TRB sample at
+    # tier=core, `vsig:div:TRB:1D_c` reads 1.9502 standardised against 2.2495 raw.
+    typer.echo(
+        f"{len(rows)} samples x {len(cols)} vsig columns. NOTE: these are RAW — this command has "
+        f"no scale reference, so the flat cstar={S.DEFAULT_CSTAR} is used and "
+        f"vsig:pgen:*:frac_atypical is nan. `mir signature` standardises its own half, so a plain "
+        f"join is mixed-scale. For a standardised pair use mir.signature.signature_cohort(), or "
+        f"standardise this frame yourself with the same reference.", err=True)
     _write(pl.DataFrame(rows).select(["sample_id", *cols]), out)
 
 

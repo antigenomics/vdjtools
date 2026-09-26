@@ -48,6 +48,7 @@ def _locus_frames(sample) -> dict[str, pl.DataFrame]:
 
 def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DEFAULT_CSTAR,
          weight: str = "log2p1", pgen_q05: dict[str, float] | None = None,
+         pgen_n_max: int = 2000, columns: list[str] | None = None,
          kmer_spaces: dict | None = None, threads: int = 0,
          prefiltered: bool = False, on_duplicate: str = "error") -> dict[str, float]:
     """The ``vsig`` half of one sample's signature, as ``{column_name: value}``.
@@ -60,6 +61,20 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         pgen_q05: Per-locus frozen 5th-percentile ``log10 Pgen`` for ``pgen:*:frac_atypical``;
             that column stays ``nan`` without it, since "atypical" is meaningless without a
             reference to be atypical against.
+        pgen_n_max: How many junctions per locus the Pgen block measures, subsampled
+            deterministically by :func:`~vdjtools.signature.blocks.pgen_junctions`. Cost is
+            linear in it and the Pgen block dominates this half, so this is the one knob that
+            trades runtime against the noise on three columns. **Lower it only together with the
+            ``pgen_q05`` reference's own draw** if you care about ``frac_atypical`` -- the mean
+            and sd are unbiased at any ``n``, but a reference drawn at a different ``n_max`` is
+            still a different draw. Default matches the shipped references.
+        columns: Compute only these columns (intersected with the tier, kept in layout order);
+            unlisted ones are dropped from the result **and their block is not run**. This is
+            how you decline the Pgen block, which is ~96% of this half's cost on a seven-locus
+            sample -- see :func:`~vdjtools.signature.blocks.pgen_block` for why it is expensive
+            and why that is not a bug. ``mask`` and the per-locus ``div`` feeding
+            ``mask:*:estimable`` are always computed; they are cheap and everything else reads
+            them.
         kmer_spaces: Per-locus frozen :class:`~vdjtools.features.kmer_space.KmerSpace`. The
             ``kmer`` block is emitted only for loci present here AND only if the block has been
             registered (see :func:`vdjtools.signature.kmer.register_kmer`) -- the columns do not
@@ -90,12 +105,18 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
             clonotype key and ``on_duplicate="error"``.
     """
     want = L.columns(tier, "vsig")
+    if columns is not None:
+        keep = set(columns)
+        want = [c for c in want if c in keep]
     out = dict.fromkeys(want, np.nan)
     frames = _locus_frames(sample)
     full = tier == "full"
     std = tier in ("standard", "full")
     reads: dict[str, float] = {}
     measured_nonstd: dict[str, float] = {}
+    # A block is worth running only if some wanted column sits under it. Keying on the
+    # "<sig>:<channel>:<locus>" prefix is exact -- every column name is that plus one feature.
+    need = {c.rsplit(":", 1)[0] for c in want}
 
     for locus in L.LOCI:
         raw = frames.get(locus)
@@ -118,22 +139,28 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         level = cstar[locus] if isinstance(cstar, dict) else cstar
 
         measured_nonstd[locus] = float(nonstd)
-        _put(out, f"vsig:qc:{locus}", B.qc_block(raw, work, locus, nonstd))
-        if prefiltered:
-            out[f"vsig:qc:{locus}:nonstd_aa_frac"] = np.nan
-        _put(out, f"vsig:depth:{locus}", B.depth_block(clean, stats))
-        _put(out, f"vsig:clon:{locus}", B.clon_block(stats))
-        _put(out, f"vsig:len:{locus}", B.len_block(work, tier_standard=std))
+        if f"vsig:qc:{locus}" in need:
+            _put(out, f"vsig:qc:{locus}", B.qc_block(raw, work, locus, nonstd))
+            if prefiltered:
+                out[f"vsig:qc:{locus}:nonstd_aa_frac"] = np.nan
+        if f"vsig:depth:{locus}" in need:
+            _put(out, f"vsig:depth:{locus}", B.depth_block(clean, stats))
+        if f"vsig:clon:{locus}" in need:
+            _put(out, f"vsig:clon:{locus}", B.clon_block(stats))
+        if f"vsig:len:{locus}" in need:
+            _put(out, f"vsig:len:{locus}", B.len_block(work, tier_standard=std))
 
         div = B.div_block(clean, level, tier_full=full)
         _put(out, f"vsig:div:{locus}", div)
         out[f"vsig:mask:{locus}:estimable"] = float(np.isfinite(div.get("1D_c", np.nan)))
 
-        if std:
+        if std and f"vsig:pgen:{locus}" in need:
             _put(out, f"vsig:pgen:{locus}",
-                 B.pgen_block(work, locus, q05=(pgen_q05 or {}).get(locus), threads=threads))
-        if full:
+                 B.pgen_block(work, locus, q05=(pgen_q05 or {}).get(locus),
+                              n_max=pgen_n_max, threads=threads))
+        if full and f"vsig:aa:{locus}" in need:
             _put(out, f"vsig:aa:{locus}", B.aa_block(work))
+        if full and f"vsig:pchem:{locus}" in need:
             _put(out, f"vsig:pchem:{locus}", B.pchem_block(work))
 
         if kmer_spaces and f"vsig:kmer:{locus}:PC01" in out:
@@ -143,8 +170,10 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
                  kmer_block(work, locus, kmer_spaces.get(locus), weight="freq"))
 
         if locus == "IGH":
-            _put(out, "vsig:iso:IGH", B.iso_block(work, tier_full=full))
-            _put(out, "vsig:shm:IGH", B.shm_block(work))
+            if "vsig:iso:IGH" in need:
+                _put(out, "vsig:iso:IGH", B.iso_block(work, tier_full=full))
+            if "vsig:shm:IGH" in need:
+                _put(out, "vsig:shm:IGH", B.shm_block(work))
             out["vsig:mask:IGH:c_call"] = float(
                 "c_call" in work.columns and work["c_call"].null_count() < work.height)
             out["vsig:mask:IGH:shm"] = float("v_identity" in work.columns)
@@ -205,11 +234,14 @@ def _stats(df: pl.DataFrame) -> dict[str, float]:
 
 def _one_vsig(item, tier, kw):
     """One sample's vsig row. Module-level so a worker process can unpickle it."""
+    from .cohort import resolve_sample
+
     sid, s = item
-    return {"sample_id": sid, **vsig(s, tier=tier, **kw)}
+    return {"sample_id": sid, **vsig(resolve_sample(s), tier=tier, **kw)}
 
 
-def vsig_cohort(samples, *, tier: str = "standard", n_jobs: int = 1, **kw):
+def vsig_cohort(samples, *, tier: str = "standard", n_jobs: int = 1,
+                columns: list[str] | None = None, **kw):
     """Assemble a whole cohort into one frame: ``sample_id`` plus the ``vsig`` columns.
 
     Args:
@@ -218,8 +250,12 @@ def vsig_cohort(samples, *, tier: str = "standard", n_jobs: int = 1, **kw):
             worker and keeps peak memory at ``O(n_jobs)`` samples rather than the whole cohort.
         tier: Passed to :func:`vsig`.
         n_jobs: Worker processes; ``1`` (default) stays in-process, ``0`` uses every core this
-            process may use. Pass ``threads=1`` in ``kw`` so vsig's own Pgen threads do not
-            compete with the pool.
+            process may use. ``threads`` (the Pgen kernel's own threads) is the knob that
+            actually scales this workload -- see :func:`vsig` and the cohort guide. The two are
+            independent claims on the same cores, so do not max both.
+        columns: Explicit subset, intersected with the ``vsig`` half. Unlike a select-and-drop,
+            this **skips the work**: passing a list with no ``vsig:pgen:`` entry does not run
+            the Pgen block at all.
         **kw: Passed to :func:`vsig`.
 
     Returns:
@@ -229,11 +265,16 @@ def vsig_cohort(samples, *, tier: str = "standard", n_jobs: int = 1, **kw):
 
     from .cohort import parallel_rows
 
+    want = L.columns(tier, "vsig")
+    if columns is not None:
+        keep = set(columns)
+        want = [c for c in want if c in keep]
+        kw = {**kw, "columns": want}
     items = list(samples.items() if isinstance(samples, dict) else samples)
     rows = parallel_rows(items, functools.partial(_one_vsig, tier=tier, kw=kw), n_jobs)
     if not rows:
         return pl.DataFrame(schema={"sample_id": pl.Utf8})
-    return pl.DataFrame(rows).select(["sample_id", *L.columns(tier, "vsig")])
+    return pl.DataFrame(rows).select(["sample_id", *want])
 
 
 def _demo() -> None:
