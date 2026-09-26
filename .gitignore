@@ -79,3 +79,9 @@ screpertoire_airr.tsv
 # file to publish, so it lives here and stays local. Public provenance -- what a shipped artifact
 # is and how to regenerate it -- belongs in the docstring of whatever loads it.
 /SOURCES.md
+
+# Methodology memos. They read as documentation and they are not: they name in-flight internal
+# work -- an unpublished audit manuscript and its dump paths, a sibling benchmark project, a
+# reviewer's local conda prefix. The scripts beside them stay tracked; the prose does not.
+# (`/appendix` is already excluded from the sdist, so nothing about the wheel changes.)
+/appendix/*.md
