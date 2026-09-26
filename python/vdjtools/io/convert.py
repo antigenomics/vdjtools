@@ -156,8 +156,8 @@ _ZERO_PAD = re.compile(r"0([1-9])")
 def _adaptive_map() -> dict[str, str]:
     """Adaptive token → IMGT gene, from the shipped CDR-validated table (cached).
 
-    Built by ``appendix/build_adaptive_imgt_map.py``; provenance in ``SOURCES.md``, rationale in
-    ``appendix/adaptive_imgt_map.md``.
+    Built by ``appendix/build_adaptive_imgt_map.py``; the table's own header rows carry its
+    provenance, and the rationale is in ``appendix/adaptive_imgt_map.md``.
     """
     txt = resources.files("vdjtools.resources").joinpath("adaptive_imgt_map.tsv").read_text()
     return {r["adaptive_token"]: r["imgt_gene"]

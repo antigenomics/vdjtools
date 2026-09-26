@@ -72,3 +72,10 @@ screpertoire_airr.tsv
 # cohorts a bug was found on. Kept local, never in a published history.
 /CLAUDE.md
 /.claude/
+
+# Data provenance. SOURCES.md is the one md file whose PURPOSE is internal detail: cluster
+# project paths, private HuggingFace dataset names, local git-LFS checkouts, and cohort
+# composition down to batch names and HLA schemas. It is the right file to keep and the wrong
+# file to publish, so it lives here and stays local. Public provenance -- what a shipped artifact
+# is and how to regenerate it -- belongs in the docstring of whatever loads it.
+/SOURCES.md

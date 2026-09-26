@@ -3,6 +3,46 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.18.1 — 2026-09-26
+
+Guards for the class of bug 3.18.0 fixed, and one file that should never have been public.
+
+### Added — `tests/python/test_knob_audit.py`
+
+Every knob that moves a number must move only the columns it is documented to move. Turn the
+knob, take the set of columns that moved, check it against the set the knob may touch. Seven loci
+on purpose: a TRB-only fixture cannot see a reference that covers TRA and TRB and leaves five loci
+of diversity as holes, which is the case that used to raise `KeyError`.
+
+Mutation-checked rather than assumed — each of these fails the suite:
+
+| mutation | caught by |
+|---|---|
+| a partial `cstar` dict borrows another locus's level | the TRA/TRB-reference test |
+| `cstar_fallback_frac` hard-coded to 0 (the column exists but lies) | the blast-radius test |
+| the coverage level leaks into `vsig:len` | two tests |
+
+At cohort scale on 40 seven-locus samples: switching from the flat `C* = 0.20` to a measured
+`C* = 0.1072` moves **992 cells, 18.14% of the matrix, across 29 columns**, and switching to a
+TRA/TRB-only reference turns **800 of 1,120** `vsig:div` cells into declared holes with 200
+`estimable` flags going to 0. Before 3.18.0 the first was silent and the second was a `KeyError`.
+
+### Removed — `SOURCES.md` is no longer tracked
+
+It is the one markdown file whose *purpose* is internal detail: cluster project paths, private
+HuggingFace dataset names, local git-LFS checkout locations, and cohort composition down to batch
+names and HLA schemas. It was already excluded from the sdist; it is now gitignored too, and the
+references to it in `bundled.py`, `convert.py` and `SKILL.md` point at the per-artifact
+`manifest.json` instead, which is where an outside reader can actually look.
+
+Two CHANGELOG measurements were also reworded to name what was measured rather than where: a
+cluster node instead of its hostname, "a bulk-RNA-seq AIRR cohort" instead of a project's store.
+
+### Changed
+
+`vsig`'s fallback bookkeeping is a counter, not a dict whose keys always equalled `reads`'.
+`vdjtools signature --cstar none` now has a CLI test.
+
 ## 3.18.0 — 2026-09-26
 
 The coverage level the diversity block rests on is now **visible in the vector**. It was not, and
@@ -327,7 +367,7 @@ It said `mir signature --preset classify ...` "emits both halves as one vector".
 ### Fixed — pools were sized off the machine's cores, not this process's
 
 `os.cpu_count()` reports the machine. It is not what a process is allowed to use, and everywhere
-repertoire analysis actually runs, the two differ. Measured on an Aldan-3 `medium` node allocated
+repertoire analysis actually runs, the two differ. Measured on a SLURM cluster node allocated
 with `srun -c 8`:
 
 | | |
@@ -679,8 +719,8 @@ with junk. `sanitise(df, *, strict=True)` now raises on it; `strict=False` resto
 behaviour for a corpus known to carry ambiguity codes. A `null` junction stays a drop — absence is
 not a damaged character, and a partly-annotated table should still yield a vector.
 
-The character class is not a guess. Measured across the **6,047,716 rows** of one project's
-clinical AIRR store, all seven loci:
+The character class is not a guess. Measured across **6,047,716 rows** of one bulk-RNA-seq AIRR
+cohort, all seven loci:
 
 | | rows |
 |---|--:|
@@ -702,7 +742,7 @@ is wrong. Every block is computed on the rows that survive `sanitise`, and `work
 
 What differs is that `sanitise` also *reports the weight fraction it dropped*, via
 `logit(nonstd_frac, raw.height)`. Pre-filtering drives the numerator to zero **and** shrinks the
-denominator, so it moves twice. Measured on 1,168 blood samples from a clinical AIRR cohort at `tier="standard"`:
+denominator, so it moves twice. Measured on 1,168 bulk-RNA-seq blood samples at `tier="standard"`:
 
 | | columns |
 |---|--:|

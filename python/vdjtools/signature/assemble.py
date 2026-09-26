@@ -129,7 +129,7 @@ def vsig(sample, *, tier: str = "standard",
     std = tier in ("standard", "full")
     reads: dict[str, float] = {}
     measured_nonstd: dict[str, float] = {}
-    fallback: dict[str, bool] = {}
+    n_fallback = 0
     # A block is worth running only if some wanted column sits under it. Keying on the
     # "<sig>:<channel>:<locus>" prefix is exact -- every column name is that plus one feature.
     need = {c.rsplit(":", 1)[0] for c in want}
@@ -160,7 +160,7 @@ def vsig(sample, *, tier: str = "standard",
         # "Got a level, and it was a borrowed one." A locus with no level at all is not a
         # fallback -- it is a hole, and mask:*:estimable already says so. Keeping the two
         # disjoint is what lets a reader add them up.
-        fallback[locus] = level is not None and not isinstance(cstar, dict)
+        n_fallback += level is not None and not isinstance(cstar, dict)
 
         measured_nonstd[locus] = float(nonstd)
         if f"vsig:qc:{locus}" in need:
@@ -207,8 +207,7 @@ def vsig(sample, *, tier: str = "standard",
 
     _put(out, "vsig:pair:-", B.pair_block(reads))
     out["vsig:qc:-:n_loci_present"] = float(len(reads))
-    out["vsig:qc:-:cstar_fallback_frac"] = (
-        float(sum(fallback.values())) / len(fallback) if fallback else np.nan)
+    out["vsig:qc:-:cstar_fallback_frac"] = n_fallback / len(reads) if reads else np.nan
     _warn_if_prefiltered(measured_nonstd, prefiltered)
     _warn_if_partial_cstar(cstar, reads)
     return {k: out[k] for k in want}

@@ -35,7 +35,7 @@ silently wrong answer. It does not repeat the reference documentation.
 | Single-cell and scverse interop | https://docs.isalgo.dev/vdjtools/singlecell.html |
 | Worked notebooks | https://docs.isalgo.dev/vdjtools/notebooks.html |
 | How to work in this repo, open loops | `CLAUDE.md` |
-| Dataset provenance and numbers of record | `SOURCES.md` |
+| Dataset provenance and numbers of record | per-artifact `manifest.json`; `CHANGELOG.md` |
 | Release-by-release narrative | `CHANGELOG.md` |
 
 ## Canonical data model

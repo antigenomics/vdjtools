@@ -17,7 +17,8 @@ Three model sets live under ``vdjtools/model/_bundled/``:
 :func:`load_bundled` hides that — pass ``organism=`` and it picks the right key.
 
 Each model is a directory of parquet marginal tables + ``manifest.json`` (see :mod:`vdjtools.model`).
-Provenance and the build command are recorded in ``SOURCES.md``.
+Each ``manifest.json`` records what the model was built from; the builder is
+``appendix/build_bundled_models.py``.
 """
 from __future__ import annotations
 

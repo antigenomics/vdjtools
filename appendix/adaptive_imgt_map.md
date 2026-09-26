@@ -257,7 +257,7 @@ Two follow-ups worth considering, neither required for the fix:
   `v="TRBV29-1"`, `j="TRBJ2-6"` — both are `TCRBV29-01`/`TCRBJ02-06` in the fixture and both are
   unchanged by the table. Worth adding a fixture row with a `TCRAJ*-01` or `TCRBV09-01` call, since
   no current fixture exercises a failing token.
-* **SOURCES.md** gets the table's provenance row (done).
+* The table's provenance row is recorded with the data, not here (done).
 
 ## 6. Regenerating the table
 

@@ -5,6 +5,8 @@ or HuggingFace fetch is needed.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import polars as pl
 import pytest
@@ -309,3 +311,39 @@ def test_a_preset_with_no_pgen_column_does_not_compute_pgen(tmp_path, monkeypatc
     res = CliRunner().invoke(app, ["signature", "--preset", "nuisance", str(src),
                                    "-o", str(tmp_path / "out.tsv")])
     assert res.exit_code == 0, res.output
+
+
+def test_signature_cstar_none_emits_a_declared_hole_not_a_guessed_number(tmp_path):
+    """`--cstar none` is the CLI's way to refuse the flat fallback.
+
+    This command has no scale reference, so without a measured constant every `vsig:div` column
+    rests on one coverage level stretched over seven loci. The number is plausible and nothing
+    about it says so, which is why the fallback is reported in `vsig:qc:-:cstar_fallback_frac`
+    and why declining it has to be reachable from the command line too.
+    """
+    src = tmp_path / "s1.tsv"
+    src.write_text("junction_aa\tv_call\tj_call\tduplicate_count\n"
+                   + "".join(f"CASS{'ACDEFGHIKLMNPQRSTVWY'[i % 20] * 3}YEQYF\tTRBV20-1\t"
+                             f"TRBJ2-2\t{i + 1}\n" for i in range(60)))
+
+    def run(*extra):
+        out = tmp_path / f"o{len(extra)}.tsv"
+        res = CliRunner().invoke(app, ["signature", "--tier", "core", str(src),
+                                       "-o", str(out), *extra])
+        assert res.exit_code == 0, res.output
+        return pl.read_csv(out, separator="\t"), res.output
+
+    def hole(frame, col):
+        v = frame[col][0]
+        return v is None or (isinstance(v, float) and math.isnan(v))
+
+    default, _ = run()
+    assert default["vsig:qc:-:cstar_fallback_frac"][0] == 1.0
+    assert not hole(default, "vsig:div:TRB:1D_c")
+
+    holed, _ = run("--cstar", "none")
+    assert holed["vsig:qc:-:cstar_fallback_frac"][0] == 0.0
+    div = [c for c in holed.columns if c.startswith("vsig:div:")]
+    assert div and all(hole(holed, c) for c in div)
+    assert holed["vsig:mask:TRB:estimable"][0] == 0.0
+    assert not hole(holed, "vsig:depth:TRB:reads"), "depth needs no coverage level"
