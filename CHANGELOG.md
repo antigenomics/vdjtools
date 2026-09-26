@@ -3,6 +3,68 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 3.18.0 — 2026-09-26
+
+The coverage level the diversity block rests on is now **visible in the vector**. It was not, and
+that is the whole of `ISSUES.md` item 6 (3): `DEFAULT_CSTAR = 0.20` is one number stretched over
+seven loci that attain very different coverage, and a `vsig:div` block computed at it is fully
+populated and entirely plausible. Nothing said it was a guess.
+
+### Added — `vsig:qc:-:cstar_fallback_frac`
+
+The share of a sample's **present** loci whose coverage level came from the flat fallback rather
+than from a measured constant. One column, in every tier, in the `qc` channel beside the V/J
+fallback fractions — for the same reason that block exists: it is the number that tells a
+collaborator whether your vector is comparable to theirs.
+
+The size of what it declares, 40 synthetic TRB samples of 400–4,000 clonotypes, median absolute
+shift against the bulk-RNA-seq measured level (`C* = 0.1072`), in `log10` Hill units:
+
+| coverage level | `1D_c` | `0D_c` | `2D_c` | `clonality` |
+|---|---:|---:|---:|---:|
+| flat fallback `C* = 0.20` | 0.2684 | 0.2765 | 0.2575 | 0.4575 |
+| amplicon `C* = 0.4080` | 0.5755 | 0.6030 | 0.5432 | 1.0329 |
+
+0.2684 in `log10` is a **factor of 1.86** on the Shannon diversity, and against the amplicon level
+a factor of 3.8. Every sample in both columns is estimable (40/40), so none of this shows up as a
+hole; two matrices differing by that much join cleanly and look the same.
+
+Tier widths move by one: `core` 152 → **153**, `standard` 688 → **689**, `full` 1403 → **1404**;
+the `vsig` half 160 → **161**. Only the `nuisance` preset gains it (73 → 74) — it describes the
+run, not the donor, so `classify` (615), `transfer` (550), `compact` (86), `bcell` (271),
+`geometry` (514) and `statistics` (101) are unchanged. The shipped scale references cover 1,403
+columns and do not scale the new one; it passes through, which is right for a provenance fraction.
+
+### Changed — a locus with no established level is a hole, not a borrowed number
+
+`cstar` takes `None` and takes a **partial** dict. A locus the dict does not cover establishes no
+level: its `vsig:div:*` columns are `nan` and `vsig:mask:<locus>:estimable` is `0`, with one
+warning naming the loci. Standardising IGH's Hill numbers to a level measured on TRB is not a
+measurement, and a plausible number in the wrong units cannot be detected by the caller while a
+`nan` can.
+
+The refusal and the fallback are **disjoint**, so the two signals add up: a locus with no level is
+counted by `estimable`, a locus with a borrowed one by `cstar_fallback_frac`. `cstar=None` reports
+`0.0`, not `1.0` — it did not fall back, it declined.
+
+`vdjtools signature --cstar none` reaches the same path from the command line, and the stderr note
+says which of the two the run used.
+
+### Fixed — a partial `cstar` dict raised `KeyError` from inside the loop
+
+`level = cstar[locus]` indexed the dict directly, so a reference covering TRA and TRB only — which
+is exactly what the shipped amplicon reference is — died on the first B-cell locus instead of
+reporting a hole. `mir.signature.signature()` worked around it by completing the dict with a
+deliberately unreachable `C* = 1.0` so the estimability check would fail; that workaround is gone
+in mirpy 3.20.0 because the library now owns the semantics, and the wasted `estimate_d` call per
+uncovered locus goes with it.
+
+### Docs
+
+`docs/signature.rst` gains the provenance table above, in the section that already explains why
+`C*` is load-bearing. The preset table's `compact` (152 → 86) and `bcell` (286 → 271) widths were
+stale before this release and are now the live values.
+
 ## 3.17.1 — 2026-09-26
 
 The Pgen block you cannot decline. 3.16.0 let a caller skip `vsig:pgen` entirely, which is 96.6% of

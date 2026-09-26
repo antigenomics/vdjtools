@@ -182,7 +182,13 @@ _BLOCKS: list[Block] = [
     # collaborator their vector is not comparable to ours.
     Block("vsig", "qc", feats("core", "logit",
                               "v_fallback_frac", "j_fallback_frac", "nonstd_aa_frac")),
-    Block("vsig", "qc", feats("core", "none", "n_loci_present"), loci=()),
+    # The coverage level the Hill numbers are standardised to is a measured constant that has to
+    # come from somewhere, and when it does not, `vsig` falls back to one flat number for all
+    # seven loci. That produces a fully populated, entirely plausible `vsig:div` block computed
+    # at a level nobody established -- the same failure as the V/J fallback above, so it gets the
+    # same treatment: a reported fraction rather than a log line. 0.0 means every present locus
+    # had a level of its own.
+    Block("vsig", "qc", feats("core", "none", "n_loci_present", "cstar_fallback_frac"), loci=()),
 
     # ---------------------------------------------------------------------- count statistics
     Block("vsig", "depth", {**feats("core", "log10", "reads", "richness"),

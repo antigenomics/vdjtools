@@ -34,6 +34,12 @@ from . import layout as L
 #: measured values are neither uniform nor assay-independent (TRB attains 0.408 in amplicon data
 #: and 0.126 in bulk blood RNA-seq). Pass measured constants via ``cstar=`` whenever a reference
 #: artifact supplies them; ``mir.signature.signature()`` does this for you. See ``docs/signature.rst``.
+#:
+#: And because it is a fallback, it is **declared**: every sample carries
+#: ``vsig:qc:-:cstar_fallback_frac``, the share of its present loci whose coverage level came
+#: from here rather than from a measurement. A ``vsig:div`` block computed at a level nobody
+#: established is fully populated and entirely plausible, so the only way a collaborator can
+#: tell is if the vector says so. ``cstar=None`` refuses the fallback outright and emits holes.
 DEFAULT_CSTAR = 0.20
 
 
@@ -46,7 +52,8 @@ def _locus_frames(sample) -> dict[str, pl.DataFrame]:
             for k, v in df.partition_by(LOCUS, as_dict=True).items()}
 
 
-def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DEFAULT_CSTAR,
+def vsig(sample, *, tier: str = "standard",
+         cstar: float | dict[str, float] | None = DEFAULT_CSTAR,
          weight: str = "log2p1", pgen_q05: dict[str, float] | None = None,
          pgen_n_max: int = 2000, columns: list[str] | None = None,
          kmer_spaces: dict | None = None, threads: int = 0,
@@ -56,7 +63,15 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
     Args:
         sample: ``{locus: clonotype frame}``, or a single frame with a ``locus`` column.
         tier: ``"core"``, ``"standard"`` or ``"full"``.
-        cstar: Coverage level for the standardised Hill numbers; a scalar or ``{locus: level}``.
+        cstar: Coverage level the Hill numbers are standardised to. ``{locus: level}`` is the
+            measured form and the one to use -- a reference artifact supplies it, and
+            ``mir.signature.signature()`` passes it for you. A **scalar** applies one number to
+            all seven loci; that is a fallback, not a measurement, and the emitted
+            ``vsig:qc:-:cstar_fallback_frac`` says what share of the present loci got one.
+            ``None``, or a dict missing a locus, establishes no level for that locus: its
+            ``vsig:div:*`` columns are holes and ``vsig:mask:*:estimable`` is 0, rather than a
+            confident number at a level nobody chose. A plausible number in the wrong units
+            cannot be detected by the caller; a hole and a fraction can.
         weight: Clone-size weight ``g`` (see :func:`~vdjtools.signature.blocks.work_frame`).
         pgen_q05: Per-locus frozen 5th-percentile ``log10 Pgen`` for ``pgen:*:frac_atypical``;
             that column stays ``nan`` without it, since "atypical" is meaningless without a
@@ -114,6 +129,7 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
     std = tier in ("standard", "full")
     reads: dict[str, float] = {}
     measured_nonstd: dict[str, float] = {}
+    fallback: dict[str, bool] = {}
     # A block is worth running only if some wanted column sits under it. Keying on the
     # "<sig>:<channel>:<locus>" prefix is exact -- every column name is that plus one feature.
     need = {c.rsplit(":", 1)[0] for c in want}
@@ -136,7 +152,15 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         work = B.work_frame(clean, weight)
         reads[locus] = float(clean[COUNT].sum())
         stats = _stats(clean)
-        level = cstar[locus] if isinstance(cstar, dict) else cstar
+        # A dict entry is a level established FOR THIS LOCUS; a scalar is one number stretched
+        # over seven loci that attain very different coverage (TRB reaches 0.408 in amplicon
+        # data and 0.126 in bulk RNA-seq). Absent either, there is no level -- and no level
+        # means a hole, not a guess.
+        level = cstar.get(locus) if isinstance(cstar, dict) else cstar
+        # "Got a level, and it was a borrowed one." A locus with no level at all is not a
+        # fallback -- it is a hole, and mask:*:estimable already says so. Keeping the two
+        # disjoint is what lets a reader add them up.
+        fallback[locus] = level is not None and not isinstance(cstar, dict)
 
         measured_nonstd[locus] = float(nonstd)
         if f"vsig:qc:{locus}" in need:
@@ -150,9 +174,12 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
         if f"vsig:len:{locus}" in need:
             _put(out, f"vsig:len:{locus}", B.len_block(work, tier_standard=std))
 
-        div = B.div_block(clean, level, tier_full=full)
-        _put(out, f"vsig:div:{locus}", div)
-        out[f"vsig:mask:{locus}:estimable"] = float(np.isfinite(div.get("1D_c", np.nan)))
+        if level is None:
+            out[f"vsig:mask:{locus}:estimable"] = 0.0
+        else:
+            div = B.div_block(clean, level, tier_full=full)
+            _put(out, f"vsig:div:{locus}", div)
+            out[f"vsig:mask:{locus}:estimable"] = float(np.isfinite(div.get("1D_c", np.nan)))
 
         if std and f"vsig:pgen:{locus}" in need:
             _put(out, f"vsig:pgen:{locus}",
@@ -180,8 +207,34 @@ def vsig(sample, *, tier: str = "standard", cstar: float | dict[str, float] = DE
 
     _put(out, "vsig:pair:-", B.pair_block(reads))
     out["vsig:qc:-:n_loci_present"] = float(len(reads))
+    out["vsig:qc:-:cstar_fallback_frac"] = (
+        float(sum(fallback.values())) / len(fallback) if fallback else np.nan)
     _warn_if_prefiltered(measured_nonstd, prefiltered)
+    _warn_if_partial_cstar(cstar, reads)
     return {k: out[k] for k in want}
+
+
+def _warn_if_partial_cstar(cstar, reads: dict[str, float]) -> None:
+    """Warn when measured constants were supplied but do not cover every locus in the sample.
+
+    A scalar fallback is a stated choice and travels in ``vsig:qc:-:cstar_fallback_frac``, so it
+    does not warn. A *partial dict* is different: the caller asked for measured levels, and the
+    loci the dict misses silently lose their whole diversity block. That is the right outcome --
+    a hole beats a number at a level nobody established -- but it should be said once, because
+    the usual cause is a reference fitted on another assay (the amplicon reference carries TRA
+    and TRB only, and a B-cell sample scored against it loses five loci of ``vsig:div``).
+    """
+    if not isinstance(cstar, dict) or not reads:
+        return
+    missing = sorted(set(reads) - {k for k, v in cstar.items() if v is not None})
+    if missing:
+        warnings.warn(
+            f"no coverage level was supplied for {', '.join(missing)}, so vsig:div:* is nan and "
+            f"vsig:mask:*:estimable is 0 there. The reference covers "
+            f"{', '.join(sorted(k for k in cstar if cstar[k] is not None)) or 'no locus'}. "
+            "This is a hole on purpose -- standardising a Hill number to a level measured on a "
+            "different locus is not a measurement -- but if you expected those loci, you are "
+            "probably using a reference fitted on a different assay.", UserWarning, stacklevel=3)
 
 
 def _warn_if_prefiltered(measured: dict[str, float], declared: bool) -> None:

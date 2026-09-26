@@ -301,8 +301,8 @@ vdjtools signature --channels          # the channel vocabulary — what each gr
 from vdjtools.signature import vsig, vsig_cohort, channels, describe
 ```
 
-Columns are `<sig>:<channel>:<locus>:<feature>`, and the tiers `core` (152) ⊂ `standard` (688) ⊂
-`full` (1403) are exact index subsets of one frozen order. The second field is the **channel** — the
+Columns are `<sig>:<channel>:<locus>:<feature>`, and the tiers `core` (153) ⊂ `standard` (689) ⊂
+`full` (1404) are exact index subsets of one frozen order. The second field is the **channel** — the
 named group of columns that measures one thing, and the level a finding is stated at ("the groups
 separate in IGH diversity"). Twenty channels cover the whole vector.
 

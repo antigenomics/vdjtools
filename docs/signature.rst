@@ -286,8 +286,45 @@ constants with ``cstar=`` whenever a reference artifact supplies them —
 above what your samples attain is the failure mode worth avoiding; the fallback errs the other way
 on purpose.
 
-A locus with no measured ``C*`` falls back to a coverage level no finite sample attains, so its
-``div:`` columns come back ``nan``. If a whole locus of diversity columns is empty, this is why.
+A locus with no measured ``C*`` gets **no level at all**: its ``div:`` columns come back ``nan``
+and ``vsig:mask:<locus>:estimable`` is ``0``. If a whole locus of diversity columns is empty, this
+is why — and a partial dict (the shipped amplicon reference carries TRA and TRB only) also warns,
+naming the loci it could not cover. ``cstar=None`` asks for that outcome on every locus.
+
+**The fallback is declared in the vector, because it cannot be detected any other way.**
+
+A ``vsig:div`` block computed at a borrowed coverage level is fully populated and entirely
+plausible; nothing about the numbers says they rest on a guess rather than on a measurement, so a
+matrix built on the fallback can be joined to one built on measured constants without anybody
+noticing. Every sample therefore carries ``vsig:qc:-:cstar_fallback_frac`` — the share of its
+**present** loci whose level came from the flat fallback:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 14 56
+
+   * - ``cstar=``
+     - the column
+     - what the diversity block is
+   * - *(default)*, or a number
+     - ``1.0``
+     - computed at one borrowed level for all seven loci
+   * - ``{locus: level}``, covering the sample
+     - ``0.0``
+     - computed at each locus's own measured level
+   * - ``{locus: level}``, missing a locus
+     - ``0.0``
+     - a hole for the missing loci, measured for the rest
+   * - ``None``
+     - ``0.0``
+     - a hole everywhere — no level was established, and none was borrowed
+
+The refusal and the fallback are kept disjoint on purpose, so the two columns add up: a locus with
+no level is counted by ``estimable``, a locus with a borrowed one by ``cstar_fallback_frac``. The
+column sits in the ``qc`` channel beside the V/J fallback fractions, for the same reason — it is
+the number that tells a collaborator whether your vector is comparable to theirs — and it is in
+the ``nuisance`` preset rather than in ``classify`` or ``transfer``, because it describes the
+run, not the donor.
 
 The signature filters for you — do not pre-filter
 -------------------------------------------------
@@ -312,7 +349,7 @@ dropped*, and that is a column::
 
 On a pre-filtered input there is nothing left to drop, so the numerator goes to zero **and** the
 denominator shrinks, and the value moves twice. Measured on 1,168 blood samples from a clinical AIRR cohort at
-``tier="standard"``: of 688 columns, **7 move** — one ``nonstd_aa_frac`` per locus — and 681 are
+``tier="standard"``: of 689 columns, **7 move** — one ``nonstd_aa_frac`` per locus — and 682 are
 bit-identical, including all 528 geometry columns.
 
 Two ways to not have the problem:
@@ -532,7 +569,7 @@ choices, documents each, and **ranks** it:
      - what it is
    * - ``compact``
      - **recommended**
-     - 152
+     - 86
      - The smallest vector that still describes a repertoire. Start here.
    * - ``transfer``
      - **recommended**
@@ -548,7 +585,7 @@ choices, documents each, and **ranks** it:
      - Classical repertoire statistics only. Needs no embedding, so vdjtools alone suffices.
    * - ``bcell``
      - *specific*
-     - 286
+     - 271
      - B-cell receptor work: the immunoglobulin loci with somatic hypermutation and isotype.
    * - ``geometry``
      - *specific*
@@ -556,11 +593,11 @@ choices, documents each, and **ranks** it:
      - Embedding coordinates only — no count statistics at all.
    * - ``full``
      - *specific*
-     - 1403
+     - 1404
      - Every contract column. For feature selection, not for fitting.
    * - ``nuisance``
      - ``avoid``
-     - 73
+     - 74
      - Sequencing protocol only. A control, not a feature set.
 
 Every preset resolves to a column list from the frozen layout alone — block names, loci, tier. No

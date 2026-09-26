@@ -214,6 +214,13 @@ _ONDUP = typer.Option(
     help="A frame with no junction_nt that repeats (junction_aa, v_call, j_call, c_call) cannot "
          "say whether those rows are two clonotypes or one: error (default) refuses, sum adds "
          "the counts together.")
+_CSTAR = typer.Option(
+    None, "--cstar",
+    help="Coverage level the Hill numbers are standardised to (signature only). A number "
+         "applies it to all seven loci -- a fallback, reported in vsig:qc:-:cstar_fallback_frac; "
+         "'none' establishes no level, so vsig:div:* is a declared hole instead of a confident "
+         "number at a level nobody measured. Default: the flat fallback.",
+)
 _COHORT = typer.Option(
     None, "--cohort",
     help="Pre-ingested parquet cohort dir (vdjtools.io.ingest_cohort): one streamed "
@@ -467,7 +474,7 @@ def signature(
     channels: bool = typer.Option(False, "--channels",
                                   help="Print the channel vocabulary for --tier and exit -- one "
                                        "row per named group of columns, and what it measures."),
-    threads: int = _THREADS, pgen_n_max: int = _PGEN_N_MAX,
+    threads: int = _THREADS, pgen_n_max: int = _PGEN_N_MAX, cstar: Optional[str] = _CSTAR,
     on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
     """One repertoire in, one row of named features out — ready for a classifier.
@@ -551,7 +558,7 @@ def signature(
     if channels:
         # The vocabulary, not the dictionary: one row per channel rather than per column. This is
         # the level a finding is stated at -- "IGH diversity separates the groups" -- so it is
-        # worth printing on its own rather than making the reader group 688 rows by hand.
+        # worth printing on its own rather than making the reader group 689 rows by hand.
         _write(L.channel_table(tier).filter(pl.col("sig") == "vsig"), out)
         return
     if describe:
@@ -570,8 +577,11 @@ def signature(
     # no vsig:pgen column still pays for Pgen and drops it -- and Pgen is ~96% of this half's
     # cost on a seven-locus sample (`nuisance` is tier=full with 0 pgen columns, so it paid the
     # entire bill for nothing).
+    level: float | None = S.DEFAULT_CSTAR
+    if cstar is not None:
+        level = None if cstar.strip().lower() in ("none", "hole") else float(cstar)
     fn = functools.partial(vsig, tier=tier, weight=weight, threads=1, columns=keep,
-                           pgen_n_max=pgen_n_max, on_duplicate=on_duplicate)
+                           cstar=level, pgen_n_max=pgen_n_max, on_duplicate=on_duplicate)
     # `v_identity` is the one field the signature needs that the canonical schema does not
     # carry, so it has to be asked for by name. Without it the SHM block is not merely absent
     # but uncomputable, and ships as a permanently-nan column on files that do have it.
@@ -586,9 +596,12 @@ def signature(
     # `vsig:pgen:*:frac_atypical` is nan without the reference's pgen_q05. That is a real gap and
     # it is better said than discovered: measured on one synthetic 600-clonotype TRB sample at
     # tier=core, `vsig:div:TRB:1D_c` reads 1.9502 standardised against 2.2495 raw.
+    cstar_note = (f"the flat cstar={level} is used (declared per sample in "
+                  f"vsig:qc:-:cstar_fallback_frac)" if level is not None else
+                  "no coverage level is established, so vsig:div:* is a declared hole")
     typer.echo(
         f"{len(rows)} samples x {len(cols)} vsig columns. NOTE: these are RAW — this command has "
-        f"no scale reference, so the flat cstar={S.DEFAULT_CSTAR} is used and "
+        f"no scale reference, so {cstar_note} and "
         f"vsig:pgen:*:frac_atypical is nan. `mir signature` standardises its own half, so a plain "
         f"join is mixed-scale. For a standardised pair use mir.signature.signature_cohort(), or "
         f"standardise this frame yourself with the same reference.", err=True)

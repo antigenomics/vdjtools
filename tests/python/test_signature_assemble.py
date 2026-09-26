@@ -280,3 +280,56 @@ def test_one_locus_at_zero_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         vsig(sample)
+
+
+class TestTheCoverageLevelSaysWhereItCameFrom:
+    """vdjtools ISSUES item 6 (3). ``DEFAULT_CSTAR = 0.20`` is one number stretched over seven
+    loci that attain very different coverage, and a ``vsig:div`` block computed at it is fully
+    populated and entirely plausible. The failure mode is not a wrong number, it is an
+    **undetectable** one: nothing in the emitted vector said which coverage level it rested on,
+    so a matrix built on the fallback and a matrix built on measured constants looked identical
+    and could be joined, compared, or fed to one model.
+
+    Same treatment as the V/J fallback one block over: a reported fraction, not a log line.
+    """
+
+    def test_the_flat_fallback_is_declared_in_the_vector(self, sample):
+        out = vsig(sample, tier="core")
+        assert out["vsig:qc:-:cstar_fallback_frac"] == 1.0
+        assert np.isfinite(out["vsig:div:TRB:1D_c"])          # still computed, just declared
+
+    def test_a_measured_dict_reports_no_fallback(self, sample):
+        out = vsig(sample, tier="core", cstar={"TRB": 0.1072, "IGH": 0.3})
+        assert out["vsig:qc:-:cstar_fallback_frac"] == 0.0
+        assert np.isfinite(out["vsig:div:TRB:1D_c"])
+
+    def test_a_locus_the_dict_misses_is_a_hole_not_a_borrowed_level(self, sample):
+        """Standardising IGH's Hill numbers to a level measured on TRB is not a measurement."""
+        with pytest.warns(UserWarning, match="no coverage level was supplied for IGH"):
+            out = vsig(sample, tier="core", cstar={"TRB": 0.1072})
+        assert np.isfinite(out["vsig:div:TRB:1D_c"]) and out["vsig:mask:TRB:estimable"] == 1.0
+        assert np.isnan(out["vsig:div:IGH:1D_c"]) and out["vsig:mask:IGH:estimable"] == 0.0
+        assert np.isfinite(out["vsig:depth:IGH:reads"]), "depth does not need a coverage level"
+
+    def test_a_partial_dict_used_to_be_a_keyerror(self, sample):
+        """It indexed ``cstar[locus]`` directly, so a reference covering TRA and TRB only --
+        which is exactly what the shipped amplicon reference is -- died on the first B-cell
+        locus instead of reporting a hole."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            vsig(sample, tier="core", cstar={"TRB": 0.1072})    # no KeyError
+
+    def test_cstar_none_refuses_the_fallback_outright(self, sample):
+        out = vsig(sample, tier="core", cstar=None)
+        assert all(np.isnan(v) for k, v in out.items() if k.startswith("vsig:div:"))
+        assert all(v == 0.0 for k, v in out.items() if k.endswith(":estimable"))
+        # a refusal is not a fallback: the two states stay disjoint so a reader can add them up
+        assert out["vsig:qc:-:cstar_fallback_frac"] == 0.0
+        assert np.isfinite(out["vsig:depth:TRB:reads"])
+
+    def test_the_fraction_is_over_present_loci(self):
+        assert np.isnan(vsig({}, tier="core")["vsig:qc:-:cstar_fallback_frac"])
+
+    def test_the_column_is_in_every_tier(self):
+        for tier in L.TIERS:
+            assert "vsig:qc:-:cstar_fallback_frac" in L.columns(tier, "vsig")

@@ -285,7 +285,10 @@ def test_signature_describe_lists_only_the_vsig_half(tmp_path):
     assert res.exit_code == 0, res.output
     rows = out.read_text().strip().split("\n")[1:]
     assert {r.split("\t")[1] for r in rows} == {"vsig"}
-    assert len(rows) == 160
+
+    from vdjtools.signature import layout as L
+
+    assert len(rows) == len(L.columns("standard", "vsig")) == 161
 
 
 def test_a_preset_with_no_pgen_column_does_not_compute_pgen(tmp_path, monkeypatch):

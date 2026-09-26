@@ -3,7 +3,7 @@ Channels: reading a signature
 
 Twenty names that turn "the model found something" into a sentence with a noun in it.
 
-A signature is a wide vector — 152, 688 or 1,403 columns depending on the tier. Wide vectors score
+A signature is a wide vector — 153, 689 or 1,404 columns depending on the tier. Wide vectors score
 well and explain badly. **Channels** are the interpretive layer over them: a small, fixed,
 purely structural vocabulary, the same for every sample anyone emits, in which a finding can be
 stated and compared across labs.
@@ -39,7 +39,7 @@ fixed menu of named statistics side by side — diversity, clonality, junction l
 test per statistic, and reading off which one moved. The menu **is** the explanation: every number
 has a name, so a result is a sentence.
 
-A wide feature vector scores better and explains worse. ``signature()`` returns 688 anonymous
+A wide feature vector scores better and explains worse. ``signature()`` returns 689 anonymous
 columns; a model trained on them reports "it separates the groups", which has no noun in it. The
 channel vocabulary restores the noun without giving up the vector:
 

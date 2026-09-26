@@ -226,7 +226,7 @@ the variance-stabilising layer (`logit` Haldane–Anscombe, `arcsine` Anscombe, 
 
 **Presets are the entry point to recommend**, not hand-picked columns: `compact` (86),
 `classify` (615), `transfer` (550), `geometry` (514), `statistics` (101), `bcell` (271),
-`full` (1403, feature selection only), `nuisance` (73, ranked *avoid* — a control). They resolve
+`full` (1404, feature selection only), `nuisance` (74, ranked *avoid* — a control). They resolve
 from the frozen layout alone. `vdjtools presets NAME` prints one in full.
 
 **Channels** are the second field of a column name — the named group measuring one thing, and the
