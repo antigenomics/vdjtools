@@ -11,12 +11,11 @@ a tolerance-based oracle cannot:
 * **the values are bit-for-bit what 3.16.0 returned** — ``vsig:pgen:*:frac_atypical`` is compared
   against a frozen ``pgen_q05``, so a last-bit move is a silent data bug, not a rounding detail.
 
-Why a tolerance is not enough here, measured 2026-09-26: stopping the shared walk one nucleotide
-short (so each ``(D, 5' cut)`` chain loses its longest D) moves IGH Pgen by a **median relative
-error of 7.9e-7** over 12 junctions off the bundled model -- under the ``rtol=1e-6`` every
-OLGA-comparison test in this repo uses, even though the worst junction moves 4.3%. The frozen
-reference below catches that mutation on every value; a tolerance catches it only if the draw
-happens to include a long junction.
+Why the oracle tests are not enough here, measured 2026-09-26: stopping the shared walk one
+nucleotide short (so each ``(D, 5' cut)`` chain loses its longest D) moves IGH Pgen by a **median
+relative error of 7.9e-7** over 12 junctions off the bundled model — under the ``rtol=1e-6`` that
+OLGA comparisons in this repo use, even though the worst junction moves 4.3%. All three IGH oracle
+tests here passed against that mutation; the frozen reference below caught it on every value.
 
 IGH is where the cost was (9,212 live ``(D, ndel5, ndel3)`` states against TRB's 297) and it had no
 OLGA comparison anywhere in the suite until this file.
@@ -205,15 +204,31 @@ def test_igh_aa_pgen_matches_olga_marginalised(igh):
 
 # ---- the frozen reference -------------------------------------------------------------------
 
+#: The bar the frozen reference is compared at. ``appendix/compare_models.py`` already calls a max
+#: relative error under 1e-9 "EXACT" and anything above it "MISMATCH — BUG", so this is the house
+#: definition rather than a new one. The margin on both sides is what makes it useful: the bug
+#: class it exists for shows up at a **median 7.9e-7**, 800x above this, and the largest thing that
+#: legitimately moves a value — rebuilding with a different compiler — was measured at **1 ULP,
+#: ~2e-16**, seven orders below. Tightening it to ``==`` turns a correctness check into a platform
+#: check, which is how it first went red on Linux CI while every oracle test passed.
+PGEN_EXACT = 1e-9
+
+
 def test_pgen_matches_the_frozen_reference():
-    """Bit-for-bit equality with the values 3.16.0 returned, on the three D-bearing loci.
+    """The values 3.16.0 returned, on the three D-bearing loci, at the repo's EXACT bar.
 
-    Hex float64, so the fixture round-trips exactly and the comparison is ``==`` rather than a
-    tolerance. This is the only stored Pgen reference in the repo: the signature block's
-    ``frac_atypical`` is measured against a ``pgen_q05`` frozen outside it, so a shift of 1e-6
-    lands in a plausible range and no other test would see it.
+    Stored as hex float64 so the fixture itself round-trips without loss. This is the only stored
+    Pgen reference in the repo, and it exists because the signature block's ``frac_atypical`` is
+    measured against a ``pgen_q05`` frozen outside it: a shift of 1e-6 lands in a plausible range
+    and no other test would see it.
 
-    Regenerate ONLY when a germline or a bundled model changes — never to make a red test green.
+    NOTE: **float64 Pgen is not bit-portable across compilers, and never was.** The same model and
+    the same sequence give a 1-ULP-different answer under Linux/GCC than under macOS/clang, with no
+    code change involved. The bitwise claim in the 3.17.1 changelog is therefore scoped to one
+    platform, before against after — which is the claim a user upgrading cares about — and it is
+    verified at release time by dumping every value from both builds, not here.
+
+    Regenerate ONLY when a germline or a bundled model changes, never to make a red test green.
     """
     want = json.loads(GOLDEN.read_text())
     for locus, block in sorted(want["values"].items()):
@@ -230,5 +245,7 @@ def test_pgen_matches_the_frozen_reference():
         for key, vals in sorted(got.items()):
             exp = [float.fromhex(h) for h in block[key]]
             assert len(vals) == len(exp)
-            bad = [(i, e, g) for i, (e, g) in enumerate(zip(exp, vals)) if e != g]
-            assert not bad, f"{locus}/{key}: {len(bad)} of {len(exp)} moved, first {bad[0]}"
+            bad = [(i, e, g, abs(g - e) / e) for i, (e, g) in enumerate(zip(exp, vals))
+                   if e != g and (e == 0.0 or abs(g - e) / e > PGEN_EXACT)]
+            worst = max(bad, key=lambda b: b[3]) if bad else None
+            assert not bad, f"{locus}/{key}: {len(bad)} of {len(exp)} moved, worst {worst}"

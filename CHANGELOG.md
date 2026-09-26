@@ -3,7 +3,7 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## 3.17.0 — 2026-09-26
+## 3.17.1 — 2026-09-26
 
 The Pgen block you cannot decline. 3.16.0 let a caller skip `vsig:pgen` entirely, which is 96.6% of
 a `standard`-tier seven-locus sample — but `--preset classify` and `--preset transfer`, the two
@@ -65,7 +65,7 @@ where it matters and wrong everywhere.
 its per-boundary reduction is worth roughly another 2x and is **not** taken here: it regroups the
 sum, and that forfeits the guarantee below. It is noted at the call site with its cost.
 
-### The output is bitwise unchanged, and that is checked rather than asserted
+### The output does not move, and that is checked rather than asserted
 
 The rewrite is arranged in two passes: the walk records each join, then a second pass adds them into
 the total **in the original `(ndel3, position)` order**. Summing straight out of the walk would be
@@ -73,22 +73,29 @@ correct to ~1e-16 and would still be wrong to ship, because `vsig:pgen:*:frac_at
 against a `pgen_q05` reference frozen outside the block — a last-bit move there is a silent data
 bug that lands in a plausible range, not a rounding detail.
 
-- **1,708 of 1,708 Pgen values identical**, compared as raw float64 bits across all 7 loci x both
-  `from_olga` (uncollapsed) and `load_bundled` (collapsed, the default) x `pgen_nt`, `pgen_aa`,
-  `pgen_aa(mismatches=1)`, V/J-agnostic and V/J-restricted. Collapsing changes the D-state
-  cardinality the DP walks, so both settings are covered.
+- **1,708 of 1,708 Pgen values bit-for-bit identical** on one platform, 3.16.0 against 3.17.1,
+  across all 7 loci x both `from_olga` (uncollapsed) and `load_bundled` (collapsed, the default) x
+  `pgen_nt`, `pgen_aa`, `pgen_aa(mismatches=1)`, V/J-agnostic and V/J-restricted. Collapsing
+  changes the D-state cardinality the DP walks, so both settings are covered. Same platform is the
+  scope claimed and the scope that matters: upgrading does not move your numbers.
 - **7-locus OLGA concordance reproduces `r(log10 Pgen) = 1.00000`** on nt and aa. IGH agrees with
   OLGA to a max relative error of **1.0e-13 (nt) / 7.9e-14 (aa)**.
 
+Across *compilers* it is a different question with a pre-existing answer: float64 Pgen has never
+been bit-portable. The same bundled model and the same junction return a **1-ULP** (~2e-16)
+different value under Linux/GCC than under macOS/clang, because the sum contracts differently — no
+code change involved, and true of every release before this one.
+
 ### Added — `tests/python/fixtures/pgen_golden.json`, the first stored Pgen reference
 
-276 values over IGH/TRB/TRD as hex float64, so `test_pgen_d_prefix.py` compares with `==` rather
-than a tolerance. It exists because a tolerance measurably does not catch this class of bug:
-stopping the shared walk one nucleotide short — each chain loses its longest D — moves IGH Pgen by
-a **median relative error of 7.9e-7** over 12 bundled-model junctions, *under* the `rtol=1e-6` every
-OLGA-comparison test here uses, even though the worst junction moves 4.3%. The frozen reference
-catches that mutation on every value; an oracle comparison catches it only if the draw happens to
-include a long junction. Regenerate it only when a germline or a bundled model changes.
+276 values over IGH/TRB/TRD as hex float64, compared at a max relative error of **1e-9** — the bar
+`appendix/compare_models.py` already calls "EXACT". It exists because the oracle tests measurably
+do not catch this class of bug: stopping the shared walk one nucleotide short — each chain loses its
+longest D — moves IGH Pgen by a **median relative error of 7.9e-7** over 12 bundled-model junctions,
+*under* the `rtol=1e-6` that OLGA comparisons here use, even though the worst junction moves 4.3%.
+All three new IGH oracle tests passed against that mutation; the frozen reference caught it on every
+value — 800x tighter than the signal, and seven orders looser than cross-compiler drift. Regenerate
+it only when a germline or a bundled model changes.
 
 `test_pgen_d_prefix.py` also closes a gap this change made untenable: **IGH had no OLGA comparison
 anywhere in the suite**, though it is the 9,212-state locus and 96% of the signature bill. It now
@@ -102,6 +109,13 @@ a shared message array so order preservation is a different problem), `d_middle`
 exits on the first mismatching nucleotide, so the redundancy is not its cost — the V x J enumeration
 around it is), and `accum_vdj` (soft counts, pinned at `atol=1e-12` rather than bitwise, and it runs
 only during model regeneration).
+
+### Note on 3.17.0
+
+`v3.17.0` was tagged with this same change and **never published** — its pre-publish CI job went red
+because the new frozen reference was compared with `==`, asserting bit-identity across compilers
+rather than across versions. Nothing reached PyPI under that version; 3.17.1 is the first release of
+this work.
 
 ## 3.16.0 — 2026-09-26
 
