@@ -193,8 +193,263 @@ How many components
 
 The artifact stores the rotation only up to the count it was fitted at, plus the **full eigenvalue
 spectrum**. So truncating downward at apply time is free and **exact** — the components are ordered,
-so the first *n* of a longer rotation are the same vectors — while asking for more than was fitted
-raises, and the error quotes what the spectrum does reach.
+so the first *n* of a longer rotation are the same vectors. A **count** above the stored one is
+capped per locus, exactly as the fit capped it; a **fraction** the stored spectrum cannot reach
+raises, and the error quotes what it does reach. Neither ever pads: no column appears under a name
+the rotation does not hold.
+
+.. _sig-component-table:
+
+The two forms are not interchangeable — measured
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Read from the shipped artifacts' own stored spectra, so this is a measurement rather than a
+preference. ``p_raw`` is the locus's raw feature count, ``k`` what the shipped rotation stores, and
+``k@0.90`` / ``k@0.95`` the counts those variance fractions would need.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 10 8 10 8 10 10 10
+
+   * - half
+     - corpus
+     - locus
+     - p_raw
+     - k
+     - k@0.90
+     - k@0.95
+     - var@k
+   * - vsig
+     - naive
+     - TRB
+     - 2261
+     - 128
+     - 571
+     - 772
+     - 0.4236
+   * - vsig
+     - naive
+     - IGH
+     - 3744
+     - 128
+     - 676
+     - 839
+     - 0.4116
+   * - vsig
+     - naive
+     - TRG
+     - 767
+     - 128
+     - 282
+     - 365
+     - 0.7841
+   * - vsig
+     - memory
+     - TRB
+     - 2261
+     - 128
+     - 501
+     - 648
+     - 0.4825
+   * - vsig
+     - memory
+     - IGH
+     - 3744
+     - 128
+     - 840
+     - 1008
+     - 0.3771
+   * - vsig
+     - memory
+     - TRG
+     - 767
+     - 128
+     - 220
+     - 340
+     - 0.8538
+   * - rsig
+     - naive
+     - TRB
+     - 772
+     - 128
+     - 17
+     - 32
+     - 0.9923
+   * - rsig
+     - naive
+     - IGH
+     - 775
+     - 128
+     - 12
+     - 35
+     - 0.9887
+   * - rsig
+     - naive
+     - TRD
+     - 772
+     - 128
+     - 5
+     - 11
+     - 0.9966
+   * - rsig
+     - memory
+     - TRB
+     - 772
+     - 128
+     - 11
+     - 19
+     - 0.9957
+   * - rsig
+     - memory
+     - IGH
+     - 775
+     - 128
+     - 8
+     - 26
+     - 0.9911
+   * - rsig
+     - memory
+     - TRD
+     - 772
+     - 128
+     - 3
+     - 4
+     - 0.9987
+
+The two halves sit on opposite sides of 128, and by a wide margin:
+
+* **On the statistics half, 128 components are far short of 0.90.** Reaching it needs 220 (TRG,
+  ``memory``) to 840 (IGH, ``memory``) components, so ``--components 0.90`` and anything above it
+  **raises on the shipped vsig corpora** rather than returning a narrower matrix. That is the
+  intended refusal — the rotation genuinely stops at 128 — and the message names the fraction
+  actually reached. Use a count there, or refit at a larger ``n_components``.
+* **On the geometry half, 128 is generous.** 0.90 needs 3 to 28 components, because its raw features
+  are a few hundred embedding coordinates rather than a few thousand sparse usage shares, so a
+  fraction is the natural knob and yields a far narrower matrix.
+* **A corpus changes the answer.** IGH needs *more* components under ``memory`` than ``naive`` (840
+  against 676) while every other locus needs fewer — clonal expansion concentrates most loci and
+  spreads IGH, whose isotype and SHM blocks only vary once clones are selected.
+
+Full per-locus numbers for all seven loci and both corpora are in each artifact's ``manifest.json``
+under ``variance_at_k`` beside the stored spectrum, so any threshold can be read off without a refit.
+
+.. _sig-depth-sweep:
+
+A corpus is depth-portable on the geometry half and not on the statistics half
+------------------------------------------------------------------------------
+
+Every bound, centre and scale in a corpus is fitted at the depth the corpus was drawn at, so the
+question a user actually has is: *can I score a deep cohort through a corpus drawn shallow?* Measured
+rather than assumed — twelve extra corpora at N=1,000, drawn at the per-locus **p05 / median / p95**
+of real ``n_eff`` (from 1,168 real bulk blood samples), both halves, both regimes. ``centre shift`` is
+the median per-column distance from the p05 centre to the p95 centre, **in p05 robust-SD units**;
+``pc scale`` is the median ratio of per-PC scale, p95 over p05.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 8 8 8 8 10 10 12
+
+   * - half
+     - corpus
+     - locus
+     - p05
+     - p95
+     - bound width
+     - pc scale
+     - centre shift
+   * - vsig
+     - naive
+     - TRB
+     - 195
+     - 790
+     - 1.48
+     - 0.628
+     - 3.53
+   * - vsig
+     - naive
+     - IGH
+     - 111
+     - 1219
+     - 2.67
+     - 0.311
+     - 6.48
+   * - vsig
+     - naive
+     - TRD
+     - 14
+     - 34
+     - 1.10
+     - 0.803
+     - 1.69
+   * - vsig
+     - memory
+     - TRB
+     - 195
+     - 790
+     - 1.51
+     - 0.589
+     - 3.57
+   * - vsig
+     - memory
+     - IGH
+     - 111
+     - 1219
+     - 2.64
+     - 0.285
+     - 5.54
+   * - rsig
+     - naive
+     - TRB
+     - 195
+     - 790
+     - 0.97
+     - 1.012
+     - 0.06
+   * - rsig
+     - naive
+     - IGH
+     - 111
+     - 1219
+     - 0.96
+     - 0.977
+     - 0.07
+   * - rsig
+     - memory
+     - TRB
+     - 195
+     - 790
+     - 7.31
+     - 1.024
+     - 0.05
+   * - rsig
+     - memory
+     - IGH
+     - 111
+     - 1219
+     - 4.62
+     - 1.010
+     - 0.04
+
+Across all seven loci and both regimes:
+
+* **On the statistics half, depth moves the fit.** The centre shifts **1.67 to 6.48** p05-robust-SD
+  between the shallow and deep point, and per-PC scale falls to **0.285–0.904** of its shallow value.
+  So scoring a deep cohort through a shallow corpus puts samples many robust deviations out for a
+  reason that is sequencing depth, not biology. Match the corpus's depth to the cohort's, or expect
+  the offset. The effect tracks each locus's own depth spread — 11.0x on IGH against 2.4x on TRD —
+  which is why it is largest on IGH and IGL and smallest on TRD.
+* **On the geometry half it does not.** The centre shifts **0.03–0.08** SD and per-PC scale stays
+  within **±5%**, at every locus and both regimes. That follows from what the coordinates are: an
+  ``rsig`` coordinate is a weighted mean of fixed embedding vectors, so depth changes its *variance*
+  (:math:`\approx \sigma^2/n_\text{eff}`) and not its value, while a richness or Hill number is a
+  function of depth directly.
+* **Bounds are the exception on ``rsig`` ``memory``**, widening **4.6–7.8x** where ``naive`` stays at
+  0.94–0.98. Bounds are percentiles, so clonal expansion fattens the tails while leaving the centre
+  and scale where they were — the winsorization bound is the depth-sensitive part of the geometry
+  half, and the standardisation is not.
+
+The sweep artifacts are not shipped; they are a measurement of the shipped ones. Reproduce with
+``vdjtools corpus --corpus naive --size p05 --samples 1000`` (``p05`` / ``n_eff`` / ``p95``).
 
 .. warning::
 

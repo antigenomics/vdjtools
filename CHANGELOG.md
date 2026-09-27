@@ -205,6 +205,33 @@ hash of the **cut segments the generator will actually draw from**, which a decl
 cannot track: repairing `TRBV4-3*02` changed what every TRB pool contains while leaving
 `olga:human_T_beta@2.0.0` identical.
 
+### Measured: what the shipped corpora actually are
+
+Two tables the docs now carry, both read off the artifacts rather than asserted
+(:ref:`sig-component-table`, :ref:`sig-depth-sweep`).
+
+**The two `--components` forms are not interchangeable.** Reaching 0.90 cumulative variance needs
+**220** (TRG, `memory`) to **840** (IGH, `memory`) components on the statistics half, so a fraction
+raises on the shipped `vsig` corpora rather than returning a narrower matrix — the rotation genuinely
+stops at 128, and the message names the fraction reached. On the geometry half 0.90 needs **3 to 28**,
+so a fraction is the natural knob there. IGH needs *more* components under `memory` than `naive` (840
+against 676) while every other locus needs fewer.
+
+**A corpus is depth-portable on the geometry half and not on the statistics half.** Twelve extra
+corpora at N=1,000, drawn at the per-locus p05 / median / p95 of real `n_eff`, both halves, both
+regimes. On `vsig` the centre moves **1.67 to 6.48 p05-robust-SD** from the shallow to the deep point
+and per-PC scale falls to **0.285–0.904** of its shallow value; on `rsig` the centre moves
+**0.03–0.08 SD** and per-PC scale stays within **±5%**. An `rsig` coordinate is a weighted mean of
+fixed vectors, so depth changes its variance and not its value. The exception is `rsig` `memory`
+bounds, which widen **4.6–7.8x** where `naive` stays at 0.94–0.98: bounds are percentiles, so clonal
+expansion fattens the tails while leaving the centre and scale put.
+
+**The builder is byte-reproducible.** Two smoke corpora built with different thread counts
+(`POLARS_MAX_THREADS` 1 against the default) and different worker counts (`--jobs 3` against the
+allocation) are `cmp`-identical. This is an acceptance criterion, not an aspiration: a corpus whose
+values depend on the builder's machine cannot be compared with one built anywhere else.
+
+
 ## 3.18.1 — 2026-09-26
 
 Guards for the class of bug 3.18.0 fixed, and one file that should never have been public.
