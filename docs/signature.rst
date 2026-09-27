@@ -584,8 +584,9 @@ The two halves sit on opposite sides of 128, and by a wide margin:
   and 0.5381 against ``naive``'s 0.4236 — because a corpus drawn across two decades of depth has a
   genuine dominant direction (depth) that a fixed-depth corpus does not.
 
-Full per-locus numbers for all seven loci and both corpora are in each artifact's ``manifest.json``
-under ``variance_at_k`` beside the stored spectrum, so any threshold can be read off without a refit.
+Full per-locus numbers for all seven loci and all four shipped corpora are in each artifact's
+``manifest.json`` under ``variance_at_k`` beside the stored spectrum, so any threshold can be read off
+without a refit.
 
 .. _sig-depth-sweep:
 
