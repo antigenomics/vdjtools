@@ -877,21 +877,34 @@ def copula_uniforms(rank_corr: tuple, n: int, rng: np.random.Generator) -> np.nd
     is what the rotation is fitted on.
 
     Measured over all 14 (cohort, locus) entries of :data:`COHORT`: the realised rank correlations
-    match their targets to within **0.015** on 20,000 draws, and the implied Gaussian matrix is
-    comfortably positive semidefinite everywhere -- smallest eigenvalue 0.2176, on blood IGK. The
-    eigenvalue clip therefore never binds on the shipped table and is defensive, for a caller passing
-    three correlations that cannot come from one joint distribution; the row renormalisation is what
-    restores unit marginal variance when it does bind, without which a clipped matrix would quietly
-    narrow the drawn bands.
+    match their targets to within **0.015** on 20,000 draws.
+
+    **The correlation matrix is factorised in closed form, not by an eigendecomposition**, and that is
+    a reproducibility requirement rather than a micro-optimisation. ``numpy.linalg.eigh`` returns
+    eigenvectors whose SIGN is a LAPACK convention, not mathematics: negating a column leaves the
+    covariance -- and so every marginal and every correlation -- untouched, but it changes the realised
+    sample. A corpus built on a machine whose LAPACK signs a column differently would then differ
+    byte-for-byte from the same build here while being statistically identical, and a corpus whose
+    values depend on the builder's linear-algebra library cannot be compared with one built anywhere
+    else. The Cholesky factor of a positive-definite matrix is unique, and at 3x3 it is six
+    arithmetic operations, so there is nothing to defer to.
+
+    Unit diagonal makes the factor's rows unit-norm by construction, so the normals need no
+    rescaling. An infeasible triple -- three correlations that cannot come from one joint
+    distribution -- makes the last radicand negative and raises, rather than being clipped into
+    something plausible.
     """
     from scipy.special import ndtr
 
     r_nm, r_nf, r_mf = (2.0 * np.sin(np.pi * np.asarray(rank_corr, dtype=float) / 6.0))
-    m = np.array([[1.0, r_nm, r_nf], [r_nm, 1.0, r_mf], [r_nf, r_mf, 1.0]])
-    w, v = np.linalg.eigh(m)
-    root = v * np.sqrt(np.clip(w, 0.0, None))
+    l22 = np.sqrt(1.0 - r_nm * r_nm)
+    l32 = (r_mf - r_nf * r_nm) / l22
+    rad = 1.0 - r_nf * r_nf - l32 * l32
+    if not (l22 > 0.0 and rad > 0.0):
+        raise ValueError(f"rank correlations {tuple(rank_corr)} are not jointly attainable: no "
+                         "positive-definite correlation matrix has them")
+    root = np.array([[1.0, 0.0, 0.0], [r_nm, l22, 0.0], [r_nf, l32, np.sqrt(rad)]])
     z = rng.standard_normal((n, 3)) @ root.T
-    z /= np.sqrt(np.maximum((root ** 2).sum(axis=1), 1e-12))
     # Onto the ladder's own support: a monotone map, so the copula's ranks survive it, and without
     # it the 10% of draws outside p05-p95 would pile up as point masses on the two band edges.
     return COHORT_QS[0] + (COHORT_QS[-1] - COHORT_QS[0]) * ndtr(z)

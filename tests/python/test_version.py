@@ -7,17 +7,21 @@ shipped its fix under the old literal and never reached PyPI, and mirpy's 4.0.0 
 """
 
 import re
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_the_pyproject_version_matches_the_changelog_top_entry():
-    cfg = tomllib.loads(Path(ROOT, "pyproject.toml").read_text())
+    # Read by regex rather than with `tomllib`, which is stdlib only from 3.11 while this package
+    # supports 3.10 -- a test-only import of it fails *collection*, so the whole suite errors out
+    # rather than one test failing. (Cost, measured 2026-09-28: exactly that, on both 3.10 CI jobs.)
+    pyproject = Path(ROOT, "pyproject.toml").read_text()
+    got = re.search(r'^version = "(\d+\.\d+\.\d+)"', pyproject, re.M)
     head = re.search(r"^## (\d+\.\d+\.\d+)", Path(ROOT, "CHANGELOG.md").read_text(), re.M)
+    assert got, "pyproject.toml has no top-level `version = \"x.y.z\"`"
     assert head, "CHANGELOG.md has no `## <version>` entry"
-    assert cfg["project"]["version"] == head.group(1)
+    assert got.group(1) == head.group(1)
 
 
 def test_the_installed_version_is_read_from_that_file_and_not_a_literal():

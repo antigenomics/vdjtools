@@ -153,67 +153,67 @@ What that costs, measured on 500 drawn samples per cohort against the cohort's o
    * - blood
      - TRB
      - 34,365
-     - 430
+     - 452
      - 457
-     - 780
+     - 812
      - 763
-     - 0.734 / 0.759
+     - 0.774 / 0.759
    * - blood
      - TRA
      - 32,732
-     - 260
+     - 253
      - 276
-     - 432
+     - 421
      - 456
-     - 0.727 / 0.745
+     - 0.766 / 0.745
    * - blood
      - IGH
      - 33,245
-     - 765
+     - 715
      - 697
-     - 1,327
+     - 1,187
      - 1,298
-     - 0.668 / 0.697
+     - 0.687 / 0.697
    * - blood
      - IGK
      - 43,678
-     - 554
+     - 578
      - 549
-     - 1,280
+     - 1,260
      - 1,316
-     - 0.575 / 0.555
+     - 0.569 / 0.555
    * - tissue
      - TRB
      - 22,298
-     - 150
+     - 156
      - 158
-     - 464
+     - 467
      - 308
-     - 0.657 / 0.688
+     - 0.704 / 0.688
    * - tissue
      - IGH
      - 47,031
-     - 594
+     - 626
      - 602
-     - 2,172
+     - 1,934
      - 2,194
-     - 0.539 / 0.561
+     - 0.541 / 0.561
    * - tissue
      - IGK
      - 58,706
-     - 551
+     - 566
      - 519
-     - 2,974
+     - 2,596
      - 2,634
-     - 0.431 / 0.410
+     - 0.417 / 0.410
 
-The singleton fraction lands within 0.03 everywhere and richness within 10% on 12 of the 14
-(cohort, locus) pairs. The read count is within 15% on 11 of 14; the exceptions are the shallow
-tissue TR loci, where it runs 23–51% high (tissue TRB 464 against 308) because a product of three
-heavy-tailed factors has a median above the product of their medians unless the joint tails match
-exactly, and no marginals-plus-copula draw does that. The drawn p95 of the read count is also
-*lower* than the cohort's — blood TRB 3,964 against 5,274 — so the fitted depth ceiling is tighter
-than the cohort's own p95 by roughly a quarter.
+The singleton fraction lands within 0.03, and richness within 10%, on **all 14** (cohort, locus)
+pairs. The read count is within 15% on 10 of 14; the exceptions are the four shallow tissue TR loci,
+where it runs 20–52% high (tissue TRB 467 against 308) because a product of three heavy-tailed factors
+has a median above the product of their medians unless the joint tails match exactly, and no
+marginals-plus-copula draw does that. The drawn p95 of the read count is also *lower* than the
+cohort's — blood TRB 3,755 against 5,274 — so the fitted depth ceiling is roughly 29% tighter than the
+cohort's own p95.
 
 **Why this matters more than it sounds.** ``naive`` and ``memory`` draw their depth across
 :data:`~vdjtools.signature.corpus.DEPTH_SPREAD`, 2.4× on TRD to 11.0× on IGH, measured on 1,168 deep
@@ -472,48 +472,48 @@ preference. ``p_raw`` is the locus's raw feature count, ``k`` what the shipped r
      - 2261
      - 128
      - 633
-     - 828
-     - 0.4629
+     - 829
+     - 0.4618
    * - vsig
      - synthetic-blood
      - IGH
      - 3744
      - 128
-     - 836
-     - 1078
-     - 0.4601
+     - 844
+     - 1087
+     - 0.4630
    * - vsig
      - synthetic-blood
      - TRG
      - 767
      - 128
-     - 160
-     - 280
-     - 0.8836
+     - 162
+     - 281
+     - 0.8827
    * - vsig
      - synthetic-tissue
      - TRB
      - 2261
      - 128
-     - 489
-     - 637
-     - 0.5381
+     - 483
+     - 629
+     - 0.5424
    * - vsig
      - synthetic-tissue
      - IGH
      - 3744
      - 128
-     - 883
-     - 1132
-     - 0.5136
+     - 885
+     - 1134
+     - 0.5123
    * - vsig
      - synthetic-tissue
      - TRG
      - 767
      - 128
-     - 127
-     - 246
-     - 0.9011
+     - 124
+     - 243
+     - 0.9028
    * - rsig
      - synthetic-blood
      - TRB
@@ -528,32 +528,32 @@ preference. ``p_raw`` is the locus's raw feature count, ``k`` what the shipped r
      - 775
      - 128
      - 13
-     - 38
-     - 0.9880
+     - 36
+     - 0.9884
    * - rsig
      - synthetic-blood
      - TRD
      - 772
      - 128
-     - 6
+     - 7
      - 17
-     - 0.9951
+     - 0.9952
    * - rsig
      - synthetic-tissue
      - TRB
      - 772
      - 128
      - 20
-     - 37
-     - 0.9909
+     - 36
+     - 0.9910
    * - rsig
      - synthetic-tissue
      - IGH
      - 775
      - 128
      - 13
-     - 37
-     - 0.9882
+     - 36
+     - 0.9883
    * - rsig
      - synthetic-tissue
      - TRD
@@ -561,12 +561,12 @@ preference. ``p_raw`` is the locus's raw feature count, ``k`` what the shipped r
      - 128
      - 7
      - 17
-     - 0.9950
+     - 0.9949
 
 The two halves sit on opposite sides of 128, and by a wide margin:
 
 * **On the statistics half, 128 components are far short of 0.90 nearly everywhere.** Reaching it
-  needs 127 (TRG, ``synthetic-tissue``) to 883 (IGH, ``synthetic-tissue``) components, so
+  needs 124 (TRG, ``synthetic-tissue``) to 885 (IGH, ``synthetic-tissue``) components, so
   ``--components 0.90`` and anything above it **raises on every shipped vsig corpus and locus except
   that one** rather than returning a narrower matrix. That is the intended refusal — the rotation
   genuinely stops at 128 — and the message names the fraction actually reached. Use a count there, or
@@ -578,10 +578,10 @@ The two halves sit on opposite sides of 128, and by a wide margin:
   against 676) while every other locus needs fewer — clonal expansion concentrates most loci and
   spreads IGH, whose isotype and SHM blocks only vary once clones are selected.
 * **Drawing across a real depth range concentrates the TR loci and spreads IGH further.** TRB at 0.90
-  needs 489 components under ``synthetic-tissue`` and 633 under ``synthetic-blood``, against 571 under
-  ``naive``; TRG drops to 127 and 160 from ``naive``'s 228. IGH goes the other way, 836 and 883
-  against 676. Variance at the shipped 128 rises on every locus of both cohort corpora — TRB 0.4629
-  and 0.5381 against ``naive``'s 0.4236 — because a corpus drawn across two decades of depth has a
+  needs 483 components under ``synthetic-tissue`` and 633 under ``synthetic-blood``, against 571 under
+  ``naive``; TRG drops to 124 and 162 from ``naive``'s 228. IGH goes the other way, 844 and 885
+  against 676. Variance at the shipped 128 rises on every locus of both cohort corpora — TRB 0.4618
+  and 0.5424 against ``naive``'s 0.4236 — because a corpus drawn across two decades of depth has a
   genuine dominant direction (depth) that a fixed-depth corpus does not.
 
 Full per-locus numbers for all seven loci and all four shipped corpora are in each artifact's

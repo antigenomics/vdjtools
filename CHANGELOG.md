@@ -57,14 +57,22 @@ against expansion size is -0.503 on blood TRB and -0.846 on blood IGK (n = 43,67
 singletons, bigger expansions. Drawing independently would hand the PCA a correlation the cohort does
 not have, which no amount of correct marginals repairs.
 
+The correlation matrix is factorised **in closed form rather than by an eigendecomposition**, and that
+is a reproducibility requirement. `numpy.linalg.eigh` returns eigenvectors whose sign is a LAPACK
+convention: negating a column leaves the covariance, every marginal and every correlation untouched
+while changing the realised sample, so a corpus built where LAPACK signs a column differently would
+differ byte-for-byte from the same build here while being statistically identical — and a corpus whose
+values depend on the builder's linear-algebra library cannot be compared with one built anywhere else.
+A 3x3 Cholesky factor is unique and is six arithmetic operations.
+
 Acceptance, on 500 drawn samples per cohort against the cohort's own percentiles: the singleton
-fraction lands within 0.03 everywhere, richness within 10% on 12 of the 14 (cohort, locus) pairs, and
-the read count within 15% on 11 of 14. The exceptions are the shallow tissue TR loci, where the read
-count runs 23-51% high (tissue TRB 464 against 308) — a product of three heavy-tailed factors has a
+fraction lands within 0.03, and richness within 10%, on **all 14** (cohort, locus) pairs; the read
+count is within 15% on 10 of 14. The exceptions are the four shallow tissue TR loci, where the read
+count runs 20-52% high (tissue TRB 467 against 308) — a product of three heavy-tailed factors has a
 median above the product of their medians unless the joint tails match exactly, and no
 marginals-plus-copula draw does that. The drawn p95 of the read count is also *lower* than the
-cohort's (blood TRB 3,964 against 5,274), so the fitted depth ceiling is about a quarter tighter than
-the cohort's own p95. The full table is in `docs/signature.rst`.
+cohort's (blood TRB 3,755 against 5,274), so the fitted depth ceiling is roughly 29% tighter than the
+cohort's own p95. The full table is in `docs/signature.rst`.
 
 `naive` and `memory` are unchanged and remain as the pure-regime references: the shipped artifacts
 still rebuild bit-for-bit, checked by building a `memory` corpus against this commit and against
