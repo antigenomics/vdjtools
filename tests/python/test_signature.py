@@ -211,9 +211,24 @@ def test_apply_time_truncation_is_bitwise_exact(corpus, held_out):
     assert not any(c.endswith("PC03") for c in short)
 
 
-def test_asking_for_more_components_than_were_fitted_refuses_rather_than_padding(corpus):
-    with pytest.raises(ValueError, match="refit"):
-        corpus.resolve_k(corpus.fits["TRB"].k + 1)
+def test_a_component_count_is_capped_per_locus_and_never_padded(corpus):
+    """A count is an upper bound, capped exactly as the fit capped it -- and nothing is invented.
+
+    Refusing instead made the flag unusable on everything the builder produces: the cross-locus block
+    has 5 raw features, so ``--components 128`` fitted it at 5 and then refused to apply the same 128
+    the build had accepted. Capping is not padding -- no column appears under a name the rotation does
+    not hold -- and the emitted width is reported in the preflight and recorded in the manifest.
+    """
+    k = corpus.fits["TRB"].k
+    got = corpus.resolve_k(k + 1000)
+    assert got["TRB"] == k
+    assert all(got[loc] == f.k for loc, f in corpus.fits.items())
+    assert corpus.resolve_k(1)["TRB"] == 1                      # below the cap it is honoured
+    # A variance fraction the stored spectrum cannot reach must still refuse: there the requested
+    # thing is a property of the data, not a width, and silently returning the whole rotation would
+    # claim a variance the corpus never reached.
+    with pytest.raises(ValueError, match="Refit"):
+        corpus.resolve_k(0.999999999)
 
 
 # ----------------------------------------------------------- 7. the clamp is reported
