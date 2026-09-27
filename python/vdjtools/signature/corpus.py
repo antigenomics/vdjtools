@@ -578,7 +578,13 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
             x, moved = clamp(x, *f.bounds[p])
             n_moved += int(moved.sum())
         z = _standardize(x, f.loc, f.scale)
-        scores = z @ f.rotation[:, :k]
+        # Rotate through the WHOLE rotation, then slice. `z @ rotation[:, :k]` is the same
+        # arithmetic in a different GEMM shape, and OpenBLAS accumulates it in a different
+        # order: the truncated and untruncated TRB PC01 differed at 2e-15 on Linux while
+        # agreeing bit-for-bit on Accelerate, which is how the exactness test passed here and
+        # failed in CI. Slicing the full product makes truncation exact by construction --
+        # both paths evaluate the identical expression -- at a few microseconds per locus.
+        scores = (z @ f.rotation)[:k]
         safe = np.where(f.pc_scale[:k] > MIN_SPREAD, f.pc_scale[:k], 1.0)
         vals = (scores - f.pc_loc[:k]) / safe
         if mode == "pcs":

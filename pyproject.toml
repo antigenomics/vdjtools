@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "4.0.0"
+version = "4.0.1"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,7 +39,13 @@ dependencies = [
     # >=2.19.0: stage-1 mapping moved to `arda map` (`arda rnaseq map` now exits 2); also the
     # germline anchors `model.reference` reads, arda 2.17.0+ `junction_completed_nt` and 2.19.0
     # `--flag-chimeras` in the annotation path.
-    "arda-mapper>=2.19.0",
+    # >=2.30.1: `cdr3fix` placed the aa V/J boundary up to two residues too far into the
+    # junction -- on a tie `_align` preferred consuming more query, so residues that paid
+    # nothing were credited to the segment. Every `v_end`/`j_start` vdjtools reads from an
+    # amino-acid annotation moves, which is `model.data.build_all`'s anchoring and every
+    # junction-region feature derived from it. 2.30.0 carries the same fix but never reached
+    # PyPI (its own version-pin test failed on master), so 2.30.1 is the floor.
+    "arda-mapper>=2.30.1",
     # seqtree = the fuzzy-search / e-value engine, vdjmatch = overlap + TCRnet on top of it.
     # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
     # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or

@@ -3,6 +3,34 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.0.1 — 2026-09-27
+
+Everything in 4.0.0 below, plus the two things that kept it off PyPI. **4.0.0 never published** — the
+tag was pushed but no GitHub Release was created, and `publish.yml` fires on `release: published`, not
+on a tag. The `v4.0.0` tag stays where it is as the record; 4.0.1 is the first 4.x release to reach
+PyPI.
+
+### Fixed: apply-time truncation is exact on OpenBLAS too, not only on Accelerate
+
+`test_apply_time_truncation_is_bitwise_exact` passed on macOS and failed on both Linux jobs, at
+`vsig:pc:TRB:PC01` = -0.4881794592306904 against -0.4881794592306884 — a relative 4e-15, which is
+BLAS reassociation rather than a different rotation. `z @ rotation[:, :k]` is the same arithmetic as
+the untruncated `z @ rotation` in a *different* GEMM shape, and OpenBLAS is entitled to accumulate a
+2-column product in a different order than a 128-column one.
+
+The claim the test pins — fit once at `0.95`, apply later at a fixed count, and get bit-identical
+values — is the whole reason apply-time truncation exists instead of a refit, so the fix is to make it
+true by construction rather than to relax the test: rotate through the whole stored rotation and slice
+the *scores*. Both paths now evaluate one identical expression. Cost is one full gemv per locus
+instead of a truncated one, microseconds on a (2100, 128) rotation, once per sample.
+
+### Changed: `arda-mapper>=2.30.1`
+
+arda 2.30.0 fixed `cdr3fix` placing the amino-acid V/J boundary up to two residues too far into the
+junction: `_align` broke a tie by consuming more query, so residues that scored nothing were credited
+to the segment. Every `v_end` / `j_start` vdjtools reads out of an amino-acid annotation moves with
+it. The floor is 2.30.1 rather than 2.30.0 because 2.30.0 never reached PyPI either.
+
 ## 4.0.0 — 2026-09-27
 
 **Signatures rewritten from scratch.** No legacy path, no backward compatibility, no artifact
