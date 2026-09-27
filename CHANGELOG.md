@@ -21,6 +21,52 @@ deviations** out, and how `tissue` came to carry `blood`'s coverage constants fo
 Now everything comes out of **one pass over one matrix of repertoires**: bounds, centre, scale,
 rotation and per-PC scaling, per locus, from the same corpus.
 
+### Fixed, found while vectorizing the feature path
+
+- **Every TRD physicochemistry column was the weighted mean over a subset of the repertoire.**
+  `pchem_group` called `physchem_profile(group_by="locus")`, and the locus is derived **per row**
+  from the gene name — so a TRD frame, which legitimately carries **TRAV** V genes because TRA and
+  TRD share their V segments, split into two groups, and the loop over the tidy result let the last
+  group win. Measured on a 10,000-clonotype synthetic TRD repertoire, 1,441 of whose clonotypes
+  carried TRAV calls: all 30 TRD `pchem` columns moved on the fix, e.g. `all_charge`
+  −0.00414 → +0.00124 and `center_volume` 97.792 → 97.857. Nothing raised, and the value was a
+  plausible physchem mean throughout. The other six loci are unaffected (they carry one V naming
+  scheme), and their agreement with the previous implementation is exact to 1.1e-12 absolute.
+- **A docstring that cost a design decision.** `draw_pool` claimed the generator runs at 20,372
+  sequences/s on IGH. Measured 2026-09-27 on one core of a 16-core M-series laptop,
+  `generate(load_bundled("IGH"), 50_000, productive_only=True)` runs at **4,200 seq/s**, and
+  identically at 1 and 16 polars threads — it is a per-sequence Python loop and does not thread.
+  The 4.8x error is what made pool generation look like a 16 s stage when it is a 77 s one.
+
+### Performance
+
+Measured on a 16-core M-series laptop; the cohort shape is stated because a signature timing without
+one has been wrong here before by 9x in the wrong direction.
+
+- **One sample, seven loci, 10,000 clonotypes each: 0.732 s → 0.273 s (2.68x).** The composition
+  groups were Python loops over every residue of every clonotype — 1.2M iterations and 208,863
+  scalar `np.clip` calls per sample. `aa`, `kmer`, `spec`, `vus`/`jus`, `iso` and the QC fallback
+  fractions are now `bincount`/`reduceat` over a 256-entry residue lookup table, and `pchem` replaces
+  an explode-to-one-row-per-residue polars pipeline (150,000 rows per locus) with a `reduceat`
+  against a 20x15 property matrix. Every value is unchanged except the TRD fix above.
+- **A whole build, 64 samples of 5,000 receptors across seven loci: 300.8 s → 50.2 s (6.0x).** The
+  build now runs **across samples** in worker processes: each worker draws its own repertoires from
+  memory-mapped pools and returns one row of numbers, so nothing larger than a feature row crosses a
+  process boundary — shipping drawn repertoires instead would be ~38 GB of pickling at the shipped
+  size. Three faults were measured and fixed in that stage, in this order: pool generation fanned
+  out over the **locus count** (7, on any machine) rather than the core count, 296.6 s; each of
+  those workers then started a kernel with every core, 112 threads on 16 cores, 122.2 s after the
+  first fix; and pool tasks were handed out in contiguous per-worker slices, which leaves workers
+  idle behind IGH's pool, 51.1 s after the second. Featurisation of that shape is 2.5 s of the 50.2.
+- The artifact is **bit-identical at every `n_jobs`**, because a sample is a pure function of its
+  index: each one gets its own generator seeded from `(seed, locus, j)`. `POOL_CHUNKS` is a recorded
+  constant, not the core count, for the same reason — a chunk count read off the machine would make
+  an artifact built on 64 cores differ from the same build on 16. Pinned by
+  `tests/python/test_signature_vectorized.py`.
+- `vdjtools corpus --jobs/-j` (and `mir corpus -j`): worker **processes**, `0` = the whole
+  allocation. The help text says which layer it reaches, because wiring a `--threads` flag to
+  `n_jobs` is a mistake this repo has already shipped once.
+
 ### Added
 
 - `vdjtools.signature.corpus` — build a synthetic corpus, winsorize it, fit the rotation and the

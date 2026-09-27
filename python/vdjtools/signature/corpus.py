@@ -679,9 +679,14 @@ N_EFF: dict[str, tuple[int, int, int]] = {
 def draw_pool(locus: str, n: int, *, seed: int, source: str = "olga") -> pl.DataFrame:
     """``n`` productive rearrangements from the bundled model for one locus.
 
-    Measured on a 16-core M-series laptop: 20,372 sequences/s on IGH, 23,113 on TRB, 34,506 on TRA,
-    so a 10^7 pool is 8-14 minutes on one core and the seven loci are about ten minutes at one
-    process per locus.
+    Measured 2026-09-27, ``generate(load_bundled("IGH"), 50_000, productive_only=True)`` on one
+    core of a 16-core M-series laptop: **4,200 sequences/s**, and identical at 1 and 16 polars
+    threads -- the sampler is a per-sequence Python/numpy loop, so it does not thread. Pool
+    generation is therefore the dominant serial cost of a synthetic build (about 15M sequences at
+    ``size=10,000`` across seven loci) and is why :func:`build_pools` fans out over processes.
+
+    NOTE an earlier docstring here claimed 20,372 seq/s on IGH. That figure is 4.8x the measured
+    rate and it is what made a 77 s stage look like a 16 s one when the build was planned.
     """
     from ..model import load_bundled
     from ..model.generate import generate
@@ -742,49 +747,304 @@ def resolved_size(locus: str, size: "int | str") -> int:
     return N_EFF[locus][{"p05": 0, "n_eff": 1, "p95": 2}[size]]
 
 
+def draw_one(pools: dict, sizes: dict, regime: str, j: int, seed: int) -> dict:
+    """Sample ``j`` of a synthetic corpus -- a **pure function of** ``j``.
+
+    Each sample gets its own generator, seeded from ``(seed, locus index, j)``, so any process can
+    draw any sample in any order and get the same repertoire. That is what lets the build run across
+    processes while staying bit-identical at every ``n_jobs``: the drawing is the only part of the
+    pipeline carrying RNG state, and here it carries none between samples.
+    """
+    return {loc: draw_sample(pools[loc], int(sizes[loc][j]), regime,
+                             np.random.default_rng([seed, i, j]))
+            for i, loc in enumerate(pools)}
+
+
+def pool_target(locus: str, size: "int | str", n_samples: int) -> int:
+    """How many receptors a locus's pool needs: the largest repertoire, times :data:`POOL_FACTOR`.
+
+    The pool has to cover the LARGEST depth the spread can ask for, since a sample is drawn from it
+    without replacement.
+    """
+    top = int(resolved_size(locus, size) * np.sqrt(DEPTH_SPREAD.get(locus, 4.0))) + 1
+    return min(top * POOL_FACTOR, max(top * n_samples, top))
+
+
+def _pool_chunk(args) -> tuple:
+    """Generate one contiguous chunk of one locus's pool; write it as uncompressed Arrow IPC."""
+    import os
+
+    from .cohort import WORKER_ENV
+
+    os.environ[WORKER_ENV] = "1"
+    locus, k, n, seed, source, tmp = args
+    path = Path(tmp) / f"pool_{locus}_{k:03d}.arrow"
+    draw_pool(locus, n, seed=seed, source=source).write_ipc(path, compression="uncompressed")
+    return locus, k, path
+
+
+def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path,
+                n_jobs: int = 1, progress=None) -> dict:
+    """Generate every locus's pool across processes; return ``{locus: [chunk path, ...]}``.
+
+    Generation is the single most expensive stage of a synthetic build and it is embarrassingly
+    parallel -- measured on Aldan-3, seven pools at ``size=10,000`` took 4,850 s in one process,
+    which is 81 minutes of a build whose featurisation is the part anyone cares about.
+
+    Written as **uncompressed** IPC and read back memory-mapped, so N workers share one physical
+    copy of a multi-gigabyte pool through the page cache instead of each pickling its own.
+    """
+    single_threaded_children()
+    ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
+    tasks = []
+    for i, locus in enumerate(ordered):
+        total = pool_target(locus, size, n_samples)
+        # Chunk sizes differ by at most one and the seeds are per chunk, so the concatenated pool
+        # is a deterministic function of (locus, total, seed) and of the chunk count -- which is
+        # why the chunk count is the fixed :data:`POOL_CHUNKS` and never the machine's core count.
+        # Seven loci would otherwise cap the fan-out at seven, whatever the machine: measured, that
+        # left 5.2M sequences taking 296 s on a 16-core box.
+        for k, (a, b) in enumerate(_ranges(total, POOL_CHUNKS)):
+            tasks.append((locus, k, b - a, seed + i * 1_000 + k, source, tmp))
+    # One task at a time to the pool, NOT a contiguous slice per worker. The opposite of the
+    # featurise stage, and for a measured reason: there are few tasks and they are large and
+    # unequal (IGH's pool is 1.6x TRB's), so contiguous slicing leaves workers idle behind the big
+    # ones -- it cost 122 s against a 77 s floor. Per-task submission overhead is irrelevant next
+    # to a chunk that takes tens of seconds.
+    done = _map_unordered(_pool_chunk, tasks, n_jobs)
+    out: dict = {loc: [] for loc in ordered}
+    for locus, k, path in sorted(done, key=lambda t: (t[0], t[1])):
+        out[locus].append(path)
+    # Per LOCUS, not per chunk. ``map`` returns only once every chunk is finished, so a per-chunk
+    # callback fires 448 times in one instant -- noise that says nothing about progress.
+    if progress:
+        for i, locus in enumerate(ordered):
+            progress(locus, i + 1, len(ordered))
+    return out
+
+
+def _map_unordered(fn, tasks: list, n_jobs: int) -> list:
+    """``[fn(t) for t in tasks]``, load-balanced one task at a time. Raises if the pool cannot start."""
+    from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
+    from multiprocessing import get_context
+
+    workers = _workers(n_jobs, len(tasks))
+    if workers < 2:
+        return [fn(t) for t in tasks]
+    try:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as ex:
+            return list(ex.map(fn, tasks, chunksize=1))
+    except (BrokenExecutor, RuntimeError) as e:
+        raise RuntimeError(
+            f"could not start {workers} worker processes ({type(e).__name__}). Workers are spawned, "
+            "so the calling module is re-imported: that works from an importable module and fails "
+            "from `python -c` or a heredoc. Guard the call with `if __name__ == '__main__':`, or "
+            "pass n_jobs=1. It is NOT falling back to one process.") from e
+
+
+def read_pools(paths: dict) -> dict:
+    """Memory-map the pool chunks and present one frame per locus, without copying them.
+
+    ``rechunk=False`` is load-bearing: a rechunk would materialise the whole pool in this process,
+    which is the per-worker copy this design exists to avoid.
+    """
+    return {loc: pl.concat([pl.read_ipc(p, memory_map=True) for p in ps], rechunk=False)
+            for loc, ps in paths.items()}
+
+
+#: Chunks each locus's pool is generated in. Fixed, so the pool is a function of the build and not
+#: of the machine: a chunk count taken from the core count would make an artifact built on 64 cores
+#: differ from the same build on 16. Sixty-four because ONE CHUNK IS THE FLOOR on wall time -- it
+#: cannot be split further, however many cores the machine has. At 16 chunks IGH's 3.3M-sequence
+#: pool is 207k per chunk, which is 49 s at the measured 4,200 seq/s; at 64 it is 12 s. Changing
+#: this value changes the pools and so the artifact, which is why it is a recorded constant.
+POOL_CHUNKS: int = 64
+
+
+#: Per-worker state, set once by the pool initializer. One copy per worker **process**, never per
+#: task: a worker that re-mapped the pools per task would pay that cost once per batch instead of
+#: once per core, which is the mistake the initializer exists to prevent.
+_W: dict = {}
+
+
+def _init_worker(paths, sizes, regime, seed, cols, featurise) -> None:
+    import os
+
+    from .cohort import WORKER_ENV
+
+    os.environ[WORKER_ENV] = "1"
+    _W.update(pools=read_pools(paths), sizes=sizes, regime=regime, seed=seed, cols=cols,
+              featurise=featurise)
+
+
+def _feat_batch(span) -> tuple:
+    """Draw and featurise samples ``[a, b)`` in this worker; return the filled rows per locus."""
+    a, b = span
+    out = {loc: np.full((b - a, len(cols)), np.nan) for loc, cols in _W["cols"].items()}
+    for j in range(a, b):
+        raw = _W["featurise"](draw_one(_W["pools"], _W["sizes"], _W["regime"], j, _W["seed"]))[0]
+        for loc, cols in _W["cols"].items():
+            out[loc][j - a] = [raw.get(c, np.nan) for c in cols]
+    return a, out
+
+
+def _ranges(n: int, parts: int) -> list:
+    from .cohort import slices
+
+    return [(a, b) for a, b in slices(n, parts) if b > a]
+
+
+def _workers(n_jobs: int, cap: int) -> int:
+    from ..cores import available_cores
+
+    return max(1, min(n_jobs if n_jobs > 0 else available_cores(), cap))
+
+
+def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
+                   loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
+                   size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "olga",
+                   n_jobs: int = 1, progress=None, tmp: "Path | None" = None) -> dict:
+    """The corpus matrix, ``{locus: (array, columns)}``, built across ``n_jobs`` processes.
+
+    Shared by both halves of the signature: ``vsig`` and ``rsig`` differ only in ``featurise`` and
+    ``sig``, and the samples they see are identical -- same pools, same per-sample seeds, same
+    depths -- which is what makes the two artifacts joinable on ``sample_id``.
+
+    Parallel **across samples, never inside one**. A sample's featurisation is a pure function of
+    that sample, so a worker needs no coordination; and because every worker draws its own samples
+    from memory-mapped pools, the only thing that crosses a process boundary is one row of numbers
+    per sample. Shipping drawn repertoires instead would be ~38 GB of pickling at the shipped size.
+
+    Args:
+        featurise: A **picklable** callable mapping ``{locus: frame}`` to ``(raw, channels)`` --
+            a module-level function or a ``functools.partial`` over one, never a lambda.
+        n_jobs: Worker processes; ``0`` means every core available. ``1`` runs in-process and is
+            the default, so that a doctest or a 12-sample test does not spawn a pool.
+        tmp: Scratch directory for the pool files. A private temporary directory by default,
+            removed when the build finishes.
+
+    Returns:
+        ``{locus: (matrix, columns)}``, the matrix being ``(n_samples, p_locus)`` float64.
+    """
+    import shutil
+    import tempfile
+
+    ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
+    cols = {}
+    for locus in (*ordered, L.NO_LOCUS):
+        got = locus_matrix(vocab, sig, locus, n_samples)
+        if got is not None:
+            cols[locus] = got[1]
+    mats = {loc: (np.full((n_samples, len(c)), np.nan), c) for loc, c in cols.items()}
+
+    own_tmp = tmp is None
+    tmp = Path(tempfile.mkdtemp(prefix="vdjtools-corpus-")) if own_tmp else Path(tmp)
+    try:
+        paths = build_pools(ordered, size=size, n_samples=n_samples, seed=seed, source=source,
+                            tmp=tmp, n_jobs=n_jobs, progress=progress)
+        sizes = {loc: draw_sizes(resolved_size(loc, size), n_samples,
+                                 DEPTH_SPREAD.get(loc, 4.0),
+                                 np.random.default_rng(seed + 1000 + i))
+                 for i, loc in enumerate(ordered)}
+        workers = _workers(n_jobs, n_samples)
+        single_threaded_children()
+        # Four spans per worker rather than one. The expensive per-worker state -- the mapped pools
+        # and the germline vocabulary -- is loaded once by the initializer, not once per span, so
+        # extra spans cost nothing and buy load balance plus progress that moves.
+        spans = _ranges(n_samples, workers * 4 if workers > 1 else 1)
+        args = (paths, sizes, regime, seed, cols, featurise)
+        if workers < 2:
+            _init_worker(*args)
+            results = [_feat_batch(sp) for sp in _progress(spans, n_samples, progress)]
+        else:
+            results = _pooled(spans, args, workers, n_samples, progress)
+        for a, part in results:
+            for loc, block in part.items():
+                mats[loc][0][a:a + block.shape[0]] = block
+    finally:
+        if own_tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return mats
+
+
+def _progress(spans, n_samples, progress):
+    for sp in spans:
+        yield sp
+        if progress:
+            progress("featurise", sp[1], n_samples)
+
+
+def single_threaded_children() -> None:
+    """Make spawned workers take ONE kernel thread each, by setting the env they inherit.
+
+    ``n_jobs`` processes each starting a kernel sized off the core count is ``cores x cores``
+    threads. Measured here: seven pool workers on a 16-core box, each with a 16-thread polars,
+    turned 15 s of receptor generation into 296 s. The variables have to be set in the parent,
+    before any child exists -- a spawned child reads them while importing polars, which is strictly
+    earlier than any initializer of ours can run. The parent's own kernel is already up, so this
+    does not throttle it.
+    """
+    import os
+
+    for var in ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "RAYON_NUM_THREADS"):
+        os.environ.setdefault(var, "1")
+
+
+def _pooled(spans, args, workers: int, n_samples: int, progress):
+    """Run the spans in a spawned pool. A pool that cannot start **raises**, it does not degrade."""
+    from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
+    from multiprocessing import get_context
+
+    out, done, step = [], 0, max(n_samples // 20, 1)
+    try:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"),
+                                 initializer=_init_worker, initargs=args) as ex:
+            for a, part in ex.map(_feat_batch, spans):
+                out.append((a, part))
+                was, done = done, done + next(b - x for x, b in spans if x == a)
+                # At most twenty lines, whatever the span count. One span per 4 workers means 288
+                # spans on a 72-core box, and 288 progress lines in a log is not progress.
+                if progress and done // step > was // step:
+                    progress("featurise", done, n_samples)
+    except (BrokenExecutor, RuntimeError) as e:
+        raise RuntimeError(
+            f"could not start {workers} worker processes ({type(e).__name__}). Workers are "
+            "spawned, not forked -- polars cannot be combined with fork -- and a spawned worker "
+            "re-imports the module that called this, which works from an importable module and "
+            "fails from `python -c` or a heredoc. Guard the call with `if __name__ == "
+            "'__main__':`, or pass n_jobs=1. It is NOT falling back to one process: that is what "
+            "hid a 20x slowdown here before.") from e
+    return out
+
+
 def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                   size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "olga",
-                  progress=None):
-    """Set up the pools and return ``(ordered_loci, draw)`` where ``draw(j)`` is sample ``j``.
+                  progress=None, tmp: "Path | None" = None, n_jobs: int = 1):
+    """Set up the pools in this process and return ``(ordered_loci, draw)``; ``draw(j)`` is sample j.
 
-    Shared by both halves of the signature so that ``vsig_<name>`` and ``rsig_<name>`` describe the
-    **same** repertoires: same pools, same seeds, same drawn depths, same clone sizes. That identity
-    is the whole reason the two artifacts can be joined on ``sample_id``, so there is one
-    implementation of it rather than two that agree today.
-
-    A generator rather than a list because the samples do not fit: 10,000 repertoires of ~25,000
-    clonotypes across seven loci is about 38 GB held at once, for a corpus matrix that is 1.08 GB.
-
-    NOTE ``draw`` must be called with ``j = 0, 1, 2, ...`` in order. The per-locus generators are
-    advanced by each call, which is what keeps a rebuild bit-identical; calling out of order gives a
-    different (still deterministic) corpus.
+    The in-process path, for callers that want the repertoires themselves rather than a corpus
+    matrix. ``draw`` may be called in any order -- see :func:`draw_one`.
     """
+    import tempfile
+    from functools import partial
+
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
-    pools, rngs, sizes = {}, {}, {}
-    for i, locus in enumerate(ordered):
-        n = resolved_size(locus, size)
-        # The pool must cover the LARGEST repertoire the spread can ask for, since a sample is drawn
-        # without replacement.
-        top = int(n * np.sqrt(DEPTH_SPREAD.get(locus, 4.0))) + 1
-        pools[locus] = draw_pool(locus, min(top * POOL_FACTOR, max(top * n_samples, top)),
-                                 seed=seed + i, source=source)
-        rngs[locus] = np.random.default_rng(seed + 1000 + i)
-        sizes[locus] = draw_sizes(n, n_samples, DEPTH_SPREAD.get(locus, 4.0), rngs[locus])
-        if progress:
-            progress(locus, i + 1, len(loci))
-
-    def draw(j: int) -> dict:
-        return {loc: draw_sample(pools[loc], int(sizes[loc][j]), regime, rngs[loc])
-                for loc in ordered}
-
-    return ordered, draw
+    tmp = Path(tempfile.mkdtemp(prefix="vdjtools-pools-")) if tmp is None else Path(tmp)
+    paths = build_pools(ordered, size=size, n_samples=n_samples, seed=seed, source=source,
+                        tmp=tmp, n_jobs=n_jobs, progress=progress)
+    pools = read_pools(paths)
+    sizes = {loc: draw_sizes(resolved_size(loc, size), n_samples, DEPTH_SPREAD.get(loc, 4.0),
+                             np.random.default_rng(seed + 1000 + i))
+             for i, loc in enumerate(ordered)}
+    return ordered, partial(draw_one, pools, sizes, regime, seed=seed)
 
 
 def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                size: "int | str" = DEFAULT_SIZE, seed: int = SEED,
                n_components: "int | float" = DEFAULT_COMPONENTS, mode: str = "features",
                winsor_p: float = 0.01, source: str = "olga", fit_corpus: bool = True,
-               progress=None):
+               progress=None, n_jobs: int = 1):
     """Build a synthetic corpus, and fit it.
 
     Args:
@@ -801,6 +1061,8 @@ def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int 
         fit_corpus: ``False`` returns the raw samples instead of fitting, for scoring a held-out
             draw against a corpus fitted on another.
         progress: Optional ``callable(locus, done, total)``.
+        n_jobs: Worker **processes** (not kernel threads). ``0`` means every available core; ``1``,
+            the default, runs in-process. The result is bit-identical at every value.
 
     Returns:
         ``(corpus, mats)`` when fitting -- ``mats`` being ``{locus: (matrix, columns)}``, the corpus
@@ -812,29 +1074,19 @@ def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int 
     *across processes* while being deterministic within one, because a marginal-table aggregation
     left its group order unspecified.
     """
+    from functools import partial
+
     from . import features as FE
 
     vocab = {loc: FE.gene_vocab(loc) for loc in loci}
-    ordered, draw = sample_stream(regime, loci=loci, n_samples=n_samples, size=size, seed=seed,
-                                 source=source, progress=progress)
-
     if not fit_corpus:
+        _ordered, draw = sample_stream(regime, loci=loci, n_samples=n_samples, size=size,
+                                       seed=seed, source=source, progress=progress, n_jobs=n_jobs)
         return [draw(j) for j in range(n_samples)]
 
-    # One sample at a time, straight into preallocated per-locus buffers. Materialising all N
-    # samples first is ~38 GB at the shipped size (10,000 repertoires x ~25,000 clonotypes across
-    # seven loci) for a corpus matrix that is 1.08 GB.
-    mats = {}
-    for locus in (*ordered, L.NO_LOCUS):
-        got = locus_matrix(vocab, "vsig", locus, n_samples)
-        if got is not None:
-            mats[locus] = got
-    for j in range(n_samples):
-        raw = FE.raw_and_channels(draw(j), vocab)[0]
-        for locus, (buf, cols) in mats.items():
-            fill_row(buf, cols, j, raw)
-        if progress and (j + 1) % max(n_samples // 20, 1) == 0:
-            progress("featurise", j + 1, n_samples)
+    mats = build_matrices(regime, sig="vsig", featurise=partial(FE.raw_and_channels, vocab=vocab),
+                          vocab=vocab, loci=loci, n_samples=n_samples, size=size, seed=seed,
+                          source=source, n_jobs=n_jobs, progress=progress)
 
     from .. import __version__
     corpus = fit_matrices(mats, vocab, sig="vsig", name=regime, mode=mode,

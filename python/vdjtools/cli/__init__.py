@@ -633,6 +633,9 @@ def corpus(
     source: str = typer.Option("olga", "--source", help="Bundled model set: olga | learned | arda."),
     smoke: bool = typer.Option(False, "--smoke", help="Reduced build (200 samples of 1000) for "
                                                       "tests and the reproducibility check."),
+    jobs: int = typer.Option(0, "--jobs", "-j", help="Worker PROCESSES across samples (not kernel "
+                                                     "threads): 0 = every core, 1 = in-process. "
+                                                     "The artifact is identical at any value."),
 ) -> None:
     """Build a synthetic corpus and fit its rotation, bounds and scaling.
 
@@ -670,7 +673,7 @@ def corpus(
     t0 = time.time()
     kw = {} if which is None else {"loci": which}
     art, _rows = synthesize(name, n_samples=n_samples, size=sz, seed=seed, n_components=ks,
-                            mode=winsorize, winsor_p=winsor_p, source=source,
+                            mode=winsorize, winsor_p=winsor_p, source=source, n_jobs=jobs,
                             progress=lambda loc, d, t: print(
                                 f"  {loc:4s} {d}/{t}  {time.time() - t0:5.0f}s",
                                 file=sys.stderr, flush=True),

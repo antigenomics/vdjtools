@@ -318,16 +318,32 @@ Building a corpus
    vdjtools corpus --smoke -o /tmp/smoke.npz                             # minutes, for tests
 
 The synthetic corpora use **no samples from anybody's cohort**: every receptor is drawn from the
-bundled recombination models. The build is a deterministic function of
-``(corpus, loci, samples, size, seed, source)`` and those models, and is required to be
-byte-identical across processes and thread counts:
+bundled recombination models.
+
+The build runs across worker **processes**, one contiguous block of samples each; ``--jobs/-j``
+sets how many and defaults to every core the process may use (``-j 1`` stays in-process). A sample
+is a pure function of its index -- its generator is seeded from ``(seed, locus, index)`` -- so each
+worker draws its own repertoires from memory-mapped pools and returns one row of numbers, and
+**the artifact is identical at every** ``--jobs``. Measured on Aldan-3, seven loci at
+``--samples 10000 --size 10000`` on 72 cores: 157 s to generate the receptor pools (4,850 s in one
+process) and about 50 samples/s to featurise them.
+
+.. note::
+
+   Two knobs, two layers. ``--jobs`` is worker **processes**; ``POLARS_MAX_THREADS`` and
+   ``OMP_NUM_THREADS`` are **kernel threads**. The builder sets its workers to one kernel thread
+   each, because ``jobs x cores`` threads is how a 15 s stage was once measured at 296 s.
+
+The build is a deterministic function of ``(corpus, loci, samples, size, seed, source)`` and those
+models, and is required to be byte-identical across processes, worker counts and thread counts:
 
 .. code-block:: bash
 
    vdjtools corpus --corpus naive --loci TRB,TRG --samples 40 --size 150 -o /tmp/a.npz
    OMP_NUM_THREADS=1 POLARS_MAX_THREADS=1 \
      vdjtools corpus --corpus naive --loci TRB,TRG --samples 40 --size 150 -o /tmp/b.npz
-   cmp /tmp/a.npz /tmp/b.npz          # must be identical
+   vdjtools corpus --corpus naive --loci TRB,TRG --samples 40 --size 150 -j 4 -o /tmp/c.npz
+   cmp /tmp/a.npz /tmp/b.npz && cmp /tmp/a.npz /tmp/c.npz     # all three must be identical
 
 .. important::
 

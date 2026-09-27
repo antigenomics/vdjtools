@@ -165,6 +165,46 @@ def _w(df: pl.DataFrame) -> np.ndarray:
     return df[FREQ].to_numpy().astype(float)
 
 
+#: ASCII byte -> index into :data:`AMINO_ACIDS`. Built once, at import. This table is what makes
+#: the composition groups one numpy gather instead of a Python loop over every residue of every
+#: clonotype: at the corpus depth that loop ran 1.2 million times per sample.
+_AA_LUT = np.full(256, 255, dtype=np.uint8)
+for _i, _a in enumerate(AMINO_ACIDS):
+    _AA_LUT[ord(_a)] = _i
+
+
+def _residues(df: pl.DataFrame) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+    """Every junction residue in the frame, flattened: ``(code, weight, length-per-clonotype)``.
+
+    ``sanitise`` has already anchored the alphabet to the 20 proteinogenic residues, so every code
+    is in ``0..19`` and no validity mask is needed here. The per-residue weight is the clonotype's
+    weight repeated across its residues, which is exactly what a weighted composition sums.
+    """
+    seqs = df[JUNCTION_AA].to_list()
+    lens = np.fromiter(map(len, seqs), dtype=np.int64, count=len(seqs))
+    codes = _AA_LUT[np.frombuffer("".join(seqs).encode("ascii"), dtype=np.uint8)]
+    return codes, np.repeat(_w(df), lens), lens
+
+
+def _property_matrix() -> np.ndarray:
+    """The legacy amino-acid property table as ``(20, len(DEFAULT_PROPERTIES))``, residue-indexed.
+
+    Row order is :data:`AMINO_ACIDS`, so it is indexed directly by the codes :func:`_residues`
+    returns. Reads the shipped table through its own cached loader rather than re-parsing it.
+    """
+    from ..features.physchem import DEFAULT_PROPERTIES, load_property_table
+
+    tbl = load_property_table()
+    by_aa = {r["amino_acid"]: r for r in tbl.iter_rows(named=True)}
+    return np.array([[float(by_aa[a][p]) for p in DEFAULT_PROPERTIES] for a in AMINO_ACIDS])
+
+
+def _codes(series: pl.Series, mapping: dict, default: int) -> np.ndarray:
+    """Map a gene-call series onto integer indices in one polars pass, ``default`` for unknown."""
+    return series.replace_strict(mapping, default=default,
+                                 return_dtype=pl.Int64).to_numpy()
+
+
 # ------------------------------------------------------------------------ germline vocabulary
 
 
@@ -307,18 +347,13 @@ def aa_group(df: pl.DataFrame) -> dict[str, float]:
     keys = list(AMINO_ACIDS)
     if df.height == 0:
         return dict.fromkeys(keys, np.nan)
-    w = _w(df)
-    seqs = df[JUNCTION_AA].to_list()
-    idx = {a: i for i, a in enumerate(AMINO_ACIDS)}
-    acc = np.zeros(20)
-    for s, wi in zip(seqs, w):
-        for ch in s:
-            acc[idx[ch]] += wi
-    m = float(df[JUNCTION_AA].str.len_chars().sum())      # residues actually observed
+    codes, wr, lens = _residues(df)
+    acc = np.bincount(codes, weights=wr, minlength=20)
+    m = float(lens.sum())                                 # residues actually observed
     tot = acc.sum()
     if tot <= 0:
         return dict.fromkeys(keys, np.nan)
-    return {a: float(T.arcsine(acc[i] / tot, m)) for a, i in idx.items()}
+    return dict(zip(keys, map(float, T.arcsine(acc / tot, m))))
 
 
 def kmer_group(df: pl.DataFrame) -> dict[str, float]:
@@ -332,19 +367,23 @@ def kmer_group(df: pl.DataFrame) -> dict[str, float]:
     pairs = [a + b for a in AMINO_ACIDS for b in AMINO_ACIDS]
     if df.height == 0:
         return dict.fromkeys(pairs, np.nan)
-    pos = {p: i for i, p in enumerate(pairs)}
-    acc = np.zeros(len(pairs))
-    n_tok = 0.0
-    for s, wi in zip(df[JUNCTION_AA].to_list(), _w(df)):
-        for i in range(len(s) - KMER_K + 1):
-            j = pos.get(s[i:i + KMER_K])
-            if j is not None:
-                acc[j] += wi
-                n_tok += 1.0
+    n = len(AMINO_ACIDS)
+    codes, wr, lens = _residues(df)
+    if codes.size < KMER_K:
+        return dict.fromkeys(pairs, np.nan)
+    # A k-mer has to sit inside ONE junction. The flattened residue array concatenates them, so the
+    # window starting at any clonotype's last residue would straddle into the next clonotype: mask
+    # exactly those starts out. (``cumsum(lens) - 1`` is each clonotype's last residue; the final
+    # one has no successor in the window array at all.)
+    ok = np.ones(codes.size - KMER_K + 1, dtype=bool)
+    ok[np.cumsum(lens)[:-1] - 1] = False
+    idx = (codes[:-1].astype(np.int64) * n + codes[1:])[ok]
+    acc = np.bincount(idx, weights=wr[:-1][ok], minlength=n * n)
+    n_tok = float(ok.sum())
     tot = acc.sum()
     if tot <= 0:
         return dict.fromkeys(pairs, np.nan)
-    return {p: float(T.arcsine(acc[i] / tot, max(n_tok, 1.0))) for p, i in pos.items()}
+    return dict(zip(pairs, map(float, T.arcsine(acc / tot, max(n_tok, 1.0)))))
 
 
 def pchem_group(df: pl.DataFrame, regions=("all", "center")) -> dict[str, float]:
@@ -354,18 +393,40 @@ def pchem_group(df: pl.DataFrame, regions=("all", "center")) -> dict[str, float]
     clonotypes the quantiles of a per-clonotype property are noise, while the weighted mean is a
     well-behaved average over every residue seen.
     """
-    from ..features.physchem import DEFAULT_PROPERTIES, physchem_profile
+    from ..features.physchem import DEFAULT_PROPERTIES
 
     keys = [f"{r}_{p}" for r in regions for p in DEFAULT_PROPERTIES]
     out = dict.fromkeys(keys, np.nan)
     if df.height == 0:
         return out
+    props = _property_matrix()
+    codes, _wres, lens = _residues(df)
+    w = _w(df)
+    starts = np.concatenate(([0], np.cumsum(lens)[:-1]))
     for region in regions:
-        prof = physchem_profile(df, group_by="locus", region=region, weight="freq")
-        for row in prof.iter_rows(named=True):
-            key = f"{region}_{row['property']}"
-            if key in out and row["mean_value"] is not None:
-                out[key] = float(row["mean_value"])
+        if region == "all":
+            # Per-clonotype mean over its own residues, then the weighted mean over clonotypes.
+            # ``reduceat`` on the flattened residue codes is the whole computation; the polars path
+            # this replaces exploded one row per residue (150,000 rows on a 10,000-clonotype
+            # locus) and grouped twice, at 9 ms per call against 0.3 ms here.
+            per = np.add.reduceat(props[codes], starts, axis=0) / lens[:, None]
+            wi = w
+        elif region == "center":
+            # The middle five residues; a junction shorter than five has no centre and is skipped,
+            # exactly as ``_region_expr`` returns null for it.
+            ok = lens >= 5
+            if not ok.any():
+                continue
+            take = (starts[ok] + lens[ok] // 2 - 2)[:, None] + np.arange(5)
+            per = props[codes[take]].mean(axis=1)
+            wi = w[ok]
+        else:
+            raise ValueError(f"region must be 'all' or 'center'; got {region!r}")
+        tot = wi.sum()
+        if tot <= 0:
+            continue
+        vals = (per * wi[:, None]).sum(axis=0) / tot
+        out |= {f"{region}_{k}": float(v) for k, v in zip(DEFAULT_PROPERTIES, vals)}
     return out
 
 
@@ -383,10 +444,9 @@ def usage_group(df: pl.DataFrame, col: str, genes: list[str]) -> dict[str, float
     if df.height == 0:
         return dict.fromkeys(genes, np.nan)
     pos = {g: i for i, g in enumerate(genes)}
-    acc = np.zeros(len(genes) + 1)                      # last cell closes the composition
-    calls = df.select(strip_allele(pl.col(col)).alias("g"))["g"].to_list()
-    for g, wi in zip(calls, _w(df)):
-        acc[pos.get(g, len(genes))] += wi
+    calls = df.select(strip_allele(pl.col(col)).alias("g"))["g"]
+    gi = _codes(calls, pos, len(genes))                 # last cell closes the composition
+    acc = np.bincount(gi, weights=_w(df), minlength=len(genes) + 1)
     coords = T.clr(acc, m=df.height)
     return {g: float(coords[i]) for g, i in pos.items()}
 
@@ -409,15 +469,13 @@ def spec_group(df: pl.DataFrame, names: list[str], v_genes: list[str]) -> dict[s
     nl = len(SPECTRATYPE_LENGTHS)
     lo, hi = SPECTRATYPE_LENGTHS[0], SPECTRATYPE_LENGTHS[-1]
     vpos = {g: i for i, g in enumerate(v_genes)}
-    acc = np.zeros(len(v_genes) * nl + 1)               # last cell closes the composition
-    calls = df.select(strip_allele(pl.col(V_CALL)).alias("g"))["g"].to_list()
-    lens = df[JUNCTION_AA].str.len_chars().to_numpy()
-    for g, ln, wi in zip(calls, lens, _w(df)):
-        vi = vpos.get(g)
-        if vi is None:
-            acc[-1] += wi                               # unrecognised V: the residual, not a gene
-            continue
-        acc[vi * nl + int(np.clip(ln, lo, hi)) - lo] += wi
+    resid = len(v_genes) * nl                           # last cell closes the composition
+    vi = _codes(df.select(strip_allele(pl.col(V_CALL)).alias("g"))["g"], vpos, -1)
+    # int64, not the UInt32 ``len_chars`` returns: the clip below subtracts ``lo`` and an unsigned
+    # length underflows on a junction shorter than the shortest spectratype bin.
+    ln = df[JUNCTION_AA].str.len_chars().to_numpy().astype(np.int64)
+    cell = np.where(vi >= 0, vi * nl + np.clip(ln, lo, hi) - lo, resid)
+    acc = np.bincount(cell, weights=_w(df), minlength=resid + 1)
     coords = T.clr(acc, m=df.height)
     return {n: float(coords[i]) for i, n in enumerate(names)}
 
@@ -438,12 +496,10 @@ def iso_group(df: pl.DataFrame) -> dict[str, float]:
     # (some cohorts really are mostly uncalled) rather than an error anybody sees.
     calls = (df.select(strip_allele(pl.col(C_CALL).cast(pl.Utf8)).alias("c"))["c"].to_list()
              if C_CALL in df.columns else [None] * df.height)
-    parts = dict.fromkeys(ISOTYPES, 0.0)
-    for c, wi in zip(calls, w):
-        for iso, names in ISOTYPES.items():
-            if c in names:
-                parts[iso] += float(wi)
-                break
+    gene_iso = {g: i for i, (_iso, names) in enumerate(ISOTYPES.items()) for g in names}
+    ci = _codes(pl.Series("c", calls, dtype=pl.Utf8), gene_iso, len(ISOTYPES))
+    got = np.bincount(ci, weights=w, minlength=len(ISOTYPES) + 1)
+    parts = {iso: float(got[i]) for i, iso in enumerate(ISOTYPES)}
     parts["_uncalled"] = max(1.0 - sum(parts.values()), 0.0)
     coords = T.clr(parts, m=df.height)
     return {k: coords[k] for k in keys}
@@ -512,8 +568,9 @@ def qc_channel(raw: pl.DataFrame, clean: pl.DataFrame, locus: str,
             out[f"{seg.lower()}_fallback_frac"] = np.nan
             continue
         w = _w(clean)
-        genes = clean.select(strip_allele(pl.col(col)).alias("g"))["g"].to_list()
-        miss = np.array([g is None or g not in known[seg] for g in genes])
+        genes = clean.select(strip_allele(pl.col(col)).alias("g"))["g"]
+        # ``is_in`` leaves a null call null; an uncalled gene IS a fallback, so it counts as missing.
+        miss = (~genes.is_in(list(known[seg]))).fill_null(True).to_numpy()
         out[f"{seg.lower()}_fallback_frac"] = float(w[miss].sum())
     return out
 
