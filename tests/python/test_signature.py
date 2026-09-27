@@ -425,11 +425,14 @@ def test_a_corpus_fits_the_cross_locus_block_which_requires_depth_to_vary():
     It fails silently -- as an artifact that simply omits them -- which is why the depth of each
     synthetic repertoire is drawn rather than fixed.
     """
-    art, rows = C.synthesize("naive", loci=("TRB", "TRG"), n_samples=30, size=100, seed=9,
+    art, mats = C.synthesize("naive", loci=("TRB", "TRG"), n_samples=30, size=100, seed=9,
                              n_components=4)
     assert L.NO_LOCUS in art.fits, "the cross-locus block was not fitted; is depth constant?"
-    reads = np.array([r["vsig:depth:TRB:reads"] for r in rows])
+    buf, cols = mats["TRB"]
+    reads = buf[:, cols.index("vsig:depth:TRB:reads")]
     assert reads.std() > 0, "corpus depth does not vary"
+    # the corpus matrix is the thing that was fitted, not a rebuilt copy of it
+    assert buf.shape == (30, len(cols)) and np.isfinite(buf).all()
 
 
 def test_draw_sizes_is_log_uniform_and_centred_on_the_nominal():

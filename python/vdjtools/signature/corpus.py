@@ -461,22 +461,38 @@ def _fix_signs(comps: np.ndarray) -> np.ndarray:
     return comps * sign
 
 
-def fit(rows: list[dict[str, float]], vocab: dict[str, dict[str, list[str]]], *, sig: str,
-        name: str, mode: str = "features", n_components: "int | float" = DEFAULT_COMPONENTS,
-        winsor_p: float = 0.01, meta: "dict | None" = None) -> Corpus:
-    """Fit a corpus from raw feature rows -- one dict per repertoire.
+def locus_matrix(vocab: dict[str, dict[str, list[str]]], sig: str, locus: str,
+                 n: int) -> "tuple[np.ndarray, list[str]] | None":
+    """A preallocated ``(n, p_L)`` buffer and its column order, or ``None`` if the locus is empty.
+
+    Preallocated and filled in place rather than built from a list of per-sample dicts. At the
+    shipped corpus size a dict of 13,483 Python floats per sample is 4-5 GB of interpreter objects
+    for a matrix that is 1.08 GB as float64 -- and the dicts have to coexist with the array while it
+    is assembled. See :func:`fill_row`.
+    """
+    cols = L.raw_columns(sig, locus, vocab.get(locus))
+    if not cols:
+        return None
+    return np.full((n, len(cols)), np.nan), cols
+
+
+def fill_row(buf: np.ndarray, cols: list[str], i: int, raw: dict[str, float]) -> None:
+    """Write one sample's values for one locus into row ``i`` of a preallocated buffer."""
+    buf[i] = [raw.get(c, np.nan) for c in cols]
+
+
+def fit_matrices(mats: dict[str, tuple[np.ndarray, list[str]]],
+                 vocab: dict[str, dict[str, list[str]]], *, sig: str, name: str,
+                 mode: str = "features", n_components: "int | float" = DEFAULT_COMPONENTS,
+                 winsor_p: float = 0.01, meta: "dict | None" = None) -> Corpus:
+    """Fit a corpus from per-locus matrices -- the memory-bounded path.
 
     Each locus is fitted only on the rows that observed it, so a corpus where half the samples have
     no TRD does not learn TRD from imputed values.
     """
-    loci = [loc for loc in (*L.LOCI, L.NO_LOCUS) if loc in vocab or loc == L.NO_LOCUS]
     fits: dict[str, LocusFit] = {}
     trimmed: dict[str, float] = {}
-    for locus in loci:
-        cols = L.raw_columns(sig, locus, vocab.get(locus))
-        if not cols:
-            continue
-        x = np.array([[r.get(c, np.nan) for c in cols] for r in rows], dtype=float)
+    for locus, (x, cols) in mats.items():
         keep = np.isfinite(x).any(axis=1)
         if keep.sum() < 2:
             continue
@@ -492,6 +508,27 @@ def fit(rows: list[dict[str, float]], vocab: dict[str, dict[str, list[str]]], *,
                         "n_components_requested": n_components,
                         "trimmed_frac": trimmed,
                         "platform": platform.platform(), "numpy": np.__version__})
+
+
+def fit(rows: list[dict[str, float]], vocab: dict[str, dict[str, list[str]]], *, sig: str,
+        **kw) -> Corpus:
+    """Fit a corpus from raw feature rows -- one dict per repertoire.
+
+    Convenient for a small corpus and for tests. For a full-size build use
+    :func:`locus_matrix` / :func:`fill_row` / :func:`fit_matrices`, which never holds more than one
+    sample's dict at a time.
+    """
+    order = [loc for loc in (*L.LOCI, L.NO_LOCUS) if loc in vocab or loc == L.NO_LOCUS]
+    mats: dict[str, tuple[np.ndarray, list[str]]] = {}
+    for locus in order:
+        got = locus_matrix(vocab, sig, locus, len(rows))
+        if got is None:
+            continue
+        buf, cols = got
+        for i, r in enumerate(rows):
+            fill_row(buf, cols, i, r)
+        mats[locus] = (buf, cols)
+    return fit_matrices(mats, vocab, sig=sig, **kw)
 
 
 # ----------------------------------------------------------------------------------- applying
@@ -691,6 +728,58 @@ def draw_sample(pool: pl.DataFrame, size: int, regime: str, rng: np.random.Gener
         pl.Series("duplicate_count", counts[keep].astype(np.int64)))
 
 
+def resolved_size(locus: str, size: "int | str") -> int:
+    """The per-locus receptor count a ``size`` asks for -- an integer, or a measured depth name.
+
+    Separate from :func:`sample_stream` because the manifest has to record what each locus was
+    actually drawn at: ``size="n_eff"`` means seven different depths, and a manifest saying only
+    ``"n_eff"`` cannot tell a reader which.
+    """
+    if isinstance(size, int):
+        return size
+    if locus not in N_EFF:
+        raise ValueError(f"size={size!r} has no measured depth for {locus}")
+    return N_EFF[locus][{"p05": 0, "n_eff": 1, "p95": 2}[size]]
+
+
+def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
+                  size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "olga",
+                  progress=None):
+    """Set up the pools and return ``(ordered_loci, draw)`` where ``draw(j)`` is sample ``j``.
+
+    Shared by both halves of the signature so that ``vsig_<name>`` and ``rsig_<name>`` describe the
+    **same** repertoires: same pools, same seeds, same drawn depths, same clone sizes. That identity
+    is the whole reason the two artifacts can be joined on ``sample_id``, so there is one
+    implementation of it rather than two that agree today.
+
+    A generator rather than a list because the samples do not fit: 10,000 repertoires of ~25,000
+    clonotypes across seven loci is about 38 GB held at once, for a corpus matrix that is 1.08 GB.
+
+    NOTE ``draw`` must be called with ``j = 0, 1, 2, ...`` in order. The per-locus generators are
+    advanced by each call, which is what keeps a rebuild bit-identical; calling out of order gives a
+    different (still deterministic) corpus.
+    """
+    ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
+    pools, rngs, sizes = {}, {}, {}
+    for i, locus in enumerate(ordered):
+        n = resolved_size(locus, size)
+        # The pool must cover the LARGEST repertoire the spread can ask for, since a sample is drawn
+        # without replacement.
+        top = int(n * np.sqrt(DEPTH_SPREAD.get(locus, 4.0))) + 1
+        pools[locus] = draw_pool(locus, min(top * POOL_FACTOR, max(top * n_samples, top)),
+                                 seed=seed + i, source=source)
+        rngs[locus] = np.random.default_rng(seed + 1000 + i)
+        sizes[locus] = draw_sizes(n, n_samples, DEPTH_SPREAD.get(locus, 4.0), rngs[locus])
+        if progress:
+            progress(locus, i + 1, len(loci))
+
+    def draw(j: int) -> dict:
+        return {loc: draw_sample(pools[loc], int(sizes[loc][j]), regime, rngs[loc])
+                for loc in ordered}
+
+    return ordered, draw
+
+
 def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                size: "int | str" = DEFAULT_SIZE, seed: int = SEED,
                n_components: "int | float" = DEFAULT_COMPONENTS, mode: str = "features",
@@ -714,7 +803,8 @@ def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int 
         progress: Optional ``callable(locus, done, total)``.
 
     Returns:
-        ``(corpus, rows)`` when fitting, else a list of ``{locus: frame}`` samples.
+        ``(corpus, mats)`` when fitting -- ``mats`` being ``{locus: (matrix, columns)}``, the corpus
+        matrix itself -- else a list of ``{locus: frame}`` samples.
 
     The whole build is a deterministic function of ``(regime, loci, n_samples, size, seed, source)``
     and the bundled models, so two machines at different thread counts must produce byte-identical
@@ -724,43 +814,40 @@ def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int 
     """
     from . import features as FE
 
-    def size_for(locus: str) -> int:
-        if isinstance(size, int):
-            return size
-        if locus not in N_EFF:
-            raise ValueError(f"size={size!r} has no measured depth for {locus}")
-        return N_EFF[locus][{"p05": 0, "n_eff": 1, "p95": 2}[size]]
-
     vocab = {loc: FE.gene_vocab(loc) for loc in loci}
-    pools, per_locus = {}, {}
-    for i, locus in enumerate(sorted(loci, key=lambda x: L.LOCI.index(x))):
-        n = size_for(locus)
-        # The pool must cover the LARGEST repertoire the sweep can ask for, since a sample is
-        # drawn without replacement.
-        top = int(n * np.sqrt(DEPTH_SPREAD.get(locus, 4.0))) + 1
-        pools[locus] = draw_pool(locus, min(top * POOL_FACTOR, max(top * n_samples, top)),
-                                 seed=seed + i, source=source)
-        rng = np.random.default_rng(seed + 1000 + i)
-        sizes = draw_sizes(n, n_samples, DEPTH_SPREAD.get(locus, 4.0), rng)
-        per_locus[locus] = [draw_sample(pools[locus], int(m), regime, rng) for m in sizes]
-        if progress:
-            progress(locus, i + 1, len(loci))
-    samples = [{loc: per_locus[loc][j] for loc in per_locus} for j in range(n_samples)]
-    if not fit_corpus:
-        return samples
+    ordered, draw = sample_stream(regime, loci=loci, n_samples=n_samples, size=size, seed=seed,
+                                 source=source, progress=progress)
 
-    rows = [FE.raw_and_channels(s, vocab)[0] for s in samples]
+    if not fit_corpus:
+        return [draw(j) for j in range(n_samples)]
+
+    # One sample at a time, straight into preallocated per-locus buffers. Materialising all N
+    # samples first is ~38 GB at the shipped size (10,000 repertoires x ~25,000 clonotypes across
+    # seven loci) for a corpus matrix that is 1.08 GB.
+    mats = {}
+    for locus in (*ordered, L.NO_LOCUS):
+        got = locus_matrix(vocab, "vsig", locus, n_samples)
+        if got is not None:
+            mats[locus] = got
+    for j in range(n_samples):
+        raw = FE.raw_and_channels(draw(j), vocab)[0]
+        for locus, (buf, cols) in mats.items():
+            fill_row(buf, cols, j, raw)
+        if progress and (j + 1) % max(n_samples // 20, 1) == 0:
+            progress("featurise", j + 1, n_samples)
+
     from .. import __version__
-    corpus = fit(rows, vocab, sig="vsig", name=regime, mode=mode, n_components=n_components,
-                 winsor_p=winsor_p, meta={
+    corpus = fit_matrices(mats, vocab, sig="vsig", name=regime, mode=mode,
+                          n_components=n_components, winsor_p=winsor_p, meta={
                      "regime": regime, "n_samples": n_samples, "seed": seed, "source": source,
-                     "size": size, "size_per_locus": {k: size_for(k) for k in loci},
+                     "size": size,
+                     "size_per_locus": {k: resolved_size(k, size) for k in loci},
                      "zipf_a": ZIPF_A if regime == "memory" else None,
                      "reads_per_clone": READS_PER_CLONE if regime == "memory" else 1,
                      "pool_factor": POOL_FACTOR, "model_version": __version__,
                      "depth_spread": {k: DEPTH_SPREAD.get(k) for k in loci},
                      "loci": list(loci)})
-    return corpus, rows
+    return corpus, mats
 
 
 def _demo() -> None:
