@@ -72,7 +72,7 @@ fraction all differ between the two readings.
 
 Since 3.14.0 the library refuses rather than picking one. :func:`vdjtools.io.schema.assert_resolvable`
 is the gate; ``diversity_stats``, ``diversity_cohort`` and
-:func:`vdjtools.signature.blocks.sanitise` all take ``on_duplicate="error"`` (the default) or
+:func:`vdjtools.signature.features.sanitise` all take ``on_duplicate="error"`` (the default) or
 ``"sum"``.
 
 .. code-block:: python
@@ -278,7 +278,7 @@ To renormalise explicitly at any point:
 
 .. note::
 
-   :func:`vdjtools.signature.blocks.work_frame` also writes the ``frequency`` column, but it is
+   :func:`vdjtools.signature.features.work_frame` also writes the ``frequency`` column, but it is
    **not** the file's frequency — it is the signature's internal clone weight
    ``log2(1+count)/Σ``, which merely borrows the column name. It is applied inside the signature
    and does not affect anything documented on this page.
@@ -316,7 +316,7 @@ Both recompute ``frequency`` over what survives.
 
    Order matters. Anything that recomputes ``frequency`` — ``downsample``, ``select_top``, or a
    filter with ``recompute_frequencies=True`` — must run **before** the signature's
-   :func:`~vdjtools.signature.blocks.work_frame`, never after, or it silently restores read
+   :func:`~vdjtools.signature.features.work_frame`, never after, or it silently restores read
    weighting on top of the clone weight.
 
 

@@ -309,7 +309,7 @@ def assert_resolvable(df: pl.DataFrame, *, name: str | None = None) -> None:
     """Raise if a frame without ``junction_nt`` repeats an amino-acid clonotype key.
 
     A **data-integrity gate, not a filter** — the sibling of
-    :func:`vdjtools.signature.blocks.assert_parseable`, and it guards a question the frame cannot
+    :func:`vdjtools.signature.features.assert_parseable`, and it guards a question the frame cannot
     answer about itself. Without ``junction_nt`` there is no way to tell whether two rows sharing
     ``(junction_aa, v_call, j_call, c_call)`` are two nucleotide clonotypes that happen to encode
     the same peptide, or one clonotype duplicated by an export artefact. The two readings give

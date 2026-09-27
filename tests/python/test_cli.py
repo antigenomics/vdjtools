@@ -5,7 +5,6 @@ or HuggingFace fetch is needed.
 """
 from __future__ import annotations
 
-import math
 
 import numpy as np
 import polars as pl
@@ -264,86 +263,132 @@ def test_correct_vj_writes_usage_and_corrected_tables(tmp_path, gen):
     assert runner.invoke(app, ["correct-vj", *paths, "-b", "A,B"]).exit_code != 0
 
 
-def test_signature_channels_reads_no_input(tmp_path):
-    """The vocabulary describes the contract, not the data, so it prints without a sample."""
-    out = tmp_path / "chan.tsv"
-    res = CliRunner().invoke(app, ["signature", "--channels", "-o", str(out)])
-    assert res.exit_code == 0, res.output
-    rows = out.read_text().strip().split("\n")
-    assert rows[0].split("\t")[:3] == ["channel", "sig", "block"]
-    assert any(r.startswith("vsig:div\t") for r in rows)
-    # Every channel carries its one-line meaning; an unexplained name is not a vocabulary.
-    assert all(len(r.split("\t")[-1]) > 10 for r in rows[1:])
-    # ...and only this command's half. It used to list all twenty channels including the seven
-    # rsig ones, which `vdjtools signature` has not emitted since the 3.18.0 mirpy split.
-    assert not [r for r in rows[1:] if r.startswith("rsig:")], "rsig is mirpy's half"
+@pytest.fixture(scope="module")
+def tiny_corpus(tmp_path_factory):
+    """One small artifact, built once: the CLI tests are about the command, not the fit."""
+    from vdjtools.signature.corpus import synthesize
+
+    art, _ = synthesize("memory", loci=("TRG",), n_samples=24, size=80, seed=4, n_components=4)
+    return art.save(tmp_path_factory.mktemp("corpus") / "tiny")
 
 
-def test_signature_describe_lists_only_the_vsig_half(tmp_path):
-    """Same contract for the column dictionary: what you will get, not what exists."""
-    out = tmp_path / "cols.tsv"
-    res = CliRunner().invoke(app, ["signature", "--describe", "--tier", "standard", "-o",
-                                   str(out)])
-    assert res.exit_code == 0, res.output
-    rows = out.read_text().strip().split("\n")[1:]
-    assert {r.split("\t")[1] for r in rows} == {"vsig"}
-
-    from vdjtools.signature import layout as L
-
-    assert len(rows) == len(L.columns("standard", "vsig")) == 161
+def _one_sample(path):
+    path.write_text("junction_aa\tv_call\tj_call\tduplicate_count\n"
+                    + "".join(f"CASS{'ACDEFGHIKLMNPQRSTVWY'[i % 20] * 3}YEQYF\tTRBV20-1\t"
+                              f"TRBJ2-2\t{i + 1}\n" for i in range(60)))
+    return path
 
 
-def test_a_preset_with_no_pgen_column_does_not_compute_pgen(tmp_path, monkeypatch):
-    """`--preset` was a display filter; it is a work filter now.
+def test_signature_requires_a_corpus(tmp_path):
+    """There is no default corpus, deliberately.
 
-    `nuisance` is tier=full and keeps zero `vsig:pgen:` columns, so before this it computed all
-    seven loci of Pgen -- ~96% of the command's runtime -- and dropped every one of them.
-    Asserted by booby-trapping the block rather than by timing it.
+    A silently chosen rotation makes two matrices look comparable when they are not, which is the
+    mixed-units failure the rewrite exists to end.
     """
-    from vdjtools.signature import blocks as B
-
-    src = tmp_path / "s1.tsv"
-    src.write_text("junction_aa\tv_call\tj_call\tduplicate_count\n"
-                   + "".join(f"CASS{'ACDEFGHIKLMNPQRSTVWY'[i % 20] * 3}YEQYF\tTRBV20-1\t"
-                             f"TRBJ2-2\t{i + 1}\n" for i in range(60)))
-    monkeypatch.setattr(B, "pgen_block", lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("pgen_block ran for a preset that keeps no pgen column")))
-    res = CliRunner().invoke(app, ["signature", "--preset", "nuisance", str(src),
-                                   "-o", str(tmp_path / "out.tsv")])
-    assert res.exit_code == 0, res.output
+    src = _one_sample(tmp_path / "s1.tsv")
+    assert CliRunner().invoke(app, ["signature", str(src)]).exit_code != 0
 
 
-def test_signature_cstar_none_emits_a_declared_hole_not_a_guessed_number(tmp_path):
-    """`--cstar none` is the CLI's way to refuse the flat fallback.
+def test_describe_names_exactly_the_columns_this_invocation_emits(tmp_path, tiny_corpus):
+    """The one output whose entire job is to be right about the width.
 
-    This command has no scale reference, so without a measured constant every `vsig:div` column
-    rests on one coverage level stretched over seven loci. The number is plausible and nothing
-    about it says so, which is why the fallback is reported in `vsig:qc:-:cstar_fallback_frac`
-    and why declining it has to be reachable from the command line too.
+    In 3.18.0 ``--describe`` printed all 688 columns while the command emitted 161 -- it named
+    columns you would not get. So it is resolved against --corpus, --components AND --columns, and
+    compared here against the real emitted header rather than against a layout constant.
     """
-    src = tmp_path / "s1.tsv"
-    src.write_text("junction_aa\tv_call\tj_call\tduplicate_count\n"
-                   + "".join(f"CASS{'ACDEFGHIKLMNPQRSTVWY'[i % 20] * 3}YEQYF\tTRBV20-1\t"
-                             f"TRBJ2-2\t{i + 1}\n" for i in range(60)))
+    src = _one_sample(tmp_path / "s1.tsv")
+    runner = CliRunner()
 
-    def run(*extra):
-        out = tmp_path / f"o{len(extra)}.tsv"
-        res = CliRunner().invoke(app, ["signature", "--tier", "core", str(src),
-                                       "-o", str(out), *extra])
-        assert res.exit_code == 0, res.output
-        return pl.read_csv(out, separator="\t"), res.output
+    for extra in ([], ["--components", "2"]):
+        desc, emit = tmp_path / "d.tsv", tmp_path / "e.tsv"
+        r1 = runner.invoke(app, ["signature", "--corpus", str(tiny_corpus), "--describe",
+                                 "-o", str(desc), *extra])
+        assert r1.exit_code == 0, r1.output
+        r2 = runner.invoke(app, ["signature", "--corpus", str(tiny_corpus), str(src),
+                                 "-o", str(emit), *extra])
+        assert r2.exit_code == 0, r2.output
+        described = pl.read_csv(desc, separator="\t")["column"].to_list()
+        emitted = [c for c in pl.read_csv(emit, separator="\t").columns if c != "sample_id"]
+        assert described == emitted, f"--describe disagrees with the output for {extra}"
 
-    def hole(frame, col):
-        v = frame[col][0]
-        return v is None or (isinstance(v, float) and math.isnan(v))
+    # and it carries the two things a caller needs per column
+    desc = pl.read_csv(tmp_path / "d.tsv", separator="\t")
+    assert set(desc["kind"].unique()) <= {"rotated", "channel"}
+    assert set(desc["support"].unique()) <= set(__import__(
+        "vdjtools.signature.layout", fromlist=["SUPPORTS"]).SUPPORTS)
 
-    default, _ = run()
-    assert default["vsig:qc:-:cstar_fallback_frac"][0] == 1.0
-    assert not hole(default, "vsig:div:TRB:1D_c")
 
-    holed, _ = run("--cstar", "none")
-    assert holed["vsig:qc:-:cstar_fallback_frac"][0] == 0.0
-    div = [c for c in holed.columns if c.startswith("vsig:div:")]
-    assert div and all(hole(holed, c) for c in div)
-    assert holed["vsig:mask:TRB:estimable"][0] == 0.0
-    assert not hole(holed, "vsig:depth:TRB:reads"), "depth needs no coverage level"
+def test_describe_honours_a_column_subset(tmp_path, tiny_corpus):
+    want = tmp_path / "cols.txt"
+    want.write_text("vsig:pc:TRG:PC01\nvsig:cov:TRG:cstar\n")
+    out = tmp_path / "d2.tsv"
+    r = CliRunner().invoke(app, ["signature", "--corpus", str(tiny_corpus), "--describe",
+                                 "--columns", str(want), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert pl.read_csv(out, separator="\t")["column"].to_list() == [
+        "vsig:pc:TRG:PC01", "vsig:cov:TRG:cstar"]
+
+
+def test_the_coverage_target_is_a_runtime_choice_not_a_baked_constant(tmp_path, tiny_corpus):
+    """The target used to live in a scaling artifact, which is how one reference ended up
+    standardising tissue samples to a level measured on blood."""
+    src = _one_sample(tmp_path / "s1.tsv")
+
+    def run(tag, *extra):
+        out = tmp_path / f"o_{tag}.tsv"
+        r = CliRunner().invoke(app, ["signature", "--corpus", str(tiny_corpus), str(src),
+                                     "-o", str(out), *extra])
+        assert r.exit_code == 0, r.output
+        return pl.read_csv(out, separator="\t")
+
+    shared, own = run("min"), run("own", "--cstar-target", "own")
+    fixed = run("fixed", "--cstar-target", "0.5")
+    for frame in (shared, own, fixed):
+        # coverage is emitted whatever the target, because it is a property of the sample
+        assert frame["vsig:cov:TRB:cstar"][0] is not None
+    assert CliRunner().invoke(app, ["signature", "--corpus", str(tiny_corpus), str(src),
+                                    "--cstar-target", "not-a-number"]).exit_code != 0
+
+
+def test_whatever_the_bound_clamps_is_reported(tmp_path, tiny_corpus):
+    """A bound that edits a number the caller cannot see is the failure winsor_frac prevents."""
+    src = _one_sample(tmp_path / "s1.tsv")
+
+    def frac(mode):
+        out = tmp_path / f"w_{mode}.tsv"
+        r = CliRunner().invoke(app, ["signature", "--corpus", str(tiny_corpus), str(src),
+                                     "--winsorize", mode, "-o", str(out)])
+        assert r.exit_code == 0, r.output
+        return pl.read_csv(out, separator="\t")["vsig:qc:-:winsor_frac"][0]
+
+    assert frac("none") == 0.0
+    assert frac("features") >= 0.0
+    assert CliRunner().invoke(app, ["signature", "--corpus", str(tiny_corpus), str(src),
+                                    "--winsorize", "nonsense"]).exit_code != 0
+
+
+@pytest.mark.parametrize("flag", [
+    ["--preset", "classify"], ["--tier", "core"], ["--pgen-n-max", "200"],
+    ["--cstar", "0.2"], ["--threads", "4"], ["--channels"], ["--standardize", "none"],
+    ["--scale", "blood"], ["--clip", "8"], ["--squash", "soft"],
+])
+def test_every_removed_flag_is_rejected(tmp_path, tiny_corpus, flag):
+    src = _one_sample(tmp_path / "s1.tsv")
+    r = CliRunner().invoke(app, ["signature", "--corpus", str(tiny_corpus), str(src), *flag])
+    assert r.exit_code != 0, f"{flag} was accepted"
+
+
+def test_the_presets_command_is_gone():
+    from typer.main import get_command
+
+    assert "presets" not in get_command(app).commands
+    assert "corpus" in get_command(app).commands
+
+
+def test_the_preflight_line_names_the_corpus_and_its_hash(tmp_path, tiny_corpus):
+    """A saved matrix's provenance should be in the log even without the manifest to hand."""
+    src = _one_sample(tmp_path / "s1.tsv")
+    r = CliRunner().invoke(app, ["signature", "--corpus", str(tiny_corpus), str(src),
+                                 "-o", str(tmp_path / "o.tsv")])
+    assert r.exit_code == 0, r.output
+    assert "corpus memory" in r.output and "winsorize=features" in r.output and "k=" in r.output
