@@ -19,23 +19,27 @@ Quickstart
 
 .. code-block:: bash
 
-   # build a corpus once -- uses no samples from anybody's cohort
-   vdjtools corpus --corpus naive --smoke -o /tmp/naive.npz
-
-   # then score repertoires through it
-   vdjtools signature --corpus /tmp/naive.npz samples/*.tsv.gz -o sig.tsv
+   # four corpora ship with the wheel; name one, no build and no cohort needed
+   vdjtools signature --corpus synthetic-blood samples/*.tsv.gz -o sig.tsv
 
    # what exactly will I get?
-   vdjtools signature --corpus /tmp/naive.npz --components 32 --describe
+   vdjtools signature --corpus synthetic-blood --components 32 --describe
+
+   # or build your own -- still uses no samples from anybody's cohort
+   vdjtools corpus --corpus synthetic-tissue -o /tmp/st.npz
+   vdjtools signature --corpus /tmp/st.npz samples/*.tsv.gz -o sig.tsv
 
 .. code-block:: python
 
    from vdjtools.signature import vsig, vsig_cohort
-   from vdjtools.signature.corpus import Corpus
+   from vdjtools.signature.corpus import Corpus, bundled_path
 
-   corpus = Corpus.load("/tmp/naive.npz")
+   corpus = Corpus.load(bundled_path("synthetic-blood"))
    row = vsig({"TRB": trb, "IGH": igh}, corpus)
    frame = vsig_cohort({"S1": sample1, "S2": sample2}, corpus, n_jobs=0)
+
+Pick ``synthetic-blood`` or ``synthetic-tissue`` by which compartment your samples come from; both are
+described below, with what they reproduce and what they do not.
 
 A corpus is required
 --------------------
