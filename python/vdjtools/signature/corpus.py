@@ -1055,11 +1055,16 @@ def draw_plan(loci, *, n_samples: int, size: "int | str", seed: int,
     ``cohort=None`` leaves the two mixture knobs unset, which is correct for ``naive`` and ``memory``
     and keeps their draw byte-identical to what the shipped artifacts were built from.
     """
-    if cohort is not None and not isinstance(depth_spread, str):
+    # Compared against the cohort itself, not merely type-checked: `depth_spread="tissue"` on a blood
+    # corpus would otherwise pass, change nothing, and be recorded in the manifest as the tissue
+    # spread. A knob that silently does nothing is the failure this whole subsystem was rewritten to
+    # end.
+    if cohort is not None and depth_spread != cohort:
         raise ValueError(
-            f"corpus cohort {cohort!r} draws depth from its measured p05-p50-p95 richness ladder, so "
-            "depth_spread does not apply. Move the whole ladder with `size` (which rescales it about "
-            "its median), or build naive/memory, which is where an explicit spread belongs.")
+            f"corpus cohort {cohort!r} draws depth from its measured richness ladder "
+            f"({COHORT_QS[0]:.2f}-{COHORT_QS[-1]:.2f} of it), so depth_spread={depth_spread!r} does "
+            "not apply. Move the whole ladder with `size`, which rescales it about its median, or "
+            "build naive/memory, which is where an explicit spread belongs.")
     plan = {}
     for i, locus in enumerate(loci):
         rng = np.random.default_rng(seed + 1000 + i)
