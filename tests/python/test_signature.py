@@ -260,8 +260,13 @@ def test_a_model_version_mismatch_raises(corpus, tmp_path):
     # copy the meta rather than mutating the module-scoped fixture: a test that edits a shared
     # fixture breaks whichever test happens to run next, which is its own small version of the bug
     # this suite is about.
+    #
+    # The gate is on the GERMLINE the pools were drawn from, not on the library version: a patch
+    # release must not invalidate a corpus, and a germline repair must. ``model_fingerprint`` hashes
+    # the cut segments, so a stale hash is what a moved germline looks like.
     stale = C.Corpus(sig=corpus.sig, name=corpus.name, vocab=corpus.vocab, fits=corpus.fits,
-                     meta={**corpus.meta, "model_version": "0.0.1-not-installed"})
+                     meta={**corpus.meta,
+                           "models": {"TRB": "olga:human_T_beta@0000deadbeef"}})
     path = stale.save(tmp_path / "c2")
     with pytest.raises(ValueError, match="bundled recombination models"):
         C.Corpus.load(path)

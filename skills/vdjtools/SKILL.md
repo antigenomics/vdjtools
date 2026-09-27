@@ -153,11 +153,23 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   Reproduces `infer_nt_bruteforce` (the exact but exponential ORACLE, tests only) 25/25 TRG and
   19/19 TRA; the one-scenario "best codon per residue" shortcut manages 9/25 and 4/19, because a
   trim chosen before the codons pins a codon the true optimum would have trimmed away.
-  **`native.best_aa_scenarios(model, aa, v=, j=, k=8)`** is stage 1 alone (top-k scenarios as
+  **`best_aa_scenarios(model, aa, v=, j=, k=8, resolve_genes=True)`** (exported at
+  `vdjtools.model`) is stage 1 alone (top-k scenarios as
   `(w, v, len_v, j, len_j, d, idx5, idx3, pos)`): the same Pi_L*Pi_R transfer matrix as `pgen_aa`
   with `max` for the sums. **2.5 ms/TRB, 0.5 ms/TRA — all of VDJdb in ~3 min.**
   `v=`/`j=` take one allele, a list or comma-separated string (ambiguous `v_call`), or `None`
-  (marginalize — barely slower, 0.26 vs 0.23 ms). NOTE: pass a `Model`, not a `prepare()`-d one:
+  (marginalize — barely slower, 0.26 vs 0.23 ms). A **gene**-level name (`TRBV4-3`) resolves to a
+  representative allele; a name the model has no gene for raises and names it, so an empty result
+  only ever means the DP explains nothing. **`best_aa_scenarios_batch(model, aas, v=, j=, k=8,
+  threads=0)`** → a frame with one row per scenario (`row`, `rank`, `w`, `v_call`, `len_v`, `j_call`,
+  `len_j`, `d_call`, `idx5`, `idx3`, `pos`); **8.02 s → 0.64 s on 24,907 real human TRB clonotypes at
+  k=8**, identical to the per-row loop at any thread count, and a declined query contributes no rows.
+  `v_end` is `len_v` and `j_start` is `3*len(aa) - len_j`.
+  WARNING: this is the argmax of a *probability* model, not an aligner. On 25,000 real TRB clonotypes
+  against the observed nt markup, top-1 places `v_end` exactly **59.8%** and `j_start` **90.3%**,
+  against **73.3% / 97.7%** for germline alignment (`arda.cdr3fix`) at a twelfth of the cost — many
+  junctions have several near-equally-probable boundaries. Reach for it when you want what alignment
+  cannot give: alternatives with probabilities, D geometry, or a V/J named by marginalising. NOTE: pass a `Model`, not a `prepare()`-d one:
   a prepared model selects the pure-Python reference search, ~600x slower on TRB (tests cross-check
   the two). WARNING: Do not pin germline flanks to shrink the search — it drops trimmed-germline
   sequences and the true max can be one. Tandem-D is not enumerated in stage 1 (it cannot add

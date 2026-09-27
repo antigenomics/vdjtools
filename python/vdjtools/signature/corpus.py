@@ -328,16 +328,20 @@ class Corpus:
                     f"{len(extra)} only in the artifact, {len(missing)} only in the layout). The "
                     f"rotation is indexed by position, so applying it now would mix features. "
                     f"Refit the corpus against this version.")
-        recorded = self.meta.get("model_version")
-        if recorded is not None:
-            from .. import __version__ as installed
-            if recorded != installed:
+        recorded = self.meta.get("models") or {}
+        if recorded:
+            have = model_fingerprint(sorted(recorded), self.meta.get("source") or "olga")
+            moved = {loc: (was, have.get(loc)) for loc, was in recorded.items()
+                     if have.get(loc) != was}
+            if moved:
+                detail = "; ".join(f"{loc}: fitted on {was}, installed {now}"
+                                   for loc, (was, now) in sorted(moved.items()))
                 raise ValueError(
-                    f"corpus {self.name!r} was fitted against vdjtools {recorded} and this is "
-                    f"{installed}. The synthetic corpora are drawn from that release's bundled "
-                    f"recombination models, and retraining those moves the result by 0.1-1.6% per "
-                    f"locus, so the mismatch is not cosmetic. Rebuild the corpus, or load with "
-                    f"verify=False if you have established the models did not change.")
+                    f"corpus {self.name!r} was fitted on bundled recombination models that are no "
+                    f"longer the installed ones ({detail}). Every synthetic repertoire in it was "
+                    f"drawn from those models, and retraining one moves its locus by 0.1-1.6%, so "
+                    f"the mismatch is not cosmetic. Rebuild the corpus, or load with verify=False "
+                    f"if you have established the models did not change.")
 
 
 def _locus_order(loc: str) -> int:
@@ -601,6 +605,43 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
 #: of percentile bounds -- no sample is recoverable from any of it, which is why these ship publicly
 #: while the per-sample matrices they were fitted on do not.
 _RES = Path(__file__).resolve().parent.parent / "resources" / "signature"
+
+
+def model_fingerprint(loci, source: str = "olga") -> dict[str, str]:
+    """``{locus: "<model source>@<model version>"}`` for the models a synthetic pool is drawn from.
+
+    The version is a hash of the **germline the generator will actually draw from** (every allele's
+    CDR3-region cut segment of the collapsed model), not the manifest's declared version string. A
+    declared version does not move when a germline is repaired: correcting ``TRBV4-3*02``'s anchor
+    changed what every TRB pool contains while leaving ``olga:human_T_beta@2.0.0`` identical, so a
+    corpus fitted before the repair would have loaded silently against models that no longer produce
+    it. The hash cannot miss that.
+
+    This, not the library version, is what a synthetic corpus's numbers rest on: every pool comes
+    out of these models, and retraining one moves that locus by 0.1-1.6%. Gating on the library
+    version instead was both too strict -- a patch release invalidated every corpus for no reason --
+    and **wrong**: ``vdjtools.__version__`` is read from installed distribution metadata, so a build
+    driven by ``PYTHONPATH`` against a different installed version records *that* version rather
+    than the code that ran. The first four cluster artifacts recorded ``3.6.0`` for exactly that
+    reason, from a 4.0.0 tree.
+
+    A real corpus is fitted on real repertoires and no model enters it, so its manifest carries no
+    fingerprint and :meth:`Corpus.verify` has nothing to check.
+    """
+    import hashlib
+
+    from ..model import load_bundled
+
+    out = {}
+    for loc in loci:
+        m = load_bundled(loc, source)
+        h = hashlib.sha256()
+        for name in sorted(m.genomic):
+            col = f"{name.split('_')[1]}_allele"
+            for a, c in sorted(zip(m.genomic[name][col], m.genomic[name]["cut_segment"])):
+                h.update(f"{a}\t{c}\n".encode())
+        out[loc] = f"{m.manifest.source}@{h.hexdigest()[:12]}"
+    return out
 
 
 def bundled_names() -> list[str]:
@@ -1096,7 +1137,8 @@ def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int 
                      "size_per_locus": {k: resolved_size(k, size) for k in loci},
                      "zipf_a": ZIPF_A if regime == "memory" else None,
                      "reads_per_clone": READS_PER_CLONE if regime == "memory" else 1,
-                     "pool_factor": POOL_FACTOR, "model_version": __version__,
+                     "pool_factor": POOL_FACTOR, "vdjtools_version": __version__,
+                     "models": model_fingerprint(loci, source),
                      "depth_spread": {k: DEPTH_SPREAD.get(k) for k in loci},
                      "loci": list(loci)})
     return corpus, mats

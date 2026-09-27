@@ -18,9 +18,24 @@ The collapse is a proper marginalisation, not a truncation:
   single germline, so collapsed Pgen is approximate there (exact wherever the CDR3-region germline
   is allele-invariant, which is the common case).
 
-The representative is ranked, in order, by **CDR3-region germline length**, then **IMGT
-functionality** (``F`` > ``ORF`` > ``P``, read from arda's per-allele CDR3-anchor table), then
-**usage**, then a preference for ``*01``, then the allele name as a last resort.
+The representative is ranked, in order, by whether the germline is **in frame with its anchor**,
+then **CDR3-region germline length**, then **IMGT functionality** (``F`` > ``ORF`` > ``P``, read from
+arda's per-allele CDR3-anchor table), then **usage**, then a preference for ``*01``, then the allele
+name as a last resort.
+
+*The frame gate leads* because it is not a preference: a V CDR3-region germline starts at the
+conserved Cys104 codon and a J one ends at Phe/Trp118, and a cut that does neither was sliced at the
+wrong index. Human ``TRBV4-3`` is the trap: ``*02``'s germline in the bundled models is
+``CTCTGCGCCAGC…``, one whole framework codon (``CTC``, Leu) upstream of Cys104 and therefore **24 nt
+against ``*01``'s correct 21**, so length alone made the mis-anchored allele the representative and
+relabelled it ``*01``. Every real ``TRBV4-3`` junction then scored ``pgen_aa`` **exactly 0** — 698 of
+698 in a 25,000-clonotype human TRB control set, 2.8% of it — with no error raised, while OLGA itself
+scores those junctions at 1.06e-08. That last part is what makes it ours and not inherited: the
+``olga`` models exist to reproduce OLGA exactly, so a gene where we return 0 and OLGA does not is a
+broken invariant, unlike the empty germlines OLGA genuinely ships (see ``IGHV4-30-4*01``).
+
+The gate is inert where no candidate passes it, which is load-bearing: an empty germline is out of
+frame too, so ranking it above length would otherwise re-create the ``TRBV23/OR9-2`` failure below.
 
 *Length leads* because IMGT ships some alleles with a truncated — sometimes empty — CDR3-region
 germline, and a truncated allele must never define the gene's trim range. Human IGKV3-20 is the
@@ -117,10 +132,32 @@ def _functionality(manifest) -> dict[str, str]:
     return dict(zip(g["allele"].to_list(), g["functionality"].to_list()))
 
 
+def _in_frame(seg: str, cut: str) -> bool:
+    """Is ``cut`` a CDR3-region germline that actually starts (V) or ends (J) at its anchor?
+
+    A V segment's CDR3 region begins at the conserved Cys104 codon and a J's ends at the conserved
+    Phe/Trp118 codon; that is what "CDR3-region germline" means, not a preference. A cut that fails
+    it was sliced at the wrong index and cannot represent the gene however long it is. ``D`` has no
+    anchor, and an empty cut has nothing to check — both answer ``False``, which is deliberate: the
+    gate must never lift an empty germline over a non-empty one (see the module docstring on
+    ``TRBV23/OR9-2``), so it ranks *above* length while staying inert wherever no candidate passes.
+    """
+    from .reference import translate
+
+    if len(cut) < 3:
+        return False
+    if seg == "v":
+        return translate(cut[:3]) == "C"
+    if seg == "j":
+        return translate(cut[-3:]) in ("F", "W")
+    return False
+
+
 def _representative(alleles: list[str], cut: dict[str, str], func: dict[str, str],
-                    usage: dict[str, float]) -> str:
+                    usage: dict[str, float], seg: str = "") -> str:
     """The allele whose germline represents the gene — see the module docstring for the order."""
-    return max(alleles, key=lambda a: (len(cut.get(a) or ""),
+    return max(alleles, key=lambda a: (_in_frame(seg, cut.get(a) or ""),
+                                       len(cut.get(a) or ""),
                                        _FUNCTIONALITY_RANK.get(func.get(a, ""), 0),
                                        usage.get(a, 0.0),
                                        a.endswith("*01"),
@@ -249,7 +286,7 @@ def collapse_alleles(model: Model) -> Model:
         for gene, sub in g.group_by(_gene(acol).alias("_g"), maintain_order=True):
             key = gene[0] if isinstance(gene, tuple) else gene
             cut = dict(zip(sub[acol].to_list(), sub["cut_segment"].to_list()))
-            best = _representative(sub[acol].to_list(), cut, func, usage)
+            best = _representative(sub[acol].to_list(), cut, func, usage, seg)
             rep = sub.filter(pl.col(acol) == best).with_columns(pl.lit(_rep(key)).alias(acol),
                                                                 pl.lit(key).alias("gene"))
             rows.append(rep)

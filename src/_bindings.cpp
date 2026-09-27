@@ -107,6 +107,35 @@ PYBIND11_MODULE(_core, m) {
           py::call_guard<py::gil_scoped_release>(),
           "Top-k recombination scenarios for an amino-acid CDR3 by joint max-product weight — the "
           "argmax counterpart of pgen_aa, over the same Pi_L*Pi_R transfer matrix.");
+    m.def("best_aa_scenarios_batch",
+          [](const PackedModel& mm, const std::vector<std::string>& seqs,
+             const std::vector<int>& v_idxs, const std::vector<int>& j_idxs, int k, int threads) {
+              AaScenarioBatch b;
+              {
+                  py::gil_scoped_release nogil;
+                  b = vdjtools::best_aa_scenarios_batch(mm, seqs, v_idxs, j_idxs, k, threads);
+              }
+              // One numpy column per field, so k scenarios per query never become Python objects.
+              py::dict out;
+              auto ints = [](const std::vector<int>& v) { return py::array_t<int>(v.size(), v.data()); };
+              out["row"] = ints(b.row);
+              out["rank"] = ints(b.rank);
+              out["w"] = py::array_t<double>(b.w.size(), b.w.data());
+              out["v"] = ints(b.v);
+              out["len_v"] = ints(b.len_v);
+              out["j"] = ints(b.j);
+              out["len_j"] = ints(b.len_j);
+              out["d"] = ints(b.d);
+              out["idx5"] = ints(b.idx5);
+              out["idx3"] = ints(b.idx3);
+              out["pos"] = ints(b.pos);
+              return out;
+          },
+          py::arg("model"), py::arg("seqs"), py::arg("v_idxs") = std::vector<int>{},
+          py::arg("j_idxs") = std::vector<int>{}, py::arg("k") = 8, py::arg("threads") = 0,
+          "Batch best_aa_scenarios over many CDR3s, parallelized across sequences and identical to "
+          "the per-sequence calls; returns one numpy column per scenario field, with 'row' indexing "
+          "seqs and 'rank' the position within that row's top-k. threads=0 -> auto.");
 
     py::class_<Counts>(m, "Counts")
         .def_readonly("v_choice", &Counts::v_choice)

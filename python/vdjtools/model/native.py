@@ -42,6 +42,44 @@ def _gene_idx(idx_of: dict[str, int], name: str | None, kind: str) -> int:
     )
 
 
+def gene_to_allele(model: Model) -> dict[str, str]:
+    """Map each V/J **gene** the model carries to a representative allele of that gene.
+
+    Real repertoires and every aligner report genes (``TRBV10-3``) while a model is keyed by
+    allele (``TRBV10-3*01``), and :func:`pgen_aa` deliberately raises on a gene name rather than
+    silently marginalising over every allele — that fallback once returned a Pgen 2.38x too high
+    with no error. So the gene has to be resolved to a concrete allele deliberately and visibly.
+
+    The representative is the lowest-numbered allele present, i.e. ``*01`` wherever the model has
+    it. Alleles of one gene share the CDR3-region germline in all but rare cases, so this is the
+    conventional reading of a gene-level call — but it IS a choice, which is why the functions
+    using it expose ``resolve_genes=False`` to refuse it instead.
+
+    Args:
+        model: A recombination :class:`Model`.
+
+    Returns:
+        ``{gene: allele}`` over both V and J (their gene names are disjoint).
+    """
+    _pm, vi, ji = pack(model)
+    out: dict[str, str] = {}
+    for idx_of in (vi, ji):
+        for allele in idx_of:
+            gene = allele.split("*")[0]
+            if gene not in out or allele < out[gene]:
+                out[gene] = allele
+    return out
+
+
+def _resolve_vj(model: Model, v: str | None, j: str | None,
+                resolve_genes: bool) -> tuple[str | None, str | None]:
+    """``(v, j)`` with a gene-level call replaced by its representative allele, when asked."""
+    if not resolve_genes:
+        return v, j
+    alias = gene_to_allele(model)
+    return (alias.get(v, v) if v else v), (alias.get(j, j) if j else j)
+
+
 def _del_dense(pdel: dict, idx_of: dict, maxpal: int) -> tuple[list[float], int]:
     """{(allele, ndel): p} -> (flat [n_allele * nbins], nbins), index = ndel + maxpal."""
     nbins = max((n + maxpal for (_a, n) in pdel), default=0) + 1
@@ -314,7 +352,7 @@ def pgen_aa_batch(
 
 
 def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str | None = None,
-                      k: int = 8) -> list[tuple]:
+                      k: int = 8, *, resolve_genes: bool = True) -> list[tuple]:
     """Top-``k`` recombination scenarios for an amino-acid CDR3, best first.
 
     The argmax counterpart of :func:`pgen_aa`, over the same Pi_L*Pi_R transfer matrix: ``max`` in
@@ -325,17 +363,43 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
     Args:
         model: The recombination model.
         cdr3_aa: CDR3 amino-acid sequence (conserved Cys -> conserved Phe/Trp inclusive).
-        v, j: Optional **allele** names to condition on. ``None`` marginalizes.
+        v, j: Optional V/J names to condition on. ``None`` marginalizes. A gene-level name is
+            resolved to a representative allele unless ``resolve_genes=False``; a name the model
+            has no gene for raises :class:`KeyError` naming it.
         k: How many scenarios to return.
+        resolve_genes: Resolve a **gene**-level call (``TRBV10-3``) to a representative model
+            allele (``TRBV10-3*01``) before the DP — see :func:`gene_to_allele`. Default ``True``,
+            because real V/J calls are gene-level and without it every one of them raises. Set
+            ``False`` to accept exact allele names only.
 
     Returns:
         ``[(w, v_allele, len_v, j_allele, len_j, d_allele | None, idx5, idx3, pos)]``, descending by
-        ``w``. ``len_v``/``len_j`` are the nucleotides each germline contributes to the CDR3;
+        ``w``. ``len_v``/``len_j`` are the nucleotides each germline contributes to the CDR3, so the
+        boundaries are ``v_end = len_v`` and ``j_start = 3 * len(cdr3_aa) - len_j``;
         ``idx5``/``idx3`` are the D's 5'/3' trims and ``pos`` where its contribution starts.
+
+        **Empty** only when the DP can explain nothing: a residue outside the genetic code (which
+        has no codons), or no rearrangement reachable under the pinned V/J. It is never empty
+        because of a naming mismatch — that raises.
+
+    Raises:
+        KeyError: If ``v`` or ``j`` names no gene the model carries (with ``resolve_genes``), or no
+            exact allele (without it).
+
+    Note:
+        This is the argmax of a *probability* model, not an aligner. Measured on 25,000 real human
+        TRB clonotypes against the observed nucleotide markup, the top-1 scenario places ``v_end``
+        exactly 59.8% of the time and ``j_start`` 90.3%, against 73.3% / 97.7% for germline
+        alignment (``arda.cdr3fix``) at a twelfth of the cost — many junctions have several
+        near-equally-probable boundaries, so the modal scenario is often not the one that happened.
+        Reach for this when you want what an aligner cannot give: the *alternatives* with their
+        probabilities, D geometry, or a V/J named by marginalising over the model. When the V/J call
+        is already known and you only want the boundary, align instead.
     """
     from .._core import best_aa_scenarios as _best
 
     pm, vi, ji = pack(model)
+    v, j = _resolve_vj(model, v, j, resolve_genes)
     d_alleles = (model.genomic["genes_d"]["d_allele"].to_list()
                  if model.chain_type == "VDJ" else [])
     iv = {i: a for a, i in vi.items()}
@@ -343,3 +407,77 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
     got = _best(pm, cdr3_aa.upper(), _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"), k)
     return [(s.w, iv[s.v], s.len_v, ij[s.j], s.len_j,
              d_alleles[s.d] if s.d >= 0 else None, s.idx5, s.idx3, s.pos) for s in got]
+
+
+def best_aa_scenarios_batch(
+    model: Model,
+    cdr3_aas: list[str],
+    v: list[str | None] | None = None,
+    j: list[str | None] | None = None,
+    k: int = 8,
+    threads: int = 0,
+    *,
+    resolve_genes: bool = True,
+):
+    """Batch :func:`best_aa_scenarios` over many CDR3s, parallelized across sequences natively.
+
+    Mirrors :func:`pgen_aa_batch`: the GIL is released and the queries are partitioned across
+    worker threads, and the result is identical to the serial per-sequence calls for any
+    ``threads``. This is the entry point to use on a clonotype table — the per-row Python loop,
+    not the DP, is most of the cost of calling :func:`best_aa_scenarios` 25,000 times.
+
+    Args:
+        model: A recombination :class:`Model`.
+        cdr3_aas: Junction/CDR3 amino-acid sequences.
+        v: Optional per-sequence V names (same length as ``cdr3_aas``); ``None`` marginalizes over
+            all V for every sequence, and individual entries may be ``None``.
+        j: Optional per-sequence J names (as ``v``).
+        k: Scenarios per sequence.
+        threads: Worker threads; ``0`` = auto (``hardware_concurrency - 2``). Batches under 64
+            sequences run single-threaded.
+        resolve_genes: As :func:`best_aa_scenarios`.
+
+    Returns:
+        A :class:`polars.DataFrame` with one row per **scenario**, ordered by ``row`` then ``rank``:
+        ``row`` (index into ``cdr3_aas``), ``rank`` (0-based within that row's top-``k``), ``w``,
+        ``v_call``, ``len_v``, ``j_call``, ``len_j``, ``d_call``, ``idx5``, ``idx3``, ``pos``.
+        A sequence the DP cannot explain contributes **no rows**, so an absent ``row`` value is how
+        a declined query shows up; it is never a silently marginalized scenario.
+
+    Raises:
+        KeyError: If any ``v``/``j`` entry names no gene the model carries (see
+            :func:`best_aa_scenarios`).
+        ValueError: If ``v`` or ``j`` is given with a length other than ``len(cdr3_aas)``.
+    """
+    import numpy as np
+    import polars as pl
+
+    from .._core import best_aa_scenarios_batch as _batch
+
+    pm, vi, ji = pack(model)
+    seqs = [s.upper() for s in cdr3_aas]
+    if v is not None and len(v) != len(seqs):
+        raise ValueError("v must have the same length as cdr3_aas")
+    if j is not None and len(j) != len(seqs):
+        raise ValueError("j must have the same length as cdr3_aas")
+    alias = gene_to_allele(model) if resolve_genes else {}
+    v_idxs = ([_gene_idx(vi, alias.get(x, x) if x else x, "V") for x in v]
+              if v is not None else [])
+    j_idxs = ([_gene_idx(ji, alias.get(x, x) if x else x, "J") for x in j]
+              if j is not None else [])
+    cols = _batch(pm, seqs, v_idxs, j_idxs, k, threads)
+
+    # Index -> allele name by fancy-indexing, so naming k scenarios per row stays vectorized.
+    names_v = np.array([a for a, _i in sorted(vi.items(), key=lambda kv: kv[1])], dtype=object)
+    names_j = np.array([a for a, _i in sorted(ji.items(), key=lambda kv: kv[1])], dtype=object)
+    names_d = np.array(model.genomic["genes_d"]["d_allele"].to_list()
+                       if model.chain_type == "VDJ" else [], dtype=object)
+    d = cols["d"]
+    return pl.DataFrame({
+        "row": cols["row"], "rank": cols["rank"], "w": cols["w"],
+        "v_call": names_v[cols["v"]], "len_v": cols["len_v"],
+        "j_call": names_j[cols["j"]], "len_j": cols["len_j"],
+        "d_call": (np.where(d >= 0, names_d[np.maximum(d, 0)], None)
+                   if names_d.size else np.full(d.shape, None, dtype=object)),
+        "idx5": cols["idx5"], "idx3": cols["idx3"], "pos": cols["pos"],
+    })

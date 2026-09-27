@@ -132,6 +132,79 @@ one has been wrong here before by 9x in the wrong direction.
 - **Corpus build is byte-identical across thread counts**, verified `cmp` on the npz with
   `OMP_NUM_THREADS`/`POLARS_MAX_THREADS` at 1 against the default.
 
+### Fixed: a functional V gene whose germline was one codon off scored Pgen exactly 0
+
+`TRBV4-3*02`'s CDR3-region germline in both bundled human TRB models began `CTCTGCGCCAGC…` — one
+whole framework codon (`CTC`, Leu) **upstream of Cys104**. OLGA's `human_T_beta` records its anchor as
+267 against its own **287**-nt germline while `*01` is **284** nt at the same 267, so the defect is in
+OLGA's tables and we reproduced it faithfully.
+
+Reproducing it was not harmless, because `collapse_alleles` ranked a gene's representative germline by
+**length** first: `*02`'s broken cut is 24 nt against `*01`'s correct 21, so the collapsed `TRBV4-3`
+inherited the mis-anchored germline relabelled `*01`. Measured on 25,000 real human TRB clonotypes
+(`isalgo/airr_control` `human.trb.ntvj`), `pgen_aa` was **exactly 0 for 698 of 698** TRBV4-3
+junctions — **2.8%** of the set — with no error raised, against **1/595** zeros for the `TRBV4-1`
+control. OLGA itself returns **1.063e-08** for `CASSQDLNTEAFF | TRBV4-3 | TRBJ1-1`: it marginalises
+over the gene's alleles and `*01` carries the mass, so OLGA never returns 0 there. Fixing this
+**restores** the exact-OLGA invariant rather than breaking it.
+
+Two independent defences, because either alone leaves the other's failure reachable:
+
+- **`model.io.repair_anchors`** makes the conserved anchor an invariant, on build **and on load**, so
+  every already-shipped artifact is corrected on read with no regeneration. A V anchor steps by whole
+  framework codons until the region starts at Cys104; a J is repaired only by undoing the known
+  wrong-side slice (`full[anchor:]` where a J needs `full[:anchor+3]`), never by searching — a search
+  finds an earlier in-frame Phe by coincidence and *shortens* the germline, which strands the allele's
+  own deletion mass. Measured: on mouse `TRAJ19*01` a two-codon search cut arda's 30-nt germline to
+  24. Repaired across the bundled set: `TRBV4-3*02` in `olga/TRB` and `learned/TRB` (anchor 267 → 270),
+  and **9 of the 11** `learned` human TRA J alleles carrying framework downstream of Phe118 — 7 of
+  those now match arda's germline **exactly**, a defect previously recorded as needing an all-loci
+  regeneration.
+- **`collapse_alleles` ranks the frame gate above length**, so a longer out-of-frame germline can
+  never represent a gene. The gate is inert where no candidate passes it, which is load-bearing: an
+  empty germline is out of frame too, and promoting it over a non-empty one is the `TRBV23/OR9-2`
+  trap from the other side.
+
+Consequence for the amino-acid scenario DP on the same 25,000 clonotypes: junctions the model could
+not explain at all fell from **731 to 33**, 698 of them this one gene.
+
+Not fixed, and not guessable from our reference: `TRAJ35*01` (human), the survivor of that TRA family.
+arda's recorded anchor (25) points at a **Cys** codon, so neither the stored slice nor arda says where
+Phe118 is; settling it needs IMGT arbitration rather than a search. Sizing is unchanged from 3.9.1:
+**0** of VDJdb's 30,937 human TRA records use any of the family.
+
+### Added: the amino-acid scenario API is usable from outside (#179)
+
+`best_aa_scenarios` enumerates the plausible recombinations of an amino-acid junction with `len_v`,
+`len_j` and D geometry. Three things stopped it being reachable as that primitive, all addressed:
+
+- **Exported at `vdjtools.model`**, beside `infer_nt` and `best_scenario`, with
+  `best_aa_scenarios_batch` and `gene_to_allele`.
+- **Gene-level calls resolve** to a representative allele (`resolve_genes=True`, as
+  `sc.paired_pgen`), because every real V/J call is gene-level and every one of them used to raise.
+  A call naming no gene the model carries still raises and **names it**. The resolver now has one
+  definition — `sc.pgen` carried a private copy, and #179's point was that every caller writes its
+  own.
+- **`best_aa_scenarios_batch`** returns a `polars.DataFrame`, one row per scenario, parallelized
+  across sequences in native code. Measured on 24,907 real human TRB clonotypes at `k=8`:
+  **8.02 s → 0.64 s** (12.5x), identical to the per-row loop and **bit-identical at any thread
+  count**. A query the DP cannot explain contributes no rows, so an absent `row` is how a decline
+  shows up — never a silently V/J-marginalised scenario.
+- **Documented for what it is for**: the alternatives with their probabilities, D geometry, and naming
+  a missing V/J by marginalising. It is *not* the better way to place a known boundary — measured on
+  the same rows, top-1 places `v_end` exactly 59.8% and `j_start` 90.3% against germline alignment's
+  73.3% / 97.7% at a twelfth of the cost.
+
+### Changed: a corpus artifact is gated on the germline it was drawn from, not the library version
+
+`Corpus.verify` compared `vdjtools.__version__`, which is both too strict — a patch release
+invalidated every corpus — and wrong: it is read from installed distribution metadata, so a build
+driven by `PYTHONPATH` against a different installed version records *that* version. The first
+cluster artifacts recorded `3.6.0` from a 4.0.0 tree. The manifest now carries `models`, a per-locus
+hash of the **cut segments the generator will actually draw from**, which a declared version string
+cannot track: repairing `TRBV4-3*02` changed what every TRB pool contains while leaving
+`olga:human_T_beta@2.0.0` identical.
+
 ## 3.18.1 — 2026-09-26
 
 Guards for the class of bug 3.18.0 fixed, and one file that should never have been public.

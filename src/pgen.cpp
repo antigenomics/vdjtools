@@ -761,8 +761,8 @@ namespace {
 // the serial loop regardless of thread count; `one` must not throw (an escaping exception in a
 // worker terminates the process — validate before calling).
 template <class F>
-std::vector<double> run_batch(size_t n, int nthreads, F&& one) {
-    std::vector<double> out(n, 0.0);
+auto run_batch(size_t n, int nthreads, F&& one) -> std::vector<decltype(one(size_t{0}))> {
+    std::vector<decltype(one(size_t{0}))> out(n);
     int T = nthreads;
     if (T <= 0) {
         unsigned hw = std::thread::hardware_concurrency();
@@ -1622,6 +1622,35 @@ std::vector<AaScenario> best_aa_scenarios(const PackedModel& m, const std::strin
     std::sort(top.begin(), top.end(),
               [](const AaScenario& a, const AaScenario& b) { return a.w > b.w; });
     return top;
+}
+
+AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m, const std::vector<std::string>& seqs,
+                                        const std::vector<int>& v_idxs,
+                                        const std::vector<int>& j_idxs, int k, int nthreads) {
+    auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
+    auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
+    auto per = run_batch(seqs.size(), nthreads, [&](size_t i) {
+        return best_aa_scenarios(m, seqs[i], vi(i), ji(i), k);
+    });
+    size_t total = 0;
+    for (const auto& one : per) total += one.size();
+    AaScenarioBatch out;
+    for (auto* c : {&out.row, &out.rank, &out.v, &out.len_v, &out.j, &out.len_j,
+                    &out.d, &out.idx5, &out.idx3, &out.pos}) c->reserve(total);
+    out.w.reserve(total);
+    for (size_t i = 0; i < per.size(); ++i) {
+        for (size_t r = 0; r < per[i].size(); ++r) {
+            const AaScenario& sc = per[i][r];
+            out.row.push_back(static_cast<int>(i));
+            out.rank.push_back(static_cast<int>(r));
+            out.w.push_back(sc.w);
+            out.v.push_back(sc.v); out.len_v.push_back(sc.len_v);
+            out.j.push_back(sc.j); out.len_j.push_back(sc.len_j);
+            out.d.push_back(sc.d);
+            out.idx5.push_back(sc.idx5); out.idx3.push_back(sc.idx3); out.pos.push_back(sc.pos);
+        }
+    }
+    return out;
 }
 
 
