@@ -3,7 +3,7 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## 4.1.0 — 2026-09-27
+## 4.1.0 — 2026-09-28
 
 ### Added: `synthetic-blood` and `synthetic-tissue`, two corpora that describe a real compartment
 
