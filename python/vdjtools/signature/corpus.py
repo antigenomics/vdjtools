@@ -212,23 +212,24 @@ class Corpus:
 
         Raises:
             ValueError: If an ``int`` exceeds what a locus was fitted with, or a ``float`` target
-                is not reached by the stored spectrum. Both refuse rather than pad: the artifact
-                stores the rotation only up to the count it was fitted at, so the components asked
-                for genuinely do not exist and returning fewer under the requested name would make
-                two matrices with the same column names carry different things.
+                is not reached by the stored spectrum. Neither ever pads: a count is capped at
+                each locus's stored ``k`` (the same cap the fit applied, so a 5-feature cross-locus
+                block yields 5 whether you asked for 5 or 128), and a variance fraction the stored
+                spectrum cannot reach raises rather than silently returning the whole rotation
+                under the requested name.
         """
         if n_components is None:
             return self.k
         out: dict[str, int] = {}
         for loc, f in self.fits.items():
             if isinstance(n_components, int) and not isinstance(n_components, bool):
-                if n_components > f.k:
-                    raise ValueError(
-                        f"{self.name}:{loc} was fitted with {f.k} components; {n_components} were "
-                        f"asked for. Increasing the count needs a refit -- the rotation is stored "
-                        f"only up to what it was fitted at. The stored spectrum says the first "
-                        f"{f.k} reach {f.variance_at(f.k):.4f} of the variance.")
-                out[loc] = int(n_components)
+                # A count is an upper bound per locus, exactly as it was at fit time: a block with
+                # fewer non-degenerate directions than asked for contributes the ones it has. This
+                # has to mirror the fit or the flag is unusable on anything the fit produced -- the
+                # cross-locus block has 5 raw features, so `--components 128` fitted it at 5 and
+                # then refused to apply itself. Nothing is padded: no column is invented under a
+                # name it does not hold, which is the property the refusal existed for.
+                out[loc] = min(int(n_components), f.k)
             else:
                 frac = float(n_components)
                 if not 0.0 < frac < 1.0:

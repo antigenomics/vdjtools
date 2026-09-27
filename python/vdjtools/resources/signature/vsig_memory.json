@@ -1,5 +1,5 @@
 {
- "content_sha256": "9e23ab0b138090390f6e4c6971fff2fd2641ceecb688c4a0f069b628edf9aec3",
+ "content_sha256": "85a4b66da0cf3ebef588633dcec66ea81183dc9240a7aaf105a294d72fac3eca",
  "depth_spread": {
   "IGH": 10.981981981981981,
   "IGK": 10.407407407407407,
@@ -29,7 +29,15 @@
   "IGL"
  ],
  "mode": "features",
- "model_version": "3.6.0",
+ "models": {
+  "IGH": "olga:human_B_heavy@e21ec62f2139",
+  "IGK": "olga:human_B_kappa@f160ed8ce718",
+  "IGL": "olga:human_B_lambda@4756d868be49",
+  "TRA": "olga:human_T_alpha@2a4e83d16fdf",
+  "TRB": "olga:human_T_beta@2fccd0006de8",
+  "TRD": "olga:human_T_delta@def2922b705f",
+  "TRG": "olga:human_T_gamma@d25719222561"
+ },
  "n_components_requested": 128,
  "n_rows": {
   "-": 10000,
@@ -77,10 +85,11 @@
   "IGK": 0.6834726095181541,
   "IGL": 0.590198065594496,
   "TRA": 0.6058772832761301,
-  "TRB": 0.4824793430070729,
+  "TRB": 0.48247942832854335,
   "TRD": 0.812461384746417,
   "TRG": 0.8538277179913261
  },
+ "vdjtools_version": "3.6.0",
  "vocab": {
   "IGH": {
    "jus": [
