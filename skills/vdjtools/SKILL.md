@@ -205,50 +205,68 @@ Full reference: **https://docs.isalgo.dev/vdjtools/signature.html** and
 and not the reverse.
 
 ```python
-from vdjtools.signature import (vsig, vsig_cohort, columns, describe,
-                                channels, channel, channel_table, CHANNELS)
-v = vsig({"TRB": df}, tier="standard")        # {column: value}, in layout order
-describe("standard")                          # the column dictionary
-channel_table("standard")                     # the channel vocabulary
+from vdjtools.signature import (vsig, vsig_cohort, raw_and_channels, synthesize,
+                                Corpus, parse, support_of, channel_columns, pc_columns)
+corpus = Corpus.load("naive.npz")             # a corpus is REQUIRED; there is no default
+v = vsig({"TRB": df}, corpus)                 # {column: value}, in artifact order
+corpus.columns(n_components=32)               # exactly what an invocation will emit
+raw, chan = raw_and_channels({"TRB": df}, corpus.vocab)   # un-rotated, natural units
 ```
 ```bash
-vdjtools signature *.tsv --tier standard -o vsig.parquet
-vdjtools signature --describe                 # column dictionary; reads no input
-vdjtools signature --channels                 # channel vocabulary; reads no input
-vdjtools presets                              # the 8 named column subsets, ranked
+vdjtools corpus --corpus naive --smoke -o naive.npz    # build + fit; uses no cohort
+vdjtools signature *.tsv --corpus naive.npz -o vsig.parquet
+vdjtools signature --corpus naive.npz --components 32 --describe
 ```
 
-**Submodules.** `layout` is the contract — `LOCI`, `TIERS`, `columns(tier, sig)`, `index()`,
-`describe()`, `parse()`, `register()`, `Block`, `feats()`, plus the channel API. `transform` is
-the variance-stabilising layer (`logit` Haldane–Anscombe, `arcsine` Anscombe, `clr`, `log10`,
-`log1p`, `reference_z`, `robust_loc_scale`, `magnitude_scale`). `blocks` holds `sanitise`,
-`work_frame` and the per-block builders. `assemble` holds `vsig` / `vsig_cohort`.
+**Submodules, four of them.** `layout` is the contract — `LOCI`, `raw_groups()`, `channels()`,
+`raw_columns(sig, locus, vocab)`, `channel_columns(sig)`, `pc_columns(sig, k)`,
+`signature_columns(sig, k)`, `parse()`, `support_of()`, `SUPPORTS`, `RawGroup`, `Channel`,
+`register_raw()`, `register_channel()`, `feats()`. `transform` is the variance-stabilising layer
+only (`logit` Haldane–Anscombe, `arcsine` Anscombe, `clr`, `log10`, `log1p`, `apply`) — it no longer
+does any reference rescaling. `features` holds `sanitise`, `work_frame`, `gene_vocab`, the per-group
+builders and `raw_and_channels`. `corpus` holds `synthesize`, `fit`, `fit_locus`, `apply`,
+`bounds_for`, `clamp`, `robust_loc_scale`, `Corpus`, `LocusFit`. `signature` holds `vsig` /
+`vsig_cohort` / `attained_coverage`.
 
-**Presets are the entry point to recommend**, not hand-picked columns: `compact` (86),
-`classify` (615), `transfer` (550), `geometry` (514), `statistics` (101), `bcell` (271),
-`full` (1404, feature selection only), `nuisance` (74, ranked *avoid* — a control). They resolve
-from the frozen layout alone. `vdjtools presets NAME` prints one in full.
+**The three stages.** Raw features from this sample alone → clamped to the corpus's winsorization
+bounds → rotated by its per-locus PCA and scaled by its per-PC median/MAD. One rotation per
+`(half, locus)` plus one cross-locus, **never** one joint rotation over all loci: under a joint
+rotation one absent locus silently moves every component.
 
-**Channels** are the second field of a column name — the named group measuring one thing, and the
-level a finding is stated at. `channels(tier, sig, columns=…, per_locus=…)` returns the
-name→column-index map, disjoint and exhaustive; `channel_table(tier)` is one row per channel.
-Keys carry their half (`vsig:div` vs `rsig:div` are different measurements of the same idea).
-Feed the map to `mir.signature.channel_spec` / `mir.explain.channel_report` to ask which channel
-carries a signal.
+**`--components` takes a count or a variance fraction.** A count is a cap at fit time and a hard
+limit at apply time; a fraction gives a different width per locus and per corpus, which is real.
+Truncating downward at apply time is **exact** and needs no refit; asking for more than was fitted
+raises.
+
+**Channels are never rotated and never clamped**: `cov:<locus>:cstar` (the coverage this sample
+attained, always emitted), `mask:*` (why a column is a hole), `qc:*` (germline fallback fractions,
+`nonstd_aa_frac`, `n_loci_present`, `winsor_frac`). Read `winsor_frac`, `cov:*:cstar` and
+`mask:*:estimable` before trusting any `pc:` value of a row.
 
 #### Traps
 
-- **Transforms are declared per feature, not per block.** A clonality block legitimately mixes a
-  CLR-transformed composition with a logit-transformed proportion.
+- **The winsorization side comes from `support`, never from `transform`.** Three raw features
+  declare `transform="none"` with three different supports — a log-probability is bounded above, a
+  standard deviation below, a log-ratio neither. Deriving the side from the transform silently trims
+  the wrong end of two of them.
+- **Transforms are declared per feature, not per group.** A clonality group legitimately mixes a
+  CLR composition with a logit proportion.
 - **`clr` ships *k−1* parts.** All *k* are linearly dependent and would be a guaranteed zero
   eigenvalue in any PCA. It is also capped, so a shallow composition cannot consume itself.
 - **`estimable()` refuses rather than extrapolates.** Real repertoires attain Good–Turing coverage
-  0.24–0.58, so a textbook `C*=0.95` puts every sample into extrapolation, where diversity
-  inflates roughly tenfold.
-- **Pass `threads=1`** to `vsig` inside your own process pool: the default 0 means all cores *per
-  worker*.
-- **A tier is an index subset, not a filter.** Column *i* means the same thing at every tier and in
-  anyone else's matrix. Changing a name is a breaking change, not an edit.
+  0.24–0.58, so a textbook `C*=0.95` puts every sample into extrapolation, where diversity inflates
+  roughly tenfold. The target is a **runtime argument** (`cstar_target`), never a corpus constant.
+- **`columns=` selects output; it does not skip work.** A locus is rotated jointly over all its
+  groups, so every group must be computed before any of that locus's components exist. Declining a
+  whole locus does skip it.
+- **Do not pick the component count by explained variance alone.** Measured on AS vs healthy, both
+  HLA-B27+: the 17 columns the published motif occupies read AUC 0.769 at permutation *p* = 0.031,
+  while the best of 64 SVD components reads 0.841 at *p* = 0.20. For rare discriminative signal use
+  `raw_and_channels` and an L1 model instead of rotating.
+- **A synthetic corpus must draw its depth.** At one fixed depth, `depth:reads`, `depth:richness`
+  and all five `pair:` ratios are exactly constant, so the cross-locus block cannot be fitted — and
+  it fails quietly, as an artifact that simply omits them.
+- **`--jobs` is processes.** There is one concurrency knob and it says which layer it reaches.
 
 ### `vdjtools.overlap` — overlap + TCRnet (delegates to vdjmatch/seqtree)
 `overlap_metrics`, `overlap_pair`, `DEFAULT_KEY`; `fuzzy_overlap`, `fuzzy_overlap_metrics`;
@@ -353,7 +371,8 @@ compare compare-pgen loglik log`. A model is named as a directory **or** as
 error-severity issue**, so it works as a build gate. Data: **`convert`** (any format →
 canonical), **`downsample`**, **`filter`** (`--coding`/`--noncoding`/`--min-freq`/`--v`/`--j`),
 **`pool`** (`--join`). Analytics: `diversity`, `overlap`, `segment-usage`, `spectratype`. Signature: **`signature`**
-(`--preset`/`--tier`, `--describe`, `--channels`) and **`presets`**.
+(`--corpus` required, `--winsorize`, `--components`, `--cstar-target`, `--describe`) and
+**`corpus`** (build + fit an artifact).
 Longitudinal/enrichment: `dynamics`, `tcrnet`, `alice`. Inputs auto-detected; **`-o` is
 format-aware** — `.parquet`/`.pq` → Parquet, else TSV (or stdout). The per-sample analytics
 commands take **`--threads N`** (parallel over samples, `map_samples`) and **`--cohort DIR`** (one

@@ -1,4 +1,4 @@
-# vdjtools — the repertoire signature: transforms, V-call resolution, and the V+k-mer space.
+# vdjtools — the repertoire signature: transforms, V-call resolution, and the corpus rotation.
 #
 # Reactive marimo app. Everything here runs on repertoires SAMPLED FROM THE BUNDLED MODELS, so
 # there is no download and no cohort: the point is the feature machinery, and a generated
@@ -8,7 +8,7 @@
 # few seconds here:
 #   1. why the amino-acid block is arcsine-transformed and not log1p of counts;
 #   2. why an ambiguous V call must be resolved, not stripped;
-#   3. what the V+k-mer space is, and why you should not select its components by variance.
+#   3. k-mers as a raw feature group, and why the component count is a real choice.
 #
 # Run with:  marimo edit examples/signature_features.py
 import marimo
@@ -170,12 +170,16 @@ def _(mo):
 def _(mo):
     mo.md(
         """
-        ## 3. The V + k-mer space
+        ## 3. k-mers, and why the component count is a real choice
 
-        A junction k-mer profile keyed jointly on the V gene, TF-IDF scaled, projected onto a
-        frozen truncated-SVD basis. Counting is C++; the pattern string marks kept positions
-        (`"xx.x"` is gapped), and `n_groups < 20` clusters residues by BLOSUM62 via classical MDS
-        plus Ward linkage — no hand-picked chemistry classes.
+        A junction k-mer profile is now just another **raw feature group** — 400 columns per locus
+        at `k=2` — concatenated with usage, spectratype, composition and the count statistics, and
+        rotated by the corpus's own per-locus PCA. There is no separate frozen k-mer space and no
+        separate TF-IDF basis any more: one corpus, one rotation per locus, one place where
+        anything is fitted.
+
+        That makes `--components` the only knob controlling how much of the k-mer signal survives,
+        and it is not a free choice.
         """
     )
     return
@@ -183,53 +187,15 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    alpha = mo.ui.dropdown({"20 (plain amino acids)": 20, "8 (BLOSUM62 groups)": 8,
-                            "12 (BLOSUM62 groups)": 12}, value="20 (plain amino acids)",
-                           label="alphabet")
-    pattern = mo.ui.dropdown(["xxxx", "xxx", "xx.x", "x.xx"], value="xxxx", label="k-mer pattern")
-    mo.hstack([alpha, pattern])
-    return alpha, pattern
-
-
-@app.cell
-def _(alpha, clones, pattern, pl):
-    from vdjtools.features.kmer_space import fit_kmer_space
-
-    # A corpus of small repertoires: the vocabulary and the IDF are set by how many SAMPLES back
-    # each document frequency, not by how deep any one of them is.
-    corpus = [clones(500, 100 + i) for i in range(40)]
-    space = fit_kmer_space(corpus, pattern=pattern.value, n_groups=alpha.value, flank=4,
-                           min_df=0.02, max_df=0.99, n_components=8, max_columns=100_000)
-    pl.DataFrame([{"pattern": pattern.value,
-                   "alphabet": alpha.value,
-                   "code space": space.meta["code_space"],
-                   "surviving columns": space.meta["surviving"],
-                   "kept": space.n_columns,
-                   "components": space.n_components}])
-    return corpus, fit_kmer_space, space
-
-
-@app.cell
-def _(corpus, space):
-    space.transform(corpus[0], weight="freq", residual=True)
-    return
-
-
-@app.cell
-def _(mo):
     mo.md(
         """
-        The last value is the **residual** — the norm of what the retained components threw away.
-        It rides with the projection because a coordinate vector without it cannot tell you whether
-        the sample was well described by the basis at all.
+        ### Do not pick components by explained variance alone
 
-        ### Do not pick components by explained variance
+        A truncated SVD keeps the directions of greatest variance *in the fitting corpus*, which for
+        repertoires are depth, V usage and batch. A motif carried by a handful of clonotypes in a
+        handful of donors is not one of those.
 
-        A truncated SVD keeps the directions of greatest variance *in the fitting corpus*, which
-        for repertoires are depth, V usage and batch. A motif carried by a handful of clonotypes in
-        a handful of donors is not one of those.
-
-        Measured on ankylosing spondylitis vs healthy, both HLA-B27+, with the space fitted on a
+        Measured on ankylosing spondylitis vs healthy, both HLA-B27+, with the basis fitted on a
         disjoint cohort:
 
         | read-out | AUC | perm. *p* |
@@ -239,12 +205,17 @@ def _(mo):
         | best single vocabulary column | 0.813 | — |
 
         The two larger numbers are the meaningless ones: a maximum over 64 components reaches
-        \\|AUC − 0.5\\| = 0.34 under a label permutation null. Any best-of-N read-out must be
-        nulled or not quoted.
+        \\|AUC − 0.5\\| = 0.34 under a label permutation null. Any best-of-N read-out must be nulled
+        or not quoted.
 
-        So: **rare and discriminative** → keep the un-projected sparse columns and an L1 model;
-        **broad compositional shift** → project, and keep only components that survive a
-        study-disjoint refit, not components that reach a cumulative-variance threshold.
+        So: **rare and discriminative** → do not rotate. Take the raw features
+        (`features.raw_and_channels`) and an L1 model. **Broad compositional shift** → rotate, and
+        keep only components that survive a study-disjoint refit, rather than components that reach
+        a cumulative-variance threshold.
+
+        This is why the corpus stores its full eigenvalue spectrum and why `--components` accepts a
+        count as well as a fraction: the fraction is convenient, the count is what you pin once you
+        have measured which components transfer.
         """
     )
     return
@@ -256,9 +227,16 @@ def _(mo):
         """
         ## The contract
 
-        Column names are `vsig:<block>:<locus>:<feature>`, and the tiers are exact index subsets of
-        one frozen layout — a narrower tier is a slice of a wider one, never a differently-computed
-        number. `layout.columns()` reads no data at all.
+        Column names are `vsig:<block>:<locus>:<feature>` throughout, so one `parse()` reads all
+        three kinds: a **raw feature** (an input to the rotation), a **rotated column**
+        (`vsig:pc:<locus>:PCnn`), and a **channel** (carried through untouched).
+
+        Two fields are declared per raw feature and neither is inferred: its `transform`, applied
+        where the feature is computed while its denominator is still in scope, and its `support`,
+        which decides the winsorization side. The support is separate because `transform="none"`
+        spans three different supports — a log-probability is bounded above, a standard deviation
+        below, a log-ratio neither — so deriving the trimming side from the transform silently
+        trims the wrong end of two of them.
         """
     )
     return
@@ -268,23 +246,54 @@ def _(mo):
 def _(pl):
     from vdjtools.signature import layout
 
-    # The layout registry holds BOTH namespaces -- `rsig:` blocks are declared here too, because
-    # the shared contract machinery lives in vdjtools and mir.signature registers into it. `vsig`
-    # returns the `vsig:` half; the geometry half comes from `mir.signature`.
-    pl.DataFrame([{"tier": t,
-                   "vsig columns": sum(c.startswith("vsig:") for c in layout.columns(t)),
-                   "whole contract": len(layout.columns(t))}
-                  for t in ("core", "standard", "full")])
+    # The registry holds BOTH namespaces -- `rsig:` groups are declared here too, because the
+    # shared contract lives in vdjtools and mir.signature registers into it. Nothing here imports
+    # mir. Widths per locus are the ROTATION INPUT: what the PCA sees, not what comes out.
+    pl.DataFrame([{"group": g.name, "sig": g.sig, "loci": len(g.emitted_loci),
+                   "features": len(g.features) or "germline-wide",
+                   "support": g.dynamic[1] if g.dynamic else
+                              ", ".join(sorted({v[1] for v in g.features.values()}))}
+                  for g in layout.raw_groups()])
     return (layout,)
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+        ## Rotating a sample: a corpus is required
+
+        There is no default corpus. A signature is only comparable to another one rotated through
+        the *same* corpus, so the artifact has to be named — and the emitted row carries which one
+        it was, how much of itself got clamped by that corpus's bounds, and the coverage the sample
+        actually attained.
+
+        Build one with `vdjtools corpus --smoke -o /tmp/c.npz` (minutes), or load a bundled name.
+        """
+    )
+    return
 
 
 @app.cell
 def _(deep):
     from vdjtools.signature import vsig
+    from vdjtools.signature.corpus import synthesize
 
-    v = vsig({"TRB": deep}, tier="core")
-    {k: v[k] for k in list(v)[:12]}
-    return v, vsig
+    # A deliberately tiny corpus so this notebook runs in seconds. The real ones are 10,000
+    # repertoires; see `vdjtools corpus --help`.
+    corpus, _rows = synthesize("memory", loci=("TRB",), n_samples=30, size=120, seed=1,
+                               n_components=6)
+    v = vsig({"TRB": deep}, corpus)
+    {k: v[k] for k in list(v)[:10]}
+    return corpus, v, vsig
+
+
+@app.cell
+def _(v):
+    # The three channels a caller should read before trusting any rotated column of this row.
+    {k: v[k] for k in ("vsig:cov:TRB:cstar", "vsig:mask:TRB:estimable",
+                       "vsig:qc:-:winsor_frac")}
+    return
 
 
 if __name__ == "__main__":

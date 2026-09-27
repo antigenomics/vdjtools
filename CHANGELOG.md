@@ -3,6 +3,89 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.0.0 — 2026-09-27
+
+**Signatures rewritten from scratch.** No legacy path, no backward compatibility, no artifact
+carried over. The statistics half only; the geometry half follows in mirpy 4.0.0.
+
+### The defect this fixes
+
+The old system fitted a rotation on **10,000 individual clonotypes** from a prototype panel, while
+every one of the 399 PC columns that rotation produced was a **repertoire** statistic. Its centre
+and scale were fitted on **zero rows** of that artifact and arrived from a separate corpus of real
+samples. Two independent fits, stitched — which is how one shipped reference came to pair a centre of
+exactly `0.0` with a scale plainly fitted from data, putting a corpus-typical sample **81 robust
+deviations** out, and how `tissue` came to carry `blood`'s coverage constants for all seven loci to
+17 significant digits while its own location and scale had genuinely been refitted.
+
+Now everything comes out of **one pass over one matrix of repertoires**: bounds, centre, scale,
+rotation and per-PC scaling, per locus, from the same corpus.
+
+### Added
+
+- `vdjtools.signature.corpus` — build a synthetic corpus, winsorize it, fit the rotation and the
+  scaling, read and write the artifact. `synthesize`, `fit`, `fit_locus`, `apply`, `Corpus`.
+- `vdjtools.signature.features` — raw features and channels for one sample, a pure function of that
+  sample plus the germline vocabulary.
+- `vdjtools corpus` — the builder as a command, with `--smoke` for a minutes-long reduced build.
+- New raw feature groups: **V usage**, **J usage**, **spectratype** (junction length per V gene) and
+  **2-mer composition**, all clr/arcsine and folded into the same per-locus rotation. Raw widths run
+  685 (TRD) to 3,744 (IGH), 13,483 features in total.
+- New channels: `vsig:cov:<locus>:cstar` — the coverage the sample actually attained, **always**
+  emitted, including when the diversity features are holes. It was previously computed, used to
+  decide whether 28 columns were holes, and discarded: the only vsig quantity that was measured and
+  thrown away. And `vsig:qc:-:winsor_frac`, what fraction of the row the corpus's bounds clamped.
+- `support` on every raw feature declaration, as a closed vocabulary
+  (`nonneg`/`nonpos`/`real`/`unit`), and winsorization **by percentile** with the side read from it.
+
+### Removed
+
+- **`vsig:pgen:*`** and the `pgen_q05` corpus constant. Per-clonotype Pgen was 96% of this command's
+  runtime — 1,083 s of a 1,130 s cohort, essentially all of it IGH. Pgen remains a first-class
+  `vdjtools.model` API; it is no longer a signature feature.
+- `signature/blocks.py`, `assemble.py`, `presets.py`, `kmer.py`, `features/kmer_space.py` and the
+  `vdjtools presets` command. The frozen TF-IDF + SVD k-mer space is subsumed by the corpus rotation.
+- The reference-rescaling half of `signature/transform.py` (`reference_z`, `robust_loc_scale`,
+  `magnitude_scale`, `DEFAULT_CLIP`). The transforms themselves are unchanged.
+- **Tiers.** `core`/`standard`/`full` traded width for cost, and with a joint per-locus rotation
+  every group must be computed before any component exists, so a tier could no longer skip work.
+  `--components` replaces it and does the job better.
+- CLI flags `--preset`, `--tier`, `--pgen-n-max`, `--cstar`, `--channels`, `--threads`. Each is
+  pinned by a test that asserts a non-zero exit, because a flag that is accepted and silently
+  ignored is the worst of the three outcomes.
+
+### Changed
+
+- **A corpus is required.** No default, because a silently chosen rotation makes two matrices look
+  comparable when they are not.
+- **The coverage target is a runtime argument** (`--cstar-target`, default: this cohort's own
+  per-locus minimum attained coverage), not a constant in an artifact. A per-sample quantity in a
+  corpus artifact is what produced the `tissue` defect above.
+- `--components` takes a count or a variance fraction. The artifact stores the rotation up to the
+  fitted count plus the **full eigenvalue spectrum**, so truncating downward later is exact and
+  needs no refit, while asking for more raises and quotes what the spectrum reaches.
+- `--jobs` is processes and says so. The old `--threads` reached `n_jobs`.
+- `columns=` selects output rather than skipping work, for the joint-rotation reason above.
+  Declining a whole locus still skips it.
+
+### Measured while building this
+
+- **A synthetic corpus must draw its depth.** At one fixed size, `depth:reads`, `depth:richness` and
+  all five `pair:` log-ratios are identical in every sample, so their corpus spread is 0, they
+  contribute nothing to the rotation, and the cross-locus block **cannot be fitted at all** — which
+  fails quietly, as an artifact that simply omits it. Depths are now drawn log-uniformly over the
+  measured real p05–p95 spread per locus (4.1x on TRB, 11.0x on IGH).
+- **`numpy.random.Generator.zipf` is the wrong Zipf.** It samples integers *from* a Zipf
+  distribution, which at `a = 1.5` has infinite mean, so normalising a draw gives one clone almost
+  all the mass: repertoires collapsed to as few as 1 surviving clonotype and every
+  coverage-standardised diversity feature became a hole. The spec is the Zipf law over **ranks**,
+  `f_i ∝ i^-a`, which is a well-behaved rank-abundance curve: 336 of 500 clones surviving with 129
+  singletons at 20 reads per clone.
+- **Generation throughput**, 16-core M-series, one core: IGH 20,372 seq/s, TRB 23,113, TRA 34,506 —
+  so a 10^7 pool is 8–14 min per locus, ~10 min for all seven at one process per locus.
+- **Corpus build is byte-identical across thread counts**, verified `cmp` on the npz with
+  `OMP_NUM_THREADS`/`POLARS_MAX_THREADS` at 1 against the default.
+
 ## 3.18.1 — 2026-09-26
 
 Guards for the class of bug 3.18.0 fixed, and one file that should never have been public.

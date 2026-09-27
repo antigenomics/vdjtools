@@ -1,653 +1,376 @@
-Repertoire signature — the statistics half
-==========================================
+Repertoire signatures
+=====================
 
-:mod:`vdjtools.signature` turns one AIRR sample into a **fixed, named, positional** vector of
-repertoire statistics — ``vsig``. Its companion is :mod:`mir.signature` (``rsig``), which covers the
-embedding geometry; the two are namespaced so they concatenate on ``sample_id`` without colliding,
-and the shared contract machinery (column layout, transform registry, frozen-reference rescaling)
-lives here, in vdjtools, because mirpy depends on vdjtools and not the reverse.
+A *signature* is a fixed-order, name-addressed feature vector for one repertoire, on a scale a
+downstream model can consume without fitting a scaler of its own. ``vdjtools`` emits the
+**statistics** half, ``vsig``; the **geometry** half, ``rsig``, comes from `mirpy
+<https://github.com/antigenomics/mirpy>`_ and shares this contract exactly.
 
-.. note::
+It is built in three stages, and a **corpus** fixes the last two:
 
-   Columns are named ``<sig>:<channel>:<locus>:<feature>``. The **channel** is the second field —
-   the named group of columns that measures one thing, and the level a finding is usually stated
-   at ("the groups separate in IGH diversity"). :doc:`channels` is the vocabulary: twenty names,
-   what each measures, and how to ask which one carries your signal.
+.. code-block:: text
 
-Quickstart — one command
-------------------------
+   raw features  ->  winsorization bounds  ->  rotation + per-PC scaling  ->  vsig
+   (this sample                (all three from one corpus artifact)
+    alone)                                                              +  channels, untouched
 
-No Python needed. Point ``vdjtools signature`` at your samples, pick a preset, get one row per
-sample:
+Quickstart
+----------
 
 .. code-block:: bash
 
-   # a metadata sheet plus a directory of samples
-   vdjtools signature --preset classify -m metadata.txt --base-dir samples/ -o sig.tsv
+   # build a corpus once -- uses no samples from anybody's cohort
+   vdjtools corpus --corpus naive --smoke -o /tmp/naive.npz
 
-   # or just pass files (AIRR, native vdjtools, Parquet, third-party — auto-detected)
-   vdjtools signature --preset compact sampleA.tsv sampleB.tsv.gz -o sig.tsv
+   # then score repertoires through it
+   vdjtools signature --corpus /tmp/naive.npz samples/*.tsv.gz -o sig.tsv
 
-   # which columns am I about to get? reads no input at all
-   vdjtools signature --preset classify --describe
-
-   # the named feature sets, ranked, and what each one is for
-   vdjtools presets
-   vdjtools presets classify
-
-Three presets are marked ``recommended``: **compact** (the smallest vector that still describes a
-repertoire, usable at *n* = 50), **classify** (general-purpose, the usual random-forest / boosting
-input), and **transfer** (for a model that must work on another lab's samples). See
-:ref:`signature-presets` for the full table.
-
-.. important::
-
-   This command emits the ``vsig`` half only. For a classifier you usually want **both** halves —
-   run ``mir signature --preset classify ...`` in mirpy, which emits ``vsig`` and ``rsig`` as one
-   vector. A preset spanning both halves keeps only its ``vsig:`` columns here and says so on
-   stderr.
-
-.. warning::
-
-   **CDR3 vs junction.** The reader prefers AIRR ``junction_aa`` (conserved anchors *included*) and
-   falls back to IMGT ``cdr3_aa`` (anchors *excluded*). A file carrying only ``cdr3_aa`` is two
-   residues short everywhere, which shifts the length, k-mer and Pgen features. Check your headers
-   before you trust a matrix.
-
-A folder of AIRR files, and a table you can join
-------------------------------------------------
-
-The complete recipe. Input: a directory of per-sample AIRR TSVs plus your own metadata sheet.
-Output: one TSV, one row per sample, joinable on ``sample_id``.
-
-.. code-block:: bash
-
-   vdjtools signature --preset classify samples/*.tsv -o vsig.tsv
-
-``sample_id`` is the file name up to the first dot, so ``samples/SRR8364167.tsv`` becomes
-``SRR8364167``. Name your files after the key your metadata already uses and the join needs no
-mapping table:
-
-.. code-block:: python
-
-   import polars as pl
-
-   sig  = pl.read_csv("vsig.tsv", separator="\t")
-   meta = pl.read_csv("meta.tsv", separator="\t")      # your own sheet
-   sig.join(meta, left_on="sample_id", right_on="Run", how="left") \
-      .write_csv("signature_with_metadata.tsv", separator="\t")
-
-**This command emits the statistics half only.** For most modelling you want both halves, which is
-one command in mirpy and produces the same ``sample_id`` and the same column names:
-
-.. code-block:: bash
-
-   pip install mirpy-lib
-   mir signature --preset classify samples/*.tsv -o both.tsv
-
-A preset spanning both halves keeps only its ``vsig:`` columns here and says so on stderr, because
-silently returning half of what was asked for is worse than saying it. See :doc:`notebooks` for the
-runnable end-to-end version on a real 1,764-sample cohort.
-
-Raw block values
-----------------
-
-``--standardize none`` (``mir signature``) or the un-rescaled block output emits every column in its
-own units, before reference standardisation -- raw counts, fractions and Hill numbers. Use it when
-you are building a within-cohort model and do not need cross-cohort comparability. It is also why a
-locus with no coverage constant in the bundled reference still returns diversity numbers this way:
-raw Hill numbers need no ``C*``, so all seven loci are populated. What you give up is exactly what
-standardisation buys -- a column that means the same thing in your matrix and a collaborator's.
-
-The Python API
---------------
+   # what exactly will I get?
+   vdjtools signature --corpus /tmp/naive.npz --components 32 --describe
 
 .. code-block:: python
 
    from vdjtools.signature import vsig, vsig_cohort
-   from vdjtools.signature import layout
+   from vdjtools.signature.corpus import Corpus
 
-   v = vsig({"TRB": df})                       # {column: value}, in layout order
-   F = vsig_cohort(samples, tier="standard")   # one row per sample, positional
-   layout.columns("full")                      # the contract, computed from no data
+   corpus = Corpus.load("/tmp/naive.npz")
+   row = vsig({"TRB": trb, "IGH": igh}, corpus)
+   frame = vsig_cohort({"S1": sample1, "S2": sample2}, corpus, n_jobs=0)
 
-Columns are named ``vsig:<block>:<locus>:<feature>``. Tiers ``core`` / ``standard`` / ``full`` are
-**exact index subsets** of one frozen layout — a narrower tier is a slice of a wider one, never a
-differently-computed number.
+A corpus is required
+--------------------
 
-Running a cohort
-~~~~~~~~~~~~~~~~
+There is no default. A signature is comparable to another one **only** if both were rotated
+through the same corpus, so the artifact has to be named, and the emitted row records which one it
+was. Two matrices whose column names match but whose corpora differ are not comparable, and nothing
+about the numbers says so — which is why the choice is not allowed to be implicit.
 
-Use :func:`vdjtools.io.map_samples`, which is what the CLI does: it reads each sample **inside**
-the worker and discards the clonotype frame as soon as the reduction is done, so peak memory is
-``O(workers)`` samples rather than the whole cohort.
-
-.. code-block:: python
-
-   import functools
-   from vdjtools.io import map_samples
-   from vdjtools.signature import vsig
-
-   fn = functools.partial(vsig, tier="standard", threads=1)   # 1: the pool is the parallelism
-   rows = map_samples(fn, [(sid, path), ...])
-
-Threads, not processes, and that is not an oversight — ``vsig``'s cost is native Pgen plus polars,
-and both release the GIL. **Measured** on 32 samples of 10,000 clonotypes, 16 cores: 25.46 s at one
-worker, 12.39 s at two, 6.40 s at four, 3.51 s at eight — **2.05x / 3.98x / 7.26x**. There is
-nothing to gain from forking here, and no pickling to pay for.
-
-``workers=None`` (the default) asks :func:`vdjtools.cores.available_cores`, which is the count this
-process is *allowed*: under ``srun -c 8`` on a 40-core node ``os.cpu_count()`` says 40 and the
-answer is 8. Pass ``threads=1`` to ``vsig`` itself so its own Pgen batch does not compete with the
-pool that is already using every core.
-
-.. contents::
-   :local:
-   :depth: 1
-
-Every column is transformed, and the transform is denominator-aware
--------------------------------------------------------------------
-
-A learner cannot be handed a read count, an amino-acid fraction and a Hill number in one matrix and
-be expected to weight them sensibly. Each block therefore declares a transform:
+Five corpora are planned; the two synthetic ones need no cohort at all and are reproducible by
+anyone who installs the library.
 
 .. list-table::
    :header-rows: 1
-   :widths: 16 22 62
+   :widths: 14 20 66
 
-   * - transform
-     - blocks
-     - why this one
-   * - ``arcsine``
-     - ``aa`` (×20)
-     - Anscombe :math:`\arcsin\sqrt{(xm + 3/8)/(m + 3/4)}` — a proportion with a known denominator
-   * - ``logit``
-     - ``qc`` ``shm`` ``div:clonality`` ``pgen:frac_atypical`` ``clon:top``
-     - Haldane–Anscombe, so ``0/3`` and ``0/500`` are different numbers
-   * - ``clr``
-     - ``iso`` ``clon`` (ships :math:`k-1` parts)
-     - a genuine closed composition; all :math:`k` parts are linearly dependent
-   * - ``log10`` / ``log1p``
-     - ``depth`` ``div``
-     - non-negative, right-skewed, unbounded above
+   * - corpus
+     - what it is
+     - clone sizes
+   * - ``naive``
+     - synthetic, unselected
+     - every clone size 1 — what the recombination model emits
+   * - ``memory``
+     - synthetic, selected
+     - Zipf rank-abundance, sampled by multinomial, zeros dropped
+   * - ``deep-tcr``
+     - real, targeted/amplicon TCR
+     - 7 cohorts, 4,080 samples
+   * - ``blood``
+     - real, bulk RNA-seq blood
+     - 23,234 samples across 947 study groups
+   * - ``tissue``
+     - real, bulk RNA-seq non-blood
+     - 13,577 samples across 1,024 study groups
+
+What comes out
+--------------
+
+Column names are four colon-separated parts throughout, so one :func:`~vdjtools.signature.parse`
+reads every kind::
+
+   vsig:pc:TRB:PC01          a rotated coordinate
+   vsig:cov:TRB:cstar        a channel, carried through untouched
+   vsig:qc:-:winsor_frac     a channel that is not per-locus
+
+**Channels are never rotated and never clamped.** A provenance number that has been mixed with the
+measurements it was supposed to qualify is no longer provenance. Read these three before trusting
+any rotated column of a row:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - channel
+     - what it tells you
+   * - ``vsig:cov:<locus>:cstar``
+     - The coverage this sample actually attained, in ``[0, 1]``. **Always** emitted, including
+       when the coverage-standardised diversity features turn out not to be estimable — which is
+       the case it matters most in.
+   * - ``vsig:mask:<locus>:present`` / ``:estimable``
+     - Why a column is a hole. "This locus is absent" and "this sample is too shallow to reach the
+       target" are different facts that would otherwise both render as one ``nan``.
+   * - ``vsig:qc:-:winsor_frac``
+     - What fraction of this row the corpus's bounds clamped. See :ref:`sig-winsor`.
+
+``vsig:qc:<locus>:v_fallback_frac`` and ``:j_fallback_frac`` are the other two worth reading: an
+unrecognised V or J call raises nowhere, because the germline lookup falls back to the maximum
+observed distance, so a cohort on Adaptive nomenclature or an older IMGT release yields a fully
+populated, entirely plausible, systematically wrong result. These fractions are the only thing that
+says so.
+
+A hole is ``nan``, never ``0``.
+
+.. _sig-winsor:
+
+Winsorization: by percentile, and one-sided where the metric is
+---------------------------------------------------------------
+
+Bounds are estimated **once, on the corpus**, at a percentile — not as a multiple of a robust
+standard deviation. A robust-SD bound is not a fixed amount of probability: it depends on the
+distribution's shape, so an 8-SD bound trims nothing at all on a right-skewed count and a third of
+the corpus on a near-degenerate column.
+
+The side that gets trimmed comes from each feature's declared ``support``, and **never** from its
+transform:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 20 64
+
+   * - support
+     - trimmed
+     - because
+   * - ``nonneg``
+     - top only
+     - ``[0, inf)`` — cannot run away downward. Counts, richness, Hill numbers, standard deviations.
+   * - ``nonpos``
+     - bottom only
+     - ``(-inf, 0]`` — a log-probability is bounded above by 0.
+   * - ``real``
+     - both
+     - ``(-inf, inf)`` — log-ratios, clr and logit coordinates, PC scores.
+   * - ``unit``
+     - neither
+     - ``[a, b]`` — already bounded on both sides. Raw proportions, ``cstar``.
+
+Three raw features declare ``transform="none"`` and have three different supports. Deriving the side
+from the transform silently trims the wrong end of two of them, which is why ``support`` is a
+declared field rather than an inference.
+
+Two modes, and the mode fixes how the rotation was fitted
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 38 48
+
+   * - ``--winsorize``
+     - at emit time
+     - the corpus PCA was fitted by
+   * - ``features``
+     - clamp raw features to the corpus bounds, **then** rotate
+     - winsorized corpus, median/MAD, plain SVD. Deterministic and bit-reproducible; the robustness
+       sits in a step you can inspect.
+   * - ``pcs``
+     - rotate, **then** clamp the PC scores
+     - ``RobustScaler`` and a full-solver PCA — there the corpus still has its tails at fit time,
+       so the estimator has to resist them itself.
    * - ``none``
-     - ``len`` ``pchem`` ``pair`` ``pgen:mean_log10``
-     - already a moment, a log-ratio or a log-probability
-   * - ``none``, exempt
-     - ``mask``
-     - a 0/1 indicator; rescaling it against a reference would destroy it
+     - clamp nothing
+     - whichever of the two the artifact records
 
-Why arcsine and not log1p with winsorization
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Both bound sets and both percentiles (0.01 and 0.05) are stored, so ``--winsorize`` and
+``--winsor-p`` are apply-time choices that need no refit.
 
-This comes up every time, so here are the measurements (``benchmark_transform_arcsine.py`` in
-`2026-mirpy-analysis <https://github.com/antigenomics>`_ regenerates them).
+**The clamp is never silent.** Clamping is many-to-one: it overwrites a real measurement of a real
+sample, and the sample cannot tell afterwards. In the system this replaces, a reference whose centre
+was wrong by 57 robust deviations went unnoticed because every affected sample was clamped to the
+bound and looked like an ordinary tail case. So every row carries ``vsig:qc:-:winsor_frac``, and a
+value near 1.0 means this sample does not belong to this corpus — not that it is unusual.
 
-**Depth invariance.** Hold the true proportion :math:`p` fixed and vary the denominator from
-:math:`m = 91` (the corpus median junction-residue count for a shallow RNA-seq sample) to
-:math:`m = 50{,}000`:
+.. _sig-components:
 
-.. list-table::
-   :header-rows: 1
-   :widths: 26 24 24 26
-
-   * - transform
-     - value at m = 91
-     - value at m = 50,000
-     - drift
-   * - ``log1p(count)``
-     - 0.919
-     - 6.908
-     - **7.5×**
-   * - ``arcsine(p, m)``
-     - 0.1476
-     - 0.1419
-     - **1.04×**
-
-The same biological composition sequenced twice as deep is a *different feature value* under
-``log1p`` of counts. That alone decides it: depth is the largest nuisance axis in a public-data
-cohort, and a transform that encodes depth into every column hands the learner the batch label.
-
-**Variance stabilisation.** Ratio of the largest to the smallest per-bin standard deviation across
-the 20 amino-acid columns:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 26 26 28
-
-   * - denominator
-     - ``log1p``
-     - ``arcsine``
-     - reading
-   * - m = 91
-     - 3.1–3.9×
-     - 3.1–3.9×
-     - indistinguishable when counts are small
-   * - m = 5,000
-     - 21.6×
-     - **1.0×**
-     - only arcsine survives depth
-
-**Zeros carry information.** ``arcsine(0, m)`` depends on :math:`m` — a zero from 91 residues and a
-zero from 50,000 residues are different evidence, and the transform says so. ``log1p(0) = 0``
-always, which asserts that never observing a residue in a shallow sample and never observing it in
-a deep one are the same observation.
-
-**Winsorization is a fitted parameter.** A 5% clip has to be estimated from a corpus, so it inherits
-that corpus's depth distribution — and at the top of the distribution it clips the dominant V genes
-and the most abundant residues, which is where the biology usually is. Arcsine has no free
-parameter: the :math:`3/8` is Anscombe's, not ours.
-
-**Can you compose them?** ``arcsine(log1p(x))`` is undefined for :math:`x \ge 2` — ``log1p(2) = 1.10``
-and :math:`\arcsin` needs :math:`[0,1]`. The useful composition is the one the pipeline already
-does: log the *counts* into a clone weight, normalise to a proportion, then arcsine that proportion
-against the true count denominator. Under heavy clonal expansion the ``log2p1`` clone weight cuts
-the column standard deviation about 4× (0.0319 → 0.0080) and restores arcsine's 1.14× stabilisation,
-which raw frequency weighting loses.
-
-Holes are ``nan``, never 0
---------------------------
-
-A locus that was not sequenced, or a statistic the sample is too shallow to estimate, yields ``nan``
-plus a ``vsig:mask:`` column. A model that reads "absent" as "zero" reads an unsequenced chain as a
-biological finding.
-
-The coverage level the diversity columns are compared at
---------------------------------------------------------
-
-Every Hill number in the ``vsig:div:`` block is reported at a **standardised coverage** ``C*``
-rather than at a standardised read count — two samples are only comparable if the same fraction of
-their populations has been seen. Which ``C*`` is therefore load-bearing, and it is not one number.
-
-``DEFAULT_CSTAR = 0.20`` is a **fallback**, used when no measured constants are supplied. It is
-deliberately low: attained Good-Turing coverage on real repertoires runs 0.24–0.58, so a textbook
-0.95 would put essentially every sample into extrapolation, where the estimator inflates diversity
-roughly tenfold. Being below what samples attain is the safe direction.
-
-The measured values are neither uniform across loci nor independent of assay:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 14 22 22
-
-   * - locus
-     - amplicon TCR
-     - bulk blood RNA-seq
-   * - TRA
-     - 0.5451
-     - 0.1230
-   * - TRB
-     - 0.4080
-     - 0.1072
-
-A **3.8x difference on the same locus**, purely from how the library was made. Pass measured
-constants with ``cstar=`` whenever a reference artifact supplies them —
-:func:`mir.signature.signature` does it for you, selecting the reference by assay. Using a ``C*``
-above what your samples attain is the failure mode worth avoiding; the fallback errs the other way
-on purpose.
-
-A locus with no measured ``C*`` gets **no level at all**: its ``div:`` columns come back ``nan``
-and ``vsig:mask:<locus>:estimable`` is ``0``. If a whole locus of diversity columns is empty, this
-is why — and a partial dict (the shipped amplicon reference carries TRA and TRB only) also warns,
-naming the loci it could not cover. ``cstar=None`` asks for that outcome on every locus.
-
-**The fallback is declared in the vector, because it cannot be detected any other way.**
-
-A ``vsig:div`` block computed at a borrowed coverage level is fully populated and entirely
-plausible; nothing about the numbers says they rest on a guess rather than on a measurement, so a
-matrix built on the fallback can be joined to one built on measured constants without anybody
-noticing. Every sample therefore carries ``vsig:qc:-:cstar_fallback_frac`` — the share of its
-**present** loci whose level came from the flat fallback:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 14 56
-
-   * - ``cstar=``
-     - the column
-     - what the diversity block is
-   * - *(default)*, or a number
-     - ``1.0``
-     - computed at one borrowed level for all seven loci
-   * - ``{locus: level}``, covering the sample
-     - ``0.0``
-     - computed at each locus's own measured level
-   * - ``{locus: level}``, missing a locus
-     - ``0.0``
-     - a hole for the missing loci, measured for the rest
-   * - ``None``
-     - ``0.0``
-     - a hole everywhere — no level was established, and none was borrowed
-
-The refusal and the fallback are kept disjoint on purpose, so the two columns add up: a locus with
-no level is counted by ``estimable``, a locus with a borrowed one by ``cstar_fallback_frac``. The
-column sits in the ``qc`` channel beside the V/J fallback fractions, for the same reason — it is
-the number that tells a collaborator whether your vector is comparable to theirs — and it is in
-the ``nuisance`` preset rather than in ``classify`` or ``transfer``, because it describes the
-run, not the donor.
-
-The signature filters for you — do not pre-filter
--------------------------------------------------
-
-``sanitise`` drops non-functional clonotypes — a stop codon ``*``, or the legacy out-of-frame
-marker ``_`` — before any block is computed, and it runs **unconditionally** inside :func:`vsig`.
-There is no flag to turn it off and no need to do it yourself.
-
-Anything *outside* the 20 amino acids plus ``*`` and ``_`` raises instead of being dropped: an
-ambiguity code (``X``/``B``/``Z``), a lowercase residue, an empty string. That is a damaged table
-rather than a kind of receptor, and silently filtering it would hide a broken input. Measured over
-6,047,716 rows of real clinical AIRR: **zero** such characters, and zero ``_``. Pass
-``sanitise(df, strict=False)`` for a corpus known to carry ambiguity codes.
-
-**Pre-filtering changes exactly one column, and not the one you would expect.** Every block is
-computed on the rows that survive ``sanitise``, and ``work_frame`` overwrites ``frequency`` with
-``log2(1+count)/Σ`` over those survivors — it never reads the input file's ``frequency``, so an
-upstream renormalisation cannot propagate. But ``sanitise`` also *reports the weight fraction it
-dropped*, and that is a column::
-
-    vsig:qc:<locus>:nonstd_aa_frac = logit(dropped_fraction, n_rows)
-
-On a pre-filtered input there is nothing left to drop, so the numerator goes to zero **and** the
-denominator shrinks, and the value moves twice. Measured on 1,168 blood samples from a clinical AIRR cohort at
-``tier="standard"``: of 689 columns, **7 move** — one ``nonstd_aa_frac`` per locus — and 682 are
-bit-identical, including all 528 geometry columns.
-
-Two ways to not have the problem:
-
-* **Use a preset.** ``qc`` is in :data:`~vdjtools.signature.presets.NUISANCE_BLOCKS`, so
-  ``compact``, ``transfer`` and ``classify`` all drop it. Measured across the same 1,168 samples,
-  **zero columns differ** under any of the three. This is exact; filtering the repertoire is not.
-* **Declare it.** ``vsig(..., prefiltered=True)`` reports ``nan`` — a hole — instead of a confident
-  floor value that reads as "this repertoire is exceptionally clean".
-
-If every locus reports exactly zero non-functional weight, :func:`vsig` warns: that does not happen
-in unfiltered data. A single locus can genuinely reach zero (IGK does it in 84 of those 1,168
-samples), which is why the check is on the conjunction and why ``prefiltered`` is a parameter
-rather than something inferred.
-
-Ambiguous V calls resolve to the first gene
--------------------------------------------
-
-Real data does not hand you one V gene. Adaptive/immunoSEQ material realigned with MiXCR against the
-IMGT reference — the better reference, but junction plus short flanks rather than full primered
-reads — routinely calls a comma-separated tie. In one store slice that produced **1,296 distinct
-"genes"**, of which **1,235 were comma-strings** rather than genes at all, which silently shatters
-any V-keyed feature space into singleton columns.
-
-:func:`vdjtools.io.schema.resolve_gene` takes the **first** gene in the list and strips the allele —
-MiXCR orders by alignment score, so the first is the best-supported call:
-
-.. code-block:: python
-
-   from vdjtools.io.schema import resolve_gene, strip_allele
-
-   df.with_columns(resolve_gene(pl.col("v_call")))   # "TRBV5-1*01,TRBV5-5*01" -> "TRBV5-1"
-   df.with_columns(strip_allele(pl.col("v_call")))   # keeps the tie, sorted, for reporting
-
-The two are deliberately different functions. ``strip_allele`` **sorts** the tie so that reporting is
-order-insensitive; composing it with "take the first" would therefore give you the *alphabetically*
-first gene (``TRBV19`` where the aligner said ``TRBV5``), which is a plausible-looking wrong answer.
-Use ``resolve_gene`` for anything keyed on V.
-
-The V + k-mer space
+How many components
 -------------------
 
-:mod:`vdjtools.features.kmer_space` is the heavy feature: a junction k-mer profile keyed jointly on
-the V gene, TF-IDF scaled, and projected onto a frozen truncated-SVD basis. The k-mer counting is
-C++ (``src/kmer.cpp``); a Python implementation is not viable at corpus scale.
+``--components`` / ``n_components=`` takes either kind of answer:
 
-.. code-block:: python
+* an **integer** — a fixed count, identical at every locus. At fit time it is a cap: a block
+  narrower than the request (the five cross-locus ratios against a request of 128) gets its full
+  rotation, recorded per locus in the artifact.
+* a **fraction** in ``(0, 1)`` — cumulative variance explained. The count then differs per locus
+  *and per corpus*, because some corpora are genuinely easier to explain. That is biology, not a
+  defect.
 
-   from vdjtools.features.kmer_space import fit_kmer_space, save_kmer_spaces
-   from vdjtools.signature.kmer import register_kmer
+The artifact stores the rotation only up to the count it was fitted at, plus the **full eigenvalue
+spectrum**. So truncating downward at apply time is free and **exact** — the components are ordered,
+so the first *n* of a longer rotation are the same vectors — while asking for more than was fitted
+raises, and the error quotes what the spectrum does reach.
 
-   sp = fit_kmer_space(frames, pattern="xxxx", n_groups=8, flank=4,
-                       min_df=0.02, max_df=0.80, n_components=32)
-   register_kmer({"TRB": sp})            # adds vsig:kmer:TRB:PC01.. to the layout
-   sp.transform(df, weight="freq")       # project one repertoire
+.. warning::
 
-**Patterns.** ``"xxxx"`` is a contiguous 4-mer; ``"xx.x"`` is gapped (the ``.`` is a skipped
-position). Gapped patterns exist because a conserved motif with one variable position is otherwise
-split across every substitution at that position.
+   **Do not choose the count by explained variance alone.** A truncated SVD keeps the directions of
+   greatest variance *in the fitting corpus*, which for repertoires are depth, V usage and batch. A
+   motif carried by a handful of clonotypes in a handful of donors is not one of those.
 
-**Alphabets.** ``n_groups=20`` is the plain amino-acid alphabet. Smaller values cluster residues by
-BLOSUM62: :func:`seqtree.SubstitutionMatrix.blosum62().penalty` is
-:math:`s(a,a) + s(b,b) - 2s(a,b)`, which is a *squared* distance in the Gram sense, so classical MDS
-recovers the exact embedding and Ward linkage on it gives the groups. No hand-picked chemistry
-classes.
+   Measured on ankylosing spondylitis against healthy, both HLA-B27+, basis fitted on a disjoint
+   cohort: the sum of the 17 columns the published motif occupies reads AUC 0.769 at permutation
+   *p* = 0.031, while the best of 64 SVD components reads AUC 0.841 at *p* = 0.20. The larger number
+   is the meaningless one — a maximum over 64 components reaches \|AUC − 0.5\| = 0.34 under a label
+   permutation null.
 
-**The sparsity trade, measured.** On TRB with V-keying and a 4-mer:
+   For rare, discriminative signal do not rotate at all: take
+   :func:`~vdjtools.signature.raw_and_channels` and an L1 model. For a broad compositional shift,
+   rotate, and keep components that survive a study-disjoint refit rather than components that reach
+   a variance threshold.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 18 26 28 28
+The coverage target is a runtime argument
+-----------------------------------------
 
-   * - alphabet
-     - code space
-     - surviving columns
-     - effect
-   * - A = 20
-     - 3,360,000
-     - 1,022
-     - most codes never occur; the survivors are common motifs
-   * - A = 8
-     - 86,016
-     - 25,402
-     - dense, but distinct motifs collapse into one column
-
-Neither is universally right. ``max_df`` matters as much as the alphabet: at ``A=8, max_df=0.80``
-a known disease motif was cut from the vocabulary entirely (0/4 windows present), while at
-``A=20, max_df=0.99`` all 4 survived. If you are looking for a *rare discriminative* motif, keep the
-document-frequency ceiling high and do not project — see below.
-
-Do not select components by variance
--------------------------------------
-
-A truncated SVD keeps the directions of greatest variance **in the fitting corpus** — which, for a
-repertoire matrix, are sequencing depth, V-gene usage and batch. A disease motif carried by a
-handful of clonotypes in a handful of donors is not one of those, so projecting onto the leading
-components discards it by construction.
-
-Measured on ankylosing spondylitis vs healthy, both HLA-B27+, with the space fitted on a disjoint
-TRB cohort (``benchmark_kmer_ankspond.py``):
+Hill numbers are read at a coverage level, and **that level is not in the artifact**. A per-sample
+quantity has no business in a corpus artifact: in the system this replaces it lived there, and one
+shipped reference ended up standardising tissue samples to a level measured on blood, identical to
+17 significant digits across all seven loci while its location and scale had genuinely been refitted.
 
 .. list-table::
    :header-rows: 1
-   :widths: 44 16 16 24
+   :widths: 20 80
 
-   * - read-out
-     - AUC
-     - perm. p
-     - verdict
-   * - sum of the 17 columns the published motif occupies (A = 20)
-     - 0.769
-     - **0.031**
-     - the representation carries it
-   * - same, A = 8
-     - 0.731
-     - 0.061
-     - the reduced alphabet blurs it
-   * - best of 64 SVD components
-     - 0.841
-     - 0.20
-     - **chance** — null median 0.297, 95th 0.385
-   * - best single vocabulary column
-     - 0.813
-     - —
-     - a label-selected maximum, not an estimate
+   * - ``--cstar-target``
+     - meaning
+   * - ``min`` *(default)*
+     - This cohort's own per-locus minimum attained coverage. Comparable across its samples, and a
+       property of *this* cohort rather than of somebody's corpus. Costs a cheap extra pass over the
+       count column — and resolves deferred samples twice, so pass a number for a one-pass run.
+   * - a number
+     - That level for every locus. One pass.
+   * - ``own``
+     - Each sample at its own attained coverage: the diversity features are then *observed* rather
+       than standardised, and are not comparable across samples.
 
-The two "best-of-N" rows are the point. They are the larger numbers and they are the ones that mean
-nothing: a maximum taken over 64 components reaches :math:`|\mathrm{AUC} - 0.5| = 0.34` under a
-label permutation null. **Any best-of-N read-out must be nulled or not quoted.**
+Whatever the target, ``vsig:cov:<locus>:cstar`` reports what the sample reached and
+``vsig:mask:<locus>:estimable`` reports whether the target was reachable without extrapolating.
 
-How many components, then? Measured on the emitted signature matrix (14,553 samples × 1,369
-columns, 182 studies), mean AUC over the four largest tasks with study-disjoint folds and the
-rotation refit inside every fold:
+Raw feature groups
+------------------
+
+Every group at a locus is concatenated into **one** feature vector and rotated together, so the PCA
+can find cross-group structure. One rotation per ``(half, locus)``, plus one for the cross-locus
+group — *not* one joint rotation over all loci, because under a joint rotation one absent locus
+silently moves every component. Per-locus blocking is what keeps a hole a hole.
 
 .. list-table::
    :header-rows: 1
-   :widths: 16 14 14 14 14 14 14
+   :widths: 12 18 70
 
-   * - components
-     - 8
-     - 16
-     - 64
-     - 256
-     - 512
-     - all 1,369
-   * - mean AUC
-     - 0.575
-     - 0.581
-     - 0.589
-     - **0.591**
-     - 0.584
-     - 0.555
+   * - group
+     - width
+     - what
+   * - ``div``
+     - 6
+     - Coverage-standardised Hill numbers ``0D_c``/``1D_c``/``2D_c``, ``clonality``, ``0D_chao``,
+       ``d50``
+   * - ``depth``
+     - 3
+     - ``reads``, ``richness``, ``S_unseen`` (Chao's estimate of what was never drawn)
+   * - ``clon``
+     - 3
+     - Clone-size composition ``f1``/``f2`` in clr coordinates, plus the top clone's share
+   * - ``len``
+     - 3
+     - Weighted junction-length ``mean``, ``sd``, ``skew``
+   * - ``vus`` / ``jus``
+     - germline
+     - V and J gene usage over the arda germline vocabulary, clr
+   * - ``spec``
+     - germline x 26
+     - Spectratype: junction length resolved per V gene, clr
+   * - ``kmer``
+     - 400
+     - Junction 2-mer composition, arcsine
+   * - ``aa``
+     - 20
+     - Single-residue composition, arcsine
+   * - ``pchem``
+     - 30
+     - Physicochemistry over two junction regions
+   * - ``iso`` / ``shm``
+     - 5 / 1
+     - IGH only: isotype composition in clr, and mean V identity
+   * - ``pair``
+     - 5
+     - Cross-locus: five log read-count ratios, depth divided out
 
-Flat from 16 to 256, then a cliff — **the full matrix scores worse than 16 components**. Use
-**16–64**: 16 buys 98% of the achievable AUC at a quarter of the width, 64 is the plateau. Keep all
-columns only for a regularised learner (L1, boosting) or a rare sparse signal.
+Widths per locus run from 685 (TRD) to 3,744 (IGH), 13,483 raw features in total.
 
-The practical consequence for feature selection:
+.. note::
 
-- **rare, discriminative signal** — keep the un-projected TF-IDF columns and use an L1 model. The
-  SVD is the wrong tool; it optimises for the wrong thing.
-- **broad compositional shift** — project, and keep only components that survive a study-disjoint
-  split-half refit (per-component score correlation ≥ 0.95), not components that reach a
-  cumulative-variance threshold.
-- **either way** — report the permutation null alongside the number.
+   ``spec`` is by far the widest group and the sparsest. 121 IGH V genes x 26 lengths is 3,146 cells
+   against a median 464 IGH clonotypes per real sample — about 0.15 observations per cell, mostly
+   structural zeros. That sparsity is real and is not hidden: a corpus of 10,000 repertoires puts
+   ~4.6M observations behind the same cells, so the rotation's directions are well determined even
+   where one sample's scores along them are noisy. How noisy is readable per sample from
+   ``vsig:cov:<locus>:cstar``.
 
-Regenerating these numbers
---------------------------
+``columns=`` selects output, it does not skip work
+--------------------------------------------------
 
-Every table on this page is produced by a script in the companion
-`2026-mirpy-analysis <https://github.com/antigenomics>`_ repo, so it can be re-measured rather than
-trusted:
+Because a locus is rotated jointly over all its groups, every group must be computed before any of
+that locus's components exist. ``columns=`` therefore restricts the emitted frame; it does not avoid
+the computation. **Declining a whole locus does skip it**, and is the way to make a run cheaper.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 46 54
-
-   * - script
-     - what it re-measures
-   * - ``benchmark_transform_arcsine.py``
-     - the arcsine vs log1p depth-drift and variance-stabilisation tables
-   * - ``benchmark_kmer_ankspond.py``
-     - the k-mer transfer AUCs and their permutation nulls
-   * - ``benchmark_signature_dimension.py``
-     - how many components reproduce across a study-disjoint refit
-   * - ``fit_kmer_spaces.py``
-     - the fitted per-locus spaces and their vocabulary sizes
-
-*Measurements on this page were last taken 2026-08-13.*
-
-.. _signature-presets:
-
-Feature presets — pick by intent, not by column
------------------------------------------------
-
-The signature is over 1,400 columns. Almost nobody wants all of them, and which subset is right
-depends on the question — a model that must run on another lab's samples wants different columns
-from one scoring samples inside a single study. :mod:`vdjtools.signature.presets` names those
-choices, documents each, and **ranks** it:
-
-**recommended**
-   Use this unless you have a reason not to.
-
-*specific*
-   Correct for a stated purpose and wrong outside it.
-
-``avoid``
-   A control, a baseline, or a measured dead end. Named so that choosing it is deliberate.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 14 14 10 62
-
-   * - preset
-     - rank
-     - columns
-     - what it is
-   * - ``compact``
-     - **recommended**
-     - 86
-     - The smallest vector that still describes a repertoire. Start here.
-   * - ``transfer``
-     - **recommended**
-     - 550
-     - For models that must work on another lab's samples. Drops the columns whose level moves most between studies.
-   * - ``classify``
-     - **recommended**
-     - 615
-     - The general-purpose set. Best measured task performance when train and test come from comparable cohorts.
-   * - ``statistics``
-     - *specific*
-     - 101
-     - Classical repertoire statistics only. Needs no embedding, so vdjtools alone suffices.
-   * - ``bcell``
-     - *specific*
-     - 271
-     - B-cell receptor work: the immunoglobulin loci with somatic hypermutation and isotype.
-   * - ``geometry``
-     - *specific*
-     - 514
-     - Embedding coordinates only — no count statistics at all.
-   * - ``full``
-     - *specific*
-     - 1404
-     - Every contract column. For feature selection, not for fitting.
-   * - ``nuisance``
-     - ``avoid``
-     - 74
-     - Sequencing protocol only. A control, not a feature set.
-
-Every preset resolves to a column list from the frozen layout alone — block names, loci, tier. No
-corpus, no fitted artifact and no private data is involved, so two people selecting the same preset
-get the same columns in the same order.
+Building a corpus
+-----------------
 
 .. code-block:: bash
 
-   vdjtools presets                      # the table above
-   vdjtools presets transfer             # one preset in full: features, how, use cases, caveats
-   vdjtools signature *.tsv --preset transfer --describe    # the exact columns it selects
+   vdjtools corpus --corpus naive  --out naive.npz                       # 10,000 repertoires
+   vdjtools corpus --corpus memory --size n_eff --components 0.95 -o m.npz
+   vdjtools corpus --smoke -o /tmp/smoke.npz                             # minutes, for tests
 
-.. code-block:: python
+The synthetic corpora use **no samples from anybody's cohort**: every receptor is drawn from the
+bundled recombination models. The build is a deterministic function of
+``(corpus, loci, samples, size, seed, source)`` and those models, and is required to be
+byte-identical across processes and thread counts:
 
-   from vdjtools.signature import presets
+.. code-block:: bash
 
-   presets.get("transfer").rank        # 'recommended'
-   cols = presets.columns("compact")   # a concrete, ordered column list
-   presets.table()                     # the whole registry as a DataFrame
+   vdjtools corpus --corpus naive --loci TRB,TRG --samples 40 --size 150 -o /tmp/a.npz
+   OMP_NUM_THREADS=1 POLARS_MAX_THREADS=1 \
+     vdjtools corpus --corpus naive --loci TRB,TRG --samples 40 --size 150 -o /tmp/b.npz
+   cmp /tmp/a.npz /tmp/b.npz          # must be identical
 
-Where the rankings come from
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. important::
 
-A benchmark over a public multi-study AIRR corpus — **182 study groups over 198 accessions,
-14,553 samples** — scored with **study-disjoint folds**: fit on some studies, predict on studies the
-fit never saw. Under that split a column that merely encodes sequencing protocol scores at chance,
-which is the point. Three findings shaped the presets:
+   Each repertoire's depth is **drawn**, log-uniformly over the measured real p05–p95 spread for its
+   locus, not fixed. A corpus at one fixed depth has exactly zero variance in ``depth:reads``,
+   ``depth:richness`` and all five ``pair:`` ratios, so those contribute nothing to the rotation and
+   the cross-locus block cannot be fitted at all — and it fails quietly, as an artifact that simply
+   omits them. Real repertoires span 4.1x (TRB) to 11.0x (IGH) between their 5th and 95th
+   percentiles.
 
-* **A nuisance floor of depth + presence masks + call quality is a surprisingly strong predictor**
-  on many contrasts. Any feature set worth using has to beat its own floor, which is why
-  ``nuisance`` ships as a named control rather than being hidden.
-* **Projection did not help.** Plain robust or ``asinh`` scaling beat PCA at every rank tested, so
-  no preset projects by default and ``full`` is documented as a feature-selection tool rather than a
-  model input.
-* **The two halves have opposite nuisance profiles.** The embedding geometry carries several times
-  less study-to-study variance than the count statistics and the most donor-to-donor variance, and
-  is nearly unaffected by whether a sample is blood or tissue — but wins fewer supervised tasks
-  outright. Hence ``transfer`` and ``geometry`` for robustness, ``classify`` and ``statistics`` for
-  raw accuracy.
+The artifact verifies itself on load: the raw column order is re-derived from the stored vocabulary
+through the current layout and compared, and the recorded bundled-model version is checked against
+the installed one. Both raise rather than producing numbers in a different coordinate system that
+look perfectly reasonable — retraining the bundled models moves the synthetic corpora by 0.1–1.6%
+per locus.
 
-Anyone with a comparable SRA/AIRR corpus can reproduce this; none of it depends on a private
-dataset.
+Parallelism
+-----------
+
+``--jobs``/``n_jobs`` is worker **processes**. There is exactly one concurrency knob, and its help
+text says which layer it reaches; a flag named ``--threads`` that started processes is a mistake
+this subsystem has made before. Workers are spawned, not forked — polars cannot be combined with
+``fork`` — and a pool that cannot start **raises** rather than falling back to one process, because
+a correctness-preserving fallback is what hid a 20x slowdown here once.
 
 API
 ---
 
 .. automodule:: vdjtools.signature
    :members:
-   :undoc-members:
+   :imported-members:
 
-.. automodule:: vdjtools.features.kmer_space
+.. automodule:: vdjtools.signature.layout
    :members:
-   :undoc-members:
+
+.. automodule:: vdjtools.signature.features
+   :members:
+
+.. automodule:: vdjtools.signature.corpus
+   :members:
+
+.. automodule:: vdjtools.signature.signature
+   :members:
+
+.. automodule:: vdjtools.signature.transform
+   :members:

@@ -180,7 +180,8 @@ vdjtools diversity      -m metadata.txt --base-dir samples/ --threads 8 -o div.t
 vdjtools spectratype    --cohort cohort_parquet/ -o spectra.tsv                       # one streamed pass
 
 # the portable signature — one fixed, named feature vector per sample (see below)
-vdjtools signature      --preset classify -m metadata.txt --base-dir samples/ -o sig.tsv
+vdjtools corpus         --corpus naive --smoke -o naive.npz      # fit once, no cohort needed
+vdjtools signature      --corpus naive.npz -m metadata.txt --base-dir samples/ -o sig.tsv
 
 # longitudinal — paired within-donor expansion test between two timepoints
 vdjtools dynamics day0.tsv day15.tsv -o tracked.tsv
@@ -238,10 +239,11 @@ half (`vsig`); the geometry half (`rsig`, features of the prototype-sum embeddin
 `sample_id` into one contract:
 
 ```python
-from vdjtools.signature import vsig, vsig_cohort, columns, describe
+from vdjtools.signature import vsig, vsig_cohort
+from vdjtools.signature.corpus import Corpus
 
-v = vsig({"TRB": sample}, tier="standard")    # {column: value}, in frozen layout order
-describe("standard")                          # the column dictionary
+corpus = Corpus.load("naive.npz")             # a corpus is REQUIRED -- no default
+v = vsig({"TRB": sample}, corpus)             # {column: value}, in artifact order
 ```
 
 Every feature carries a variance-stabilising transform chosen from its support — Haldane–Anscombe
@@ -291,26 +293,32 @@ so your matrix and a collaborator's are the same coordinate system, computed ind
 scaler of your own.
 
 ```bash
-vdjtools signature --preset classify -m metadata.txt --base-dir samples/ -o vsig.tsv
-vdjtools presets                       # the named feature sets, ranked
-vdjtools signature --describe          # the exact columns, reading no input
-vdjtools signature --channels          # the channel vocabulary — what each group of columns measures
+vdjtools corpus --corpus naive --smoke -o naive.npz          # build a corpus (no cohort needed)
+vdjtools signature --corpus naive.npz -m metadata.txt --base-dir samples/ -o vsig.tsv
+vdjtools signature --corpus naive.npz --components 32 --describe   # exactly what you will get
 ```
 
 ```python
-from vdjtools.signature import vsig, vsig_cohort, channels, describe
+from vdjtools.signature import vsig, vsig_cohort, raw_and_channels, synthesize
 ```
 
-Columns are `<sig>:<channel>:<locus>:<feature>`, and the tiers `core` (153) ⊂ `standard` (689) ⊂
-`full` (1404) are exact index subsets of one frozen order. The second field is the **channel** — the
-named group of columns that measures one thing, and the level a finding is stated at ("the groups
-separate in IGH diversity"). Twenty channels cover the whole vector.
+Three stages, and a **corpus** fixes the last two: raw features come from this sample alone, then
+they are clamped to the corpus's winsorization bounds, then rotated by its per-locus PCA and scaled
+by its per-PC median and MAD. A corpus is required — a signature is comparable to another one only
+if both were rotated through the same one, and nothing about the numbers would say otherwise.
+
+Columns are `<sig>:<block>:<locus>:<feature>`. What comes out per locus is `vsig:pc:<locus>:PCnn`
+plus **channels**, which are never rotated and never clamped: `cov:*:cstar` (the coverage this
+sample actually attained, always emitted), `mask:*` (why a column is a hole), and `qc:*` (germline
+fallback fractions, and how much of the row the bounds clamped). A hole is `nan`, never `0`.
+
+`--components` takes a count (`128`) or a variance fraction (`0.95`); truncating downward later is
+exact and needs no refit.
 
 This command emits the statistics half (`vsig`). The geometry half (`rsig`) needs the prototype
-embedding and lives in [mirpy](https://github.com/antigenomics/mirpy) — `mir signature` emits both
-as one vector, which is usually what you want.
+embedding and lives in [mirpy](https://github.com/antigenomics/mirpy) — `mir signature` emits it.
 
-Full documentation, including which scale reference to use and what "weighted" means:
+Full documentation, including which corpus to use and how the winsorization side is chosen:
 [**Signature**](https://docs.isalgo.dev/vdjtools/signature.html) ·
 [**Channels**](https://docs.isalgo.dev/vdjtools/channels.html)
 

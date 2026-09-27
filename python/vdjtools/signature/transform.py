@@ -1,10 +1,13 @@
-"""Variance-stabilising transforms, and the frozen reference rescaling.
+"""Variance-stabilising transforms.
 
 Every signature column is a different kind of number — a read count, a Hill number, a share of
 a composition, a coordinate of an embedding — and a downstream model should not have to know
-which. Each feature therefore declares one transform (:mod:`vdjtools.signature.layout`), applied
-where the feature is computed, and every column then passes through the same frozen reference
-rescaling. What comes out is dimensionless, roughly symmetric, and on a common scale.
+which. Each raw feature therefore declares one transform
+(:mod:`vdjtools.signature.layout`), applied where the feature is computed, so that what reaches
+the rotation is dimensionless and roughly symmetric.
+
+Standardisation, winsorization and rotation are **not** here -- they need a corpus, and they live
+in :mod:`vdjtools.signature.corpus`. This module is a pure function of one sample.
 
 **Small denominators are the whole problem.** At the depths this signature has to work at — a
 median of order a hundred clonotypes, a quarter of samples below ten — a "fraction" is very
@@ -19,14 +22,6 @@ None of these are free parameters: ``1/2`` and ``3/8`` are the standard bias-min
 from __future__ import annotations
 
 import numpy as np
-
-#: Values further than this many robust standard deviations from the reference are clipped, so a
-#: single pathological sample cannot dominate a downstream model's scaling. Wide enough that a
-#: genuine outlier stays an outlier.
-DEFAULT_CLIP = 8.0
-
-#: ``1.4826 * MAD`` estimates the standard deviation of a normal distribution.
-_MAD_TO_SD = 1.4826
 
 
 def log10(x, floor: float = 1.0):
@@ -154,50 +149,6 @@ def clr(parts, m=None, *, keys=None):
     return dict(zip(names, out)) if names else out
 
 
-def reference_z(x, loc, scale, clip: float = DEFAULT_CLIP):
-    """Rescale against the frozen reference: ``(x − loc) / scale``, clipped.
-
-    ``loc`` and ``scale`` are the reference median and ``1.4826·MAD`` — robust, so a handful of
-    pathological samples in the reference corpus cannot set the scale for everyone. They are
-    **frozen**: a collaborator does not fit them, which is what makes their vector comparable to
-    ours rather than merely internally consistent.
-
-    A zero ``scale`` means the reference never saw this column vary; the value is passed through
-    centred but unscaled rather than divided by zero.
-    """
-    x = np.asarray(x, dtype=float)
-    scale = np.asarray(scale, dtype=float)
-    safe = np.where(scale > 0, scale, 1.0)
-    return np.clip((x - np.asarray(loc, dtype=float)) / safe, -clip, clip)
-
-
-def robust_loc_scale(x, axis=0):
-    """Reference ``(median, 1.4826·MAD)`` from observed values only.
-
-    Non-finite entries are ignored rather than imputed. Computing the statistics *before* any
-    imputation matters: filling first and then measuring deflates the scale in proportion to how
-    sparse the column is, so the least-observed locus ends up with the largest apparent values
-    and dominates every distance and every principal component.
-    """
-    x = np.asarray(x, dtype=float)
-    with np.errstate(invalid="ignore"):
-        loc = np.nanmedian(np.where(np.isfinite(x), x, np.nan), axis=axis)
-        mad = np.nanmedian(np.abs(np.where(np.isfinite(x), x, np.nan) - loc), axis=axis)
-    return np.nan_to_num(loc), np.nan_to_num(mad) * _MAD_TO_SD
-
-
-def magnitude_scale(block, rms):
-    """Rescale a whole block by one frozen scalar, with no centring.
-
-    For a block whose *magnitude* is its meaning — the signed contrast to an unselected
-    reference, where a sample with no immune deviation should land at the origin. Standardising
-    such a block per column would force every coordinate to unit variance across samples, which
-    makes a near-zero sample look exactly like a typical one and deletes the deficiency the
-    block exists to carry.
-    """
-    return np.asarray(block, dtype=float) / (rms if rms > 0 else 1.0)
-
-
 #: Emit-time transforms by the code a feature declares in the layout. Those taking a denominator
 #: are called as ``f(x, m)``; the rest as ``f(x)``. ``clr`` is not here because it consumes a
 #: whole composition at once rather than one value.
@@ -253,17 +204,6 @@ def _demo() -> None:
     # multiplicative replacement leaves the observed ratio alone; additive would not
     sparse = clr({"a": 3.0, "b": 1.0, "c": 0.0}, m=4)
     assert abs((sparse["a"] - sparse["b"]) - np.log(3)) < 1e-9
-
-    # reference rescaling: clips, and does not divide by a zero scale
-    assert reference_z(1e6, 0.0, 1.0) == DEFAULT_CLIP
-    assert reference_z(3.0, 1.0, 0.0) == 2.0
-
-    # robust statistics ignore holes rather than filling them
-    loc, scale = robust_loc_scale(np.array([[1.0], [2.0], [3.0], [np.nan]]))
-    assert loc[0] == 2.0 and scale[0] > 0
-
-    # magnitude scaling leaves the origin at the origin
-    assert np.allclose(magnitude_scale(np.zeros(4), 2.0), 0.0)
 
     assert apply("log10", 0.0) == 0.0 and apply("log1p", 0.0) == 0.0
     print("transform OK")

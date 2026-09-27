@@ -23,7 +23,7 @@ from vdjtools.io.schema import (
     has_nt_resolution,
     resolve_duplicates,
 )
-from vdjtools.signature.blocks import sanitise
+from vdjtools.signature.features import sanitise
 from vdjtools.stats.diversity import diversity_cohort, diversity_stats
 
 #: The exact frame filed in TODO.md: four rows, three distinct keys, one key repeated with
@@ -121,18 +121,24 @@ def test_an_unknown_policy_is_rejected_rather_than_ignored():
             call()
 
 
-def test_the_policy_reaches_vsig_and_therefore_the_whole_signature_path():
+def test_the_policy_reaches_the_whole_feature_path():
     """The error message tells the caller to pass ``on_duplicate="sum"`` -- so it must be passable.
 
-    Without this the message is a dead end: ``sanitise`` took the argument but ``vsig`` did not,
-    so the only route through was to collapse every locus frame by hand before calling.
-    """
-    from vdjtools.signature.assemble import vsig
+    Without this the message is a dead end: ``sanitise`` took the argument but the assembler above
+    it did not, so the only route through was to collapse every locus frame by hand first.
 
+    Asserted at ``raw_and_channels`` rather than at ``vsig``, because that is the layer the policy
+    has to reach; ``vsig`` is that call plus a corpus rotation, and building a corpus to test an
+    argument-passing contract would make this test minutes long for no extra coverage.
+    """
+    from vdjtools.signature.features import gene_vocab, raw_and_channels
+
+    vocab = {"TRB": gene_vocab("TRB")}
     sample = {"TRB": REPRODUCER}
     with pytest.raises(ValueError, match="no junction_nt"):
-        vsig(sample)
-    assert vsig(sample, on_duplicate="sum")["vsig:mask:TRB:present"] == 1.0
+        raw_and_channels(sample, vocab)
+    _raw, chan = raw_and_channels(sample, vocab, on_duplicate="sum")
+    assert chan["vsig:mask:TRB:present"] == 1.0
 
 
 def test_both_clis_expose_the_flag_the_error_message_names():
