@@ -34,30 +34,6 @@ def _infer_locus(vcalls: pl.Series) -> str | None:
     return m[0] if m.len() else None
 
 
-def _gene_to_allele(model) -> dict[str, str]:
-    """Map each V/J **gene** to a representative allele the model carries.
-
-    CellRanger reports genes (``TRBV10-3``) while the model is keyed by allele
-    (``TRBV10-3*01``), and :func:`vdjtools.model.native.pgen_aa` deliberately raises on a
-    gene name rather than silently marginalising over every allele -- that fallback once
-    returned a Pgen 2.38x too high with no error. So the gene has to be resolved to a
-    concrete allele *here*, deliberately and visibly, rather than swallowed.
-
-    The representative is the lowest-numbered allele present, i.e. ``*01`` wherever the
-    model has it. Alleles of one gene share the CDR3-region germline in all but rare cases,
-    so this is the conventional reading of a gene-level call -- but it IS a choice, which is
-    why :func:`paired_pgen` exposes ``resolve_genes=False`` to refuse it instead.
-    """
-    _pm, vi, ji = native.pack(model)
-    out: dict[str, str] = {}
-    for idx_of in (vi, ji):
-        for allele in idx_of:
-            gene = allele.split("*")[0]
-            if gene not in out or allele < out[gene]:
-                out[gene] = allele
-    return out
-
-
 def _chain_pgen(model, aa, v, j, condition_vj: bool) -> float | None:
     if not isinstance(aa, str) or not aa:
         return None
@@ -101,7 +77,8 @@ def paired_pgen(
         condition_vj: Condition each chain's Pgen on its V/J call. ``False`` marginalises
             over all V/J unconditionally.
         resolve_genes: Resolve a **gene**-level call (``TRBV10-3``) to a representative
-            model allele (``TRBV10-3*01``) before scoring -- see :func:`_gene_to_allele`.
+            model allele (``TRBV10-3*01``) before scoring -- see
+            :func:`vdjtools.model.native.gene_to_allele`.
             Default ``True``, because CellRanger reports genes and without this every 10x
             row scores ``None``. Set ``False`` to score only exact allele matches.
         alpha_locus: Locus of the α/light chain (e.g. ``"TRA"``, ``"IGK"``); inferred from
@@ -129,7 +106,7 @@ def paired_pgen(
     if resolve_genes and condition_vj:
         for m in (ma, mb):
             if m is not None:
-                aliases.update(_gene_to_allele(m))
+                aliases.update(native.gene_to_allele(m))
 
     def _call(name):
         return aliases.get(name, name) if name else name

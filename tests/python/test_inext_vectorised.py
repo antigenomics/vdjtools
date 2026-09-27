@@ -92,7 +92,7 @@ def test_diversity_estimates_are_unchanged_end_to_end():
     """The number the signature actually ships, not the private helper."""
     import polars as pl
 
-    from vdjtools.signature import blocks as B
+    from vdjtools.signature import features as B
 
     r = np.random.default_rng(3)
     df = pl.DataFrame({
@@ -103,11 +103,11 @@ def test_diversity_estimates_are_unchanged_end_to_end():
     }, schema_overrides={"c_call": pl.Utf8})
     clean, _ = B.sanitise(df)
 
-    fast = B.div_block(clean, 0.20, tier_full=True)
+    fast = B.div_group(clean, 0.20)
     vec = I._rtd_moment
     try:
         I._rtd_moment = _loop
-        slow = B.div_block(clean, 0.20, tier_full=True)
+        slow = B.div_group(clean, 0.20)
     finally:
         I._rtd_moment = vec
 

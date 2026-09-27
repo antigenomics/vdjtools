@@ -114,6 +114,23 @@ struct AaScenario {
 std::vector<AaScenario> best_aa_scenarios(const PackedModel& m, const std::string& aa,
                                           int v_idx, int j_idx, int k);
 
+// Batch ``best_aa_scenarios`` over many CDR3s, parallelized across sequences exactly as
+// ``pgen_aa_batch`` is: disjoint work, no reduction, so the result is identical to the per-sequence
+// calls for any ``nthreads``. Returned as parallel COLUMNS with one entry per scenario (not per
+// query), so the Python side builds a frame without materializing k objects per row. ``row`` indexes
+// ``seqs``, ``rank`` is the 0-based position within that row's top-k; a query the DP cannot explain
+// (unknown residue, or no reachable rearrangement under the pinned V/J) contributes no entries.
+struct AaScenarioBatch {
+    std::vector<int> row, rank;
+    std::vector<double> w;
+    std::vector<int> v, len_v, j, len_j, d, idx5, idx3, pos;
+};
+
+AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m,
+                                        const std::vector<std::string>& seqs,
+                                        const std::vector<int>& v_idxs,
+                                        const std::vector<int>& j_idxs, int k, int nthreads);
+
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.
 struct Counts {

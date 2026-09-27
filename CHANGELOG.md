@@ -3,6 +3,208 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.0.0 — 2026-09-27
+
+**Signatures rewritten from scratch.** No legacy path, no backward compatibility, no artifact
+carried over. The statistics half only; the geometry half follows in mirpy 4.0.0.
+
+### The defect this fixes
+
+The old system fitted a rotation on **10,000 individual clonotypes** from a prototype panel, while
+every one of the 399 PC columns that rotation produced was a **repertoire** statistic. Its centre
+and scale were fitted on **zero rows** of that artifact and arrived from a separate corpus of real
+samples. Two independent fits, stitched — which is how one shipped reference came to pair a centre of
+exactly `0.0` with a scale plainly fitted from data, putting a corpus-typical sample **81 robust
+deviations** out, and how `tissue` came to carry `blood`'s coverage constants for all seven loci to
+17 significant digits while its own location and scale had genuinely been refitted.
+
+Now everything comes out of **one pass over one matrix of repertoires**: bounds, centre, scale,
+rotation and per-PC scaling, per locus, from the same corpus.
+
+### Fixed, found while vectorizing the feature path
+
+- **Every TRD physicochemistry column was the weighted mean over a subset of the repertoire.**
+  `pchem_group` called `physchem_profile(group_by="locus")`, and the locus is derived **per row**
+  from the gene name — so a TRD frame, which legitimately carries **TRAV** V genes because TRA and
+  TRD share their V segments, split into two groups, and the loop over the tidy result let the last
+  group win. Measured on a 10,000-clonotype synthetic TRD repertoire, 1,441 of whose clonotypes
+  carried TRAV calls: all 30 TRD `pchem` columns moved on the fix, e.g. `all_charge`
+  −0.00414 → +0.00124 and `center_volume` 97.792 → 97.857. Nothing raised, and the value was a
+  plausible physchem mean throughout. The other six loci are unaffected (they carry one V naming
+  scheme), and their agreement with the previous implementation is exact to 1.1e-12 absolute.
+- **A docstring that cost a design decision.** `draw_pool` claimed the generator runs at 20,372
+  sequences/s on IGH. Measured 2026-09-27 on one core of a 16-core M-series laptop,
+  `generate(load_bundled("IGH"), 50_000, productive_only=True)` runs at **4,200 seq/s**, and
+  identically at 1 and 16 polars threads — it is a per-sequence Python loop and does not thread.
+  The 4.8x error is what made pool generation look like a 16 s stage when it is a 77 s one.
+
+### Performance
+
+Measured on a 16-core M-series laptop; the cohort shape is stated because a signature timing without
+one has been wrong here before by 9x in the wrong direction.
+
+- **One sample, seven loci, 10,000 clonotypes each: 0.732 s → 0.273 s (2.68x).** The composition
+  groups were Python loops over every residue of every clonotype — 1.2M iterations and 208,863
+  scalar `np.clip` calls per sample. `aa`, `kmer`, `spec`, `vus`/`jus`, `iso` and the QC fallback
+  fractions are now `bincount`/`reduceat` over a 256-entry residue lookup table, and `pchem` replaces
+  an explode-to-one-row-per-residue polars pipeline (150,000 rows per locus) with a `reduceat`
+  against a 20x15 property matrix. Every value is unchanged except the TRD fix above.
+- **A whole build, 64 samples of 5,000 receptors across seven loci: 300.8 s → 50.2 s (6.0x).** The
+  build now runs **across samples** in worker processes: each worker draws its own repertoires from
+  memory-mapped pools and returns one row of numbers, so nothing larger than a feature row crosses a
+  process boundary — shipping drawn repertoires instead would be ~38 GB of pickling at the shipped
+  size. Three faults were measured and fixed in that stage, in this order: pool generation fanned
+  out over the **locus count** (7, on any machine) rather than the core count, 296.6 s; each of
+  those workers then started a kernel with every core, 112 threads on 16 cores, 122.2 s after the
+  first fix; and pool tasks were handed out in contiguous per-worker slices, which leaves workers
+  idle behind IGH's pool, 51.1 s after the second. Featurisation of that shape is 2.5 s of the 50.2.
+- The artifact is **bit-identical at every `n_jobs`**, because a sample is a pure function of its
+  index: each one gets its own generator seeded from `(seed, locus, j)`. `POOL_CHUNKS` is a recorded
+  constant, not the core count, for the same reason — a chunk count read off the machine would make
+  an artifact built on 64 cores differ from the same build on 16. Pinned by
+  `tests/python/test_signature_vectorized.py`.
+- `vdjtools corpus --jobs/-j` (and `mir corpus -j`): worker **processes**, `0` = the whole
+  allocation. The help text says which layer it reaches, because wiring a `--threads` flag to
+  `n_jobs` is a mistake this repo has already shipped once.
+
+### Added
+
+- `vdjtools.signature.corpus` — build a synthetic corpus, winsorize it, fit the rotation and the
+  scaling, read and write the artifact. `synthesize`, `fit`, `fit_locus`, `apply`, `Corpus`.
+- `vdjtools.signature.features` — raw features and channels for one sample, a pure function of that
+  sample plus the germline vocabulary.
+- `vdjtools corpus` — the builder as a command, with `--smoke` for a minutes-long reduced build.
+- New raw feature groups: **V usage**, **J usage**, **spectratype** (junction length per V gene) and
+  **2-mer composition**, all clr/arcsine and folded into the same per-locus rotation. Raw widths run
+  685 (TRD) to 3,744 (IGH), 13,483 features in total.
+- New channels: `vsig:cov:<locus>:cstar` — the coverage the sample actually attained, **always**
+  emitted, including when the diversity features are holes. It was previously computed, used to
+  decide whether 28 columns were holes, and discarded: the only vsig quantity that was measured and
+  thrown away. And `vsig:qc:-:winsor_frac`, what fraction of the row the corpus's bounds clamped.
+- `support` on every raw feature declaration, as a closed vocabulary
+  (`nonneg`/`nonpos`/`real`/`unit`), and winsorization **by percentile** with the side read from it.
+
+### Removed
+
+- **`vsig:pgen:*`** and the `pgen_q05` corpus constant. Per-clonotype Pgen was 96% of this command's
+  runtime — 1,083 s of a 1,130 s cohort, essentially all of it IGH. Pgen remains a first-class
+  `vdjtools.model` API; it is no longer a signature feature.
+- `signature/blocks.py`, `assemble.py`, `presets.py`, `kmer.py`, `features/kmer_space.py` and the
+  `vdjtools presets` command. The frozen TF-IDF + SVD k-mer space is subsumed by the corpus rotation.
+- The reference-rescaling half of `signature/transform.py` (`reference_z`, `robust_loc_scale`,
+  `magnitude_scale`, `DEFAULT_CLIP`). The transforms themselves are unchanged.
+- **Tiers.** `core`/`standard`/`full` traded width for cost, and with a joint per-locus rotation
+  every group must be computed before any component exists, so a tier could no longer skip work.
+  `--components` replaces it and does the job better.
+- CLI flags `--preset`, `--tier`, `--pgen-n-max`, `--cstar`, `--channels`, `--threads`. Each is
+  pinned by a test that asserts a non-zero exit, because a flag that is accepted and silently
+  ignored is the worst of the three outcomes.
+
+### Changed
+
+- **A corpus is required.** No default, because a silently chosen rotation makes two matrices look
+  comparable when they are not.
+- **The coverage target is a runtime argument** (`--cstar-target`, default: this cohort's own
+  per-locus minimum attained coverage), not a constant in an artifact. A per-sample quantity in a
+  corpus artifact is what produced the `tissue` defect above.
+- `--components` takes a count or a variance fraction. The artifact stores the rotation up to the
+  fitted count plus the **full eigenvalue spectrum**, so truncating downward later is exact and
+  needs no refit, while asking for more raises and quotes what the spectrum reaches.
+- `--jobs` is processes and says so. The old `--threads` reached `n_jobs`.
+- `columns=` selects output rather than skipping work, for the joint-rotation reason above.
+  Declining a whole locus still skips it.
+
+### Measured while building this
+
+- **A synthetic corpus must draw its depth.** At one fixed size, `depth:reads`, `depth:richness` and
+  all five `pair:` log-ratios are identical in every sample, so their corpus spread is 0, they
+  contribute nothing to the rotation, and the cross-locus block **cannot be fitted at all** — which
+  fails quietly, as an artifact that simply omits it. Depths are now drawn log-uniformly over the
+  measured real p05–p95 spread per locus (4.1x on TRB, 11.0x on IGH).
+- **`numpy.random.Generator.zipf` is the wrong Zipf.** It samples integers *from* a Zipf
+  distribution, which at `a = 1.5` has infinite mean, so normalising a draw gives one clone almost
+  all the mass: repertoires collapsed to as few as 1 surviving clonotype and every
+  coverage-standardised diversity feature became a hole. The spec is the Zipf law over **ranks**,
+  `f_i ∝ i^-a`, which is a well-behaved rank-abundance curve: 336 of 500 clones surviving with 129
+  singletons at 20 reads per clone.
+- **Generation throughput**, 16-core M-series, one core: IGH 20,372 seq/s, TRB 23,113, TRA 34,506 —
+  so a 10^7 pool is 8–14 min per locus, ~10 min for all seven at one process per locus.
+- **Corpus build is byte-identical across thread counts**, verified `cmp` on the npz with
+  `OMP_NUM_THREADS`/`POLARS_MAX_THREADS` at 1 against the default.
+
+### Fixed: a functional V gene whose germline was one codon off scored Pgen exactly 0
+
+`TRBV4-3*02`'s CDR3-region germline in both bundled human TRB models began `CTCTGCGCCAGC…` — one
+whole framework codon (`CTC`, Leu) **upstream of Cys104**. OLGA's `human_T_beta` records its anchor as
+267 against its own **287**-nt germline while `*01` is **284** nt at the same 267, so the defect is in
+OLGA's tables and we reproduced it faithfully.
+
+Reproducing it was not harmless, because `collapse_alleles` ranked a gene's representative germline by
+**length** first: `*02`'s broken cut is 24 nt against `*01`'s correct 21, so the collapsed `TRBV4-3`
+inherited the mis-anchored germline relabelled `*01`. Measured on 25,000 real human TRB clonotypes
+(`isalgo/airr_control` `human.trb.ntvj`), `pgen_aa` was **exactly 0 for 698 of 698** TRBV4-3
+junctions — **2.8%** of the set — with no error raised, against **1/595** zeros for the `TRBV4-1`
+control. OLGA itself returns **1.063e-08** for `CASSQDLNTEAFF | TRBV4-3 | TRBJ1-1`: it marginalises
+over the gene's alleles and `*01` carries the mass, so OLGA never returns 0 there. Fixing this
+**restores** the exact-OLGA invariant rather than breaking it.
+
+Two independent defences, because either alone leaves the other's failure reachable:
+
+- **`model.io.repair_anchors`** makes the conserved anchor an invariant, on build **and on load**, so
+  every already-shipped artifact is corrected on read with no regeneration. A V anchor steps by whole
+  framework codons until the region starts at Cys104; a J is repaired only by undoing the known
+  wrong-side slice (`full[anchor:]` where a J needs `full[:anchor+3]`), never by searching — a search
+  finds an earlier in-frame Phe by coincidence and *shortens* the germline, which strands the allele's
+  own deletion mass. Measured: on mouse `TRAJ19*01` a two-codon search cut arda's 30-nt germline to
+  24. Repaired across the bundled set: `TRBV4-3*02` in `olga/TRB` and `learned/TRB` (anchor 267 → 270),
+  and **9 of the 11** `learned` human TRA J alleles carrying framework downstream of Phe118 — 7 of
+  those now match arda's germline **exactly**, a defect previously recorded as needing an all-loci
+  regeneration.
+- **`collapse_alleles` ranks the frame gate above length**, so a longer out-of-frame germline can
+  never represent a gene. The gate is inert where no candidate passes it, which is load-bearing: an
+  empty germline is out of frame too, and promoting it over a non-empty one is the `TRBV23/OR9-2`
+  trap from the other side.
+
+Consequence for the amino-acid scenario DP on the same 25,000 clonotypes: junctions the model could
+not explain at all fell from **731 to 33**, 698 of them this one gene.
+
+Not fixed, and not guessable from our reference: `TRAJ35*01` (human), the survivor of that TRA family.
+arda's recorded anchor (25) points at a **Cys** codon, so neither the stored slice nor arda says where
+Phe118 is; settling it needs IMGT arbitration rather than a search. Sizing is unchanged from 3.9.1:
+**0** of VDJdb's 30,937 human TRA records use any of the family.
+
+### Added: the amino-acid scenario API is usable from outside (#179)
+
+`best_aa_scenarios` enumerates the plausible recombinations of an amino-acid junction with `len_v`,
+`len_j` and D geometry. Three things stopped it being reachable as that primitive, all addressed:
+
+- **Exported at `vdjtools.model`**, beside `infer_nt` and `best_scenario`, with
+  `best_aa_scenarios_batch` and `gene_to_allele`.
+- **Gene-level calls resolve** to a representative allele (`resolve_genes=True`, as
+  `sc.paired_pgen`), because every real V/J call is gene-level and every one of them used to raise.
+  A call naming no gene the model carries still raises and **names it**. The resolver now has one
+  definition — `sc.pgen` carried a private copy, and #179's point was that every caller writes its
+  own.
+- **`best_aa_scenarios_batch`** returns a `polars.DataFrame`, one row per scenario, parallelized
+  across sequences in native code. Measured on 24,907 real human TRB clonotypes at `k=8`:
+  **8.02 s → 0.64 s** (12.5x), identical to the per-row loop and **bit-identical at any thread
+  count**. A query the DP cannot explain contributes no rows, so an absent `row` is how a decline
+  shows up — never a silently V/J-marginalised scenario.
+- **Documented for what it is for**: the alternatives with their probabilities, D geometry, and naming
+  a missing V/J by marginalising. It is *not* the better way to place a known boundary — measured on
+  the same rows, top-1 places `v_end` exactly 59.8% and `j_start` 90.3% against germline alignment's
+  73.3% / 97.7% at a twelfth of the cost.
+
+### Changed: a corpus artifact is gated on the germline it was drawn from, not the library version
+
+`Corpus.verify` compared `vdjtools.__version__`, which is both too strict — a patch release
+invalidated every corpus — and wrong: it is read from installed distribution metadata, so a build
+driven by `PYTHONPATH` against a different installed version records *that* version. The first
+cluster artifacts recorded `3.6.0` from a 4.0.0 tree. The manifest now carries `models`, a per-locus
+hash of the **cut segments the generator will actually draw from**, which a declared version string
+cannot track: repairing `TRBV4-3*02` changed what every TRB pool contains while leaving
+`olga:human_T_beta@2.0.0` identical.
+
 ## 3.18.1 — 2026-09-26
 
 Guards for the class of bug 3.18.0 fixed, and one file that should never have been public.

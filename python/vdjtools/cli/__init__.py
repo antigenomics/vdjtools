@@ -203,24 +203,11 @@ _THREADS = typer.Option(
     help="Worker threads over samples (0 = all cores). Threads, not processes: the heavy work "
          "releases the GIL, so this is the knob that scales. Lower it only to share the box.",
 )
-_PGEN_N_MAX = typer.Option(
-    2000, "--pgen-n-max",
-    help="Junctions per locus the Pgen block measures (signature only). Cost is linear in it "
-         "and Pgen is ~96% of this command's work. 2000 matches the shipped references; lower "
-         "it and pgen:*:frac_atypical is a different draw from the reference it is compared to.",
-)
 _ONDUP = typer.Option(
     "error", "--on-duplicate",
     help="A frame with no junction_nt that repeats (junction_aa, v_call, j_call, c_call) cannot "
          "say whether those rows are two clonotypes or one: error (default) refuses, sum adds "
          "the counts together.")
-_CSTAR = typer.Option(
-    None, "--cstar",
-    help="Coverage level the Hill numbers are standardised to (signature only). A number "
-         "applies it to all seven loci -- a fallback, reported in vsig:qc:-:cstar_fallback_frac; "
-         "'none' establishes no level, so vsig:div:* is a declared hole instead of a confident "
-         "number at a level nobody measured. Default: the flat fallback.",
-)
 _COHORT = typer.Option(
     None, "--cohort",
     help="Pre-ingested parquet cohort dir (vdjtools.io.ingest_cohort): one streamed "
@@ -463,188 +450,240 @@ def signature(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
     fmt: str = _FMT,
-    tier: str = typer.Option("standard", help="core | standard | full — nested column sets."),
+    corpus: str = typer.Option(..., "--corpus",
+                               help="Corpus to rotate through: a bundled name (naive, memory) or "
+                                    "a path to an artifact. REQUIRED -- a silently chosen rotation "
+                                    "makes two matrices look comparable when they are not."),
+    winsorize: str = typer.Option("features", "--winsorize",
+                                  help="features (clamp raw features, then rotate) | pcs (rotate, "
+                                       "then clamp PC scores) | none. Whatever is clamped is "
+                                       "reported in vsig:qc:-:winsor_frac -- never silently."),
+    winsor_p: Optional[float] = typer.Option(None, "--winsor-p",
+                                             help="Which stored percentile to clamp at: 0.01 or "
+                                                  "0.05. Default: the one the corpus was fitted "
+                                                  "at."),
+    components: Optional[str] = typer.Option(None, "--components",
+                                             help="Truncate the rotation: an integer count (128), "
+                                                  "or a variance fraction (0.95). Exact -- the "
+                                                  "first n of a longer rotation are the same "
+                                                  "vectors. Asking for more than was fitted "
+                                                  "refuses; the corpus manifest says what it has."),
+    cstar_target: Optional[str] = typer.Option(None, "--cstar-target",
+                                               help="Coverage level the Hill numbers are read at: "
+                                                    "a number, or 'min' (default) for this "
+                                                    "cohort's own per-locus minimum attained "
+                                                    "coverage, or 'own' for each sample's own "
+                                                    "(one pass, not comparable across samples)."),
     weight: str = typer.Option("log2p1", help="Clone-size weight g: log2p1 | duplicate_count | "
                                               "distinct | log1p | anscombe."),
-    preset: Optional[str] = typer.Option(None, "--preset",
-                                         help="Named feature set (see `vdjtools presets`). "
-                                              "Overrides --tier and selects the columns."),
+    columns: Optional[Path] = typer.Option(None, "--columns",
+                                           help="File of column names (one per line) to restrict "
+                                                "the output to. Selects output; it does not skip "
+                                                "work, because a locus is rotated jointly over all "
+                                                "its feature groups."),
     describe: bool = typer.Option(False, "--describe",
-                                  help="Print the column dictionary for --tier and exit."),
-    channels: bool = typer.Option(False, "--channels",
-                                  help="Print the channel vocabulary for --tier and exit -- one "
-                                       "row per named group of columns, and what it measures."),
-    threads: int = _THREADS, pgen_n_max: int = _PGEN_N_MAX, cstar: Optional[str] = _CSTAR,
+                                  help="Print the columns THIS invocation emits, and exit."),
+    jobs: int = typer.Option(1, "--jobs", "-j",
+                             help="Worker PROCESSES over samples (0 = all cores). Processes, not "
+                                  "threads: the per-sample work is polars and numpy, not a "
+                                  "GIL-releasing kernel."),
     on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
-    """One repertoire in, one row of named features out — ready for a classifier.
-
-    Emits the `vsig` (statistics) half of the portable repertoire
-    signature: a fixed, named, positional feature vector, so your matrix
-    and a collaborator's are the same coordinate system. Reads AIRR
-    Rearrangement, native vdjtools, Parquet and the usual third-party
-    exports, auto-detected. Writes TSV, or Parquet if -o ends in .parquet.
+    """One repertoire in, one row of named features out -- rotated through a named corpus.
 
     \b
-    START HERE
-      # a metadata sheet plus a directory of samples
-      vdjtools signature --preset classify \\
-          -m metadata.txt --base-dir samples/ -o sig.tsv
-    \b
-      # or just pass files
-      vdjtools signature --preset compact a.tsv b.tsv.gz -o sig.tsv
-    \b
-      # the exact columns you will get, reading no input at all
-      vdjtools signature --preset classify --describe
-    \b
-      # the twenty channels those columns group into, and what each measures
-      vdjtools signature --channels
+      vdjtools signature --corpus naive samples/*.tsv.gz -o sig.tsv
+      vdjtools signature --corpus naive --components 32 --describe
+      vdjtools signature --corpus memory --winsorize pcs -m meta.txt -o sig.tsv
+
+    Three stages, and the corpus fixes the last two: raw features are computed from this sample
+    alone, then clamped to the corpus's winsorization bounds, then rotated by the corpus's
+    per-locus rotation and scaled by its per-PC median and MAD.
 
     \b
-    PICK A PRESET rather than columns by hand (`vdjtools presets` lists all):
-      compact    smallest vector that still describes a repertoire (n >= 50)
-      classify   general-purpose; the usual random-forest / boosting input
-      transfer   for a model that must work on ANOTHER LAB's samples
-    \b
-    --preset overrides --tier; with neither you get all of --tier (standard).
+    What comes out, per locus:
+      vsig:pc:<locus>:PCnn   the rotated coordinates
+      vsig:cov:<locus>:cstar the coverage this sample actually attained, ALWAYS emitted
+      vsig:mask:*            why a column is a hole -- absent locus, or not estimable
+      vsig:qc:*              fallback fractions, and how much of this row was clamped
 
-    THE OTHER HALF: this command is statistics only. The geometry half
-    (`rsig`) needs the prototype embedding and ships in mirpy --
-    `mir signature ...` emits it, and nothing else. One tool per half: run
-    both and join on `sample_id` for the full vector. A preset spanning both
-    halves keeps only its `vsig:` columns here and says so on stderr (mirpy
-    does the mirror image), because silently returning half of what was
-    asked for is worse than saying it.
+    The channels are never rotated and never clamped: a provenance number mixed with the
+    measurements it qualifies is no longer provenance.
 
-    \b
-    GOTCHAS
-      * CDR3 vs junction. The reader prefers AIRR `junction_aa` (anchors
-        INCLUDED) and falls back to IMGT `cdr3_aa` (anchors excluded), so a
-        file carrying only `cdr3_aa` is two residues short everywhere --
-        shifting length, k-mer and Pgen features. Check your headers first.
-      * Do not PCA-project the result. Plain scaling beat projection at
-        every rank tested.
-      * -t/--threads defaults to all cores. Inside your own process pool,
-        pass -t 1 per worker.
-      * IGH Pgen dominates this command's runtime, and it is the D trim
-        state space (9,212 states vs TRB's 297), not anything tunable.
-        3.17.0 made it 3.1x cheaper with no change to any value; a preset
-        that keeps no vsig:pgen column skips the block entirely, and
-        --pgen-n-max trades the rest linearly against noise.
+    A hole is `nan`, never 0. "This locus is absent", "this sample is too shallow" and "this field
+    was not in the input" are different facts, and the mask channels say which.
     """
-    from vdjtools import signature as S
-    from vdjtools.signature import layout as L
-    from vdjtools.signature import presets as P
-    from vdjtools.signature import vsig
-
-    keep = None
-    if preset is not None:
-        try:
-            spec = P.get(preset)
-        except KeyError as e:
-            _err(str(e))
-        tier = spec.tier
-        keep = [c for c in spec.columns() if c.startswith("vsig:")]
-        if not keep:
-            _err(f"preset {preset!r} selects no vsig columns (it is {'+'.join(spec.sig)}); "
-                 f"use `mir signature --preset {preset}` for the geometry half")
-        dropped = spec.n_columns - len(keep)
-        if dropped:
-            typer.echo(f"preset {preset!r}: {len(keep)} vsig columns "
-                       f"({dropped} rsig columns need `mir signature`)", err=True)
-
-    if tier not in L.TIERS:
-        _err(f"--tier must be one of {L.TIERS}; got {tier!r}")
-    if channels:
-        # The vocabulary, not the dictionary: one row per channel rather than per column. This is
-        # the level a finding is stated at -- "IGH diversity separates the groups" -- so it is
-        # worth printing on its own rather than making the reader group 689 rows by hand.
-        _write(L.channel_table(tier).filter(pl.col("sig") == "vsig"), out)
-        return
-    if describe:
-        # The column dictionary for what will actually be emitted, preset or tier. Filtered to
-        # this command's half: it emits vsig, so listing the rsig columns here described a vector
-        # it does not produce -- the one output whose whole job is "the exact columns you will
-        # get". `mir signature --describe` is the mirror image and lists rsig.
-        d = L.describe(tier).filter(pl.col("sig") == "vsig")
-        _write(d.filter(pl.col('column').is_in(keep)) if keep else d, out)
-        return
+    import numpy as np
 
     from vdjtools.io.batch import map_samples
+    from vdjtools.signature import corpus as CO
+    from vdjtools.signature import layout as L
+    from vdjtools.signature.signature import vsig
+
+    if winsorize not in CO.MODES:
+        _err(f"--winsorize must be one of {', '.join(CO.MODES)}; got {winsorize!r}")
+    art = _resolve_corpus(corpus)
+    ncomp = _parse_components(components)
+    want = None
+    if columns is not None:
+        want = [c for c in columns.read_text().split() if c]
+
+    if describe:
+        cols = art.columns(ncomp)
+        if want is not None:
+            cols = [c for c in cols if c in set(want)]
+        rows = []
+        for c in cols:
+            sig, block, locus, feature = L.parse(c)
+            rows.append({"column": c, "block": block, "locus": locus, "feature": feature,
+                         "kind": "rotated" if block == L.PC_BLOCK else "channel",
+                         "support": L.support_of(c)})
+        _write(pl.DataFrame(rows), out)
+        return
 
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
-    # `columns=keep` is not cosmetic: it decides which blocks RUN. Without it a preset that keeps
-    # no vsig:pgen column still pays for Pgen and drops it -- and Pgen is ~96% of this half's
-    # cost on a seven-locus sample (`nuisance` is tier=full with 0 pgen columns, so it paid the
-    # entire bill for nothing).
-    level: float | None = S.DEFAULT_CSTAR
-    if cstar is not None:
-        level = None if cstar.strip().lower() in ("none", "hole") else float(cstar)
-    fn = functools.partial(vsig, tier=tier, weight=weight, threads=1, columns=keep,
-                           cstar=level, pgen_n_max=pgen_n_max, on_duplicate=on_duplicate)
-    # `v_identity` is the one field the signature needs that the canonical schema does not
-    # carry, so it has to be asked for by name. Without it the SHM block is not merely absent
-    # but uncomputable, and ships as a permanently-nan column on files that do have it.
-    rows = [{"sample_id": sid, **res} for sid, res in
-            map_samples(fn, items, fmt=fmt, workers=threads or None, keep=("v_identity",))]
-    if not rows:
-        _err("no samples produced a signature")
-    cols = keep if keep is not None else L.columns(tier, "vsig")
-    # The half `mir signature` emits arrives standardised against a frozen scale reference; this
-    # half does not, because the reference ships in mirpy and vdjtools cannot depend on it (the
-    # dependency runs the other way). Joining the two therefore gives a MIXED-SCALE matrix, and
-    # `vsig:pgen:*:frac_atypical` is nan without the reference's pgen_q05. That is a real gap and
-    # it is better said than discovered: measured on one synthetic 600-clonotype TRB sample at
-    # tier=core, `vsig:div:TRB:1D_c` reads 1.9502 standardised against 2.2495 raw.
-    cstar_note = (f"the flat cstar={level} is used (declared per sample in "
-                  f"vsig:qc:-:cstar_fallback_frac)" if level is not None else
-                  "no coverage level is established, so vsig:div:* is a declared hole")
-    typer.echo(
-        f"{len(rows)} samples x {len(cols)} vsig columns. NOTE: these are RAW — this command has "
-        f"no scale reference, so {cstar_note} and "
-        f"vsig:pgen:*:frac_atypical is nan. `mir signature` standardises its own half, so a plain "
-        f"join is mixed-scale. For a standardised pair use mir.signature.signature_cohort(), or "
-        f"standardise this frame yourself with the same reference.", err=True)
+    target: object = "min"
+    if cstar_target is not None:
+        target = None if cstar_target == "own" else (
+            "min" if cstar_target == "min" else float(cstar_target))
+
+    # One shared coverage level, from this cohort, so the diversity columns are comparable across
+    # its samples without anybody choosing a constant. A cheap pass: only the count column matters.
+    if target == "min":
+        cov: dict[str, float] = {}
+        for _sid, per in map_samples(_attained, items, fmt=fmt, workers=jobs or None):
+            for loc, v in per.items():
+                if np.isfinite(v):
+                    cov[loc] = min(cov.get(loc, v), float(v))
+        target = cov or None
+
+    fn = functools.partial(vsig, corpus=art, mode=winsorize, winsor_p=winsor_p,
+                           n_components=ncomp, cstar_target=target, weight=weight,
+                           on_duplicate=on_duplicate, columns=want)
+    rows = [{"sample_id": sid, **res}
+            for sid, res in map_samples(fn, items, fmt=fmt, workers=jobs or None,
+                                        keep=("v_identity",))]
+    cols = [c for c in art.columns(ncomp) if want is None or c in set(want)]
+    typer.echo(f"{len(rows)} samples x {len(cols)} vsig columns | corpus {art.name} "
+               f"({art.meta.get('content_sha256', '?')[:12]}) | winsorize={winsorize} | "
+               f"k={art.resolve_k(ncomp)}", err=True)
     _write(pl.DataFrame(rows).select(["sample_id", *cols]), out)
 
 
-@app.command()
-def presets(
-    name: Optional[str] = typer.Argument(None, help="Show one preset in full."),
-    out: Optional[Path] = _OUT,
-) -> None:
-    """List the named feature sets for `signature`, with their rankings.
+def _attained(df):
+    """Per-locus attained coverage for one already-read sample. Module level so a pool can pickle."""
+    from vdjtools.signature.signature import attained_coverage
 
-    \b
-      vdjtools presets            # the table: name, rank, width, halves, scaling, summary
-      vdjtools presets classify   # one preset in full — what is in it, how, and when to use it
+    return attained_coverage(df)
 
-    \b
-    Ranks tell you how much to trust a choice:
-      recommended  use one of these unless you have a reason not to
-      specific     correct for a stated purpose and wrong outside it
-      avoid        a control or a measured dead end, named so that picking it is deliberate
 
-    The `halves` column says whether a preset needs `vsig` (this package), `rsig` (the geometry
-    half, in mirpy), or both. `vdjtools signature` emits only the `vsig:` columns; use
-    `mir signature` for a preset spanning both.
-    """
-    from vdjtools.signature import presets as P
-
-    if name is None:
-        _write(P.table().select("preset", "rank", "columns", "halves", "scaling", "summary"), out)
-        return
+def _parse_components(spec: Optional[str]):
+    """``None``, an int count, or a float variance fraction -- whichever the string spells."""
+    if spec is None:
+        return None
     try:
-        spec = P.get(name)
-    except KeyError as e:
+        return int(spec) if "." not in spec else float(spec)
+    except ValueError:
+        _err(f"--components must be an integer count or a fraction in (0, 1); got {spec!r}")
+
+
+def _resolve_corpus(name: str):
+    """A bundled corpus name, or a path to an artifact."""
+    from vdjtools.signature.corpus import Corpus, bundled_path
+
+    path = bundled_path(name)
+    if path is None:
+        have = _bundled_names()
+        _err(f"no corpus named {name!r}, and no artifact at that path. "
+             + (f"Installed: {', '.join(have)}. " if have else
+                "No corpus ships with this version yet. ")
+             + "Build one with: vdjtools corpus --corpus naive --smoke -o naive.npz")
+    try:
+        return Corpus.load(path)
+    except FileNotFoundError:
+        _err(f"corpus artifact {path} is missing its .json sidecar")
+    except ValueError as e:
         _err(str(e))
-    typer.echo(f"{spec.name}  [{spec.rank}]  {spec.n_columns} columns  "
-               f"tier={spec.tier}  halves={'+'.join(spec.sig)}  scaling={spec.scaling}\n")
-    for label, text in (("summary", spec.summary), ("features", spec.features),
-                        ("how it is computed", spec.how), ("use cases", spec.use_cases),
-                        ("notes", spec.notes)):
-        if text:
-            typer.echo(f"{label}:\n  {text}\n")
+
+
+def _bundled_names() -> list[str]:
+    from vdjtools.signature.corpus import bundled_names
+
+    return bundled_names()
+
+
+@app.command()
+def corpus(
+    name: str = typer.Option("naive", "--corpus", help="naive (every clone size 1) | memory "
+                                                       "(Zipf rank-abundance clone sizes)."),
+    out: Path = typer.Option(..., "--out", "-o", help="Artifact path; writes .npz and .json."),
+    n_samples: int = typer.Option(10000, "--samples", help="Repertoires in the corpus."),
+    size: str = typer.Option("10000", "--size",
+                             help="Receptors per repertoire: an integer, or n_eff / p05 / p95 for "
+                                  "the measured real per-locus depths."),
+    components: str = typer.Option("128", "--components",
+                                   help="Components per locus: an integer count, or a variance "
+                                        "fraction. A count is capped at what a locus supports."),
+    winsorize: str = typer.Option("features", "--winsorize", help="Mode to fit at."),
+    winsor_p: float = typer.Option(0.01, "--winsor-p", help="Percentile for the fitted bounds. "
+                                                            "All stored percentiles are written."),
+    seed: int = typer.Option(20260927, "--seed", help="Base seed; every draw is a recorded offset."),
+    loci: Optional[str] = typer.Option(None, "--loci", help="Comma-separated subset (default: all "
+                                                            "seven)."),
+    source: str = typer.Option("olga", "--source", help="Bundled model set: olga | learned | arda."),
+    smoke: bool = typer.Option(False, "--smoke", help="Reduced build (200 samples of 1000) for "
+                                                      "tests and the reproducibility check."),
+    jobs: int = typer.Option(0, "--jobs", "-j", help="Worker PROCESSES across samples (not kernel "
+                                                     "threads): 0 = every core, 1 = in-process. "
+                                                     "The artifact is identical at any value."),
+) -> None:
+    """Build a synthetic corpus and fit its rotation, bounds and scaling.
+
+    \b
+      vdjtools corpus --corpus naive  --out naive.npz
+      vdjtools corpus --corpus memory --size n_eff --components 0.95 -o memory.npz
+      vdjtools corpus --smoke -o /tmp/smoke.npz     # minutes, not hours
+
+    Uses **no samples from anybody's cohort**: every receptor is drawn from the bundled
+    recombination models, so the artifact is reproducible by anyone who installs the library. The
+    build is a deterministic function of (corpus, loci, samples, size, seed, source) and those
+    models, and must be byte-identical across processes and thread counts -- run it twice and
+    `cmp` the output.
+
+    Each repertoire's depth is **drawn**, log-uniformly over the measured real p05-p95 spread for
+    its locus, not fixed. A corpus at one depth has zero variance in its depth features and cannot
+    fit the cross-locus block at all -- which fails quietly, as a rotation that simply omits them.
+    """
+    import sys
+    import time
+
+    from vdjtools.signature.corpus import synthesize
+
+    sz: object = size
+    if size not in ("n_eff", "p05", "p95"):
+        try:
+            sz = int(size)
+        except ValueError:
+            _err(f"--size must be an integer or one of n_eff, p05, p95; got {size!r}")
+    if smoke:
+        n_samples, sz = 200, 1000
+    ks = _parse_components(components)
+    which = tuple(loci.split(",")) if loci else None
+
+    t0 = time.time()
+    kw = {} if which is None else {"loci": which}
+    art, _rows = synthesize(name, n_samples=n_samples, size=sz, seed=seed, n_components=ks,
+                            mode=winsorize, winsor_p=winsor_p, source=source, n_jobs=jobs,
+                            progress=lambda loc, d, t: print(
+                                f"  {loc:4s} {d}/{t}  {time.time() - t0:5.0f}s",
+                                file=sys.stderr, flush=True),
+                            **kw)
+    path = art.save(out)
+    typer.echo(f"{path}  {path.stat().st_size / 1e6:.2f} MB  k={art.k}  "
+               f"variance@k=" + str({loc: round(f.variance_at(f.k), 3)
+                                     for loc, f in art.fits.items()})
+               + f"  {time.time() - t0:.0f}s", err=True)
+
 
 
 @app.command()

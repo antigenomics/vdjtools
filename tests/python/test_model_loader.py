@@ -13,7 +13,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from vdjtools.model import Event, EventKind, Model, from_olga
+from vdjtools.model import Event, EventKind, Model, from_olga, translate
 from vdjtools.model.events import validate_graph
 
 OLGA_MODELS = Path(
@@ -156,7 +156,18 @@ def test_trb_vdj_lossless_vs_olga():
 
     # cut segments (palindrome-extended germline used by Pgen)
     cutv = dict(zip(m.genomic["genes_v"]["v_allele"], m.genomic["genes_v"]["cut_segment"]))
-    assert [cutv[n] for n in v_names] == list(g.cutV_genomic_CDR3_segs)
+    # One allele deliberately does NOT match, and like the ' TRBD1*01' name above the deviation is
+    # the point. OLGA records TRBV4-3*02's anchor as 267 against its own 287-nt germline while *01 is
+    # 284 nt at the same 267, so OLGA's own cut segment for *02 starts one Leu codon (CTC) before
+    # Cys104 and every Pgen through that allele is exactly 0. We re-anchor it (repair_anchors), which
+    # RESTORES the OLGA invariant rather than breaking it: OLGA's own gene-level TRBV4-3 Pgen is
+    # 1.06e-08, not 0, because OLGA marginalises over the gene's alleles and *01 carries the mass.
+    # Reproducing the broken cut is what made our collapsed model return 0 for 698 of 698 real
+    # TRBV4-3 junctions. Every probability array above still matches OLGA exactly.
+    expected = dict(zip(v_names, g.cutV_genomic_CDR3_segs))
+    expected["TRBV4-3*02"] = "TGCGCCAGCAGCCAAGATCTT"
+    assert [cutv[n] for n in v_names] == [expected[n] for n in v_names]
+    assert translate(expected["TRBV4-3*02"][:3]) == "C"
 
 
 def test_tra_vj_lossless_and_shapes():

@@ -40,6 +40,110 @@ def _read_anchors(path: Path) -> dict[str, tuple[int, str]]:
     return {r[0]: (int(r[1]), str(r[2])) for r in df.iter_rows()}
 
 
+#: How far a V anchor may be stepped, in whole framework codons, when the recorded one does not land
+#: on Cys104. Two covers every case seen (all observed drift is exactly one codon) and is small
+#: enough that a genuinely different germline is never silently re-anchored.
+_ANCHOR_SEARCH_CODONS = 2
+
+
+def _anchored(seg: str, cdr3: str) -> bool:
+    """Does ``cdr3`` start at the conserved Cys (V) or end at the conserved Phe/Trp (J)?"""
+    from . import reference as ref
+
+    if len(cdr3) < 3:
+        return False
+    return ref.translate(cdr3[:3]) == "C" if seg == "v" else ref.translate(cdr3[-3:]) in ("F", "W")
+
+
+def _reanchor(seg: str, cdr3: str, full: str, a: int) -> "tuple[int, str] | None":
+    """A corrected ``(anchor, cdr3_segment)`` for an allele whose CDR3 region is not anchored.
+
+    The two segments get different treatment because their failure modes are different, and both
+    rules are deliberately unable to *shorten* a germline -- a shorter germline strands the allele's
+    own deletion mass on trims it can no longer reach, which is the ``IGKV3-20`` trap.
+
+    * **V**: step the anchor by whole framework codons, smallest shift first, until the region starts
+      at Cys104. Drift here is an off-by-one-codon index against the germline it points into.
+    * **J**: no search. A J's CDR3 region runs from the 5' end *through* the ``[FW]118`` codon, so
+      ``full[anchor:]`` takes the framework on the wrong side of it -- a structural error, not a
+      shifted index, and it is repaired only when the stored region is exactly that wrong slice and
+      the right one is properly anchored. Searching a J instead finds an earlier in-frame Phe by
+      coincidence and truncates the region: measured on mouse ``TRAJ19*01``, a two-codon search cut
+      arda's 30-nt germline to 24. Alleles that genuinely do not end at Phe/Trp (``TRBJ2-7*02``
+      templates ``SYEQYV``) must stay as they are, and this rule leaves them alone.
+    """
+    if seg == "v":
+        for shift in sorted(range(-_ANCHOR_SEARCH_CODONS * 3, _ANCHOR_SEARCH_CODONS * 3 + 1, 3),
+                            key=lambda d: (abs(d), d)):
+            b = a + shift
+            if 0 <= b and b + 3 <= len(full) and _anchored("v", full[b:]) and set(full[b:]) <= _ACGT:
+                return b, full[b:]
+        return None
+    if cdr3 == full[a:] and a + 3 <= len(full):
+        right = full[:a + 3]
+        if _anchored("j", right) and set(right) <= _ACGT:
+            return a, right
+    return None
+
+
+def repair_anchors(genomic: dict, *, report: bool = False) -> dict:
+    """Re-anchor any V/J allele whose CDR3-region germline does not start/end at its conserved codon.
+
+    A V segment's CDR3 region begins at the Cys104 codon and a J's ends at the Phe/Trp118 codon.
+    That is the definition, so an allele failing it carries a germline sliced at the wrong index, and
+    every Pgen through that allele is **exactly 0** with no error raised. See :func:`_reanchor` for
+    the per-segment rule, and note that an allele it cannot correct is left untouched: a missing
+    conserved codon is a different problem from a shifted index, and inventing one is worse than the
+    hole. Applied on build **and on load**, so a shipped artifact is corrected on read.
+
+    Wanted for **every allele**, not only a gene's representative: an allele-level Pgen query names
+    the allele directly, and :func:`~vdjtools.model.collapse.collapse_alleles` may pick any of them.
+
+    Measured origin: OLGA's ``human_T_beta`` ships ``TRBV4-3*02`` with anchor 267 against its own
+    287-nt germline while ``*01`` is 284 nt at the same 267, so OLGA's own cut segment for ``*02``
+    starts one Leu codon (``CTC``) before Cys104. OLGA never returns 0 for a *gene*-level TRBV4-3
+    query because it marginalises over the alleles and ``*01`` carries the mass; our collapsed model
+    chose ``*02`` (24 nt against ``*01``'s 21, and length led the ranking) and so returned
+    ``pgen_aa == 0`` for **698 of 698** real TRBV4-3 junctions in a 25,000-clonotype human TRB
+    control set -- 2.8% of it -- against OLGA's 1.06e-08 for the same junction.
+
+    Args:
+        genomic: A model's ``{"genes_v": ..., "genes_j": ..., ...}`` frames.
+        report: Also return the list of repaired alleles.
+
+    Returns:
+        The frames, with ``anchor``, ``cdr3_segment`` and ``cut_segment`` corrected where needed
+        (``{name: frame}``, or ``(frames, repaired)`` when ``report``).
+    """
+    from . import reference as ref
+
+    out, repaired = dict(genomic), []
+    for name, g in genomic.items():
+        seg = name.split("_")[1][0]
+        if seg not in ("v", "j") or "anchor" not in g.columns:
+            continue
+        # The palindrome extension the existing cuts were built with, read off the frame rather than
+        # plumbed in: cut_segment is cdr3_segment plus up to max_pal palindromic nt.
+        max_pal = max((len(c or "") - len(d or "")
+                       for c, d in zip(g["cut_segment"], g["cdr3_segment"])), default=0)
+        rows = g.to_dicts()
+        for r in rows:
+            cut, cdr3 = r["cut_segment"] or "", r["cdr3_segment"] or ""
+            full, a = r["full_germline"] or "", int(r["anchor"])
+            if not cut or a < 0 or _anchored(seg, cdr3):
+                continue
+            got = _reanchor(seg, cdr3, full, a)
+            if got is None:
+                continue
+            r["anchor"], r["cdr3_segment"] = got
+            r["cut_segment"] = ref.cut_segment(got[1], seg.upper(), max_pal)
+            r["functional"] = len(r["cut_segment"]) > 0
+            repaired.append(f"{r[f'{seg}_allele']}: anchor {a} -> {got[0]}, "
+                            f"{len(cdr3)} -> {len(got[1])} nt")
+        out[name] = pl.DataFrame(rows, schema=g.schema)
+    return (out, repaired) if report else out
+
+
 def _genomic_table(gen_list, anchors, cut_segs, *, seg: str, has_anchor: bool,
                    max_pal: int = 0, derive_orf: bool = False) -> pl.DataFrame:
     """Build a genes_<seg> frame from OLGA's gen* list + cut segments (+ anchors for V/J).
@@ -201,9 +305,10 @@ def from_olga(model_dir: str | Path, *, locus: str, organism: str = "human", der
             "j_5": int(g.max_delJ_palindrome),
         }
         genomic = {
+            **repair_anchors({
             "genes_v": _genomic_table(g.genV, v_anchors, g.cutV_genomic_CDR3_segs, seg="v", has_anchor=True, max_pal=int(g.max_delV_palindrome), derive_orf=derive_orf),
             "genes_d": _genomic_table(g.genD, {}, g.cutD_genomic_CDR3_segs, seg="d", has_anchor=False),
-            "genes_j": _genomic_table(g.genJ, j_anchors, g.cutJ_genomic_CDR3_segs, seg="j", has_anchor=True, max_pal=int(g.max_delJ_palindrome), derive_orf=derive_orf),
+            "genes_j": _genomic_table(g.genJ, j_anchors, g.cutJ_genomic_CDR3_segs, seg="j", has_anchor=True, max_pal=int(g.max_delJ_palindrome), derive_orf=derive_orf)}),
         }
     else:  # VJ
         g = olm.GenomicDataVJ()
@@ -242,8 +347,9 @@ def from_olga(model_dir: str | Path, *, locus: str, organism: str = "human", der
         }
         palindrome_max = {"v_3": int(g.max_delV_palindrome), "j_5": int(g.max_delJ_palindrome)}
         genomic = {
+            **repair_anchors({
             "genes_v": _genomic_table(g.genV, v_anchors, g.cutV_genomic_CDR3_segs, seg="v", has_anchor=True, max_pal=int(g.max_delV_palindrome), derive_orf=derive_orf),
-            "genes_j": _genomic_table(g.genJ, j_anchors, g.cutJ_genomic_CDR3_segs, seg="j", has_anchor=True, max_pal=int(g.max_delJ_palindrome), derive_orf=derive_orf),
+            "genes_j": _genomic_table(g.genJ, j_anchors, g.cutJ_genomic_CDR3_segs, seg="j", has_anchor=True, max_pal=int(g.max_delJ_palindrome), derive_orf=derive_orf)}),
         }
 
     manifest = Manifest(
@@ -701,7 +807,7 @@ def load_model(path: str | Path, *, validate: bool = False) -> Model:
         want = table_columns(event)
         tables[name] = df.select([pl.col(c).cast(dt) for c, dt in want.items()])
     genomic_names = ["genes_v", "genes_j"] + (["genes_d"] if manifest.chain_type == "VDJ" else [])
-    genomic = {name: _read_table(src, name) for name in genomic_names}
+    genomic = repair_anchors({name: _read_table(src, name) for name in genomic_names})
 
     training = None
     training_path = src / "training.json"
