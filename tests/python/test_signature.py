@@ -632,3 +632,26 @@ def test_draw_sizes_is_log_uniform_and_centred_on_the_nominal():
     # geometric centre within a few percent of the nominal, and the range is the stated spread
     assert abs(np.exp(np.log(s).mean()) / 1000 - 1.0) < 0.05
     assert 2.5 < s.max() / s.min() < 12.0
+
+
+def test_the_four_bundled_corpora_are_installed_and_loadable_by_name():
+    """The wheel must actually carry what the docs tell a stakeholder to name.
+
+    `--corpus synthetic-blood` resolving is the whole quickstart: no build, no cohort. A packaging
+    change that dropped `resources/signature` would leave every code path working and every test
+    passing while the advertised entry point failed for everyone who installed it -- so this asserts
+    the installed set, by name, and loads each one through the same gate a user's call does.
+    """
+    assert C.bundled_names() == ["memory", "naive", "synthetic-blood", "synthetic-tissue"]
+    for name in ("synthetic-blood", "synthetic-tissue"):
+        path = C.bundled_path(name)
+        assert path is not None and path.exists(), name
+        art = C.Corpus.load(path)
+        assert art.sig == "vsig" and art.name == name
+        assert art.meta["cohort"] == name.removeprefix("synthetic-")
+        assert art.meta["n_samples"] == 10_000
+        # the load gate is the germline fingerprint, so a shipped corpus must pass it as installed
+        assert art.meta["models"] == C.model_fingerprint(tuple(art.meta["loci"]), "olga")
+        assert set(art.fits) == {*L.LOCI, L.NO_LOCUS}
+        assert all(f.k == 128 for loc, f in art.fits.items() if loc != L.NO_LOCUS)
+        assert len(art.columns()) == 947
