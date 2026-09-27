@@ -523,6 +523,66 @@ CDR3, 0.5 ms per TRA, so all 80k VDJdb records take about three minutes.
    A prepared model selects the pure-Python reference search, which is the implementation the native
    one is validated against and is roughly 600x slower on a VDJ locus.
 
+Every plausible rearrangement, with its probability
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:func:`~vdjtools.model.native.best_aa_scenarios` is the first stage alone: the top ``k`` scenarios
+the same transfer matrix sums over, without reconstructing nucleotides. Use it for the three things
+an aligner cannot produce — **the alternatives and their weights**, so boundary ambiguity is visible
+instead of hidden behind one committed answer; **D geometry** (``idx5``, ``idx3``, ``pos``); and
+**naming a missing V or J** by marginalising over the locus when the call is absent.
+
+.. code-block:: python
+
+   from vdjtools.model import best_aa_scenarios, best_aa_scenarios_batch
+
+   for w, v, len_v, j, len_j, d, idx5, idx3, pos in best_aa_scenarios(
+           model, "CASSLGQAYEQYF", v="TRBV9", j="TRBJ2-7", k=8):
+       ...                          # v_end is len_v; j_start is 3*len(aa) - len_j
+
+   df = best_aa_scenarios_batch(model, frame["junction_aa"].to_list(),
+                                v=frame["v_call"].to_list(), j=frame["j_call"].to_list(),
+                                k=8, threads=0)   # one row per scenario
+
+A **gene**-level name (``TRBV4-3``, which is what CellRanger and most real repertoires carry)
+resolves to that gene's representative allele; a name the model has no gene for raises and names it.
+So an empty list means one thing only: the DP explains nothing, because a residue has no codon the
+model can reach. The frame entry point returns ``row``, ``rank``, ``w``, ``v_call``, ``len_v``,
+``j_call``, ``len_j``, ``d_call``, ``idx5``, ``idx3``, ``pos``, gives values identical to the
+per-row loop at any thread count, and contributes no rows for a query it declines.
+
+.. warning::
+
+   This is the argmax of a probability model, not an aligner, and it is **worse than germline
+   alignment at placing a boundary you already have the calls for**. Measured on 25,000 real human
+   TRB clonotypes against the observed nucleotide markup, each method seeing only the amino acids
+   and the V/J calls:
+
+   .. list-table::
+      :header-rows: 1
+
+      * - method
+        - ``v_end`` exact
+        - ``j_start`` exact
+        - declined
+      * - germline alignment (:mod:`arda.cdr3fix`)
+        - **73.3%**
+        - **97.7%**
+        - **0**
+      * - ``best_aa_scenarios``, top-1 of ``k=8``
+        - 59.8%
+        - 90.3%
+        - 642
+      * - ``infer_nt``
+        - 60.1%
+        - 90.3%
+        - 642
+
+   Many junctions have several near-equally-probable boundaries, so the modal scenario is often not
+   the one that happened. Reach for the scenario list when you want the distribution; reach for
+   alignment when you want the boundary. The 642 declines above predate the gene-level resolution
+   described here.
+
 Building a model on your own germline library, fitting it to your own reads, checking it, comparing
 two of them and asking how much diversity one describes are covered in
 :doc:`Recombination model workshop <model>`. Explore any model's Bayes net interactively with
