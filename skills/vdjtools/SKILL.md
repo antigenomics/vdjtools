@@ -219,16 +219,25 @@ and not the reverse.
 ```python
 from vdjtools.signature import (vsig, vsig_cohort, raw_and_channels, synthesize,
                                 Corpus, parse, support_of, channel_columns, pc_columns)
-corpus = Corpus.load("naive.npz")             # a corpus is REQUIRED; there is no default
+corpus = Corpus.load("synthetic-blood.npz")   # a corpus is REQUIRED; there is no default
 v = vsig({"TRB": df}, corpus)                 # {column: value}, in artifact order
 corpus.columns(n_components=32)               # exactly what an invocation will emit
 raw, chan = raw_and_channels({"TRB": df}, corpus.vocab)   # un-rotated, natural units
 ```
 ```bash
-vdjtools corpus --corpus naive --smoke -o naive.npz    # build + fit; uses no cohort
-vdjtools signature *.tsv --corpus naive.npz -o vsig.parquet
-vdjtools signature --corpus naive.npz --components 32 --describe
+vdjtools signature *.tsv --corpus synthetic-blood -o vsig.parquet    # a bundled corpus by name
+vdjtools signature --corpus synthetic-blood --components 32 --describe
+vdjtools corpus --corpus synthetic-tissue -o st.npz   # build + fit your own; uses no cohort
 ```
+
+**Four corpora ship**: `synthetic-blood` and `synthetic-tissue` (each repertoire a naive/memory
+mixture drawn across three quantile ladders measured per locus on that compartment — richness, reads
+per expanded clone, and the singleton fraction that stands in for the naive share — through the
+cohort's measured rank correlations), plus the pure regimes `naive` and `memory`. Reach for a
+`synthetic-*` one: `memory` at a fixed size has the same read count in every sample, so it varies
+neither depth nor clone-size structure. `COHORT` holds the ladders, `SYNTHETIC` maps a name to
+`(regime, cohort)`, `corpus_plan` resolves it for both halves, `draw_plan` turns it into the
+per-sample draw.
 
 **Submodules, four of them.** `layout` is the contract — `LOCI`, `raw_groups()`, `channels()`,
 `raw_columns(sig, locus, vocab)`, `channel_columns(sig)`, `pc_columns(sig, k)`,
@@ -278,6 +287,16 @@ attained, always emitted), `mask:*` (why a column is a hole), `qc:*` (germline f
 - **A synthetic corpus must draw its depth.** At one fixed depth, `depth:reads`, `depth:richness`
   and all five `pair:` ratios are exactly constant, so the cross-locus block cannot be fitted — and
   it fails quietly, as an artifact that simply omits them.
+- **A corpus only describes the depths it was drawn across.** Bounds, centre and per-PC scaling are
+  all estimated from the draw; none extrapolates. `naive`/`memory` draw over `DEPTH_SPREAD`, 2.4x
+  (TRD) to 11.0x (IGH) from 1,168 deep blood samples; the full reference cohort is an order of
+  magnitude wider — blood TRB richness 74–3,162 clonotypes (43x, n = 34,365 samples), tissue IGH
+  40–10,352 (259x, n = 47,031). That gap is what `synthetic-blood`/`synthetic-tissue` exist to close.
+- **Reads per clonotype cannot be drawn independently of the singleton fraction.** A repertoire with
+  `f1` singletons whose other clones carry >= 2 reads has >= `2 - f1` reads per clonotype — an
+  identity, violated by ~half of independently drawn blood TRB pairs and by 21.1% of draws if the
+  read count itself is drawn. Reads per **expanded** clone is >= 2 whatever `f1` is, which is why
+  that is the recorded ladder.
 - **`--jobs` is processes.** There is one concurrency knob and it says which layer it reaches.
 
 ### `vdjtools.overlap` — overlap + TCRnet (delegates to vdjmatch/seqtree)

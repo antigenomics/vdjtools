@@ -3,6 +3,104 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.1.0 — 2026-09-27
+
+### Added: `synthetic-blood` and `synthetic-tissue`, two corpora that describe a real compartment
+
+Four corpora now ship, all of them synthetic. The two new ones draw every repertoire as a
+naive/memory **mixture** across three quantile ladders measured per locus on the compartment they are
+named after, so a corpus spans the depth and clone-size range the samples it will be applied to
+actually have.
+
+**The gap they close is an order of magnitude.** `naive` and `memory` draw their depth over
+`DEPTH_SPREAD`, 2.4x on TRD to 11.0x on IGH, which came from 1,168 deep blood samples. Measured
+across the whole harmonized AIRR store — one streaming pass, every sample with at least 100 reads in
+the locus, grouped by `sample_id` — the real axis is far wider: blood TRB clonotype richness spans
+**43x**, 74 to 3,162 clonotypes between its 5th and 95th percentiles over **34,365 samples**, and
+tissue IGH spans **259x**, 40 to 10,352 over 47,031. Bounds, centre and per-PC scaling are all
+estimated from the draw and none of them extrapolates, so a corpus drawn across a tenth of the axis
+cannot standardise the rest of it.
+
+Three ladders per locus, five quantiles each, in `corpus.COHORT`:
+
+- **richness**, the clonotype count;
+- **reads per expanded clone**, `(reads - singletons) / (richness - singletons)`;
+- the **singleton fraction** `f1` — in a reasonably deep library this is what stands in for the naive
+  compartment, and it falls with donor age (Britanova et al., J Immunol 2014,
+  [10.4049/jimmunol.1302064](https://doi.org/10.4049/jimmunol.1302064); 2016,
+  [10.4049/jimmunol.1600005](https://doi.org/10.4049/jimmunol.1600005)). Blood TRB spans 0.215 to
+  0.949 with a median of 0.759.
+
+V and J usage need no ladder: they come out of the rearrangement model.
+
+**The mixture is constructed, not sampled.** `round(f1 * N)` clonotypes get one read and the rest
+share the remainder with Zipf rank-abundance frequencies on a floor of 2, so a sample hits its drawn
+richness, read count and singleton fraction exactly. Contrast `memory`, where the multinomial's zeros
+are dropped and both the richness and the singleton fraction come out of the sampling rather than
+being asked for — which is why a `memory` corpus cannot be pointed at a measured cohort.
+
+**Reads per *expanded* clone rather than per clonotype, because the obvious quantity is not
+drawable.** A repertoire with `f1` singletons whose other clones all carry at least 2 reads has at
+least `2 - f1` reads per clonotype. That is an identity, and a pair drawn from those two marginals
+lands in the region it forbids about half the time on blood TRB; drawing the read count itself is
+worse, at **21.1%** of 20,000 blood TRB draws. Reads per expanded clone is >= 2 whatever `f1` is, so
+the trio has no forbidden region and nothing has to be clipped back out of one.
+
+**Five quantiles, not two, and the resolution is what makes the corpus land.** The read count is a
+product of all three drawn quantities, so it is the sharpest check on the draw. Against blood TRB's
+measured median of 763 reads, a 40,000-draw simulation gives **762** at five quantiles and 846 at
+three; blood IGH's 1,298 comes out 1,276 against 1,490.
+
+**The three are drawn through a Gaussian copula at the cohort's measured rank correlations, for the
+rotation rather than for any marginal.** A corpus's rotation *is* its covariance structure, and `f1`
+against expansion size is -0.503 on blood TRB and -0.846 on blood IGK (n = 43,678) — fewer
+singletons, bigger expansions. Drawing independently would hand the PCA a correlation the cohort does
+not have, which no amount of correct marginals repairs.
+
+Acceptance, on 500 drawn samples per cohort against the cohort's own percentiles: the singleton
+fraction lands within 0.03 everywhere, richness within 10% on 12 of the 14 (cohort, locus) pairs, and
+the read count within 15% on 11 of 14. The exceptions are the shallow tissue TR loci, where the read
+count runs 23-51% high (tissue TRB 464 against 308) — a product of three heavy-tailed factors has a
+median above the product of their medians unless the joint tails match exactly, and no
+marginals-plus-copula draw does that. The drawn p95 of the read count is also *lower* than the
+cohort's (blood TRB 3,964 against 5,274), so the fitted depth ceiling is about a quarter tighter than
+the cohort's own p95. The full table is in `docs/signature.rst`.
+
+`naive` and `memory` are unchanged and remain as the pure-regime references: the shipped artifacts
+still rebuild bit-for-bit, checked by building a `memory` corpus against this commit and against
+4.0.1 and comparing the bytes.
+
+### Added: `--depth-spread`, and `--size auto`
+
+A corpus describes only the depths it was drawn across, so the range is now a flag on both `corpus`
+commands rather than a constant. `--size 3162 --depth-spread 1000` draws log-uniformly from 100 to
+100,000 receptors per locus. On a `synthetic-*` corpus the band is the cohort's own measured one and
+`--depth-spread` is **refused** rather than silently ignored; `--size` there rescales the whole ladder
+about its median, so `--smoke` is the same cohort shape at a shallower nominal depth.
+
+`--size` defaults to `auto`: 10,000 for a pure regime, the cohort's median richness per locus for a
+`synthetic-*` one.
+
+### Changed: `synthesize` takes a corpus name
+
+The first parameter of `vdjtools.signature.corpus.synthesize` is `corpus_name`, not `regime`, and it
+takes one of `SYNTHETIC` — `naive`, `memory`, `synthetic-blood`, `synthetic-tissue`. `corpus_plan`
+resolves a name to `(regime, cohort, size, depth_spread)` and is the one place that mapping exists,
+so the `vsig` and `rsig` halves cannot resolve the same name differently. `mixed` is the regime and
+is refused as a corpus name, with a message saying why: a mixture has no unparameterised form.
+
+Also new or changed, all in `signature.corpus`: `COHORT`, `COHORT_QS`, `SYNTHETIC`, `cohort_bands`,
+`ladder_draw`, `copula_uniforms`, `draw_plan`, `corpus_meta` (one manifest builder for both halves);
+`draw_sample(pool, size, regime, rng, frac=None, mexp=None)`; `draw_one(pools, plan, ...)` over the
+per-sample plan rather than a sizes dict; `pool_target(..., cohort=None)`; `depth_spread_of` and
+`resolved_size` accept a cohort name. `SINGLETON_FRAC`, a placeholder from an unreleased commit,
+never shipped.
+
+The manifest gains `cohort`, `richness_band`, `expanded_count_band`, `singleton_frac_band`,
+`rank_corr`, `depth_spread` and `depth_spread_requested`, and the `rsig` half records the depth fields
+for the first time — it previously carried none, which left the one thing a reader needs in order to
+know whether a corpus covers their samples readable only from the `vsig` half.
+
 ## 4.0.1 — 2026-09-27
 
 Everything in 4.0.0 below, plus the two things that kept it off PyPI. **4.0.0 never published** — the

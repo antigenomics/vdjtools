@@ -724,6 +724,195 @@ N_EFF: dict[str, tuple[int, int, int]] = {
 }
 
 
+#: What a REAL repertoire looks like per locus, in the two compartments the mixture corpora are named
+#: after: ``{cohort: {locus: (samples, richness, reads per expanded clone, singleton fraction, rank
+#: correlations)}}``, each of the three quantities being its measured
+#: p05/p25/p50/p75/p95 :data:`ladder <COHORT_QS>`.
+#:
+#: Measured 2026-09-27 in one streaming pass over the harmonized AIRR store, every sample with at
+#: least 100 reads in the locus, grouped by ``sample_id``. **Richness** is distinct clonotypes;
+#: **f1** is the fraction of them seen exactly once; **reads per expanded clone** is
+#: ``(reads - singletons) / (richness - singletons)``. The sample count leads each row, so a reader
+#: can see which loci the table is thin on (tissue TRD, 1,180 samples) and which it is not (tissue
+#: IGK, 58,706).
+#:
+#: **These three ladders are the entire parameterisation of a mixture corpus**, and the middle one is
+#: deliberately not the obvious quantity. Reads per *clonotype* cannot be drawn independently of the
+#: singleton fraction: a repertoire with ``f1`` singletons whose other clones all carry at least 2
+#: reads has at least ``2 - f1`` reads per clonotype, so a pair drawn from those two marginals lands
+#: in a forbidden region about half the time on blood TRB and has to be clipped back out of it --
+#: which silently rewrites the marginal it was drawn from. Drawing the read count itself is worse
+#: still: measured here, a copula over (richness, reads, f1) asks for a repertoire below that floor
+#: for **21.1%** of 20,000 blood TRB draws. Reads per *expanded* clone is >= 2 whatever ``f1`` is, so
+#: the trio has no forbidden region at all.
+#:
+#: **Five quantiles, not two, and it is the resolution that makes the corpus land.** The read count is
+#: a product of all three drawn quantities, so it is the sharpest check on the draw: against blood
+#: TRB's measured median of 763 reads (n = 34,365 samples), a 40,000-draw simulation gives **762** at
+#: five quantiles and 846 at three; blood IGH's 1,298 comes out 1,276 against 1,490 (n = 33,245).
+#: Tissue is the harder case and is stated rather than smoothed over: tissue TRB's median 308 comes
+#: out 425 at five quantiles, against 756 at three (n = 22,298). A product of three heavy-tailed
+#: factors has a median above the product of their medians unless their joint tails are matched
+#: exactly, and no marginals-plus-copula draw does that.
+#:
+#: The last field is the Spearman rank correlations among the three, in the order ``(richness vs
+#: expanded count, richness vs f1, expanded count vs f1)``, drawn through a Gaussian copula.
+#: **That is for the rotation, not for the read count**: a corpus's rotation IS its covariance
+#: structure, and ``f1`` against expansion size is -0.503 on blood TRB and -0.846 on blood IGK
+#: (n = 43,678) -- fewer singletons, bigger expansions. A corpus that drew the two independently
+#: would hand the PCA a correlation the cohort does not have, which no amount of correct marginals
+#: repairs.
+#:
+#: Against all this, :data:`DEPTH_SPREAD` -- 2.4x on TRD to 11.0x on IGH, from 1,168 deep blood
+#: samples, and what the ``naive``/``memory`` corpora draw across -- covers about a tenth of the real
+#: axis: blood TRB richness spans 43x (74 to 3,162 clonotypes) and tissue IGH 259x (40 to 10,352). A
+#: corpus estimates its bounds, its centre and its per-PC scaling from its own draw, and not one of
+#: the three extrapolates beyond it.
+COHORT: dict[str, dict[str, tuple]] = {
+    "blood": {
+        "TRA": (32732, (67, 148, 276, 554, 1724), (2.08, 2.38, 2.75, 3.50, 6.98),
+                (0.197, 0.566, 0.745, 0.851, 0.942), (-0.045, 0.142, -0.547)),
+        "TRB": (34365, (74, 208, 457, 985, 3162), (2.10, 2.40, 2.83, 3.74, 7.91),
+                (0.215, 0.580, 0.759, 0.860, 0.949), (-0.036, 0.128, -0.503)),
+        "TRG": (8688, (21, 48, 72, 108, 220), (2.64, 3.51, 4.74, 7.00, 15.38),
+                (0.167, 0.438, 0.583, 0.686, 0.806), (-0.421, 0.463, -0.394)),
+        "TRD": (5620, (19, 48, 80, 121, 280), (2.25, 2.96, 4.17, 6.75, 17.36),
+                (0.167, 0.418, 0.591, 0.714, 0.856), (-0.547, 0.484, -0.482)),
+        "IGH": (33245, (84, 271, 697, 1711, 6200), (2.11, 2.42, 2.88, 3.93, 12.83),
+                (0.255, 0.528, 0.697, 0.819, 0.927), (0.204, -0.132, -0.717)),
+        "IGK": (43678, (80, 233, 549, 1172, 3432), (2.29, 2.83, 3.67, 5.41, 15.97),
+                (0.143, 0.384, 0.555, 0.704, 0.846), (0.399, -0.301, -0.759)),
+        "IGL": (37601, (61, 160, 361, 790, 2468), (2.33, 2.86, 3.63, 5.37, 15.89),
+                (0.122, 0.346, 0.514, 0.671, 0.817), (0.349, -0.259, -0.714)),
+    },
+    "tissue": {
+        "TRA": (16799, (18, 84, 148, 417, 1839), (2.10, 2.42, 2.95, 4.68, 120.24),
+                (0.111, 0.476, 0.668, 0.806, 0.930), (-0.320, 0.340, -0.688)),
+        "TRB": (22298, (30, 89, 158, 498, 2977), (2.11, 2.48, 3.00, 4.60, 94.74),
+                (0.194, 0.517, 0.688, 0.817, 0.928), (-0.233, 0.265, -0.598)),
+        "TRG": (2235, (7, 31, 57, 93, 172), (2.85, 4.42, 6.82, 13.29, 102.00),
+                (0.077, 0.309, 0.500, 0.661, 0.820), (-0.540, 0.462, -0.377)),
+        "TRD": (1180, (6, 21, 54, 96, 253), (2.55, 4.05, 9.29, 53.40, 373.45),
+                (0.120, 0.400, 0.594, 0.728, 0.876), (-0.661, 0.373, -0.219)),
+        "IGH": (47031, (40, 164, 602, 2458, 10352), (2.39, 3.30, 5.27, 10.00, 40.36),
+                (0.055, 0.395, 0.561, 0.690, 0.855), (0.017, 0.079, -0.509)),
+        "IGK": (58706, (34, 150, 519, 1813, 6592), (2.66, 4.09, 7.05, 14.90, 69.34),
+                (0.147, 0.290, 0.410, 0.546, 0.750), (0.134, -0.147, -0.582)),
+        "IGL": (51010, (29, 113, 343, 1188, 4152), (2.64, 3.88, 6.49, 13.09, 54.70),
+                (0.125, 0.260, 0.377, 0.510, 0.717), (0.075, -0.094, -0.565)),
+    },
+}
+
+#: The quantiles every :data:`COHORT` ladder is recorded at.
+COHORT_QS: tuple[float, ...] = (0.05, 0.25, 0.50, 0.75, 0.95)
+
+#: The named synthetic corpora: ``{name: (regime, cohort)}``. There are four, and the name is the
+#: only thing a caller has to know.
+#:
+#: ``naive`` and ``memory`` are the two pure regimes at one nominal size. Neither is representative
+#: of a real bulk sample and neither can be: ``naive`` has no clone-size structure at all, and
+#: ``memory`` has no naive background and, at a fixed size, no read-depth variance either -- its read
+#: count is exactly ``size * READS_PER_CLONE`` in every sample. The two ``synthetic-*`` corpora are
+#: the MIXTURE, drawn across the measured per-locus richness, read-depth and singleton-fraction
+#: ranges of the cohort they are named after, so they belong in the same set as the real ``blood`` /
+#: ``tissue`` / ``deep-tcr`` corpora and mean what their names say.
+SYNTHETIC: dict[str, tuple[str, "str | None"]] = {
+    "naive": ("naive", None),
+    "memory": ("memory", None),
+    "synthetic-blood": ("mixed", "blood"),
+    "synthetic-tissue": ("mixed", "tissue"),
+}
+
+
+def corpus_plan(name: str, *, size: "int | str | None" = None,
+                depth_spread: "float | str | None" = None) -> tuple:
+    """``(regime, cohort, size, depth_spread)`` for a named corpus -- the ONE place a name becomes a
+    draw, so the two halves of a corpus cannot resolve the same name differently.
+
+    A cohort name stands in for both ``size`` and ``depth_spread``, because both come out of the same
+    measured band: the nominal size is its geometric centre and the spread is its width. An explicit
+    value for either wins, which is what makes a deliberately wider or narrower variant of a named
+    corpus a one-flag change rather than a new table.
+    """
+    if name not in SYNTHETIC:
+        raise ValueError(
+            f"unknown synthetic corpus {name!r}; one of {', '.join(SYNTHETIC)}, or a path to an "
+            "artifact. 'mixed' is the regime, not a corpus: a mixture has no unparameterised form, "
+            "and the cohort it is drawn across is what makes it one.")
+    regime, cohort = SYNTHETIC[name]
+    return (regime, cohort,
+            (cohort or DEFAULT_SIZE) if size is None else size,
+            cohort if depth_spread is None else depth_spread)
+
+
+def cohort_bands(cohort: str, locus: str) -> tuple[tuple, tuple, tuple, tuple]:
+    """One locus of one cohort: the richness, expanded-count and ``f1`` ladders, and their copula."""
+    _samples, rich, mexp, frac, corr = COHORT[cohort][locus]
+    return rich, mexp, frac, corr
+
+
+def ladder_draw(q: tuple, u: np.ndarray, log: bool = True) -> np.ndarray:
+    """Inverse-CDF draw from a measured :data:`COHORT_QS` ladder, at probabilities ``u``.
+
+    Linear interpolation of the quantile function -- in log space for a scale quantity -- so the drawn
+    marginal carries **all five** of the cohort's recorded quantiles and spans **exactly** its p05 to
+    p95.
+
+    That is the difference from drawing uniformly across the band, and it is not cosmetic: real
+    singleton fractions sit near the top of theirs (blood TRB median 0.759 of a 0.215-0.949 band,
+    n = 34,365 samples), so a uniform draw would centre the corpus at 0.582 and leave a
+    cohort-median sample 0.65 robust SD off centre on every singleton-sensitive feature.
+    """
+    y = np.interp(u, COHORT_QS, np.log(q) if log else np.asarray(q, dtype=float))
+    return np.exp(y) if log else y
+
+
+def copula_uniforms(rank_corr: tuple, n: int, rng: np.random.Generator) -> np.ndarray:
+    """``(n, 3)`` probabilities carrying the measured rank correlations -- a Gaussian copula.
+
+    Spearman's rho converts to the Gaussian correlation it implies by ``2 * sin(pi * rho / 6)``, the
+    three of them are made a matrix, and correlated normals are pushed through the normal CDF. The
+    result is uniform in every column whatever the correlations are, so :func:`ladder_draw` still
+    reproduces each measured marginal exactly -- a copula only decides how they move together, which
+    is what the rotation is fitted on.
+
+    The eigenvalue clip is what keeps three separately-measured correlations usable: a matrix built
+    from them need not be positive semidefinite, and the nearest one that is differs by less than the
+    correlations' own sampling error. The row renormalisation then restores unit marginal variance,
+    without which a clipped matrix would quietly narrow the drawn bands.
+    """
+    from scipy.special import ndtr
+
+    r_nm, r_nf, r_mf = (2.0 * np.sin(np.pi * np.asarray(rank_corr, dtype=float) / 6.0))
+    m = np.array([[1.0, r_nm, r_nf], [r_nm, 1.0, r_mf], [r_nf, r_mf, 1.0]])
+    w, v = np.linalg.eigh(m)
+    root = v * np.sqrt(np.clip(w, 0.0, None))
+    z = rng.standard_normal((n, 3)) @ root.T
+    z /= np.sqrt(np.maximum((root ** 2).sum(axis=1), 1e-12))
+    # Onto the ladder's own support: a monotone map, so the copula's ranks survive it, and without
+    # it the 10% of draws outside p05-p95 would pile up as point masses on the two band edges.
+    return COHORT_QS[0] + (COHORT_QS[-1] - COHORT_QS[0]) * ndtr(z)
+
+
+def depth_spread_of(locus: str, depth_spread: "float | str | None" = None) -> float:
+    """The multiplicative depth range for one locus: measured, named, or a caller's override.
+
+    ``None`` means :data:`DEPTH_SPREAD`, the p05-p95 spread of that locus among 1,168 deep blood
+    samples, which is what ``naive`` and ``memory`` draw across -- 2.4x on TRD to 11.0x on IGH, so
+    under one decade everywhere. A cohort name from :data:`COHORT` means that cohort's own measured
+    richness band, which is 43x on blood TRB and 259x on tissue IGH. A number widens or narrows it
+    deliberately: a corpus meant to describe samples across decades of sequencing depth has to be
+    *drawn* across those decades, because the bounds, the centre and the per-PC scaling are all
+    estimated from the draw and none of them extrapolates.
+    """
+    if depth_spread is None:
+        return DEPTH_SPREAD.get(locus, 4.0)
+    if isinstance(depth_spread, str):
+        rich = cohort_bands(depth_spread, locus)[0]
+        return rich[-1] / rich[0]
+    return float(depth_spread)
+
+
 def draw_pool(locus: str, n: int, *, seed: int, source: str = "olga") -> pl.DataFrame:
     """``n`` productive rearrangements from the bundled model for one locus.
 
@@ -755,30 +944,86 @@ def draw_sizes(nominal: int, n: int, spread: float, rng: np.random.Generator) ->
 
 
 def draw_sample(pool: pl.DataFrame, size: int, regime: str, rng: np.random.Generator,
-                ) -> pl.DataFrame:
+                frac: "float | None" = None, mexp: "float | None" = None) -> pl.DataFrame:
     """One synthetic repertoire: ``size`` receptors drawn from ``pool``, with clone sizes.
 
     ``naive`` gives every clone a count of 1, which is what an unselected repertoire looks like and
     what the generator produces. ``memory`` draws Zipf frequencies, takes a multinomial sample at
     the same total, and **drops the zeros** -- so a memory repertoire has fewer distinct clones than
     a naive one at the same nominal size, exactly as a selected repertoire does.
+
+    ``mixed`` is what a real bulk sample is -- a singleton naive background plus an expanded memory
+    component -- and it needs ``frac`` (the singleton fraction) and ``mexp`` (reads per expanded
+    clone), both drawn per sample by :func:`draw_plan` from the cohort's measured ladders. Neither
+    pure regime can stand in for it: ``naive`` has no clone-size structure at all, and ``memory`` at
+    a fixed size has a read count of exactly ``size * READS_PER_CLONE`` in every sample, so its
+    depth does not vary either.
     """
-    if regime not in ("naive", "memory"):
-        raise ValueError(f"regime must be 'naive' or 'memory'; got {regime!r}")
+    if regime not in ("naive", "memory", "mixed"):
+        raise ValueError(f"regime must be 'naive', 'memory' or 'mixed'; got {regime!r}")
     idx = rng.choice(pool.height, size=min(size, pool.height), replace=False)
     df = pool[idx]
     if regime == "naive":
         return df.with_columns(pl.lit(1, dtype=pl.Int64).alias("duplicate_count"))
-    # Zipf over RANKS: f_i ~ i^-a, normalised. Ranks are shuffled so clone size is independent of
-    # where a sequence sat in the pool -- otherwise the abundance and the receptor are correlated
-    # and the corpus learns an artefact of the draw order.
-    rank = rng.permutation(df.height) + 1
+    if regime == "mixed":
+        if frac is None or mexp is None:
+            raise ValueError("regime='mixed' needs frac (the singleton fraction) and mexp (reads per "
+                             "expanded clone); a mixture has no unparameterised form. Build one of "
+                             f"{', '.join(k for k, v in SYNTHETIC.items() if v[0] == 'mixed')}, "
+                             "whose per-locus ladders come from COHORT.")
+        return _mixed_counts(df, rng, float(frac), float(mexp))
+    return _zipf_counts(df, rng)
+
+
+def _zipf_freq(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Zipf rank-abundance frequencies for ``n`` clones, over SHUFFLED ranks.
+
+    Zipf over RANKS: ``f_i ~ i**-a``, normalised. The ranks are shuffled so clone size is
+    independent of where a sequence sat in the pool -- otherwise the abundance and the receptor are
+    correlated and the corpus learns an artefact of the draw order. One definition, shared by
+    ``memory`` and the memory half of ``mixed``: two copies would let the two drift apart silently.
+    """
+    rank = rng.permutation(n) + 1
     freq = rank.astype(float) ** -ZIPF_A
-    freq /= freq.sum()
+    return freq / freq.sum()
+
+
+def _zipf_counts(df: pl.DataFrame, rng: np.random.Generator) -> pl.DataFrame:
+    """``memory`` clone sizes: a multinomial over Zipf frequencies, zeros dropped."""
+    freq = _zipf_freq(df.height, rng)
     counts = rng.multinomial(df.height * READS_PER_CLONE, freq)
     keep = counts > 0
     return df.filter(pl.Series(keep)).with_columns(
         pl.Series("duplicate_count", counts[keep].astype(np.int64)))
+
+
+def _mixed_counts(df: pl.DataFrame, rng: np.random.Generator, frac: float,
+                  mexp: float) -> pl.DataFrame:
+    """``mixed`` clone sizes: ``frac`` of the clones at one read, the rest sharing ``mexp`` each.
+
+    Hits the drawn richness, singleton fraction and read count **exactly**, which is the whole point
+    of constructing the mixture rather than sampling it: ``round(frac * n)`` clonotypes get a count
+    of 1 -- that is what the singleton fraction means operationally, and it is the quantity our aging
+    cohorts report as the naive share -- and the remaining ``ne`` clones split ``mexp * ne`` reads
+    with Zipf rank-abundance frequencies on a floor of 2, so no expanded clone can fall back into the
+    singleton class and turn the realised ``f1`` into a consequence of the sampling.
+
+    Contrast ``memory``, where the multinomial's zeros are dropped: there both the richness and the
+    singleton fraction come out of the draw rather than being asked for, which is why a memory corpus
+    cannot be pointed at a measured cohort.
+    """
+    n = df.height
+    n1 = min(int(round(frac * n)), n)
+    ne = n - n1
+    if ne == 0:
+        return df.with_columns(pl.lit(1, dtype=pl.Int64).alias("duplicate_count"))
+    counts = np.empty(n, dtype=np.int64)
+    counts[:n1] = 1
+    # `mexp` is reads per EXPANDED clone and is >= 2 by construction, so the floor cannot bind for a
+    # drawn plan; it is here for a caller passing its own number.
+    extra = max(int(round(mexp * ne)), 2 * ne) - 2 * ne
+    counts[n1:] = 2 + rng.multinomial(extra, _zipf_freq(ne, rng))
+    return df.with_columns(pl.Series("duplicate_count", counts))
 
 
 def resolved_size(locus: str, size: "int | str") -> int:
@@ -790,12 +1035,53 @@ def resolved_size(locus: str, size: "int | str") -> int:
     """
     if isinstance(size, int):
         return size
+    if size in COHORT:
+        # The cohort's MEDIAN richness for that locus. `draw_plan` rescales the whole measured ladder
+        # by `resolved_size / median`, so this is the nominal depth the ladder is centred on.
+        return cohort_bands(size, locus)[0][COHORT_QS.index(0.50)]
     if locus not in N_EFF:
         raise ValueError(f"size={size!r} has no measured depth for {locus}")
     return N_EFF[locus][{"p05": 0, "n_eff": 1, "p95": 2}[size]]
 
 
-def draw_one(pools: dict, sizes: dict, regime: str, j: int, seed: int) -> dict:
+def draw_plan(loci, *, n_samples: int, size: "int | str", seed: int,
+              depth_spread: "float | str | None" = None, cohort: "str | None" = None) -> dict:
+    """Every sample's drawn size, singleton fraction and mean count: ``{locus: {name: array}}``.
+
+    Drawn **in the parent**, once, from one generator per locus seeded at ``seed + 1000 + i``, so
+    every worker is handed the same plan rather than reproducing it -- and so the plan itself can be
+    inspected, which is how the realised corpus gets checked against the cohort it is named after.
+
+    ``cohort=None`` leaves the two mixture knobs unset, which is correct for ``naive`` and ``memory``
+    and keeps their draw byte-identical to what the shipped artifacts were built from.
+    """
+    if cohort is not None and not isinstance(depth_spread, str):
+        raise ValueError(
+            f"corpus cohort {cohort!r} draws depth from its measured p05-p50-p95 richness ladder, so "
+            "depth_spread does not apply. Move the whole ladder with `size` (which rescales it about "
+            "its median), or build naive/memory, which is where an explicit spread belongs.")
+    plan = {}
+    for i, locus in enumerate(loci):
+        rng = np.random.default_rng(seed + 1000 + i)
+        if cohort is None:
+            plan[locus] = {"size": draw_sizes(resolved_size(locus, size), n_samples,
+                                              depth_spread_of(locus, depth_spread), rng),
+                           "frac": None, "mexp": None}
+            continue
+        rich, mexp, frac, corr = cohort_bands(cohort, locus)
+        # `size` rescales the whole ladder about its median rather than being ignored, so a smoke
+        # build (--size 1000) is the same cohort SHAPE at a different nominal depth. It is 1.0 for
+        # `size=<cohort>`, which is what the corpus's own default resolves to.
+        scale = resolved_size(locus, size) / rich[COHORT_QS.index(0.50)]
+        u = copula_uniforms(corr, n_samples, rng)
+        plan[locus] = {
+            "size": np.maximum((ladder_draw(rich, u[:, 0]) * scale).astype(np.int64), 2),
+            "frac": ladder_draw(frac, u[:, 2], log=False),
+            "mexp": ladder_draw(mexp, u[:, 1])}
+    return plan
+
+
+def draw_one(pools: dict, plan: dict, regime: str, j: int, seed: int) -> dict:
     """Sample ``j`` of a synthetic corpus -- a **pure function of** ``j``.
 
     Each sample gets its own generator, seeded from ``(seed, locus index, j)``, so any process can
@@ -803,18 +1089,29 @@ def draw_one(pools: dict, sizes: dict, regime: str, j: int, seed: int) -> dict:
     processes while staying bit-identical at every ``n_jobs``: the drawing is the only part of the
     pipeline carrying RNG state, and here it carries none between samples.
     """
-    return {loc: draw_sample(pools[loc], int(sizes[loc][j]), regime,
-                             np.random.default_rng([seed, i, j]))
+    def at(v, j):
+        return None if v is None else float(v[j])
+
+    return {loc: draw_sample(pools[loc], int(plan[loc]["size"][j]), regime,
+                             np.random.default_rng([seed, i, j]),
+                             at(plan[loc]["frac"], j), at(plan[loc]["mexp"], j))
             for i, loc in enumerate(pools)}
 
 
-def pool_target(locus: str, size: "int | str", n_samples: int) -> int:
+def pool_target(locus: str, size: "int | str", n_samples: int,
+                depth_spread: "float | str | None" = None, cohort: "str | None" = None) -> int:
     """How many receptors a locus's pool needs: the largest repertoire, times :data:`POOL_FACTOR`.
 
-    The pool has to cover the LARGEST depth the spread can ask for, since a sample is drawn from it
-    without replacement.
+    The pool has to cover the LARGEST depth the draw can ask for, since a sample is drawn from it
+    without replacement. For a cohort corpus that is the top of the measured richness ladder, scaled
+    the same way :func:`draw_plan` scales it; for a pure regime it is the nominal size times the
+    half-spread.
     """
-    top = int(resolved_size(locus, size) * np.sqrt(DEPTH_SPREAD.get(locus, 4.0))) + 1
+    if cohort is not None:
+        rich = cohort_bands(cohort, locus)[0]
+        top = int(rich[-1] * resolved_size(locus, size) / rich[COHORT_QS.index(0.50)]) + 1
+    else:
+        top = int(resolved_size(locus, size) * np.sqrt(depth_spread_of(locus, depth_spread))) + 1
     return min(top * POOL_FACTOR, max(top * n_samples, top))
 
 
@@ -832,7 +1129,8 @@ def _pool_chunk(args) -> tuple:
 
 
 def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path,
-                n_jobs: int = 1, progress=None) -> dict:
+                n_jobs: int = 1, progress=None, depth_spread: "float | str | None" = None,
+                cohort: "str | None" = None) -> dict:
     """Generate every locus's pool across processes; return ``{locus: [chunk path, ...]}``.
 
     Generation is the single most expensive stage of a synthetic build and it is embarrassingly
@@ -846,7 +1144,7 @@ def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
     tasks = []
     for i, locus in enumerate(ordered):
-        total = pool_target(locus, size, n_samples)
+        total = pool_target(locus, size, n_samples, depth_spread, cohort)
         # Chunk sizes differ by at most one and the seeds are per chunk, so the concatenated pool
         # is a deterministic function of (locus, total, seed) and of the chunk count -- which is
         # why the chunk count is the fixed :data:`POOL_CHUNKS` and never the machine's core count.
@@ -915,13 +1213,13 @@ POOL_CHUNKS: int = 64
 _W: dict = {}
 
 
-def _init_worker(paths, sizes, regime, seed, cols, featurise) -> None:
+def _init_worker(paths, plan, regime, seed, cols, featurise) -> None:
     import os
 
     from .cohort import WORKER_ENV
 
     os.environ[WORKER_ENV] = "1"
-    _W.update(pools=read_pools(paths), sizes=sizes, regime=regime, seed=seed, cols=cols,
+    _W.update(pools=read_pools(paths), plan=plan, regime=regime, seed=seed, cols=cols,
               featurise=featurise)
 
 
@@ -930,7 +1228,7 @@ def _feat_batch(span) -> tuple:
     a, b = span
     out = {loc: np.full((b - a, len(cols)), np.nan) for loc, cols in _W["cols"].items()}
     for j in range(a, b):
-        raw = _W["featurise"](draw_one(_W["pools"], _W["sizes"], _W["regime"], j, _W["seed"]))[0]
+        raw = _W["featurise"](draw_one(_W["pools"], _W["plan"], _W["regime"], j, _W["seed"]))[0]
         for loc, cols in _W["cols"].items():
             out[loc][j - a] = [raw.get(c, np.nan) for c in cols]
     return a, out
@@ -951,7 +1249,9 @@ def _workers(n_jobs: int, cap: int) -> int:
 def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
                    loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                    size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "olga",
-                   n_jobs: int = 1, progress=None, tmp: "Path | None" = None) -> dict:
+                   n_jobs: int = 1, progress=None, tmp: "Path | None" = None,
+                   depth_spread: "float | str | None" = None,
+                   cohort: "str | None" = None) -> dict:
     """The corpus matrix, ``{locus: (array, columns)}``, built across ``n_jobs`` processes.
 
     Shared by both halves of the signature: ``vsig`` and ``rsig`` differ only in ``featurise`` and
@@ -989,18 +1289,17 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
     tmp = Path(tempfile.mkdtemp(prefix="vdjtools-corpus-")) if own_tmp else Path(tmp)
     try:
         paths = build_pools(ordered, size=size, n_samples=n_samples, seed=seed, source=source,
-                            tmp=tmp, n_jobs=n_jobs, progress=progress)
-        sizes = {loc: draw_sizes(resolved_size(loc, size), n_samples,
-                                 DEPTH_SPREAD.get(loc, 4.0),
-                                 np.random.default_rng(seed + 1000 + i))
-                 for i, loc in enumerate(ordered)}
+                            tmp=tmp, n_jobs=n_jobs, progress=progress,
+                            depth_spread=depth_spread, cohort=cohort)
+        plan = draw_plan(ordered, n_samples=n_samples, size=size, seed=seed,
+                         depth_spread=depth_spread, cohort=cohort)
         workers = _workers(n_jobs, n_samples)
         single_threaded_children()
         # Four spans per worker rather than one. The expensive per-worker state -- the mapped pools
         # and the germline vocabulary -- is loaded once by the initializer, not once per span, so
         # extra spans cost nothing and buy load balance plus progress that moves.
         spans = _ranges(n_samples, workers * 4 if workers > 1 else 1)
-        args = (paths, sizes, regime, seed, cols, featurise)
+        args = (paths, plan, regime, seed, cols, featurise)
         if workers < 2:
             _init_worker(*args)
             results = [_feat_batch(sp) for sp in _progress(spans, n_samples, progress)]
@@ -1068,7 +1367,8 @@ def _pooled(spans, args, workers: int, n_samples: int, progress):
 
 def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                   size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "olga",
-                  progress=None, tmp: "Path | None" = None, n_jobs: int = 1):
+                  progress=None, tmp: "Path | None" = None, n_jobs: int = 1,
+                  depth_spread: "float | str | None" = None, cohort: "str | None" = None):
     """Set up the pools in this process and return ``(ordered_loci, draw)``; ``draw(j)`` is sample j.
 
     The in-process path, for callers that want the repertoires themselves rather than a corpus
@@ -1080,27 +1380,33 @@ def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: i
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
     tmp = Path(tempfile.mkdtemp(prefix="vdjtools-pools-")) if tmp is None else Path(tmp)
     paths = build_pools(ordered, size=size, n_samples=n_samples, seed=seed, source=source,
-                        tmp=tmp, n_jobs=n_jobs, progress=progress)
+                        tmp=tmp, n_jobs=n_jobs, progress=progress, depth_spread=depth_spread,
+                        cohort=cohort)
     pools = read_pools(paths)
-    sizes = {loc: draw_sizes(resolved_size(loc, size), n_samples, DEPTH_SPREAD.get(loc, 4.0),
-                             np.random.default_rng(seed + 1000 + i))
-             for i, loc in enumerate(ordered)}
-    return ordered, partial(draw_one, pools, sizes, regime, seed=seed)
+    plan = draw_plan(ordered, n_samples=n_samples, size=size, seed=seed,
+                     depth_spread=depth_spread, cohort=cohort)
+    return ordered, partial(draw_one, pools, plan, regime, seed=seed)
 
 
-def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
-               size: "int | str" = DEFAULT_SIZE, seed: int = SEED,
+def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
+               size: "int | str | None" = None, seed: int = SEED,
                n_components: "int | float" = DEFAULT_COMPONENTS, mode: str = "features",
                winsor_p: float = 0.01, source: str = "olga", fit_corpus: bool = True,
-               progress=None, n_jobs: int = 1):
+               progress=None, n_jobs: int = 1, depth_spread: "float | str | None" = None):
     """Build a synthetic corpus, and fit it.
 
     Args:
-        regime: ``"naive"`` (every clone size 1) or ``"memory"`` (Zipf clone sizes).
+        corpus_name: One of :data:`SYNTHETIC` -- ``"naive"`` and ``"memory"`` are the pure regimes
+            at a nominal size; ``"synthetic-blood"`` and ``"synthetic-tissue"`` are the naive/memory
+            mixture drawn across the named cohort's measured per-locus richness, read-depth and
+            singleton-fraction bands (:data:`COHORT`), and are the two that describe a real bulk
+            cohort rather than a regime.
         loci: Loci to build. All seven by default.
         n_samples: Repertoires in the corpus.
-        size: Receptors per repertoire, or ``"n_eff"`` for the per-locus real medians in
-            :data:`N_EFF`, or ``"p05"`` / ``"p95"`` for the sweep endpoints.
+        size: Receptors per repertoire. ``None``, the default, is the corpus's own -- 10,000 for the
+            pure regimes, the geometric centre of the cohort's measured richness band for a
+            ``synthetic-*`` one. Also takes ``"n_eff"`` for the per-locus real medians in
+            :data:`N_EFF`, ``"p05"`` / ``"p95"`` for the sweep endpoints, or a cohort name.
         seed: Base seed; every draw is a recorded offset from it.
         n_components: Components per locus, or a variance fraction.
         mode: Winsorization mode to fit at.
@@ -1111,12 +1417,20 @@ def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int 
         progress: Optional ``callable(locus, done, total)``.
         n_jobs: Worker **processes** (not kernel threads). ``0`` means every available core; ``1``,
             the default, runs in-process. The result is bit-identical at every value.
+        depth_spread: Multiplicative depth range each repertoire's size is drawn log-uniformly
+            across, around ``size``. ``None`` is the corpus's own -- :data:`DEPTH_SPREAD` for a pure
+            regime (2.4x-11.0x), the cohort's measured richness band for a ``synthetic-*`` one (43x
+            on blood TRB, 259x on tissue IGH). Pass a number to override it: ``1000`` with
+            ``size=3162`` spans 100 to 100,000 receptors per locus. The bounds, centre and per-PC
+            scaling are all estimated from the draw, so a corpus describes only the depths it was
+            drawn across.
 
     Returns:
         ``(corpus, mats)`` when fitting -- ``mats`` being ``{locus: (matrix, columns)}``, the corpus
         matrix itself -- else a list of ``{locus: frame}`` samples.
 
-    The whole build is a deterministic function of ``(regime, loci, n_samples, size, seed, source)``
+    The whole build is a deterministic function of ``(corpus_name, loci, n_samples, size, seed,
+    source)``
     and the bundled models, so two machines at different thread counts must produce byte-identical
     artifacts. That is an acceptance criterion, not a hope: ``generate`` was once irreproducible
     *across processes* while being deterministic within one, because a marginal-table aggregation
@@ -1126,29 +1440,64 @@ def synthesize(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int 
 
     from . import features as FE
 
+    regime, cohort, size, depth_spread = corpus_plan(corpus_name, size=size,
+                                                    depth_spread=depth_spread)
     vocab = {loc: FE.gene_vocab(loc) for loc in loci}
     if not fit_corpus:
         _ordered, draw = sample_stream(regime, loci=loci, n_samples=n_samples, size=size,
-                                       seed=seed, source=source, progress=progress, n_jobs=n_jobs)
+                                       seed=seed, source=source, progress=progress, n_jobs=n_jobs,
+                                       depth_spread=depth_spread, cohort=cohort)
         return [draw(j) for j in range(n_samples)]
 
     mats = build_matrices(regime, sig="vsig", featurise=partial(FE.raw_and_channels, vocab=vocab),
                           vocab=vocab, loci=loci, n_samples=n_samples, size=size, seed=seed,
-                          source=source, n_jobs=n_jobs, progress=progress)
+                          source=source, n_jobs=n_jobs, progress=progress,
+                          depth_spread=depth_spread, cohort=cohort)
 
     from .. import __version__
-    corpus = fit_matrices(mats, vocab, sig="vsig", name=regime, mode=mode,
-                          n_components=n_components, winsor_p=winsor_p, meta={
-                     "regime": regime, "n_samples": n_samples, "seed": seed, "source": source,
-                     "size": size,
-                     "size_per_locus": {k: resolved_size(k, size) for k in loci},
-                     "zipf_a": ZIPF_A if regime == "memory" else None,
-                     "reads_per_clone": READS_PER_CLONE if regime == "memory" else 1,
-                     "pool_factor": POOL_FACTOR, "vdjtools_version": __version__,
-                     "models": model_fingerprint(loci, source),
-                     "depth_spread": {k: DEPTH_SPREAD.get(k) for k in loci},
-                     "loci": list(loci)})
+    corpus = fit_matrices(mats, vocab, sig="vsig", name=corpus_name, mode=mode,
+                          n_components=n_components, winsor_p=winsor_p,
+                          meta=corpus_meta(regime, cohort, loci, n_samples=n_samples,
+                                           size=size, seed=seed, source=source,
+                                           depth_spread=depth_spread,
+                                           vdjtools_version=__version__))
     return corpus, mats
+
+
+def corpus_meta(regime: str, cohort: "str | None", loci, *, n_samples: int,
+                size: "int | str", seed: int, source: str, depth_spread, **extra) -> dict:
+    """The manifest of a synthetic build -- everything needed to reproduce the draw, per locus.
+
+    Shared by both halves, because a manifest that disagrees between ``vsig_<name>`` and
+    ``rsig_<name>`` about the depths, the singleton fractions or the germline they were drawn from is
+    a joinability claim nobody can check.
+    """
+    mix = {} if cohort is None else {loc: cohort_bands(cohort, loc) for loc in loci}
+    return {
+        # The corpus NAME is not here: `Corpus.name` is written beside this by `save`, and two
+        # places for it is one place for them to disagree.
+        "regime": regime, "cohort": cohort,
+        "n_samples": n_samples, "seed": seed, "source": source, "size": size,
+        "size_per_locus": {k: resolved_size(k, size) for k in loci},
+        "zipf_a": ZIPF_A if regime in ("memory", "mixed") else None,
+        "reads_per_clone": {"naive": 1, "memory": READS_PER_CLONE, "mixed": None}[regime],
+        # The three measured p05/p50/p95 ladders a mixture corpus drew each sample from, per locus:
+        # richness, reads per expanded clone, and the singleton fraction (the naive share). `None`
+        # for a pure regime, which has none of them.
+        "richness_band": {k: list(v[0]) for k, v in mix.items()} or None,
+        "expanded_count_band": {k: list(v[1]) for k, v in mix.items()} or None,
+        "singleton_frac_band": {k: list(v[2]) for k, v in mix.items()} or None,
+        # ...and how they move together, which is what the rotation is fitted on.
+        "rank_corr": {k: list(v[3]) for k, v in mix.items()} or None,
+        "pool_factor": POOL_FACTOR,
+        # The pools come out of these models; retraining one moves its locus. Gated on load.
+        "models": model_fingerprint(loci, source),
+        # The depths were DRAWN across this range; a corpus describes no other depths.
+        "depth_spread": {k: depth_spread_of(k, depth_spread) for k in loci},
+        "depth_spread_requested": depth_spread,
+        "loci": list(loci),
+        **extra,
+    }
 
 
 def _demo() -> None:

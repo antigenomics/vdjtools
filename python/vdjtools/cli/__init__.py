@@ -614,13 +614,18 @@ def _bundled_names() -> list[str]:
 
 @app.command()
 def corpus(
-    name: str = typer.Option("naive", "--corpus", help="naive (every clone size 1) | memory "
-                                                       "(Zipf rank-abundance clone sizes)."),
+    name: str = typer.Option("naive", "--corpus",
+                             help="naive (every clone size 1) | memory (Zipf rank-abundance clone "
+                                  "sizes) | synthetic-blood | synthetic-tissue (the naive/memory "
+                                  "mixture, drawn across that real cohort's measured per-locus "
+                                  "richness, read depth and singleton fraction)."),
     out: Path = typer.Option(..., "--out", "-o", help="Artifact path; writes .npz and .json."),
     n_samples: int = typer.Option(10000, "--samples", help="Repertoires in the corpus."),
-    size: str = typer.Option("10000", "--size",
+    size: str = typer.Option("auto", "--size",
                              help="Receptors per repertoire: an integer, or n_eff / p05 / p95 for "
-                                  "the measured real per-locus depths."),
+                                  "the measured real per-locus depths. Default `auto` is the "
+                                  "corpus's own -- 10000 for naive/memory, the centre of the "
+                                  "cohort's measured richness band for a synthetic-* one."),
     components: str = typer.Option("128", "--components",
                                    help="Components per locus: an integer count, or a variance "
                                         "fraction. A count is capped at what a locus supports."),
@@ -631,6 +636,13 @@ def corpus(
     loci: Optional[str] = typer.Option(None, "--loci", help="Comma-separated subset (default: all "
                                                             "seven)."),
     source: str = typer.Option("olga", "--source", help="Bundled model set: olga | learned | arda."),
+    depth_spread: Optional[float] = typer.Option(None, "--depth-spread",
+                                                 help="Multiplicative depth range each repertoire's "
+                                                      "size is drawn log-uniformly across, around "
+                                                      "--size. Default is the measured real "
+                                                      "p05-p95 spread per locus (2.4x-11.0x). Use "
+                                                      "e.g. --size 3162 --depth-spread 1000 for a "
+                                                      "corpus spanning 100 to 100000 receptors."),
     smoke: bool = typer.Option(False, "--smoke", help="Reduced build (200 samples of 1000) for "
                                                       "tests and the reproducibility check."),
     jobs: int = typer.Option(0, "--jobs", "-j", help="Worker PROCESSES across samples (not kernel "
@@ -641,6 +653,7 @@ def corpus(
 
     \b
       vdjtools corpus --corpus naive  --out naive.npz
+      vdjtools corpus --corpus synthetic-blood  -o synthetic-blood.npz
       vdjtools corpus --corpus memory --size n_eff --components 0.95 -o memory.npz
       vdjtools corpus --smoke -o /tmp/smoke.npz     # minutes, not hours
 
@@ -653,18 +666,28 @@ def corpus(
     Each repertoire's depth is **drawn**, log-uniformly over the measured real p05-p95 spread for
     its locus, not fixed. A corpus at one depth has zero variance in its depth features and cannot
     fit the cross-locus block at all -- which fails quietly, as a rotation that simply omits them.
+
+    For `naive` and `memory` that spread is under one decade (2.4x on TRD to 11.0x on IGH,
+    measured on 1,168 deep blood samples), and a corpus describes only the depths it was drawn
+    across: bounds, centre and per-PC scaling are all estimated from the draw and none of them
+    extrapolates. The real cohorts are an order of magnitude wider -- blood TRB richness spans 43x
+    (74 to 3,162 clonotypes, n = 34,365 samples) and tissue IGH 259x (40 to 10,352, n = 47,031) --
+    which is what `--corpus synthetic-blood` / `synthetic-tissue` draw across, together with that
+    cohort's measured reads per clonotype and its singleton fraction (the naive share: blood TRB
+    0.215 to 0.949). To widen any of them by hand, `--size 3162 --depth-spread 1000` draws
+    log-uniformly from 100 to 100,000 receptors per locus.
     """
     import sys
     import time
 
     from vdjtools.signature.corpus import synthesize
 
-    sz: object = size
-    if size not in ("n_eff", "p05", "p95"):
+    sz: object = None if size == "auto" else size
+    if size not in ("auto", "n_eff", "p05", "p95"):
         try:
             sz = int(size)
         except ValueError:
-            _err(f"--size must be an integer or one of n_eff, p05, p95; got {size!r}")
+            _err(f"--size must be an integer or one of auto, n_eff, p05, p95; got {size!r}")
     if smoke:
         n_samples, sz = 200, 1000
     ks = _parse_components(components)
@@ -674,6 +697,7 @@ def corpus(
     kw = {} if which is None else {"loci": which}
     art, _rows = synthesize(name, n_samples=n_samples, size=sz, seed=seed, n_components=ks,
                             mode=winsorize, winsor_p=winsor_p, source=source, n_jobs=jobs,
+                            depth_spread=depth_spread,
                             progress=lambda loc, d, t: print(
                                 f"  {loc:4s} {d}/{t}  {time.time() - t0:5.0f}s",
                                 file=sys.stderr, flush=True),

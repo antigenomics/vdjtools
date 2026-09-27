@@ -455,6 +455,176 @@ def test_a_corpus_fits_the_cross_locus_block_which_requires_depth_to_vary():
     assert buf.shape == (30, len(cols)) and np.isfinite(buf).all()
 
 
+def test_the_mixture_hits_its_drawn_richness_reads_and_singleton_fraction_exactly():
+    """Neither pure regime varies what a real cohort varies, and the mixture does it by construction.
+
+    Measured here on a 3,000-receptor TRG pool at size 800: ``naive`` gives f1 = 1.0 and
+    reads == richness in every sample, and ``memory`` gives a CONSTANT read count
+    (size x reads_per_clone = 16,000) -- so at a fixed nominal size neither has any spread in depth
+    or in clone-size structure, and a corpus fitted on one describes a cohort that does not exist.
+
+    ``mixed`` is handed a singleton fraction and a mean count per sample and hits both **exactly**,
+    along with the richness, because it constructs the three rather than sampling them: that is what
+    lets a corpus be drawn across a measured cohort's bands rather than near them.
+    """
+    from vdjtools.model import load_bundled
+    from vdjtools.model.generate import generate
+
+    pool = generate(load_bundled("TRG"), 3000, seed=1, productive_only=True)
+
+    def draws(regime, **kw):
+        out = []
+        for j in range(6):
+            d = C.draw_sample(pool, 800, regime, np.random.default_rng([7, 0, j]), **kw)
+            c = d["duplicate_count"].to_numpy()
+            out.append((d.height, int(c.sum()), float((c == 1).mean())))
+        return out
+
+    naive, memory = draws("naive"), draws("memory")
+    assert {f for _, _, f in naive} == {1.0}
+    assert len({r for _, r, _ in naive}) == 1
+    assert len({r for _, r, _ in memory}) == 1, "memory read count varies at a fixed size?"
+
+    # the three targets, at the measured ends of real blood TRB's ladders
+    for frac, mexp in ((0.215, 2.10), (0.759, 2.83), (0.949, 7.91)):
+        d = C.draw_sample(pool, 800, "mixed", np.random.default_rng([7, 0, 1]), frac, mexp)
+        c = d["duplicate_count"].to_numpy()
+        n1 = round(frac * 800)
+        assert d.height == 800, "a constructed mixture drops no clone"
+        assert float((c == 1).mean()) == pytest.approx(n1 / 800)
+        assert int(c.sum()) == n1 + round(mexp * (800 - n1))
+        assert c[c > 1].min() >= 2, "an expanded clone fell back into the singleton class"
+
+    # reads per EXPANDED clone is >= 2 whatever the singleton fraction is, which is why it can be
+    # drawn independently of it; a caller's number below that floor is raised to it
+    d = C.draw_sample(pool, 800, "mixed", np.random.default_rng([7, 0, 1]), 0.2, 1.5)
+    c = d["duplicate_count"].to_numpy()
+    assert int(c.sum()) == 160 + 2 * 640 and float((c == 1).mean()) == pytest.approx(0.2)
+
+    # and a mixed sample stays a pure function of its index, which is what keeps the build
+    # bit-identical at any worker count
+    a = C.draw_sample(pool, 800, "mixed", np.random.default_rng([7, 0, 3]), 0.6, 3.0)
+    b = C.draw_sample(pool, 800, "mixed", np.random.default_rng([7, 0, 3]), 0.6, 3.0)
+    assert a.equals(b)
+
+    # a mixture has no unparameterised form, and saying so beats inventing a default
+    with pytest.raises(ValueError, match="frac.*mexp|singleton fraction"):
+        C.draw_sample(pool, 10, "mixed", np.random.default_rng(0))
+    with pytest.raises(ValueError, match="naive.*memory.*mixed"):
+        C.draw_sample(pool, 10, "clonal", np.random.default_rng(0))
+
+
+def test_a_synthetic_cohort_corpus_draws_across_the_bands_it_was_measured_on():
+    """``synthetic-blood`` / ``synthetic-tissue`` must draw across the REAL cohort's three bands.
+
+    The whole point of the two named mixture corpora: richness, reads per clonotype and the singleton
+    fraction all come from :data:`corpus.COHORT`, measured per locus on the cohort the corpus is
+    named after (34,365 blood and 22,298 tissue TRB samples with at least 100 reads). A corpus that
+    merely *had* a mixture regime, drawn around one nominal size, would still describe a cohort
+    nobody has.
+    """
+    assert C.corpus_plan("naive") == ("naive", None, C.DEFAULT_SIZE, None)
+    assert C.corpus_plan("synthetic-blood") == ("mixed", "blood", "blood", "blood")
+    # an explicit size wins over the cohort's own, so a shallower variant is one flag, not a table
+    assert C.corpus_plan("synthetic-tissue", size=500)[2:] == (500, "tissue")
+    with pytest.raises(ValueError, match="unknown synthetic corpus"):
+        C.corpus_plan("mixed")
+
+    rich, mexp, frac, corr = C.cohort_bands("blood", "TRB")
+    assert C.COHORT["blood"]["TRB"][0] > 30_000 and rich == (74, 208, 457, 985, 3162)
+    assert C.depth_spread_of("TRB", "blood") == pytest.approx(3162 / 74)
+    assert C.resolved_size("TRB", "blood") == 457, "the nominal size is the cohort's median"
+    assert C.pool_target("TRB", "blood", 10_000, cohort="blood") == 3163 * C.POOL_FACTOR
+
+    p = C.draw_plan(("TRB",), n_samples=4000, size="blood", seed=3,
+                    depth_spread="blood", cohort="blood")["TRB"]
+    # Each drawn marginal spans EXACTLY the measured p05-p95 and carries all five recorded
+    # quantiles. The draw's probabilities are uniform on [p05, p95] -- the corpus deliberately
+    # describes the cohort's middle 90% and not its two extreme tails -- so the cohort's quantile q
+    # sits at (q - 0.05) / 0.90 of the DRAW: its p05 is the draw's minimum and its median is the
+    # draw's median.
+    lo, hi = C.COHORT_QS[0], C.COHORT_QS[-1]
+    for got, band, tol in ((p["size"], rich, 0.08), (p["mexp"], mexp, 0.04),
+                           (p["frac"], frac, 0.04)):
+        assert band[0] <= got.min() * 1.001 and got.max() <= band[-1] * 1.001, band
+        for q, want in zip(C.COHORT_QS, band):
+            at = float(np.quantile(got, (q - lo) / (hi - lo)))
+            assert abs(at / want - 1.0) < tol, (band, q, at, want)
+    # and the measured rank correlations survive the copula, which is what the rotation is fitted on
+    rk = np.corrcoef(np.argsort(np.argsort(p["mexp"])), np.argsort(np.argsort(p["frac"])))[0, 1]
+    assert abs(rk - corr[2]) < 0.06, (rk, corr[2])
+    # reads per expanded clone is >= 2 for every sample whatever f1 is: no forbidden region, which
+    # is the whole reason the three ladders can be drawn independently
+    assert (p["mexp"] >= 2.0).all()
+
+    # a pure regime draws neither knob, which is what keeps the shipped naive/memory draw unchanged
+    assert C.draw_plan(("TRB",), n_samples=8, size=100, seed=3)["TRB"]["frac"] is None
+    # and a spread override on a cohort corpus is refused, not silently ignored
+    with pytest.raises(ValueError, match="richness ladder"):
+        C.draw_plan(("TRB",), n_samples=8, size="blood", seed=3, depth_spread=9.0, cohort="blood")
+    # `size` rescales the ladder about its median instead: the same shape at another depth
+    small = C.draw_plan(("TRB",), n_samples=400, size=100, seed=3, depth_spread="blood",
+                        cohort="blood")["TRB"]["size"]
+    assert abs(float(np.median(small)) / 100 - 1.0) < 0.1
+    assert small.max() / small.min() > 10
+
+    art, _ = C.synthesize("synthetic-blood", loci=("TRG",), n_samples=24, n_components=4, seed=9)
+    assert art.name == "synthetic-blood"
+    assert art.meta["regime"] == "mixed" and art.meta["cohort"] == "blood"
+    assert art.meta["richness_band"] == {"TRG": [21, 48, 72, 108, 220]}
+    assert art.meta["singleton_frac_band"] == {"TRG": [0.167, 0.438, 0.583, 0.686, 0.806]}
+    assert art.meta["expanded_count_band"] == {"TRG": [2.64, 3.51, 4.74, 7.00, 15.38]}
+    assert art.meta["rank_corr"] == {"TRG": [-0.421, 0.463, -0.394]}
+    assert art.meta["depth_spread"]["TRG"] == pytest.approx(220 / 21)
+    assert art.meta["size_per_locus"] == {"TRG": 72}
+    assert art.meta["reads_per_clone"] is None, "a mixture draws its read depth, it has no constant"
+
+    naive_art, _ = C.synthesize("naive", loci=("TRG",), n_samples=24, size=300, n_components=4,
+                                seed=9)
+    assert naive_art.meta["singleton_frac_band"] is None and naive_art.meta["cohort"] is None
+    assert naive_art.meta["reads_per_clone"] == 1
+
+
+def test_a_depth_spread_override_reaches_the_draw_and_the_manifest():
+    """A corpus describes only the depths it was drawn across, so the range has to be settable.
+
+    The shipped spread is the measured real p05-p95 one, which is under a decade everywhere (2.4x on
+    TRD to 11.0x on IGH). A cohort spanning 100 to 100,000 reads per chain is three decades, and
+    nothing about the bounds, the centre or the per-PC scaling extrapolates -- they are estimated
+    from the draw. The knob is what makes that a choice rather than a limit, and the manifest is
+    where a reader finds out which choice was made.
+    """
+    assert C.depth_spread_of("TRB") == pytest.approx(790 / 195)
+    assert C.depth_spread_of("IGH") == pytest.approx(1219 / 111)
+    assert C.depth_spread_of("TRB", 1000) == 1000.0
+    assert C.depth_spread_of("NOSUCH") == 4.0
+    # and a cohort name is the measured band of that cohort: 43x on blood TRB against 4.1x here
+    assert C.depth_spread_of("TRB", "blood") == pytest.approx(3162 / 74)
+
+    # the ladder the override exists for: geometric centre sqrt(100 * 100_000)
+    s = C.draw_sizes(3162, 20_000, C.depth_spread_of("TRB", 1000), np.random.default_rng(0))
+    assert s.min() < 130 and s.max() > 75_000, (s.min(), s.max())
+    assert 500 < s.max() / s.min() < 1000
+
+    # and it has to survive into the artifact, per locus, beside what was asked for
+    art, _ = C.synthesize("naive", loci=("TRG",), n_samples=24, size=300, n_components=4,
+                          seed=11, depth_spread=50.0)
+    assert art.meta["depth_spread"] == {"TRG": 50.0}
+    assert art.meta["depth_spread_requested"] == 50.0
+    default, _ = C.synthesize("naive", loci=("TRG",), n_samples=24, size=300, n_components=4,
+                              seed=11)
+    assert default.meta["depth_spread"]["TRG"] == pytest.approx(94 / 22)
+    assert default.meta["depth_spread_requested"] is None
+    # a wider draw is a wider corpus: the winsorization bound on depth has to move with it.
+    # `reads` declares nonneg support, so only the top is trimmed and the bottom bound is -inf --
+    # comparing widths would be inf - inf, which is why this compares the side that exists.
+    lo_w, hi_w = art.fits["TRG"].bounds[0.01]
+    lo_d, hi_d = default.fits["TRG"].bounds[0.01]
+    i = art.fits["TRG"].columns.index("vsig:depth:TRG:reads")
+    assert lo_w[i] == lo_d[i] == -np.inf
+    assert hi_w[i] > hi_d[i], "a 50x draw fitted a lower depth ceiling than a 4.3x one"
+
+
 def test_draw_sizes_is_log_uniform_and_centred_on_the_nominal():
     rng = np.random.default_rng(0)
     s = C.draw_sizes(1000, 20000, 9.0, rng)
