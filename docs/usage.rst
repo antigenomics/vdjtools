@@ -15,23 +15,41 @@ sample straight from a bundled model — every later example reuses ``demo_sampl
 
 .. code-block:: python
 
+   import numpy as np
    import polars as pl
    from vdjtools import io as vio
    from vdjtools.io import schema as S
    from vdjtools.model import load_bundled
    from vdjtools.model.generate import generate
 
-   def demo_sample(locus="TRB", n=4000, seed=0):
-       """A canonical clonotype frame sampled from the bundled OLGA model."""
-       seqs = generate(load_bundled(locus, "olga"), n, seed=seed, productive_only=True)
-       counted = (seqs.group_by(["junction_nt", "junction_aa", "v_call", "d_call", "j_call"])
-                      .len().rename({"len": S.COUNT}))
-       return vio.normalize(counted, recompute_freq=True)
+   def demo_sample(locus="TRB", clones=2000, reads=20_000, a=1.0, seed=0):
+       """A canonical clonotype frame: sequences from a bundled model, clone sizes from a rank law."""
+       seqs = generate(load_bundled(locus, "olga"), clones, seed=seed, productive_only=True)
+       rng = np.random.default_rng(seed)
+       freq = np.arange(1, seqs.height + 1, dtype=float) ** -a      # f_i proportional to i**-a
+       counts = rng.multinomial(reads, freq / freq.sum())
+       out = seqs.with_columns(pl.Series(S.COUNT, counts)).filter(pl.col(S.COUNT) > 0)
+       return vio.normalize(out, recompute_freq=True)
 
    sample = demo_sample(seed=1)
    sample.columns
    # ['v_call', 'd_call', 'j_call', 'c_call', 'junction_aa', 'junction_nt',
    #  'duplicate_count', 'frequency']
+
+.. important::
+
+   The clone sizes are what make this usable as a demo, and an earlier version of this page got it
+   wrong. Drawing ``n`` sequences and counting them gives ``n`` clonotypes of size 1, on which every
+   diversity statistic is degenerate rather than merely synthetic: Shannon equals the richness,
+   normalised Shannon is exactly ``1.0``, inverse Simpson equals the richness, and Chao1 diverges
+   (8.0e6 from 4,000 singletons). Those are not numbers any repertoire produces. Clone sizes drawn
+   from the rank law ``f_i ∝ i**-a`` give 1,790 clonotypes over 20,000 reads with 371 singletons and
+   a 12.1 percent top clone, which is the regime the estimators are built for.
+
+   Note also that ``rng.zipf`` is **not** the right draw here: it samples integers *from* a Zipf
+   distribution, whose mean is infinite at ``a = 1.5``, so normalising the result hands one clone
+   almost all the mass and collapses the repertoire to a handful of survivors. The rank law above is
+   the intended ``f_i ∝ i**-a``.
 
 Loading data
 ------------

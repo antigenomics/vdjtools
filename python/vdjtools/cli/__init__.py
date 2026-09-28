@@ -33,6 +33,31 @@ app = typer.Typer(
     help="vdjtools — TCR/BCR repertoire analysis: Pgen, sequence generation, diversity, overlap.",
 )
 
+
+def _no_emoji_help() -> None:
+    """Stop rich turning a column name into a pictograph in ``--help``.
+
+    rich rewrites any ``:name:`` token matching its emoji table, and our column contract is built
+    out of exactly that shape: ``vsig:mask:TRB:present`` renders as ``vsig<mask emoji>*`` -- an
+    emoji, which the repo forbids, standing where a column name the reader is meant to copy should
+    be. No rewording fixes it, because every faithful rendering of the name contains the token, and
+    rich's backslash escape leaves the backslash in the output. The substitution happens in
+    ``Text.from_markup``, which typer calls per help string, so the switch has to be there rather
+    than on the console. ``test_cli_help.py`` pins the rendered text.
+    """
+    from rich.text import Text
+    from typer import rich_utils
+
+    class PlainText(Text):
+        @classmethod
+        def from_markup(cls, text, **kw):  # type: ignore[override]
+            return Text.from_markup(text, **{**kw, "emoji": False})
+
+    rich_utils.Text = PlainText
+
+
+_no_emoji_help()
+
 _SEQ_COLS = ("junction_aa", "junction_nt", "cdr3_aa", "cdr3_nt", "cdr3aa", "cdr3nt", "cdr3", "junction")
 
 
@@ -451,9 +476,12 @@ def signature(
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
     fmt: str = _FMT,
     corpus: str = typer.Option(..., "--corpus",
-                               help="Corpus to rotate through: a bundled name (naive, memory) or "
-                                    "a path to an artifact. REQUIRED -- a silently chosen rotation "
-                                    "makes two matrices look comparable when they are not."),
+                               help="Corpus to rotate through: a published name (blood, tissue, "
+                                    "deep-tcr, blood-uncapped, tissue-uncapped, synthetic-blood, "
+                                    "synthetic-tissue, naive, memory) or a path to an artifact. "
+                                    "A published name is fetched on first use and cached. "
+                                    "REQUIRED -- a silently chosen rotation makes two matrices "
+                                    "look comparable when they are not."),
     winsorize: str = typer.Option("features", "--winsorize",
                                   help="features (clamp raw features, then rotate) | pcs (rotate, "
                                        "then clamp PC scores) | none. Whatever is clamped is "

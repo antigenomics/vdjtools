@@ -81,9 +81,9 @@ Reading a row
 .. code-block:: python
 
    from vdjtools.signature import vsig
-   from vdjtools.signature.corpus import Corpus
+   from vdjtools.signature.corpus import Corpus, bundled_path
 
-   corpus = Corpus.load("naive.npz")
+   corpus = Corpus.load(bundled_path("blood"))   # a published name; fetched on first use
    row = vsig(sample, corpus)
 
    # before trusting any vsig:pc:* value of this row

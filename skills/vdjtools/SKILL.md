@@ -26,11 +26,15 @@ silently wrong answer. It does not repeat the reference documentation.
 
 | You need | Go to |
 |---|---|
+| Install to a first result, no data needed | https://docs.isalgo.dev/vdjtools/getting-started.html |
 | Runnable walkthroughs, every module | https://docs.isalgo.dev/vdjtools/usage.html |
+| Every command and flag | https://docs.isalgo.dev/vdjtools/cli.html |
 | Every symbol, autodoc'd | https://docs.isalgo.dev/vdjtools/api.html |
+| A term's precise meaning here | https://docs.isalgo.dev/vdjtools/glossary.html |
 | The V(D)J model engine | https://docs.isalgo.dev/vdjtools/model.html |
 | Pre-processing and the three filter axes | https://docs.isalgo.dev/vdjtools/preprocessing.html |
 | The portable signature | https://docs.isalgo.dev/vdjtools/signature.html |
+| How the corpora were fitted, and what was rejected | https://docs.isalgo.dev/vdjtools/signature-methods.html |
 | The channel vocabulary | https://docs.isalgo.dev/vdjtools/channels.html |
 | Single-cell and scverse interop | https://docs.isalgo.dev/vdjtools/singlecell.html |
 | Worked notebooks | https://docs.isalgo.dev/vdjtools/notebooks.html |
@@ -413,7 +417,14 @@ canonical), **`downsample`**, **`filter`** (`--coding`/`--noncoding`/`--min-freq
 Longitudinal/enrichment: `dynamics`, `tcrnet`, `alice`. Inputs auto-detected; **`-o` is
 format-aware** — `.parquet`/`.pq` → Parquet, else TSV (or stdout). The per-sample analytics
 commands take **`--threads N`** (parallel over samples, `map_samples`) and **`--cohort DIR`** (one
-streamed pass over a pre-ingested `scan_cohort` Parquet dataset).
+streamed pass over a pre-ingested `scan_cohort` Parquet dataset). Full flag reference:
+https://docs.isalgo.dev/vdjtools/cli.html — `tests/python/test_cli_help.py` fails if a command
+exists and that page does not mention it.
+
+**Help text goes through rich, which eats `:name:` tokens.** `vsig:mask:*` rendered as a mask
+pictograph for a whole release, because rich substitutes emoji inside `Text.from_markup` and every
+faithful rendering of the column name contains the token. `cli/__init__.py::_no_emoji_help` turns the
+substitution off; do not remove it, and do not try to reword around it.
 
 ### Notebooks (`pip install "vdjtools[examples]"` → `marimo edit examples/<name>.py`)
 `model_explorer` (recombination Bayes net), **`model_workshop`** (custom germline → learn → check →

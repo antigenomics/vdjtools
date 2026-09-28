@@ -59,3 +59,12 @@
 }
 .bd-links--full a:hover { color: var(--pst-color-primary); }
 .bd-links--full li.current > a { color: var(--pst-color-primary); font-weight: 600; }
+
+/* Landing-page lead paragraph: the one-sentence positioning statement under the H1. Larger and
+   muted, so the eye lands on it before the prose. Used via `.. rst-class:: lead`. */
+p.lead {
+  font-size: 1.22rem;
+  line-height: 1.6;
+  color: var(--pst-color-text-muted);
+  margin-bottom: 1.6rem;
+}
