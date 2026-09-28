@@ -71,7 +71,8 @@ The three filtering axes are deliberately separate flags, because they are separ
      - Is ``junction_aa`` within an inclusive length bound? Defaults sanity-bound 5 to 60.
 
 A productive rearrangement can use a pseudogene V, so filtering one axis says nothing about the
-other. ``--recompute-frequencies`` is on by default; turn it off to keep the file's own frequencies.
+other. ``--recompute-frequencies`` is on by default, renormalising ``frequency`` over the survivors;
+``--keep-frequencies`` leaves the file's own values untouched.
 ``--min-freq``, ``--v``, ``--j`` and ``--remove`` add frequency and segment selection.
 
 ``downsample`` -- normalise depth
@@ -98,6 +99,14 @@ Corrects V/J usage differences between batches and, with ``--outdir``, rewrites 
 to match. ``-b/--batches`` is required and parallel to the sample list. ``--transform`` chooses
 ``location`` (default) or ``sigmoid``; ``--scope`` selects ``v``, ``j`` or ``vj``.
 
+Four more options change the answer rather than a path. ``--winsor-q`` clamps the per-batch mean and
+sigma at a quantile --- off by default, matching the published method, with ``0.025`` a robustness
+setting for shallow or RNA-seq repertoires. ``--unweighted`` builds usage from distinct clonotypes
+instead of reads, which is the right choice when one hyperexpanded clone would otherwise define a
+batch's usage. ``--z-cap`` bounds ``|Z|`` under ``--transform sigmoid``. ``--rescale`` rewrites
+counts deterministically instead of resampling them, so the output is reproducible without a seed
+but no longer integer-sampled. See :doc:`preprocessing`.
+
 ``pool`` -- combine samples
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -123,7 +132,9 @@ All four take sample files or ``-m``, and accept ``-t`` and ``--cohort``.
      - What it computes
    * - ``diversity``
      - Observed richness, Chao1, Chao coverage, Efron-Thisted, Shannon, normalised Shannon, inverse
-       Simpson, d50 -- one row per sample.
+       Simpson, d50 -- one row per sample. ``--on-duplicate sum`` merges rows that repeat a
+       clonotype key; the default refuses, because a table with no ``junction_nt`` cannot say
+       whether two such rows are one clonotype or two.
    * - ``spectratype``
      - Junction-length distribution. ``--kind aa|nt``, ``--weight reads|clones``.
    * - ``segment-usage``
@@ -201,6 +212,18 @@ make two matrices look comparable when they are not. Key options:
    * - ``--cstar-target``
      - Coverage level the Hill numbers are read at: a number, ``min`` (default, the cohort's own
        per-locus minimum) or ``own`` (each sample's own, not comparable across samples).
+   * - ``--winsor-p``
+     - Which stored percentile to clamp at, ``0.01`` or ``0.05``. Both are stored in the artifact,
+       so switching needs no refit; the default is whichever it was fitted with.
+   * - ``--named``
+     - Also emit the raw blocks the rotation is fitted on, under their own names:
+       ``div``, ``depth``, ``clon``, ``len``, ``iso``, ``shm``, ``pair``, or ``all``. Off by
+       default. The values carry their **declared transform**, not a natural scale --- a ``log10``
+       diversity comes back as a ``log10``. See :ref:`sig-named`.
+   * - ``--on-duplicate``
+     - ``error`` (default) or ``sum``. A frame with no ``junction_nt`` that repeats
+       ``(junction_aa, v_call, j_call, c_call)`` cannot say whether those rows are one clonotype or
+       two, so the library refuses rather than guessing.
    * - ``--describe``
      - Print the columns **this** invocation emits, and exit. Resolved against ``--corpus``,
        ``--components`` and ``--columns``, so it is the exact header you will get.
@@ -217,7 +240,8 @@ make two matrices look comparable when they are not. Key options:
 Building uses no samples from anybody's cohort: every receptor is drawn from the bundled
 recombination models, so the artifact is reproducible by anyone who installs the library, and is
 byte-identical across processes and thread counts. ``--samples``, ``--size``, ``--seed``, ``--loci``
-and ``--depth-spread`` control the draw; all are recorded in the manifest. See :doc:`signature`.
+and ``--depth-spread`` control the draw, ``--components`` and ``--winsor-p`` control the fit, and all
+are recorded in the manifest. See :doc:`signature`.
 
 Recombination models
 --------------------
@@ -233,9 +257,12 @@ Recombination models
    vdjtools pgen seqs.tsv -m TRB --mismatches 1    # and the Hamming-1 ball
 
 ``pgen`` takes ``--column`` for the sequence column and ``--v-col`` / ``--j-col`` to condition on the
-observed V and J; ``--type`` selects nucleotide or amino acid, ``auto`` by default. ``generate``
-takes ``--productive`` to keep only productive draws, at roughly 3.6 times the cost per kept
-sequence on TRB, and ``--seed`` for reproducibility.
+observed V and J; ``--type`` selects nucleotide or amino acid, ``auto`` by default, and
+``--no-header`` writes the values alone for piping. ``generate``
+takes ``-n/--number`` for how many sequences to draw, ``--productive``/``--no-productive`` to keep
+only productive draws (on by default, at roughly 3.6 times the cost per kept sequence on TRB), and
+``--seed`` for reproducibility. Both commands take ``-m/--model`` for a bundled model, or
+``--model-path`` for one on disk.
 
 ``model`` -- the workshop
 ^^^^^^^^^^^^^^^^^^^^^^^^^^

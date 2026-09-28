@@ -23,6 +23,7 @@
   <a href="https://docs.isalgo.dev/vdjtools/usage.html">Guides</a> ·
   <a href="https://docs.isalgo.dev/vdjtools/cli.html">Commands</a> ·
   <a href="https://docs.isalgo.dev/vdjtools/api.html">API</a> ·
+  <a href="https://docs.isalgo.dev/vdjtools/notebooks.html">Examples</a> ·
   <a href="https://docs.isalgo.dev/vdjtools/glossary.html">Glossary</a>
 </b></p>
 
@@ -109,7 +110,7 @@ about ten minutes, with no data to download.
 | `vdjtools.model` | Native V(D)J recombination model: Pgen over nucleotides and amino acids, the Hamming-1 ball, sequence generation, EM inference, tandem-D support, and a 13-command model workshop |
 | `vdjtools.overlap` | Exact and similarity-aware repertoire overlap, TCRnet and ALICE neighbourhood enrichment, sample clustering |
 | `vdjtools.preprocess` | Format conversion, the three filtering axes, frequency handling, downsampling, error correction, V/J-usage batch correction, pooling and joining |
-| `vdjtools.features` | CDR3 physicochemical profiles and k-mer summaries |
+| `vdjtools.features` | Junction physicochemical profiles and k-mer summaries |
 | `vdjtools.biomarker` | Incidence association against binary, per-HLA-allele or stratified conditions; co-occurrence pairing; metaclonotypes |
 | `vdjtools.dynamics` | Longitudinal clonotype tracking: paired within-donor expansion testing, the VDJtrack recapture model, an edgeR NB-exact caller |
 | `vdjtools.signature` | One fixed, named, already-standardised feature vector per repertoire, rotated through a published corpus |
@@ -145,7 +146,7 @@ mir       signature --corpus blood samples/*.tsv.gz -o rsig.tsv   # the geometry
 
 Nine corpora are published, all at 256 components per locus. `blood` (11,117 real samples, 947 study
 groups), `tissue` (21,131 / 1,934) and `deep-tcr` (3,936 amplicon samples, TRA+TRB) are fitted on
-real repertoires; the synthetic ones need no cohort at all and rebuild bit-identically anywhere.
+real repertoires; the synthetic ones need no cohort at all and rebuild byte for byte anywhere.
 Artifacts are fetched and digest-verified on first use rather than bundled.
 
 `--corpus` is required: a signature is comparable to another one only if both were rotated through
@@ -169,7 +170,7 @@ everything else is polars. Single thread, Apple M3, bundled human TRB model:
 
 The productive filter costs 3.6× on TRB and 5.1× on IGH (19,900 raw draws/s against 3,930
 productive), because out-of-frame and stop-codon draws are discarded and redrawn. Batched Pgen
-parallelises over sequences (11× on 16 cores, bit-identical to serial); the EM E-step parallelises
+parallelises over sequences (11× on 16 cores, and identical to the serial result); the EM E-step parallelises
 over reads (6.7× on 8 threads). Memory: 63 MB resident for `import vdjtools` plus one model, 123 MB
 with all seven loaded.
 

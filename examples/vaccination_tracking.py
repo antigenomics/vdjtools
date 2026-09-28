@@ -15,7 +15,7 @@ app = marimo.App(width="medium")
 def _(mo):
     mo.md(
         r"""
-        # Clonotype tracking in vaccination — a vdjtools v2 explorer
+        # Clonotype tracking in vaccination — a vdjtools explorer
 
         A vaccine drives a **clonal expansion**: antigen-specific T-cell clones divide, so their
         clonotypes rise in frequency around the response peak (day ~15 for yellow fever) and a

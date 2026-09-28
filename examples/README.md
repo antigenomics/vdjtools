@@ -251,25 +251,27 @@ A [marimo](https://marimo.io) notebook on the three feature choices that are eas
 each measurable in seconds on repertoires sampled from the bundled models (no download):
 why the amino-acid block is **Anscombe arcsine** and not `log1p` of counts (`log1p` moves ~7.5×
 across a depth change that leaves arcsine at 1.04×), why an ambiguous V call must go through
-`resolve_gene` rather than `strip_allele`, and what `fit_kmer_space` builds — gapped/ungapped
-patterns, BLOSUM62-clustered alphabets, TF-IDF, truncated SVD, and why its components must not be
-selected by explained variance.
+`resolve_gene` rather than `strip_allele`, and why the number of principal components kept from
+the corpus rotation is a real choice rather than a default.
 
 ```bash
 pip install -e ".[examples]"
 marimo edit examples/signature_features.py
 ```
 
-## `signature_features.py` — see also: feature presets
-
-`vdjtools presets` lists the named, ranked feature sets and `vdjtools presets <name>` explains one
-in full (what it contains, how it is computed, when to use it, and its caveats). To produce a table
-over a whole dataset in parallel:
+### Producing a signature over a whole dataset
 
 ```bash
-vdjtools presets                                                    # the ranked table
-vdjtools signature *.tsv --preset classify --threads 0 --out vsig.parquet
+vdjtools signature --corpus blood --components 32 *.tsv --jobs 0 --out vsig.parquet
 ```
 
-For the full vector — statistics **and** embedding geometry — use mirpy's `mir signature
---preset ...`, and see its `examples/feature_vectors.py` notebook.
+`--corpus` is required: a signature is comparable to another one only if both were rotated
+through the same reference corpus. `vdjtools signature --describe` prints the exact columns a
+given invocation emits. For the full vector — statistics **and** embedding geometry — add
+mirpy's half against the same corpus name and join on `sample_id`:
+
+```bash
+mir signature --corpus blood --components 32 *.tsv --out rsig.parquet
+```
+
+mirpy's `examples/signature_pipeline.py` notebook runs exactly that end to end.

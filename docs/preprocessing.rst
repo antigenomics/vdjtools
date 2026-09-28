@@ -376,7 +376,7 @@ Winsorization
 ~~~~~~~~~~~~~
 
 ``winsor_q=None`` is the default and matches the published method, which uses the plain mean and σ
-of the log-normal (Shapiro–Wilk validated). ``winsor_q=0.025`` is an optional robustness knob for
+of the log-normal (Shapiro–Wilk validated). ``winsor_q=0.025`` is an optional robustness setting for
 the noisy usage-as-features regime — many shallow or RNA-seq-derived repertoires — and **not** for
 deep-repertoire correction. Legacy mirpy v2 winsorized by default and used a different map
 (``p·exp(Z)``); the ``2·P_avg·sigmoid(Z)`` here is the paper's Methods formula.

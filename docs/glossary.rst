@@ -126,7 +126,9 @@ rather than only wording.
       The nucleotide or amino-acid sequence spanning the V-D-J join **including** the Cys104 and
       Phe118 :term:`anchor` residues -- AIRR's ``junction_nt`` and ``junction_aa``. Two residues
       longer than the :term:`CDR3`. vdjtools uses junction columns throughout; confirm which
-      convention any external dataset uses before matching against it.
+      convention any external dataset uses before matching against it. Note that
+      :func:`~vdjtools.model.native.pgen_aa` and :func:`~vdjtools.model.infer.infer_nt` name their
+      argument ``cdr3_aa`` for historical reasons but require a **junction** --- anchors included.
 
    locus
       Which receptor chain a clonotype belongs to: TRA, TRB, TRG, TRD, IGH, IGK, IGL. Note that TRA
@@ -232,3 +234,103 @@ rather than only wording.
       support, not its transform: a non-negative count is clamped at the top only, a
       log-probability at the bottom only, an unbounded score at both. Clamping edits a real
       measurement, so the fraction clamped is always reported in ``qc:-:winsor_frac``.
+
+   arcsine transform
+      A variance-stabilising transform for a proportion: ``arcsin(sqrt(p))``, in Anscombe's form
+      which also uses the number of observations behind ``p``. A binomial proportion's variance is
+      ``p(1-p)/m`` -- it depends on the value itself -- so an untransformed share drawn from a
+      shallow sample is noisier than the same share from a deep one, and a model cannot tell the
+      difference. After the transform the variance no longer depends on ``p``. Used for the
+      amino-acid composition block.
+
+   channel
+      A signature column carried in its **own units**, never rotated and never winsorized: the
+      coverage a sample attained, whether a locus was present, how much of the row was clamped.
+      Channels answer "can I trust this row", and mixing a number whose job is to qualify a
+      measurement into the measurement itself would destroy both. Distinct from a
+      :term:`principal component` and from a :term:`named block`. See :doc:`channels`.
+
+   clonality
+      How unevenly reads are distributed across clonotypes, reported as ``1`` minus normalised
+      Shannon entropy: 0 is perfectly even, 1 is one clone holding everything. Rises with age and
+      with antigen-driven expansion. Depth-sensitive, so compare it only at matched
+      :term:`coverage`.
+
+   clr
+      Centred log-ratio. The transform for a **closed composition** -- a set of shares that sum to
+      one, such as V-gene usage or isotype composition. Take the log of each share and subtract the
+      mean of those logs. Necessary because the parts of a composition are not free to vary
+      independently: if one goes up another must come down, so treating them as ordinary variables
+      makes the block singular and any correlation between them partly an artefact of the
+      constraint. A ``clr`` block ships ``k-1`` parts for the same reason.
+
+   dispersion
+      How spread out a repertoire's receptors are in the embedding, as opposed to where their
+      centre sits. Two donors can have the same average position and very different spread --- one
+      concentrated in a few sequence neighbourhoods, one scattered. Reported by the ``rsig:div``
+      and ``rsig:disp`` families, and unmeasurable below a few clonotypes, which is when the whole
+      family becomes a :term:`hole <holes>`.
+
+   effective dimension
+      How many directions a repertoire's receptors genuinely spread across, as a continuous number:
+      the participation ratio of the embedding's variance spectrum. A repertoire filling 40
+      directions evenly and one dominated by 3 have very different effective dimensions even at
+      identical total spread.
+
+   isotype
+      The antibody class a B-cell receptor carries --- IgM, IgD, IgG, IgA, IgE --- read from the
+      ``c_call`` column. Class-switching is a record of B-cell history, so isotype composition is a
+      feature in its own right and is reported for IGH only. Transformed with :term:`clr`, because
+      the classes are shares of one whole.
+
+   n_eff
+      Effective sample size: how many independent observations a weighted sample is worth, computed
+      from the clone-size weights. A repertoire of 10,000 reads dominated by one clone is worth far
+      fewer than 10,000 independent draws, and every estimator's precision scales with ``n_eff``
+      rather than with the raw read count.
+
+   named block
+      A raw feature group emitted under its own name, beside the rotated components --- the
+      diversity, depth, clone-size, length, isotype and cross-locus numbers the rotation is fitted
+      on. Requested with ``--named``; off by default. **The values carry their declared transform,
+      not a natural scale**: a ``log10`` diversity comes back as a ``log10``, so
+      ``vsig:div:TRB:1D_c = 2.386`` is not a clone count. Which groups are reportable is declared
+      by the library, not inferred from how many columns they have.
+
+   principal component
+      One axis of the :term:`rotation`: a weighted combination of raw features, chosen so that the
+      axes are uncorrelated across the :term:`corpus` and ordered by how much variation each one
+      carries. The ``:pc:`` columns of a :term:`signature`. A component is a **direction, not a
+      quantity** --- ``PC01`` has no units and no interpretation as a measurement, which is why the
+      raw numbers behind it are available separately as a :term:`named block`.
+
+   Rao quadratic entropy
+      A diversity measure that accounts for how *different* the clonotypes are, not just how many
+      there are: the average dissimilarity between two clonotypes drawn at random in proportion to
+      their abundance. A repertoire of 100 near-identical sequences and one of 100 unrelated ones
+      have the same :term:`richness` and very different Rao entropy.
+
+   robust z-score
+      The units a :term:`signature` column is on: the value minus the :term:`corpus`'s median for
+      that column, divided by its :term:`MAD`. Median and MAD rather than mean and standard
+      deviation, so that a handful of extreme corpus samples cannot set the scale. A value of 2
+      means "two robust deviations above the corpus's typical sample".
+
+   SHM
+      Somatic hypermutation: the antigen-driven mutation of an already-rearranged B-cell receptor
+      during affinity maturation. Summarised as mean V-segment identity to germline, so a lower
+      value means a more mutated repertoire. IGH only.
+
+   support
+      The declared range a raw feature can take --- non-negative, non-positive, unbounded, or a
+      fixed interval. Declared per feature and used to decide which side :term:`winsorization`
+      clamps. It is deliberately **not** derived from the feature's transform: three features
+      declare no transform and three different supports, so deriving one from the other trims the
+      wrong end.
+
+   Zipf law
+      The rank-abundance law used to give a synthetic repertoire a realistic clone-size
+      distribution: the ``i``-th most abundant clone gets frequency proportional to ``i`` to the
+      power ``-a``. Note this is the **rank** law, not numpy's ``Generator.zipf``, which samples
+      integers *from* a Zipf distribution and at ``a = 1.5`` has infinite mean --- normalising such
+      a draw collapses a repertoire to a handful of clonotypes.

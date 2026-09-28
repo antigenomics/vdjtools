@@ -1,4 +1,4 @@
-"""CDR3 physicochemistry and k-mer features with vdjtools v2.
+"""Junction physicochemistry and k-mer features with vdjtools.
 
 A marimo notebook. Launch it with
 
@@ -29,10 +29,18 @@ def _(mo):
         The third complementarity-determining region (**CDR3**) makes most of the direct
         antigen contacts of a T-cell receptor, and its amino-acid **physicochemistry** —
         hydropathy, charge, volume, the 10 Kidera factors — is a low-dimensional summary of
-        its binding chemistry. `vdjtools.features` turns raw CDR3s into these profiles, and
+        its binding chemistry. `vdjtools.features` turns raw sequences into these profiles, and
         into **k-mer** spectra (a sequence fingerprint). We compute both across the
-        Britanova aging cohort and test whether the repertoire's average CDR3 chemistry
+        Britanova aging cohort and test whether the repertoire's average chemistry
         tracks donor age.
+
+        One convention to fix before any number below. The profiles are cut from
+        `junction_aa`, which **includes** the conserved Cys104 and Phe118 anchors and is two
+        residues longer than the IMGT CDR3. `region="all"` is that whole junction;
+        `region="trimmed"` drops three residues from each end; `region="center"` keeps the
+        middle five, which on a typical junction is the non-templated, most diverse part.
+        Whichever you use, say so — the anchors are invariant, so including them dilutes any
+        property difference by roughly `2/L`.
         """
     )
     return

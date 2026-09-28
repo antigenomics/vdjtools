@@ -326,7 +326,7 @@ attained, always emitted), `mask:*` (why a column is a hole), `qc:*` (germline f
   identity, violated by ~half of independently drawn blood TRB pairs and by 21.1% of draws if the
   read count itself is drawn. Reads per **expanded** clone is >= 2 whatever `f1` is, which is why
   that is the recorded ladder.
-- **`--jobs` is processes.** There is one concurrency knob and it says which layer it reaches.
+- **`--jobs` is processes.** There is one concurrency option and its help text says which layer it reaches.
 
 ### `vdjtools.overlap` — overlap + TCRnet (delegates to vdjmatch/seqtree)
 `overlap_metrics`, `overlap_pair`, `DEFAULT_KEY`; `fuzzy_overlap`, `fuzzy_overlap_metrics`;

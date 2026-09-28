@@ -1,4 +1,4 @@
-"""Single-cell paired-chain TCR analysis with vdjtools v2.
+"""Single-cell paired-chain TCR analysis with vdjtools.
 
 A marimo notebook. Launch it with
 
@@ -178,7 +178,7 @@ def _(EPITOPES, contigs, labels, mo, pl, sc):
              .sort(["duplicate_count", "umi_count", "sequence_id"], descending=[True, True, False])
              .group_by("cell_id", maintain_order=True).first())
     cell_beta = (_beta.join(labels, left_on="cell_id", right_on="barcode", how="left")
-                 .filter(pl.col("antigen").is_in(EPITOPES) & pl.col("cdr3_aa").is_not_null()))
+                 .filter(pl.col("antigen").is_in(EPITOPES) & pl.col("junction_aa").is_not_null()))
     mo.md(f"Resolved **{resolved['cell_id'].n_unique():,} cells** → "
           f"**{paired.height:,} α/β pairs**; **{cell_beta.height:,} cells** carry a "
           f"target-antigen label and a β CDR3 ({cell_beta['antigen'].n_unique()} epitopes).")
@@ -204,7 +204,7 @@ def _(mo):
 @app.cell
 def _(OKABE, cell_beta, cluster_eval, components, mo, np, pl, plt):
     _true = cell_beta["antigen"].to_list()
-    _pred = components(cell_beta["cdr3_aa"].to_list())
+    _pred = components(cell_beta["junction_aa"].to_list())
     real = cluster_eval(_true, _pred)
     _shuf = _true[:]
     np.random.default_rng(0).shuffle(_shuf)

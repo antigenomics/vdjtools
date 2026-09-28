@@ -50,6 +50,7 @@ def _():
     from pathlib import Path
 
     import marimo as mo
+    import matplotlib.pyplot as plt
     import numpy as np
     import polars as pl
     from scipy.stats import spearmanr
@@ -88,8 +89,8 @@ def _():
 
     return (COUNT, HF_FOLDER, KEY, MDS, OKABE, Path, REPO, diversity_cohort,
             estimate_d, inext_batch, ingest_cohort, local_base, mo, np,
-            overlap_metrics, pl, rarefaction, read_metadata, sample_coverage,
-            scan_cohort, spearmanr, spectratype)
+            overlap_metrics, pl, plt, rarefaction, read_metadata,
+            sample_coverage, scan_cohort, spearmanr, spectratype)
 
 
 @app.cell

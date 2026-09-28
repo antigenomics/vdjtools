@@ -165,7 +165,7 @@ def _(mo):
 @app.cell
 def _(locus, mo, pl):
     def vdjdb_records(locus_name, n):
-        """`(cdr3_aa, v_call, j_call)` from a local ./data_dump/vdjdb.slim.txt(.gz) if present, else
+        """`(junction_aa, v_call, j_call)` from a local ./data_dump/vdjdb.slim.txt(.gz) if present, else
         from the latest antigenomics/vdjdb-db release (cached into ./data_dump/)."""
         import io
         import json
@@ -192,8 +192,8 @@ def _(locus, mo, pl):
             return None
         return (pl.read_csv(src, separator="\t", infer_schema_length=0)
                 .filter((pl.col("species") == "HomoSapiens") & (pl.col("gene") == gene))
-                .select(cdr3_aa=pl.col("cdr3"), v_call=pl.col("v.segm"), j_call=pl.col("j.segm"))
-                .unique(subset="cdr3_aa", maintain_order=True)
+                .select(junction_aa=pl.col("cdr3"), v_call=pl.col("v.segm"), j_call=pl.col("j.segm"))
+                .unique(subset="junction_aa", maintain_order=True)
                 .head(n))
 
     try:
@@ -229,10 +229,10 @@ def _(mo, model, pl, recs, vdjdb_n):
             ja = by_gene.get(("j", r["j_call"].split("*")[0]), [])
             if len(va) != 1 or len(ja) != 1:
                 continue
-            sc = infer_nt(model, r["cdr3_aa"], va[0], ja[0])
+            sc = infer_nt(model, r["junction_aa"], va[0], ja[0])
             if sc is None:
                 continue
-            rows.append({"cdr3_aa": r["cdr3_aa"], "cdr3_nt": sc.cdr3_nt, "v_call": sc.v_call,
+            rows.append({"junction_aa": r["junction_aa"], "cdr3_nt": sc.cdr3_nt, "v_call": sc.v_call,
                          "d_call": sc.d_call, "j_call": sc.j_call, "v_end": sc.v_end,
                          "d_start": sc.d_start, "d_end": sc.d_end, "j_start": sc.j_start,
                          "pgen": sc.pgen, "margin": round(sc.margin, 2)})
@@ -255,16 +255,16 @@ def _(ann, mo, plt):
     if ann is None or ann.is_empty():
         out3 = mo.md("*Nothing annotated yet.*").callout()
     else:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.2))
-        ax1.hist(ann["pgen"].log10().to_list(), bins=30, color="#0072B2")
-        ax1.set_xlabel("log10 Pgen of the reconstruction"); ax1.set_ylabel("records")
-        ax2.hist(ann["v_end"].to_list(), bins=range(0, 25), alpha=0.7,
-                 color="#009E73", label="V end")
-        ax2.hist([len(s) - t for s, t in zip(ann["cdr3_nt"], ann["j_start"])], bins=range(0, 25),
-                 alpha=0.7, color="#D55E00", label="J length")
-        ax2.set_xlabel("nt contributed by germline"); ax2.legend()
-        fig.tight_layout()
-        out3 = fig
+        _fig, (_ax1, _ax2) = plt.subplots(1, 2, figsize=(9, 3.2))
+        _ax1.hist(ann["pgen"].log10().to_list(), bins=30, color="#0072B2")
+        _ax1.set_xlabel("log10 Pgen of the reconstruction"); _ax1.set_ylabel("records")
+        _ax2.hist(ann["v_end"].to_list(), bins=range(0, 25), alpha=0.7,
+                  color="#009E73", label="V end")
+        _ax2.hist([len(s) - t for s, t in zip(ann["cdr3_nt"], ann["j_start"])], bins=range(0, 25),
+                  alpha=0.7, color="#D55E00", label="J length")
+        _ax2.set_xlabel("nt contributed by germline"); _ax2.legend()
+        _fig.tight_layout()
+        out3 = _fig
     out3
     return
 

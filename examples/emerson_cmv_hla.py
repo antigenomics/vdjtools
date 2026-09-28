@@ -43,6 +43,7 @@ def _():
     # --- imports, config & helpers (single cell so every name is defined once) ---
     import resource
     import sys
+    import time
     from pathlib import Path
 
     import marimo as mo
@@ -140,7 +141,7 @@ def _():
         return fig
 
     return (OKABE, Path, REPO, S, fisher_association, hip_local, load_vdjdb_cmv, mo,
-            np, peak_mb, phenotypes, pl, vdjdb_slim, vio, volcano)
+            np, peak_mb, phenotypes, pl, time, vdjdb_slim, vio, volcano)
 
 
 @app.cell

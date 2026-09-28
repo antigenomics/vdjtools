@@ -1,4 +1,4 @@
-"""Repertoire overlap — exact, fuzzy, and similarity-aware — with vdjtools v2.
+"""Repertoire overlap — exact, fuzzy, and similarity-aware — with vdjtools.
 
 A marimo notebook. Launch it with
 
@@ -132,7 +132,7 @@ def _(DEPTH, HF_FOLDER, N_SAMPLES, Path, REPO_ID, mo, np, pl, vio):
         # alphabet, which rejects the non-productive markers (``*`` stop, ``_``
         # frameshift). (vdjtools.preprocess.filter_productive does the same, and reads the
         # file's own AIRR `productive` column when it has one.)
-        _df = _df.filter(~pl.col("cdr3_aa").str.contains("[*_]"))
+        _df = _df.filter(~pl.col("junction_aa").str.contains("[*_]"))
         # multinomial downsample to DEPTH on the clonotype frequencies
         _p = _df["duplicate_count"].to_numpy().astype(float)
         _p = _p / _p.sum()
@@ -311,7 +311,7 @@ def _(mo, reps, tcrnet):
     try:
         net = tcrnet(_one, locus="TRB", species="human")
         _enr = net.sort("p_enrichment").head(8)
-        _cols = [c for c in ("cdr3_aa", "v_call", "n_target", "n_control",
+        _cols = [c for c in ("junction_aa", "v_call", "n_target", "n_control",
                              "E", "p_enrichment") if c in _enr.columns]
         _out = mo.vstack([
             mo.md(f"**{net.filter(net['p_enrichment'] < 0.05).height}** CDR3s enriched "

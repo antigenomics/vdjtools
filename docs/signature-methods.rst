@@ -137,11 +137,13 @@ standardise the rest of it.
 
 .. _sig-real-corpus:
 
-The three real corpora: how the population was selected
--------------------------------------------------------
+The three real populations: how each was selected
+-------------------------------------------------
 
-A real corpus is fitted on repertoires, so what it means depends entirely on which repertoires. The
-selection is a rule, and each artifact records it:
+Five of the nine published corpora are real, drawn from three populations --- ``blood`` and
+``tissue`` each ship in a capped and an uncapped variant of the same population, and ``deep-tcr``
+in one. A real corpus is fitted on repertoires, so what it means depends entirely on which
+repertoires. The selection is a rule, and each artifact records it:
 
 * **blood** -- public bulk RNA-seq, blood compartment. **tissue** -- the same, non-blood compartments.
   Both **task-disjoint** by study group *and* by sample against the evaluation panel, because a
@@ -468,7 +470,7 @@ Three alternatives were tried and rejected
 Each was measured before being dropped, and each is recorded so that it is not reinstated as an
 apparent simplification.
 
-**Reads per clonotype as the third mixture knob.** Because
+**Reads per clonotype as the third drawn quantity.** Because
 ``reads >= singletons + 2*(richness - singletons)`` is an identity, mean reads per clonotype is at
 least ``2 - f1``, where ``f1`` is the singleton fraction. An independently drawn pair therefore
 violates the constraint about half the time on blood TRB, and drawing the read count itself violates
@@ -485,7 +487,7 @@ five-point ladder gives 762 and a three-point ladder gives 846; blood IGH's meas
 **Independent draws instead of a copula.** The copula was kept, and for the rotation rather than for
 any marginal: a corpus's rotation *is* its covariance structure, and the singleton fraction against
 expansion size correlates -0.503 on blood TRB and -0.846 on blood IGK. On the read-count median alone
-independence is a wash (735 against the copula's 762, with 763 measured), so the justification is the
+independence makes no measurable difference (735 against the copula's 762, with 763 measured), so the justification is the
 covariance, not the margin.
 
 Two implementation notes that follow from reproducibility rather than from statistics:

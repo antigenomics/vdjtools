@@ -447,3 +447,70 @@ or as ``LOCUS[:source[:organism]]``:
    vdjtools model rescale TRB:learned my_sample.tsv -o rescaled/
    vdjtools model export TRB:olga --format tsv -o trb_tsv/
    vdjtools model net TRB:olga --format pdf -o bn.pdf
+
+Options that change a model
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every subcommand takes ``--organism`` (``human`` by default). The rest are grouped by what they
+affect; ``vdjtools model <sub> --help`` remains authoritative for defaults.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 24 54
+
+   * - Subcommand
+     - Option
+     - What it changes
+   * - ``template``, ``extend``
+     - ``--germline-v``, ``--germline-j``, ``--germline-d``, ``--anchors``
+     - Use your own FASTA segment libraries and anchor table instead of arda's. Supply all of them
+       together: mixing germline sources within one model produces wrong answers that look
+       plausible.
+   * - ``template``
+     - ``--ins-max``
+     - The largest non-templated insertion the scaffold allows, per junction. Raising it enlarges
+       every insertion table and slows every later evaluation.
+   * - ``learn``
+     - ``--template``
+     - The scaffold to start from, if not the bundled one for that locus.
+   * - ``learn``
+     - ``--max-iter``, ``--tol``
+     - When expectation-maximisation stops: an iteration cap, and the log-likelihood change below
+       which it is converged.
+   * - ``learn``
+     - ``--init``
+     - How the marginals are seeded before the first E-step.
+   * - ``learn``
+     - ``--gene-prior``, ``--nd-prior``
+     - Pseudocounts on gene usage and on the number of D segments. Non-zero keeps a rarely-observed
+       gene from being driven to exactly zero, which the E-step treats as absorbing.
+   * - ``learn``
+     - ``--single-d``
+     - Fit single-D only, skipping tandem D. Roughly 2.5 times cheaper and biases ``P(n_D = 2)``
+       downward by a measurable amount --- see :term:`tandem D`.
+   * - ``learn``
+     - ``--no-calls``
+     - Ignore the input's own V/D/J calls and re-align every read.
+   * - ``learn``
+     - ``--checkpoint-every``
+     - How often a long fit writes its state, so ``--resume`` can pick it up.
+   * - ``build``
+     - ``--chains``, ``--groups``, ``--cap``, ``--max-iter``
+     - Which loci to build, which read groups to draw from, how many sequences per chain, and the
+       EM iteration cap.
+   * - ``rescale``
+     - ``--no-v``, ``--no-j``, ``--aggregate``
+     - Which usage tables to replace from your sample, and whether to aggregate alleles to the gene
+       before doing it.
+   * - ``check``
+     - ``--germline``
+     - The reference library to audit the model's germline against.
+   * - ``loglik``
+     - ``--per-sequence``, ``--weights-col``
+     - Report one row per sequence rather than a total, and weight each by a count column.
+   * - ``compare``
+     - ``--dot-format``
+     - The image format for ``--dot``.
+   * - ``export``
+     - ``--long``
+     - One long frame of every probability instead of a directory of per-event tables.

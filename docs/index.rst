@@ -42,6 +42,20 @@ chain together instead of needing a converter between each step.
 
       Every module, class and function, with signatures and types.
 
+   .. grid-item-card:: Worked examples
+      :link: notebooks
+      :link-type: doc
+
+      Fifteen runnable notebooks, several reproducing a published result --- repertoire ageing,
+      CMV and HLA association, vaccination time courses, single-cell pairing.
+
+   .. grid-item-card:: Glossary
+      :link: glossary
+      :link-type: doc
+
+      Every term this documentation uses, and which convention vdjtools follows where the field
+      disagrees --- junction against CDR3, productive against functional.
+
 Install
 -------
 
@@ -166,7 +180,7 @@ What is in the box
        correction, V/J-usage batch correction, pooling and joining
      - :doc:`preprocessing`
    * - :mod:`vdjtools.features`
-     - CDR3 physicochemical profiles and k-mer summaries
+     - Junction physicochemical profiles and k-mer summaries
      - :doc:`usage`
    * - :mod:`vdjtools.biomarker`
      - Incidence-based association against binary, per-HLA-allele or stratified conditions;
@@ -220,8 +234,8 @@ The productive filter costs 3.6x on TRB and 5.1x on IGH (19,900 raw draws per se
 productive), because out-of-frame and stop-codon draws are discarded and redrawn rather than
 repaired. Quote whichever of the two your pipeline uses.
 
-Batched Pgen over many CDR3s parallelises over sequences
-(:func:`~vdjtools.model.native.pgen_aa_batch`, 11x on 16 cores, bit-identical to the serial result);
+Batched Pgen over many junctions parallelises over sequences
+(:func:`~vdjtools.model.native.pgen_aa_batch`, 11x on 16 cores, and identical to the serial result to the last bit);
 the EM E-step parallelises over reads (6.7x on 8 threads). Memory stays modest: 63 MB resident for
 ``import vdjtools`` plus one model, 123 MB with all seven bundled models loaded.
 

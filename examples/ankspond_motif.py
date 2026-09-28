@@ -14,7 +14,7 @@ app = marimo.App(width="medium")
 def _(mo):
     mo.md(
         r"""
-        # The ankylosing-spondylitis "AS27" motif — a vdjtools v2 explorer
+        # The ankylosing-spondylitis "AS27" motif — a vdjtools explorer
 
         Komech et al. (2018, *Rheumatology* 57:1097) found a **public TRBV9 / TRBJ2-3 CDR3β
         motif** (`CASSVGLYSTDTQYF` and relatives) expanded in the blood and synovial fluid of

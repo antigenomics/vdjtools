@@ -6,13 +6,36 @@ downstream model can consume without fitting a scaler of its own. ``vdjtools`` e
 **statistics** half, ``vsig``; the **geometry** half, ``rsig``, comes from `mirpy
 <https://github.com/antigenomics/mirpy>`_ and shares this contract exactly.
 
-It is built in three stages, and a **corpus** fixes the last two:
+It is built in three stages, and a **corpus** --- a large published reference collection of
+repertoires --- fixes the last two:
 
 .. code-block:: text
 
    raw features  ->  winsorization bounds  ->  rotation + per-PC scaling  ->  vsig
    (this sample                (all three from one corpus artifact)
     alone)                                                              +  channels, untouched
+
+In plain terms, reading left to right:
+
+#. **Raw features** are the ordinary measurements of one repertoire --- how diverse, how clonal,
+   which V and J genes, what junction lengths, which isotypes. They come from this sample and
+   nothing else.
+#. :term:`Winsorization` clips each measurement to a range measured on the corpus, so that one
+   pathological sample cannot dominate everything downstream. Clipping edits a real number, so how
+   much of the row was clipped is always reported --- see ``winsor_frac`` below.
+#. The :term:`rotation` re-expresses those correlated measurements as uncorrelated axes
+   (:term:`principal component` s) ordered by how much variation each carries across the corpus,
+   and each axis is put on a :term:`robust z-score` scale: how far this sample sits from the
+   corpus's typical one, in robust deviations. That is what makes your matrix and a collaborator's
+   directly comparable without either of you fitting a scaler.
+
+:term:`Channel` s sit outside all of this. They are carried in their own units, never rotated and
+never clipped, because a number whose job is to tell you whether to trust a row must not be mixed
+into the row.
+
+If you want the underlying measurements back rather than the rotated axes, ask for them:
+``--named`` emits the raw groups the rotation is fitted on under their own names. See
+:ref:`sig-named`.
 
 Quickstart
 ----------
@@ -104,9 +127,9 @@ through the same corpus, so the artifact has to be named, and the emitted row re
 was. Two matrices whose column names match but whose corpora differ are not comparable, and nothing
 about the numbers says so — which is why the choice is not allowed to be implicit.
 
-All nine corpora are published. Five are **synthetic** -- every receptor drawn from the bundled
+All nine corpora are published. Four are **synthetic** -- every receptor drawn from the bundled
 recombination models, so anyone can rebuild the artifact bit-for-bit and no cohort sample is needed to
-use one -- and three are **real**, fitted on repertoires. Both kinds exist on purpose: a synthetic
+use one -- and five are **real**, fitted on repertoires. Both kinds exist on purpose: a synthetic
 corpus spans a *measured* range by construction, while a real one carries the joint structure the
 generative model does not produce (selection-shaped V/J usage, isotype and SHM structure, and the
 cross-locus covariance of libraries prepared together).
@@ -437,7 +460,7 @@ process) and about 50 samples/s to featurise them.
 
 .. note::
 
-   Two knobs, two layers. ``--jobs`` is worker **processes**; ``POLARS_MAX_THREADS`` and
+   Two settings, two layers. ``--jobs`` is worker **processes**; ``POLARS_MAX_THREADS`` and
    ``OMP_NUM_THREADS`` are **kernel threads**. The builder sets its workers to one kernel thread
    each, because ``jobs x cores`` threads is how a 15 s stage was once measured at 296 s.
 
@@ -470,7 +493,7 @@ per locus.
 Parallelism
 -----------
 
-``--jobs``/``n_jobs`` is worker **processes**. There is exactly one concurrency knob, and its help
+``--jobs``/``n_jobs`` is worker **processes**. There is exactly one concurrency setting, and its help
 text says which layer it reaches; a flag named ``--threads`` that started processes is a mistake
 this subsystem has made before. Workers are spawned, not forked — polars cannot be combined with
 ``fork`` — and a pool that cannot start **raises** rather than falling back to one process, because

@@ -3,6 +3,40 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## Unreleased
+
+### Documentation
+
+The documentation was surveyed page by page against the code it describes. What it got wrong:
+
+- **Six of the fifteen example notebooks did not run.** Three referenced a column `cdr3_aa` that
+  the canonical schema does not have — it is `junction_aa`, and the distinction is two residues of
+  anchor, not a spelling. `aging.py` used `plt` without importing matplotlib anywhere and
+  `emerson_cmv_hla.py` used `time` the same way; `model_explorer.py` bound `fig` in two cells,
+  which marimo refuses outright. All fifteen now run end to end as plain scripts, and
+  `tests/python/test_examples_wiring.py` checks the cell graph statically so this class cannot
+  return.
+- **`docs/cli.rst` documented 6 of the 10 signature options that change an answer**, omitting
+  `--named` — the headline feature of 4.3.0 — along with `--winsor-p` and `--on-duplicate`, and
+  33 model-workshop options had no prose anywhere. All are documented now, and
+  `test_cli_help.py` fails if a flag that changes an answer is added without prose.
+- **The corpus kinds were miscounted**: four are synthetic and five are real, not five and three.
+- **`examples/README.md` told readers to run `vdjtools presets`** and `--preset classify`, both
+  deleted in 4.0.0.
+- `docs/notebooks.rst` listed 7 of the 15 notebooks; it now lists all of them, grouped by the
+  question each one answers.
+
+What it was missing, for a reader who is an immunologist rather than a statistician:
+
+- Fourteen glossary entries for the statistical vocabulary the output uses — `channel`,
+  `principal component`, `clr`, `logit`, `arcsine transform`, `robust z-score`, `support`,
+  `named block`, `n_eff`, `dispersion`, `effective dimension`, `Rao quadratic entropy`,
+  `clonality`, `isotype`, `SHM`, `Zipf law` — each written as what it is for, not as a definition.
+- A plain-language account of the three signature stages ahead of the diagram that names them.
+- An explicit warning that `pgen_aa` and `infer_nt` take a **junction** despite naming their
+  argument `cdr3_aa`. Passing a trimmed CDR3 does not raise; it scores a different rearrangement.
+- Worked-examples and glossary cards on both landing pages.
+
 ## 4.3.0 — 2026-09-28
 
 Three things a caller needs, and none of them is a new statistic. Everything below already existed

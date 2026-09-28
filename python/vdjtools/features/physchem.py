@@ -1,16 +1,20 @@
-"""CDR3 physicochemical-property profiles from the legacy amino-acid property table.
+"""Physicochemical-property profiles of the junction, from the legacy amino-acid property table.
 
-For each clonotype the mean of a property over the residues of a chosen CDR3 region
-is computed, then averaged (weighted by reads/frequency, or unweighted) within a
-group (e.g. per V-J pairing, or per locus).
+For each clonotype the mean of a property over the residues of a chosen region is computed, then
+averaged (weighted by reads/frequency, or unweighted) within a group (e.g. per V-J pairing, or per
+locus).
 
-Region definitions (over ``junction_aa``, length ``L``):
+All three regions are cut from ``junction_aa``, which **includes** the conserved Cys104 and Phe118
+(Trp118 for IGH) anchors and is therefore two residues longer than the IMGT CDR3. Length ``L`` is
+the junction length:
 
-* ``all`` — the entire CDR3.
-* ``trimmed`` — ``junction_aa[3:-3]`` (conserved-anchor-trimmed core); clonotypes with
-  ``L <= 6`` have an empty core and are skipped for this region.
-* ``center`` — the middle five residues ``junction_aa[L//2-2 : L//2+3]``; clonotypes
-  with ``L < 5`` are skipped for this region.
+* ``all`` — the whole junction, anchors included.
+* ``trimmed`` — ``junction_aa[3:-3]``: the core, with three residues cut from each end. This
+  removes the anchor and the two germline-templated residues beside it, so it is **not** the IMGT
+  CDR3 (which drops one residue per end). Clonotypes with ``L <= 6`` have an empty core and are
+  skipped for this region.
+* ``center`` — the middle five residues ``junction_aa[L//2-2 : L//2+3]``, which on a typical
+  junction is the non-templated, most diverse part; clonotypes with ``L < 5`` are skipped.
 """
 from __future__ import annotations
 
@@ -67,7 +71,10 @@ def _region_expr(region: str) -> pl.Expr:
 def physchem_profile(df, group_by=("v_call", "j_call"),
                      region: str = "all", weight: str = "reads",
                      properties: "tuple[str, ...] | None" = None, by=()):
-    """Group-wise weighted mean of CDR3 physicochemical properties.
+    """Group-wise weighted mean of junction physicochemical properties.
+
+    Regions are cut from ``junction_aa``, anchors included -- see the module docstring; ``"all"``
+    is the whole junction, not the IMGT CDR3.
 
     For each clonotype the region residues are looked up in the property table and
     averaged per property (the per-clonotype property mean). These are then combined

@@ -130,6 +130,14 @@ and CDR3 region; ``kmer_profile`` counts k-mers:
    features.kmer_profile(sample, k=3)       # locus, kmer, weight
    features.v_kmer_c_profile(sample, k=3)   # V-anchored k-mer occurrences
 
+.. note::
+
+   All three regions are cut from ``junction_aa``, so ``region="all"`` **includes** the Cys104 and
+   Phe118 anchors and is two residues longer than the IMGT :term:`CDR3`. ``region="trimmed"`` cuts
+   three residues from each end --- the anchor plus the two templated residues beside it, not one
+   --- and ``region="center"`` takes the middle five, which on a typical junction is the
+   non-templated part. Pick the region for the chemistry you mean, and say which one you used.
+
 Somatic hypermutation (B cells)
 -------------------------------
 
@@ -475,8 +483,16 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    model = load_bundled("TRB", "olga")           # or "learned" (fit to real repertoires)
    native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen (matches OLGA to 1e-15)
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)     # + the Hamming-1 ball
-   native.pgen_aa_batch(model, seqs, threads=0)   # many CDR3s, thread-parallel (~11x)
+   native.pgen_aa_batch(model, seqs, threads=0)   # many sequences, thread-parallel (~11x)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
+
+.. important::
+
+   **These functions take a junction, not an IMGT CDR3**, even though the parameter is spelled
+   ``cdr3_aa`` for historical reasons. The sequence must start with the conserved Cys104 and end
+   with Phe118 (Trp118 for IGH) --- ``CASSLAPGATNEKLFF``, not ``ASSLAPGATNEKL``. The same applies
+   to :func:`~vdjtools.model.infer.infer_nt`. Passing a trimmed CDR3 does not raise; it returns the
+   Pgen of a different, shorter rearrangement. See :term:`junction`.
 
 Pgen of a motif
 ^^^^^^^^^^^^^^^

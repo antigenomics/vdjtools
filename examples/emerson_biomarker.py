@@ -1,4 +1,4 @@
-"""Emerson 2017 biomarker discovery — an interactive vdjtools v2 walkthrough.
+"""Emerson 2017 biomarker discovery — an interactive vdjtools walkthrough.
 
 A marimo notebook. Launch it with
 
@@ -29,7 +29,7 @@ app = marimo.App(width="medium")
 def _(mo):
     mo.md(
         r"""
-        # Finding CMV- and HLA-associated T-cell receptors — a vdjtools v2 walkthrough
+        # Finding CMV- and HLA-associated T-cell receptors — a vdjtools walkthrough
 
         A person's T-cell repertoire is a record of what their immune system has
         seen. Chronic infections such as **cytomegalovirus (CMV)** drive clonal
@@ -40,7 +40,7 @@ def _(mo):
 
         Emerson et al. (2017) turned this into a screen: for every public TCRβ, a
         **2×2 Fisher's-exact test** of *how many subjects carry it* vs the phenotype.
-        This notebook runs that screen with **vdjtools v2**
+        This notebook runs that screen with **vdjtools**
         (`vdjtools.biomarker.fisher_association`) on the Emerson HIP cohort, and lets
         you turn the method's two knobs live —
 

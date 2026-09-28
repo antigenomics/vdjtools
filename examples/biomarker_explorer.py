@@ -14,7 +14,7 @@ app = marimo.App(width="medium")
 def _(mo):
     mo.md(
         r"""
-        # Biomarker association & co-occurrence — a vdjtools v2 explorer
+        # Biomarker association & co-occurrence — a vdjtools explorer
 
         Emerson et al. (2017) screen public **TCRβ** chains for a statistical association
         between their *presence across a cohort* and a phenotype. `vdjtools.biomarker`

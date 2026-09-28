@@ -226,7 +226,7 @@ _OUT = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout).")
 _THREADS = typer.Option(
     0, "--threads", "-t",
     help="Worker threads over samples (0 = all cores). Threads, not processes: the heavy work "
-         "releases the GIL, so this is the knob that scales. Lower it only to share the box.",
+         "releases the GIL, so this is the setting that scales. Lower it only to share the machine.",
 )
 _ONDUP = typer.Option(
     "error", "--on-duplicate",
@@ -345,7 +345,7 @@ def correct_vj(
     transform: str = typer.Option("location", "--transform", help="'location' (ComBat location term) or 'sigmoid' (sigma-standardised z-score, Vlasova et al. 2026)."),
     scope: str = typer.Option("vj", "--scope", help="Correction key: vj | v | j."),
     z_cap: float = typer.Option(6.0, "--z-cap", help="With --transform sigmoid: cap |Z| at this."),
-    winsor_q: Optional[float] = typer.Option(None, "--winsor-q", help="Winsorize the per-batch mean/sigma at this quantile. Default off, matching the published method; 0.025 is a robustness knob for shallow/RNA-seq repertoires."),
+    winsor_q: Optional[float] = typer.Option(None, "--winsor-q", help="Winsorize the per-batch mean/sigma at this quantile. Default off, matching the published method; 0.025 is a robustness setting for shallow/RNA-seq repertoires."),
     unweighted: bool = typer.Option(False, "--unweighted", help="Count clonotypes rather than reads when building usage."),
     rescale: bool = typer.Option(False, "--rescale", help="Deterministically rescale instead of roulette-wheel resampling."),
     seed: int = typer.Option(0, "--seed", help="Seed for the resample."),

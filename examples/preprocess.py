@@ -1,4 +1,4 @@
-"""Repertoire preprocessing pipeline with vdjtools v2.
+"""Repertoire preprocessing pipeline with vdjtools.
 
 A marimo notebook. Launch it with
 
@@ -26,7 +26,7 @@ app = marimo.App(width="medium")
 def _(mo):
     mo.md(
         r"""
-        # Cleaning a repertoire — the vdjtools v2 preprocessing pipeline
+        # Cleaning a repertoire — the vdjtools preprocessing pipeline
 
         Before any diversity, overlap, or biomarker analysis, a raw repertoire needs
         cleaning. `vdjtools.preprocess` is a set of composable, pure-polars steps over the
@@ -109,7 +109,7 @@ def _(mo, pl, raw):
     # Raw per-sample summary: clonotypes, reads, and % non-coding (a QC red flag).
     _rows = []
     for _s, _df in raw.items():
-        _nc = _df.filter(pl.col("cdr3_aa").str.contains("[*_]")).height
+        _nc = _df.filter(pl.col("junction_aa").str.contains("[*_]")).height
         _rows.append({"sample": _s, "batch": _df["batch"][0], "clonotypes": _df.height,
                       "reads": int(_df["duplicate_count"].sum()),
                       "pct_noncoding": round(100 * _nc / _df.height, 2)})
