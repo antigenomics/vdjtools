@@ -33,7 +33,7 @@ from .reference import (
 from .rescale import rescale_usage
 from .schema import Manifest
 from .stitch import stitch_contig, stitch_frame
-from .viterbi import Scenario, best_scenario, infer_nt
+from .viterbi import Scenario, best_scenario, infer_nt, infer_nt_batch
 
 __all__ = [
     "analyze",
@@ -67,6 +67,7 @@ __all__ = [
     "Scenario",
     "best_scenario",
     "infer_nt",
+    "infer_nt_batch",
     "best_aa_scenarios",
     "best_aa_scenarios_batch",
     "gene_to_allele",

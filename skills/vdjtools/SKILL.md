@@ -169,6 +169,16 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `len_j`, `d_call`, `idx5`, `idx3`, `pos`); **8.02 s → 0.64 s on 24,907 real human TRB clonotypes at
   k=8**, identical to the per-row loop at any thread count, and a declined query contributes no rows.
   `v_end` is `len_v` and `j_start` is `3*len(aa) - len_j`.
+  **`infer_nt_batch(model, aas, v=, j=, n_best=8, threads=0)`** is `infer_nt` over a whole table →
+  one row per input row in input order (`cdr3_nt`, `v_call`, `j_call`, `v_end`, `j_start`, `d_call`,
+  `d_start`, `d_end`, `pgen`, `scenario_p`, `n_candidates`, `runner_up_pgen`), a declined row present
+  with nulls. Identical to the per-row loop field for field at any thread count. On the released
+  VDJdb key set, 4,000 human TRB keys: **0.880 → 0.662 ms/row (1.33x)** against a 4-thread per-row
+  pool. Batching alone stops there because the codon reconstruction is pure Python — 35% of TRB and
+  **87% of TRA**, which is why TRA does not scale with `threads`. `n_best` reaches all three stages:
+  `4` is 2.58x/2.95x for 97.7%/**100%** the same `cdr3_nt`, `2` is 4.63x/5.93x for 90.2%/99.2%.
+  NOTE: a low `n_best` degrades `Scenario.margin` before `cdr3_nt` — 470 of 4,000 TRB rows lose their
+  `runner_up_pgen` at `4` against 193 at `8`. `threads` is **kernel threads**; never wrap it in a pool.
   WARNING: this is the argmax of a *probability* model, not an aligner. On 25,000 real TRB clonotypes
   against the observed nt markup, top-1 places `v_end` exactly **59.8%** and `j_start` **90.3%**,
   against **73.3% / 97.7%** for germline alignment (`arda.cdr3fix`) at a twelfth of the cost — many

@@ -546,6 +546,31 @@ it.
 nothing because the underlying DP sweeps V and J anyway. Reported timings: 2.5 ms per human TRB
 CDR3, 0.5 ms per TRA, so all 80k VDJdb records take about three minutes.
 
+On a whole table, call :func:`~vdjtools.model.viterbi.infer_nt_batch` instead — the per-row Python
+around the native DP is the cost, not the DP. It returns **one row per input row, in input order**,
+with ``Scenario``'s fields as columns and a null row where the model explains nothing, and it is the
+per-row loop's answer field for field at any ``threads``.
+
+.. code-block:: python
+
+   from vdjtools.model import infer_nt_batch
+
+   df = infer_nt_batch(model, chains["cdr3"], v=chains["v_call"], j=chains["j_call"])
+
+Measured on the released VDJdb key set (4,000 human TRB keys, 16 cores): 0.880 ms/row for the
+per-row loop in a 4-thread pool against **0.662 ms/row** batched. Batching stops there, because the
+codon reconstruction is pure Python — 35% of the cost on TRB and **87% on TRA**, which is why the
+TRA batch does not speed up with more ``threads`` at all. ``n_best`` is the knob that reaches every
+stage: ``4`` is 2.58x on TRB for the same ``cdr3_nt`` on 97.7% of rows, and 2.95x on TRA for 100%
+of them.
+
+.. warning::
+
+   ``threads`` is **kernel threads**, not worker processes, and the batch already parallelizes
+   across rows — do not wrap it in a pool of your own. Lowering ``n_best`` degrades ``margin``
+   before it degrades ``cdr3_nt``: 470 of 4,000 TRB rows lose their runner-up at ``n_best=4``,
+   against 193 at the default ``8``.
+
 .. warning::
 
    Report ``sc.margin``. With a long non-templated core many nucleotide sequences are near-equally

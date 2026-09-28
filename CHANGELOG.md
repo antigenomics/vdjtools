@@ -5,6 +5,55 @@ Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git ta
 
 ## Unreleased
 
+### `infer_nt_batch` — the batch entry point `infer_nt` never had (#181)
+
+`infer_nt` wrapped a native DP in per-row Python, and on a real annotation table that wrapper was
+the cost, not the DP: **156.19 s of a 181.89 s stage, 85.9%**, at ~200,000 distinct junctions in
+vdjdb-db's build. `infer_nt_batch(model, cdr3_aas, v=, j=, n_best=8, threads=0)` returns a frame
+with **one row per input row in input order**, carrying `Scenario`'s fields as columns; a row the
+model cannot explain is present with nulls, because the caller joins positionally. Stage 1 now goes
+through one `native.best_aa_scenarios_batch` call and the marginal re-score through one threaded
+nt-Pgen call, so the Python per row is only the codon reconstruction. `infer_nt` delegates to the
+same core, so the two cannot drift.
+
+**It is the per-row loop's answer, not a new one** — every field of every row, at any thread count,
+across all four V/J call modes. `tests/python/test_infer_nt_batch.py` pins that, and it earned its
+place immediately: the first version reported `n_candidates` *after* the top-`n_best` truncation, so
+a multi-allele call that pooled 12 candidates reported 8 while every other field stayed correct.
+
+**Measured on the real workload** — the released VDJdb 2026-06-03 slim table, rebuilt into the
+distinct `(cdr3, v.segm, j.segm)` key set the way the consumer builds it (113,051 human TRB keys,
+55,778 TRA), 4,000-row samples, 16-core M-series:
+
+| | TRB ms/row | TRA ms/row |
+|---|---|---|
+| per-row `infer_nt`, serial | 1.843 | 0.796 |
+| per-row in a 4-thread slice pool (the consumer today) | 0.880 | 0.652 |
+| `infer_nt_batch`, `threads=0` | **0.662** | **0.506** |
+
+**1.33x / 1.29x over the threaded per-row loop, and that is the honest ceiling of batching alone.**
+The reason is the one term batching cannot touch: decomposing the per-call cost on the same cohort
+gives TRB stage 1 0.334 ms / codon reconstruction 0.536 ms / stage 2 0.656 ms, and TRA 0.055 /
+0.460 / 0.014 — so the pure-Python reconstruction is **35% of TRB and 87% of TRA**, it holds the
+GIL, and it is 81% of what the batch still spends. TRA's batch does not scale with `threads` at all
+(1.55x at 1 through 14) for exactly that reason. The TRB/TRA asymmetry is entirely in the
+D-dependent terms — stage 1 6.0x, stage 2 46.2x, reconstruction 1.16x.
+
+`n_best` is the knob that reaches all three stages, and it is where the rest of the speed is:
+4,000 real TRB / TRA keys, agreement against the bit-identical `n_best=8` result.
+
+| `n_best` | TRB ms/row | vs consumer today | same `cdr3_nt` | TRA ms/row | vs today | same `cdr3_nt` |
+|---|---|---|---|---|---|---|
+| 8 | 0.662 | 1.33x | 100% | 0.506 | 1.29x | 100% |
+| 4 | 0.341 | 2.58x | 97.7% | 0.221 | 2.95x | **100%** |
+| 2 | 0.190 | 4.63x | 90.2% | 0.110 | 5.93x | 99.2% |
+
+The default is **unchanged at 8**. Lowering it is a real trade and the numbers say so from both
+sides: on the rows where `n_best=4` picks a different sequence the alternative is not implausible
+(its marginal Pgen is a median 0.82 of the default's, min 0.59), but a low `n_best` also leaves more
+rows with no second candidate, so `Scenario.margin` degrades before `cdr3_nt` does — 470 of 4,000
+TRB rows without a `runner_up_pgen` at 4, against 193 at 8.
+
 ### Documentation
 
 The documentation was surveyed page by page against the code it describes. What it got wrong:
