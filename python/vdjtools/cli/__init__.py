@@ -509,6 +509,13 @@ def signature(
                                                 "the output to. Selects output; it does not skip "
                                                 "work, because a locus is rotated jointly over all "
                                                 "its feature groups."),
+    named: str = typer.Option(None, "--named",
+                              help="Also emit the reportable raw blocks in their own right: "
+                                   "'all', or a comma-separated list (div,depth,clon,len,iso,shm,"
+                                   "pair). These are the diversity, depth and clone-size numbers "
+                                   "the rotation is fitted on; without this there is no route to "
+                                   "reading them back. Values carry their declared transform -- "
+                                   "see the 'transform' column of --describe."),
     describe: bool = typer.Option(False, "--describe",
                                   help="Print the columns THIS invocation emits, and exit."),
     jobs: int = typer.Option(1, "--jobs", "-j",
@@ -552,19 +559,32 @@ def signature(
         _err(f"--winsorize must be one of {', '.join(CO.MODES)}; got {winsorize!r}")
     art = _resolve_corpus(corpus)
     ncomp = _parse_components(components)
+    blocks: "bool | tuple[str, ...]" = ()
+    if named is not None:
+        blocks = True if named.strip().lower() == "all" else tuple(
+            b for b in (x.strip() for x in named.split(",")) if b)
+        try:
+            L.resolve_named(art.sig, blocks)
+        except ValueError as e:
+            _err(str(e))
     want = None
     if columns is not None:
         want = [c for c in columns.read_text().split() if c]
 
     if describe:
-        cols = art.columns(ncomp)
+        cols = art.columns(ncomp, named=blocks)
         if want is not None:
             cols = [c for c in cols if c in set(want)]
+        named_set = set(L.named_columns(art.sig, blocks, art.vocab) if blocks else ())
+        spec = {(r["block"], r["feature"]): r for r in L.channel_table(art.sig)}
         rows = []
         for c in cols:
-            sig, block, locus, feature = L.parse(c)
+            _sig, block, locus, feature = L.parse(c)
+            kind = ("rotated" if block == L.PC_BLOCK
+                    else "named" if c in named_set else "channel")
             rows.append({"column": c, "block": block, "locus": locus, "feature": feature,
-                         "kind": "rotated" if block == L.PC_BLOCK else "channel",
+                         "kind": kind,
+                         "transform": spec.get((block, feature), {}).get("transform", "none"),
                          "support": L.support_of(c)})
         _write(pl.DataFrame(rows), out)
         return
@@ -587,11 +607,11 @@ def signature(
 
     fn = functools.partial(vsig, corpus=art, mode=winsorize, winsor_p=winsor_p,
                            n_components=ncomp, cstar_target=target, weight=weight,
-                           on_duplicate=on_duplicate, columns=want)
+                           on_duplicate=on_duplicate, named=blocks, columns=want)
     rows = [{"sample_id": sid, **res}
             for sid, res in map_samples(fn, items, fmt=fmt, workers=jobs or None,
                                         keep=("v_identity",))]
-    cols = [c for c in art.columns(ncomp) if want is None or c in set(want)]
+    cols = [c for c in art.columns(ncomp, named=blocks) if want is None or c in set(want)]
     typer.echo(f"{len(rows)} samples x {len(cols)} vsig columns | corpus {art.name} "
                f"({art.meta.get('content_sha256', '?')[:12]}) | winsorize={winsorize} | "
                f"k={art.resolve_k(ncomp)}", err=True)

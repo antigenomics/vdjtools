@@ -476,6 +476,146 @@ this subsystem has made before. Workers are spawned, not forked — polars canno
 ``fork`` — and a pool that cannot start **raises** rather than falling back to one process, because
 a correctness-preserving fallback is what hid a 20x slowdown here once.
 
+.. _sig-named:
+
+Getting the named statistics back
+---------------------------------
+
+A signature is a rotation, and a rotated coordinate has no name a domain reader can use. But the
+rotation is fitted on features that *do*: diversity, depth, clone-size fractions, junction length,
+isotype composition, SHM, cross-locus yield. Those are computed for every sample either way.
+
+``named=`` returns them:
+
+.. tab-set::
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         from vdjtools.signature import vsig, vsig_cohort
+         from vdjtools.signature.corpus import Corpus, bundled_path
+
+         corpus = Corpus.load(bundled_path("blood"))
+
+         vsig(sample, corpus, n_components=32, named=True)
+         vsig(sample, corpus, n_components=32, named=("div", "depth"))   # or pick blocks
+         vsig_cohort(samples, corpus, n_components=32, named=True)
+
+   .. tab-item:: Command line
+
+      .. code-block:: bash
+
+         vdjtools signature --corpus blood --components 32 --named all -o sig.tsv
+         vdjtools signature --corpus blood --components 32 --named div,depth -o sig.tsv
+
+``named=()``, the default, emits exactly the rotated columns and the channels -- the output is
+byte-identical to a run without the argument. The reportable blocks are:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 20 66
+
+   * - half
+     - block
+     - what it holds
+   * - ``vsig``
+     - ``div``
+     - Coverage-standardised Hill numbers ``1D_c``/``0D_c``/``2D_c``, ``0D_chao``, clonality,
+       ``d50``
+   * - ``vsig``
+     - ``depth``
+     - ``reads``, ``richness``, ``S_unseen``
+   * - ``vsig``
+     - ``clon``
+     - Singleton, doubleton and top-clone fractions
+   * - ``vsig``
+     - ``len``
+     - Junction-length mean, sd, skew
+   * - ``vsig``
+     - ``iso`` / ``shm``
+     - IGH isotype composition, and mean V identity
+   * - ``vsig``
+     - ``pair``
+     - Cross-locus yield log-ratios
+   * - ``rsig``
+     - ``depth`` / ``band`` / ``band_igh``
+     - ``n_eff`` and observed mass; clone-size and isotype shares of ``Phi``
+
+.. warning::
+
+   **These carry their declared transform, not their natural scale.** A ``log10`` diversity comes
+   back as ``log10`` and a ``clr`` composition as a log-ratio with no unique inverse. Do not read
+   ``vsig:div:TRB:1D_c = 2.386`` as a clone count -- it is ``log10`` of one.
+   :func:`~vdjtools.signature.layout.channel_table` reports the transform for every feature, and
+   ``--describe`` prints it per emitted column.
+
+The reason this exists rather than being a convenience: the diversity floor of any study using this
+library is made of exactly these blocks. Without a documented route to them there is no floor, and
+a signature that beats nothing gets reported as if it beat something.
+
+.. _sig-fit-cohort:
+
+Fitting a corpus on your own cohort
+------------------------------------
+
+The published corpora are one route; fitting the rotation on your own training half is the other,
+and it is the first thing anybody with a cohort asks for.
+
+.. code-block:: python
+
+   from vdjtools.signature.corpus import Corpus, fit_cohort
+
+   corpus = fit_cohort(train_samples, sig="vsig", name="my-cohort",
+                       loci=("TRA", "TRB", "IGH"), n_components=64, n_jobs=0)
+   corpus.save("my-cohort.npz")
+
+   # and it is the same artifact type the shipped corpora are
+   mine = Corpus.load("my-cohort.npz")
+   vsig(held_out_sample, mine, n_components=64)
+
+Samples are ``{sample_id: {locus: frame}}``, or an iterable of frames, or **picklable** zero-argument
+callables that defer the read into the worker. ``mir.signature`` must be imported before
+``sig="rsig"`` will resolve; nothing in vdjtools imports ``mir``, so the featuriser reaches the
+corpus through a registry rather than an import.
+
+.. warning::
+
+   **A cross-validated score computed on a rotation fitted inside the same cohort is not evidence
+   that the rotation generalises.**
+
+   Measured on raw repertoire embeddings, 5,376 columns over seven loci, one logistic head, with a
+   balanced train/test split of one cohort and a second cohort held out entirely. At matched widths:
+
+   .. list-table::
+      :header-rows: 1
+      :widths: 40 20 20 20
+
+      * - read-out
+        - in-cohort leads at
+        - median, in-cohort
+        - median, corpus
+      * - training out-of-fold (what selects)
+        - 4 of 5 widths
+        - **0.5039**
+        - 0.4968
+      * - held-out half
+        - 2 of 5
+        - 0.5222
+        - **0.5635**
+      * - external cohort
+        - **0 of 5**
+        - 0.4757
+        - **0.5270**
+
+   Fitting the rotation in-cohort improves the number the configuration is *selected* on, and
+   neither held-out read-out. A rotation fitted on 612 samples of one trial learns that trial's
+   covariance, which is what a within-cohort cross-validation rewards and what does not travel.
+
+   Both routes are legitimate and they answer different questions. Fit here when you want a basis
+   for *this* cohort; name a shipped corpus when the number has to travel.
+
+
 Further reading
 ---------------
 

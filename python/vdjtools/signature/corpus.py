@@ -29,6 +29,7 @@ near-degenerate column. And the side comes from the declared support, never from
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -36,6 +37,7 @@ import platform
 import shutil
 import sys
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -201,9 +203,11 @@ class Corpus:
         could not fit a locus declares it, rather than shipping a rotation of zeros."""
         return {loc: f.k for loc, f in self.fits.items()}
 
-    def columns(self, n_components: "int | float | None" = None) -> list[str]:
-        """The signature columns this corpus emits: rotated columns then channels."""
-        return L.signature_columns(self.sig, self.resolve_k(n_components))
+    def columns(self, n_components: "int | float | None" = None,
+                named: "bool | Sequence[str]" = ()) -> list[str]:
+        """The signature columns this corpus emits: rotated, then channels, then named blocks."""
+        cols = L.signature_columns(self.sig, self.resolve_k(n_components))
+        return [*cols, *(L.named_columns(self.sig, named, self.vocab) if named else ())]
 
     def resolve_k(self, n_components: "int | float | None" = None) -> dict[str, int]:
         """``{locus: k}`` after apply-time truncation.
@@ -518,13 +522,40 @@ def fit_matrices(mats: dict[str, tuple[np.ndarray, list[str]]],
                         "platform": platform.platform(), "numpy": np.__version__})
 
 
+#: ``{sig: featurise}``, filled by each half at import. ``featurise(frames, vocab, **kw)`` returns
+#: ``(raw, channels)`` for one sample. A registry rather than an import because the contract lives
+#: in vdjtools while ``rsig``'s features live in mirpy, and **nothing in vdjtools may import mir** --
+#: mirpy depends on vdjtools and not the reverse. ``mir.signature`` registers ``"rsig"`` the same way
+#: it registers its raw groups and channels.
+_FEATURISERS: dict[str, object] = {}
+
+
+def register_featuriser(sig: str, fn) -> None:
+    """Declare how one half turns ``{locus: frame}`` into ``(raw, channels)``.
+
+    Called once at import by each half. :func:`fit_cohort` is the only consumer: it is what lets a
+    caller hand in clonotype frames rather than pre-computed feature rows.
+    """
+    _FEATURISERS[sig] = fn
+
+
+def featuriser(sig: str):
+    """The registered featuriser for ``sig``, or a pointed error naming what to import."""
+    if sig not in _FEATURISERS:
+        hint = {"rsig": "import mir.signature", "vsig": "import vdjtools.signature"}.get(sig, "")
+        raise ValueError(f"no featuriser registered for {sig!r}"
+                         + (f"; {hint} first" if hint else ""))
+    return _FEATURISERS[sig]
+
+
 def fit(rows: list[dict[str, float]], vocab: dict[str, dict[str, list[str]]], *, sig: str,
         **kw) -> Corpus:
     """Fit a corpus from raw feature rows -- one dict per repertoire.
 
     Convenient for a small corpus and for tests. For a full-size build use
     :func:`locus_matrix` / :func:`fill_row` / :func:`fit_matrices`, which never holds more than one
-    sample's dict at a time.
+    sample's dict at a time. To fit on **your own cohort** of clonotype frames rather than on
+    feature rows you assembled yourself, use :func:`fit_cohort`.
     """
     order = [loc for loc in (*L.LOCI, L.NO_LOCUS) if loc in vocab or loc == L.NO_LOCUS]
     mats: dict[str, tuple[np.ndarray, list[str]]] = {}
@@ -539,12 +570,95 @@ def fit(rows: list[dict[str, float]], vocab: dict[str, dict[str, list[str]]], *,
     return fit_matrices(mats, vocab, sig=sig, **kw)
 
 
+def _row_for(item, sig, vocab, kw):
+    """One sample's raw feature dict. Module-level so a spawned worker can unpickle it."""
+    from .cohort import resolve_sample
+
+    frames = resolve_sample(item[1] if isinstance(item, tuple) else item)
+    if not isinstance(frames, dict):
+        frames = {loc: g.drop("locus") for (loc,), g in frames.group_by(["locus"])}
+    raw, _ = featuriser(sig)(frames, vocab, **kw)
+    return raw
+
+
+def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
+               vocab: "dict[str, dict[str, list[str]]] | None" = None,
+               loci: "tuple[str, ...] | None" = None, organism: str = "human",
+               n_components: "int | float" = 128, weight: str = "log2p1",
+               n_jobs: int = 0, **kw) -> Corpus:
+    """Fit a corpus on **your own** cohort of clonotype frames.
+
+    The shipped corpora are one route and this is the other. ``fit`` takes feature rows, so a
+    caller holding repertoires had to run the featuriser per sample and assemble the dicts
+    themselves; this does that, in processes, and hands back the same :class:`Corpus` type the
+    published artifacts are. :meth:`Corpus.save` writes it, :meth:`Corpus.load` reads it back, and
+    a collaborator can score against it exactly as against a shipped one.
+
+    Args:
+        samples: ``{sample_id: sample}``, an iterable of pairs, or an iterable of samples. A sample
+            is ``{locus: frame}``, one frame with a ``locus`` column, or a **picklable**
+            zero-argument callable returning either.
+        sig: Which half to fit. ``"rsig"`` requires ``mir.signature`` to have been imported.
+        name: Recorded in the manifest, and reported in the preflight line wherever this corpus is
+            used. Name it after the cohort, not after the analysis.
+        vocab: ``{locus: {group: [names]}}``. Defaults to the germline vocabulary for ``loci``.
+        loci: Which loci to model. Defaults to every locus any sample carries.
+        organism: Germline organism, when ``vocab`` is derived rather than given.
+        n_components: Components per locus, as an int or a cumulative variance fraction.
+        weight: Clone-size weight, forwarded to the featuriser.
+        n_jobs: Worker processes; ``0`` uses every available core.
+        **kw: Forwarded to :func:`fit_matrices` (``mode``, ``winsor_p``, ...).
+
+    Returns:
+        A fitted :class:`Corpus`.
+
+    .. warning::
+
+       **A cross-validated score computed on a rotation fitted inside the same cohort is not
+       evidence that the rotation generalises.** Measured on 5,376 raw columns over seven loci with
+       one logistic head: a rotation fitted on 612 training repertoires beat the shipped ``blood``
+       artifact on the training out-of-fold number at 4 of 5 matched widths (median 0.5039 against
+       0.4968) -- and on the external cohort it led at **0 of 5** (median 0.4757 against 0.5270).
+       Fitting in-cohort improves the number the configuration is *selected* on and neither
+       held-out read-out, because a rotation fitted on one trial learns that trial's covariance.
+
+       Both routes are legitimate and they answer different questions. Fit here when you want a
+       basis for *this* cohort; use a shipped corpus when the number has to travel.
+    """
+    items = list(samples.items() if isinstance(samples, dict) else samples)
+    if items and not isinstance(items[0], tuple):
+        items = [(i, s) for i, s in enumerate(items)]
+    if vocab is None:
+        from .features import gene_vocab
+
+        if loci is None:
+            loci = tuple(l for l in L.LOCI if any(_carries(s, l) for _, s in items))
+        vocab = {loc: gene_vocab(loc, organism) for loc in loci}
+    from .cohort import parallel_rows
+
+    rows = parallel_rows(items, functools.partial(_row_for, sig=sig, vocab=vocab,
+                                                  kw={"weight": weight}), n_jobs)
+    return fit(rows, vocab, sig=sig, name=name, n_components=n_components, **kw)
+
+
+def _carries(sample, locus: str) -> bool:
+    """Whether a non-deferred sample obviously holds this locus. Deferred samples say yes."""
+    import polars as pl
+
+    if isinstance(sample, dict):
+        return locus in sample
+    if isinstance(sample, pl.DataFrame) and "locus" in sample.columns:
+        return locus in set(sample["locus"].to_list())
+    return True
+
+
 # ----------------------------------------------------------------------------------- applying
 
 
 def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
           mode: "str | None" = None, winsor_p: "float | None" = None,
-          n_components: "int | float | None" = None) -> dict[str, float]:
+          n_components: "int | float | None" = None,
+          named: "bool | Sequence[str]" = ()) -> dict[str, float]:
     """Rotate one sample's raw features through a corpus, and carry its channels through.
 
     Args:
@@ -558,9 +672,20 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
         winsor_p: Which stored percentile to clamp at. Defaults to the fitted one.
         n_components: Truncate to this many components (or this variance fraction). Exact -- the
             components are ordered, so the first ``n`` of a longer rotation are the same vectors.
+        named: Also carry through the reportable raw blocks, **untouched by the winsorization and
+            by the rotation** -- ``True`` for every group declared reportable, or an explicit
+            sequence of group names. ``()``, the default, reproduces the rotation-plus-channels
+            output exactly. These are the same numbers the rotation is fitted on, not a second
+            computation of them: ``raw`` already holds every one.
+
+            They carry each feature's **declared transform**, not its natural scale: a ``log10``
+            diversity comes back as ``log10``, and a ``clr`` composition as a log-ratio that has no
+            unique inverse. :func:`~vdjtools.signature.layout.channel_table` gives the transform
+            per feature. Do not read one of these as a clone count.
 
     Returns:
-        ``{column: value}`` in :func:`~vdjtools.signature.layout.signature_columns` order.
+        ``{column: value}`` in :func:`~vdjtools.signature.layout.signature_columns` order,
+        followed by the requested named blocks in layout order.
     """
     mode = mode or corpus.meta.get("mode", "features")
     if mode not in MODES:
@@ -606,6 +731,11 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
     wf = f"{corpus.sig}:qc:{L.NO_LOCUS}:winsor_frac"
     if wf in out:
         out[wf] = float(n_moved / n_seen) if n_seen else 0.0
+
+    # Read from `raw`, which is pre-winsorization and pre-rotation. Taking them from `x` inside
+    # the loop above would hand back a clamped value under a name that promises a measurement.
+    for c in L.named_columns(corpus.sig, named, corpus.vocab) if named else ():
+        out[c] = float(raw.get(c, np.nan))
     return out
 
 

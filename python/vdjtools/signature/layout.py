@@ -33,6 +33,7 @@ nothing here imports ``mir``.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 #: The seven human receptor loci, in canonical signature order.
@@ -112,6 +113,12 @@ class RawGroup:
             ``spec``): one ``(transform, support)`` pair shared by every column, with the names
             resolved at fit time and then **recorded in the corpus artifact**. Keeping the
             vocabulary out of here is what lets ``import vdjtools`` stay free of arda.
+        named: This group's features are **interpretable domain scalars** -- a diversity index, a
+            read count, a singleton fraction -- that a caller may legitimately want back in their
+            own units rather than only as a rotation input. Declared here rather than inferred,
+            because "is this number reportable" is a property of the feature and not of its width:
+            ``pchem`` is 30 static columns and is not reportable, ``shm`` is one and is. Groups
+            marked here are what ``named=True`` selects; see :func:`named_groups`.
     """
 
     sig: str
@@ -119,6 +126,7 @@ class RawGroup:
     features: dict[str, tuple[str, str]] = field(default_factory=dict)
     loci: tuple[str, ...] | None = None
     dynamic: tuple[str, str] | None = None
+    named: bool = False
 
     def __post_init__(self) -> None:
         if self.sig not in ("vsig", "rsig"):
@@ -208,20 +216,20 @@ _RAW: list[RawGroup] = [
     RawGroup("vsig", "div", {
         **feats("log10", "nonneg", "1D_c", "0D_c", "2D_c", "0D_chao"),
         **feats("logit", "real", "clonality", "d50"),
-    }),
+    }, named=True),
     RawGroup("vsig", "depth", {
         **feats("log10", "nonneg", "reads", "richness"),
         **feats("log1p", "nonneg", "S_unseen"),
-    }),
+    }, named=True),
     RawGroup("vsig", "clon", {
         **feats("clr", "real", "f1", "f2"),
         **feats("logit", "real", "top"),
-    }),
+    }, named=True),
     # -- junction shape ----------------------------------------------------------------------
     RawGroup("vsig", "len", {
         **feats("none", "nonneg", "mean", "sd"),
         **feats("none", "real", "skew"),
-    }),
+    }, named=True),
     RawGroup("vsig", "aa", feats("arcsine", "nonneg", *AMINO_ACIDS)),
     RawGroup("vsig", "kmer", feats("arcsine", "nonneg", *_aa_pairs())),
     RawGroup("vsig", "pchem", feats("none", "real", *(
@@ -234,11 +242,12 @@ _RAW: list[RawGroup] = [
     RawGroup("vsig", "spec", dynamic=("clr", "real")),
     # -- IGH only ----------------------------------------------------------------------------
     RawGroup("vsig", "iso", feats("clr", "real", "IgM", "IgD", "IgG", "IgA", "IgE"),
-             loci=("IGH",)),
-    RawGroup("vsig", "shm", feats("logit", "real", "mean_v_identity"), loci=("IGH",)),
+             loci=("IGH",), named=True),
+    RawGroup("vsig", "shm", feats("logit", "real", "mean_v_identity"), loci=("IGH",),
+             named=True),
     # -- cross-locus -------------------------------------------------------------------------
     RawGroup("vsig", "pair", feats("none", "real", "log_TRA_TRB", "log_TRG_TRB", "log_TRD_TRB",
-                                   "log_IGK_IGL", "log_IGH_TRB"), loci=()),
+                                   "log_IGK_IGL", "log_IGH_TRB"), loci=(), named=True),
 ]
 
 _CHANNELS: list[Channel] = [
@@ -319,6 +328,101 @@ def raw_columns(sig: str, locus: str, vocab: "dict[str, list[str]] | None" = Non
 def channel_columns(sig: str) -> list[str]:
     """Every pass-through channel column for one ``sig``, in emitted order."""
     return [c for ch in channels(sig) for loc in ch.emitted_loci for c in ch.columns(loc)]
+
+
+def named_groups(sig: "str | None" = None) -> list[RawGroup]:
+    """Raw groups whose features are reportable in their own units (:attr:`RawGroup.named`)."""
+    return [g for g in raw_groups(sig) if g.named]
+
+
+def resolve_named(sig: str, named: "bool | Sequence[str]") -> tuple[str, ...]:
+    """Normalise a ``named=`` argument to a tuple of group names.
+
+    ``True`` means every group declared :attr:`~RawGroup.named`; ``False`` and ``()`` mean none. A
+    sequence is taken literally and checked, so a typo raises here rather than silently emitting
+    nothing -- a caller who asks for ``"diversity"`` and gets no diversity columns has no way to
+    tell that from a corpus that could not compute them.
+    """
+    if named is True:
+        return tuple(g.name for g in named_groups(sig))
+    if named is False or not named:
+        return ()
+    want = tuple(named)
+    known = {g.name for g in raw_groups(sig)}
+    unknown = [n for n in want if n not in known]
+    if unknown:
+        raise ValueError(f"unknown raw group(s) for {sig}: {unknown}; "
+                         f"named groups are {[g.name for g in named_groups(sig)]}")
+    return want
+
+
+def named_columns(sig: str, named: "bool | Sequence[str]" = True,
+                  vocab: "dict[str, dict[str, list[str]]] | None" = None) -> list[str]:
+    """Raw column names carried through in natural units, in layout order.
+
+    Args:
+        sig: ``"vsig"`` or ``"rsig"``.
+        named: ``True`` for every reportable group, or an explicit sequence of group names.
+        vocab: ``{locus: {group: [names]}}`` from the corpus. When given it also **restricts the
+            loci**: a raw feature is only computed for a locus the corpus models, so emitting
+            ``vsig:div:TRA:*`` from a TRB-only corpus would hand back a column of holes that
+            never had a chance of being anything else. :data:`NO_LOCUS` is always kept, because
+            the cross-locus group is computed whatever the corpus models.
+    """
+    want = resolve_named(sig, named)
+    out: list[str] = []
+    for g in raw_groups(sig):
+        if g.name not in want:
+            continue
+        for loc in g.emitted_loci:
+            if vocab is not None and loc != NO_LOCUS and loc not in vocab:
+                continue
+            names = None
+            if g.dynamic:
+                if vocab is None or loc not in vocab or g.name not in vocab[loc]:
+                    raise ValueError(f"named={g.name!r} is dynamic; pass vocab= from the corpus")
+                names = vocab[loc][g.name]
+            out.extend(g.columns(loc, names))
+    return out
+
+
+def channel_table(sig: "str | None" = None) -> "list[dict[str, str]]":
+    """Every feature this half can emit, with what it is and what units it is in.
+
+    One row per ``(block, feature)`` with a ``kind`` saying how it reaches the output:
+
+    ``rotated``
+        A rotation input. You do not get this column; you get ``<sig>:pc:<locus>:PCnn``.
+    ``named``
+        A rotation input that is **also** reportable on its own, via ``named=`` on ``vsig`` /
+        ``rsig``. Same number, natural units.
+    ``channel``
+        Carried through untouched -- never winsorized, never rotated.
+
+    The point of the ``kind`` column is that "what can I get, and in what units" was previously
+    three lookups and a reading of ``corpus.py``.
+
+    Returns:
+        A list of dicts, ready for ``polars.DataFrame(...)``. Plain dicts so that importing
+        :mod:`~vdjtools.signature.layout` stays free of polars.
+    """
+    rows: list[dict[str, str]] = []
+    for g in raw_groups(sig):
+        kind = "named" if g.named else "rotated"
+        if g.dynamic:
+            rows.append({"sig": g.sig, "block": g.name, "feature": "<germline>", "kind": kind,
+                         "transform": g.dynamic[0], "support": g.dynamic[1],
+                         "loci": ",".join(g.emitted_loci)})
+            continue
+        for f, (tr, sup) in g.features.items():
+            rows.append({"sig": g.sig, "block": g.name, "feature": f, "kind": kind,
+                         "transform": tr, "support": sup, "loci": ",".join(g.emitted_loci)})
+    for ch in channels(sig):
+        for f, sup in ch.features.items():
+            rows.append({"sig": ch.sig, "block": ch.name, "feature": f, "kind": "channel",
+                         "transform": "none", "support": sup,
+                         "loci": ",".join(ch.emitted_loci)})
+    return rows
 
 
 def pc_columns(sig: str, k: dict[str, int]) -> list[str]:

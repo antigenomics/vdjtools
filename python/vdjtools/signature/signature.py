@@ -11,6 +11,8 @@ are not comparable no matter how alike their column names look.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import functools
 import warnings
 
@@ -42,6 +44,7 @@ def vsig(sample, corpus: C.Corpus, *, mode: "str | None" = None,
          winsor_p: "float | None" = None, n_components: "int | float | None" = None,
          cstar_target: "float | dict[str, float] | None" = None, weight: str = "log2p1",
          prefiltered: bool = False, on_duplicate: str = "error",
+         named: "bool | Sequence[str]" = (),
          columns: "list[str] | None" = None) -> dict[str, float]:
     """The statistics half of the signature for one sample.
 
@@ -60,6 +63,16 @@ def vsig(sample, corpus: C.Corpus, *, mode: "str | None" = None,
         weight: Clone-size weight; a key of :data:`~vdjtools.signature.features.WEIGHTS`.
         prefiltered: Report ``qc:*:nonstd_aa_frac`` as ``nan`` because the caller already filtered.
         on_duplicate: ``"error"`` or ``"sum"``, for a frame repeating an amino-acid clonotype key.
+        named: Also return the reportable raw blocks -- ``True`` for all of them, or a sequence
+            such as ``("div", "depth", "clon")``. ``()``, the default, emits exactly the rotated
+            columns and channels. Values carry their declared transform (``log10``, ``clr``,
+            ``logit``, ...), which :func:`~vdjtools.signature.layout.channel_table` reports.
+
+            These are the diversity, depth, clone-size, junction-length, isotype, SHM and
+            cross-locus yield numbers. They are computed either way, because the rotation is
+            fitted on them; without this argument there is no supported route to reading them
+            back, and a study that cannot report its own diversity floor has no floor. See
+            :func:`~vdjtools.signature.layout.channel_table` for the full list and its units.
         columns: Restrict the **output** to these columns, in layout order.
 
             Unlike the system this replaces, this does not skip work: the rotation for a locus is
@@ -74,10 +87,11 @@ def vsig(sample, corpus: C.Corpus, *, mode: "str | None" = None,
     raw, chan = F.raw_and_channels(_locus_frames(sample), corpus.vocab, cstar_target=cstar_target,
                                   weight=weight, prefiltered=prefiltered,
                                   on_duplicate=on_duplicate)
-    out = C.apply(raw, chan, corpus, mode=mode, winsor_p=winsor_p, n_components=n_components)
+    out = C.apply(raw, chan, corpus, mode=mode, winsor_p=winsor_p, n_components=n_components,
+                  named=named)
     if columns is None:
         return out
-    want = [c for c in corpus.columns(n_components) if c in set(columns)]
+    want = [c for c in corpus.columns(n_components, named=named) if c in set(columns)]
     return {c: out[c] for c in want}
 
 
@@ -125,7 +139,8 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
             resolve deferred samples twice, so pass an explicit float or dict for a one-pass run.
             ``None`` reads each sample at its own coverage: one pass, not comparable across samples.
         columns: Restrict the output columns.
-        **kw: Forwarded to :func:`vsig`.
+        **kw: Forwarded to :func:`vsig` -- including ``named=``, which adds the reportable raw
+            blocks in their own units.
 
     Returns:
         A frame whose columns are ``sample_id`` then the corpus's signature columns.
@@ -149,7 +164,8 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
                                                  kw={**kw, "cstar_target": cstar_target,
                                                      "columns": columns}), n_jobs)
     want = ["sample_id", *(columns if columns is not None
-                           else corpus.columns(kw.get("n_components")))]
+                           else corpus.columns(kw.get("n_components"),
+                                               named=kw.get("named", ())))]
     have = [c for c in want if any(c in r for r in rows)]
     return pl.DataFrame(rows).select(have)
 

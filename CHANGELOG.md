@@ -3,6 +3,87 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.3.0 — 2026-09-28
+
+Three things a caller needs, and none of them is a new statistic. Everything below already existed
+inside the library; what changed is what you can reach. `ISSUES.md` item 13.
+
+### Added: `named=` — the named statistics, from the call that computes them
+
+The rotation is fitted on features that have domain names — diversity, depth, clone-size fractions,
+junction length, isotype composition, SHM, cross-locus yield — and then emits coordinates that do
+not. Those features were computed for every sample and thrown away, and the only route to a Hill
+number was three calls, a hand-written block list, and knowing that `apply` drops its own input.
+
+```python
+vsig(sample, corpus, n_components=32, named=True)            # or named=("div", "depth")
+vsig_cohort(samples, corpus, n_components=32, named=True)
+```
+```bash
+vdjtools signature --corpus blood --components 32 --named all -o sig.tsv
+```
+
+`named=()` is the default and reproduces the previous output exactly. `mir.signature.rsig` takes the
+same argument for `depth` / `band` / `band_igh`.
+
+Which blocks are reportable is **declared**, on `RawGroup(named=True)`, not inferred from width:
+`pchem` is 30 static columns and is not reportable, `shm` is one column and is. Values carry their
+declared transform rather than a natural scale — a `log10` diversity comes back as `log10`, and a
+`clr` composition has no unique inverse — so `vsig:div:TRB:1D_c = 2.386` is not a clone count.
+
+**Why this is not merely convenient**: the diversity floor of any study using this library is made
+of exactly these blocks. Without a documented route to them there is no floor, and a signature that
+beats nothing gets reported as if it beat something.
+
+### Added: `channel_table()` and a `kind` column — what can I get, and in what units
+
+One call instead of three lookups and a reading of `corpus.py`. Every `(block, feature)` with its
+transform, support, emitted loci, and a `kind`: `rotated` (you get PCs instead), `named` (also
+available in its own right), `channel` (carried through untouched). `--describe` prints the same
+three kinds, and now a `transform` column, for the exact columns an invocation will emit.
+
+### Added: `fit_cohort` — fit a corpus on your own cohort
+
+`corpus.fit` was public, correct, and documented only as the shipped-artifact route; it takes
+feature **rows**, so a caller holding repertoires had to run the featuriser per sample and assemble
+the dicts. `fit_cohort` takes frames, runs the existing process pool, and returns the same `Corpus`
+type the published artifacts are — `save`/`load` round-trips, and a collaborator can score against
+it exactly as against a shipped one.
+
+```python
+corpus = fit_cohort(train_samples, sig="vsig", name="my-cohort", n_components=64, n_jobs=0)
+corpus.save("my-cohort.npz")
+```
+
+`sig="rsig"` resolves through a **featuriser registry** (`register_featuriser`) rather than an
+import, because nothing in vdjtools may import `mir`.
+
+**Documented with the caveat a caller most needs.** Measured on 5,376 raw columns over seven loci
+with one logistic head, at matched widths: a rotation fitted on 612 training repertoires beat the
+shipped `blood` artifact on the training out-of-fold number at **4 of 5** widths (median 0.5039
+against 0.4968), and on an external cohort it led at **0 of 5** (median 0.4757 against 0.5270).
+Fitting in-cohort improves the number the configuration is *selected* on and neither held-out
+read-out — a rotation fitted on one trial learns that trial's covariance. Both routes are
+legitimate; the docs now say which answers which question.
+
+### Changed: `mask` is documented as a feature block, not as QC
+
+`vsig:mask:<L>:present` / `:estimable` were listed beside `v_fallback_frac` under quality control,
+so the natural reading was "diagnostics, drop before modelling". That reading costs real signal.
+Measured on 874 labelled samples with a second cohort held out entirely, adding the five presence
+flags to the recommended feature set moved the **external** ROC-AUC from **0.6243 to 0.6676** for 17
+extra columns. In that cohort 720 of 7,399 (sample, locus) pairs sit below a five-clonotype floor,
+almost all TRD and TRG, and which donors those are tracks lymphocyte content rather than noise.
+
+`docs/channels.rst` now groups `mask` separately from `qc`, with the distinction stated: `qc`
+describes how much to trust the row, `mask` describes the donor.
+
+### Note: no corpus is invalidated
+
+A channel is pass-through — the rotation is indexed by `raw_columns` and nothing else, and
+`corpus.apply` fills every registered channel from the sample. The new `rsig` channel families
+appear in the output of every artifact already published, with no refit and no new download.
+
 ## 4.2.0 — 2026-09-28
 
 ### Added: the three real corpora — `blood`, `tissue`, `deep-tcr`

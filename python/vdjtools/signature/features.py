@@ -681,6 +681,18 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
     return raw, chan
 
 
+#: Declared so that :func:`~vdjtools.signature.corpus.fit_cohort` can turn clonotype frames into
+#: feature rows without ``corpus`` importing this module at module scope (it is the lower layer).
+#: mirpy registers ``"rsig"`` the same way.
+def _register_featuriser() -> None:
+    from .corpus import register_featuriser
+
+    register_featuriser("vsig", raw_and_channels)
+
+
+_register_featuriser()
+
+
 def _locus_raw_columns(locus: str, vocab: dict[str, dict[str, list[str]]]) -> list[str]:
     from .layout import raw_columns
 

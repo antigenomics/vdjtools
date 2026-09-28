@@ -225,7 +225,10 @@ from vdjtools.signature import (vsig, vsig_cohort, raw_and_channels, synthesize,
                                 Corpus, parse, support_of, channel_columns, pc_columns)
 corpus = Corpus.load(bundled_path("blood"))   # a corpus is REQUIRED; there is no default
 v = vsig({"TRB": df}, corpus)                 # {column: value}, in artifact order
-corpus.columns(n_components=32)               # exactly what an invocation will emit
+v = vsig({"TRB": df}, corpus, named=True)     # + the named raw blocks, in their declared transform
+corpus.columns(n_components=32, named=True)   # exactly what an invocation will emit
+C.fit_cohort(samples, sig="vsig", name="mine", n_components=64)   # fit on YOUR cohort
+L.channel_table("vsig")                       # every feature + kind (rotated|named|channel)
 raw, chan = raw_and_channels({"TRB": df}, corpus.vocab)   # un-rotated, natural units
 ```
 ```bash
@@ -258,6 +261,22 @@ does any reference rescaling. `features` holds `sanitise`, `work_frame`, `gene_v
 builders and `raw_and_channels`. `corpus` holds `synthesize`, `fit`, `fit_locus`, `apply`,
 `bounds_for`, `clamp`, `robust_loc_scale`, `Corpus`, `LocusFit`. `signature` holds `vsig` /
 `vsig_cohort` / `attained_coverage`.
+
+**`named=` is the only route to the named statistics** (4.3.0). The rotation is fitted on `div`,
+`depth`, `clon`, `len`, `iso`, `shm`, `pair` — all computed for every sample, all previously
+discarded. `named=True` returns them; `named=()` (default) reproduces the old output exactly. They
+carry their **declared transform**, not a natural scale: `vsig:div:TRB:1D_c` is `log10` of a Hill
+number, and a `clr` composition has no unique inverse. `RawGroup(named=True)` declares which blocks
+are reportable — it is not inferred from width (`pchem` is 30 columns and not reportable, `shm` is 1
+and is). **`mask` is a FEATURE block, `qc` is diagnostics** — do not drop `mask` before modelling;
+the presence flags moved an external ROC-AUC 0.6243 → 0.6676 on the cohort where it was measured.
+
+**`fit_cohort` fits on your own repertoires** and returns the same `Corpus` the shipped artifacts
+are (`save`/`load` round-trips). `sig="rsig"` resolves via `register_featuriser`, a registry rather
+than an import, because nothing in vdjtools may import `mir`. Document-and-warn, not
+recommend-one: a rotation fitted in-cohort led the shipped `blood` artifact on the **training**
+out-of-fold number at 4 of 5 widths and on an **external** cohort at 0 of 5. A cross-validated score
+on a rotation fitted inside the same cohort is not evidence that the rotation generalises.
 
 **The three stages.** Raw features from this sample alone → clamped to the corpus's winsorization
 bounds → rotated by its per-locus PCA and scaled by its per-PC median/MAD. One rotation per
