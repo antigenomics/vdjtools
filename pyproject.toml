@@ -102,8 +102,12 @@ editable.rebuild = false
 # just the package + compiled _core.
 sdist.exclude = [
     "/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples", "/assets",
-    "/appendix", "/CLAUDE.md", "/SOURCES.md", "/arda-ref.md",
-    "/notebooks", "/scripts",
+    "/appendix", "/arda-ref.md", "/notebooks", "/scripts",
+    # Working notes: internal by design (cluster paths, private dataset names, cohort detail).
+    # .gitignore is what actually keeps them out -- both backends build from the VCS file list --
+    # and these are the second line, for a tree where an untracked copy is sitting on disk.
+    "/CLAUDE.md", "/SOURCES.md", "/TODO.md", "/NOTES.md", "/ROADMAP.md", "/STATUS.md",
+    "/ISSUES.md", "/ISSUES_ext.md",
 ]
 
 [tool.scikit-build.cmake.define]
