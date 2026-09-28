@@ -1,0 +1,84 @@
+name: docs freshness
+
+# A failed docs build is SILENT. `docs.yml` builds and deploys on push to master; when its build
+# job fails the deploy job is skipped and GitHub Pages keeps serving the previous build, so the
+# published site simply stops moving and nothing says so. mirpy's site was nine hours stale on
+# 2026-09-28 for exactly this reason -- its docs build had failed on the previous release, and it
+# was found by accident while checking something else.
+#
+# So this checks the PROPERTY, not the proxy: what version is the published site actually serving,
+# and is it the one this repository is at. That catches a failed build, a skipped deploy, a Pages
+# misconfiguration and a stuck CDN alike -- none of which a green `docs.yml` would rule out.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      expect:
+        description: "Expected version override. Pass a wrong value to prove this check still fails."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  SITE: https://docs.isalgo.dev/vdjtools/
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version this repository is at
+        id: repo
+        run: |
+          v='${{ inputs.expect }}'
+          if [ -z "$v" ]; then
+            v=$(python3 -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "repository is at $v"
+
+      - name: Version the published site is serving
+        id: site
+        run: |
+          # `docs/conf.py` sets `version = release = __version__`, and the pydata theme renders it
+          # as this meta tag -- so it is the package's own version, not a string typed into a page.
+          read_site() {
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 30 "$SITE" \
+              | grep -oE '<meta name="docsearch:version" content="[^"]+"' \
+              | head -1 | sed -E 's/.*content="([^"]+)".*/\1/'
+          }
+          v=$(read_site || true)
+          # One retry: the daily run can land inside a deploy that is genuinely in flight, and a
+          # guard that cries wolf is a guard people learn to ignore.
+          if [ "$v" != "${{ steps.repo.outputs.version }}" ]; then
+            sleep 90
+            v=$(read_site || true)
+          fi
+          if [ -z "$v" ]; then
+            echo "::error::Could not read a version from $SITE -- the site is unreachable, or it no longer carries the docsearch:version meta tag."
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "published site is serving $v"
+
+      - name: The published site must be serving this repository's version
+        run: |
+          repo='${{ steps.repo.outputs.version }}'
+          site='${{ steps.site.outputs.version }}'
+          if [ "$repo" != "$site" ]; then
+            echo "::error::Published documentation is stale: $SITE serves $site, this repository is at $repo."
+            echo ""
+            echo "The usual cause is a FAILED docs build, which is silent -- Pages keeps serving the"
+            echo "last good deploy. Check the docs workflow and re-run it:"
+            echo "  gh run list --workflow=docs.yml --limit 5"
+            echo "  gh run rerun <id> --failed"
+            echo ""
+            echo "A dependency that PyPI cannot yet resolve is the recurring reason that build fails."
+            exit 1
+          fi
+          echo "Published documentation is current at $repo."
