@@ -1,0 +1,92 @@
+{
+ "blood": {
+  "json": {
+   "bytes": 197889,
+   "sha256": "584855f242ccb873f3e2230f1cf4f4a8104905e3c0de32ef5f304a516333949a"
+  },
+  "npz": {
+   "bytes": 9694684,
+   "sha256": "cb00029e6271c133cc86a094d82b6f88afc392c5cbbe3b5946a8cd8dfb757b39"
+  }
+ },
+ "blood-uncapped": {
+  "json": {
+   "bytes": 197908,
+   "sha256": "384a72746a2e7fe022b71203d08316fb9c14dbd6f01ebe9efe25b4d65db124f9"
+  },
+  "npz": {
+   "bytes": 9858780,
+   "sha256": "bce30edd55b2d0810da9fc74a98dd0602c62bdceacab1aaba6581c741932f95e"
+  }
+ },
+ "deep-tcr": {
+  "json": {
+   "bytes": 197027,
+   "sha256": "75f750ae746bff4ca241347541a3443ea72652fa27cf3f3b4f21696e6c805afa"
+  },
+  "npz": {
+   "bytes": 3766045,
+   "sha256": "f946056498878b8fb6b5805467e7f91fb925b7b5a8233a78550f61efe5e0d2d6"
+  }
+ },
+ "memory": {
+  "json": {
+   "bytes": 197627,
+   "sha256": "1a14ea0233684b257a617e8ff5336afe73aba61b7dd31eb47e498ab7932dee6e"
+  },
+  "npz": {
+   "bytes": 8930503,
+   "sha256": "6fcf42798d0213d020f4cbb106961144a98d104966829495c25a46aa50570b9a"
+  }
+ },
+ "naive": {
+  "json": {
+   "bytes": 197623,
+   "sha256": "e88f85cfec73590857c5e474e277df49a0ec0d902949a0169ca2874aee230cb4"
+  },
+  "npz": {
+   "bytes": 8922568,
+   "sha256": "0a850dfbfb9689c43dde9a656bcd65af92107fcb4bd7de8b4179ca684b39073d"
+  }
+ },
+ "synthetic-blood": {
+  "json": {
+   "bytes": 199192,
+   "sha256": "17c643e5d40523eaeedc05c1ae7fff2720fabadce392b6e1241eabbeb7a540f7"
+  },
+  "npz": {
+   "bytes": 8533784,
+   "sha256": "6f9b9d7586bbb14c29d10b56324f9200f87f4797bb71b8eedf182600200f9965"
+  }
+ },
+ "synthetic-tissue": {
+  "json": {
+   "bytes": 199186,
+   "sha256": "fa8c9936f3f694307d53f349b185f854d4ed9d484b500e22c1401b6a6c95c284"
+  },
+  "npz": {
+   "bytes": 8558519,
+   "sha256": "589fb19adf71209fef0a548f74d60b84b691eaf9f7e6fc71fe98e06b0d65411b"
+  }
+ },
+ "tissue": {
+  "json": {
+   "bytes": 197887,
+   "sha256": "e996988ef930343ca91129c9f8a951703e00e9b7c45fc308f3d6c1094e48c479"
+  },
+  "npz": {
+   "bytes": 9887592,
+   "sha256": "09239001d278b9ff7c547652b9f2e0e325ebbd7bdba0864f404c509faf907c9c"
+  }
+ },
+ "tissue-uncapped": {
+  "json": {
+   "bytes": 197899,
+   "sha256": "eebc7121cd5af50e3866da239f1de8f1c5a77774abef60bf799f9c3b2cb8f977"
+  },
+  "npz": {
+   "bytes": 10041797,
+   "sha256": "674e6d1751272f98f27c53f8834f878bbdd41fa0b4ba6bd7bbba31308cac4050"
+  }
+ }
+}

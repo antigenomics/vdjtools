@@ -293,9 +293,10 @@ so your matrix and a collaborator's are the same coordinate system, computed ind
 scaler of your own.
 
 ```bash
-vdjtools signature --corpus synthetic-blood -m metadata.txt --base-dir samples/ -o vsig.tsv
-vdjtools signature --corpus synthetic-blood --components 32 --describe  # exactly what you will get
-vdjtools corpus --corpus synthetic-tissue -o synthetic-tissue.npz       # or build your own
+vdjtools signature --corpus blood -m metadata.txt --base-dir samples/ -o vsig.tsv
+vdjtools signature --corpus blood --components 32 --describe   # exactly what you will get
+vdjtools corpus --fetch all                                   # pre-warm the corpus cache
+vdjtools corpus --corpus synthetic-tissue -o st.npz           # or build a synthetic one yourself
 ```
 
 ```python
@@ -307,14 +308,20 @@ they are clamped to the corpus's winsorization bounds, then rotated by its per-l
 by its per-PC median and MAD. A corpus is required — a signature is comparable to another one only
 if both were rotated through the same one, and nothing about the numbers would say otherwise.
 
-**Four corpora ship, and two of them describe a real compartment.** `synthetic-blood` and
-`synthetic-tissue` draw every repertoire as a naive/memory mixture across three quantile ladders
-measured per locus on that compartment — clonotype richness, reads per expanded clone, and the
-singleton fraction that stands in for the naive share — so the corpus spans the depth and clone-size
-range your samples actually have: blood TRB richness 74 to 3,162 clonotypes across 34,365 reference
-samples, against the 4.1x that `naive` and `memory` draw. Those two remain as the pure-regime
-references. Every receptor in all four is drawn from the bundled recombination models, so **no
-cohort is needed to build or use one**, and a rebuild is bit-identical at any core count.
+**Nine corpora are published — three fitted on real repertoires, five synthetic, all at 256
+components per locus.** `blood` (11,117 bulk RNA-seq blood samples, 947 study groups), `tissue`
+(21,131 / 1,934) and `deep-tcr` (3,936 amplicon samples, TRA+TRB) are the real references, each with an
+uncapped variant so the per-study cap's effect is measurable. `synthetic-blood` and `synthetic-tissue`
+draw every repertoire as a naive/memory mixture across three quantile ladders measured per locus on
+that compartment — clonotype richness, reads per expanded clone, and the singleton fraction that
+stands in for the naive share — so they span the real depth range (blood TRB richness 74 to 3,162
+clonotypes) while needing **no cohort at all** to rebuild, bit-identically, at any core count.
+`naive` and `memory` remain the pure-regime references.
+
+Artifacts are **fetched on first use**, not bundled: at 256 components the nine corpora are ~110 MB
+across both halves, so the wheel ships a few KB of index (every name, size and SHA-256) and downloads
+what you name into `~/.cache/vdjtools/signature`, verified against that digest. A local path always
+wins over a download.
 
 Columns are `<sig>:<block>:<locus>:<feature>`. What comes out per locus is `vsig:pc:<locus>:PCnn`
 plus **channels**, which are never rotated and never clamped: `cov:*:cstar` (the coverage this

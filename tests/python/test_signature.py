@@ -639,24 +639,88 @@ def test_draw_sizes_is_log_uniform_and_centred_on_the_nominal():
     assert 2.5 < s.max() / s.min() < 12.0
 
 
-def test_the_four_bundled_corpora_are_installed_and_loadable_by_name():
-    """The wheel must actually carry what the docs tell a stakeholder to name.
+def test_the_shipped_index_names_every_published_corpus_and_can_verify_it():
+    """The wheel ships an index, not 110 MB of rotations -- so the index is what must be right.
 
-    `--corpus synthetic-blood` resolving is the whole quickstart: no build, no cohort. A packaging
-    change that dropped `resources/signature` would leave every code path working and every test
-    passing while the advertised entry point failed for everyone who installed it -- so this asserts
-    the installed set, by name, and loads each one through the same gate a user's call does.
+    At k=256 a vsig artifact is ~10 MB and the nine corpora across both halves are ~110 MB, which no
+    `pip install` should pay to use one of them. The wheel therefore carries `corpora.json` and the
+    library fetches on first use. That moves the shippable invariant: it is no longer "the artifact is
+    present" but "every published corpus is NAMED, sized, and verifiable offline" -- otherwise
+    `--corpus` cannot list what exists, and a truncated download cannot be told from a good one.
     """
-    assert C.bundled_names() == ["memory", "naive", "synthetic-blood", "synthetic-tissue"]
-    for name in ("synthetic-blood", "synthetic-tissue"):
-        path = C.bundled_path(name)
-        assert path is not None and path.exists(), name
-        art = C.Corpus.load(path)
-        assert art.sig == "vsig" and art.name == name
-        assert art.meta["cohort"] == name.removeprefix("synthetic-")
-        assert art.meta["n_samples"] == 10_000
-        # the load gate is the germline fingerprint, so a shipped corpus must pass it as installed
-        assert art.meta["models"] == C.model_fingerprint(tuple(art.meta["loci"]), "olga")
-        assert set(art.fits) == {*L.LOCI, L.NO_LOCUS}
-        assert all(f.k == 128 for loc, f in art.fits.items() if loc != L.NO_LOCUS)
-        assert len(art.columns()) == 947
+    idx = C.corpora_index(C._RES)
+    if not idx:
+        pytest.skip("no corpus index shipped in this tree yet")
+    assert set(idx) <= set(C.bundled_names()), "the index names a corpus bundled_names hides"
+    for name, entry in idx.items():
+        for ext in ("npz", "json"):
+            part = entry.get(ext)
+            assert part, f"{name}: no {ext} in the index"
+            assert len(part["sha256"]) == 64, f"{name}.{ext}: not a sha256"
+            assert part["bytes"] > 0, f"{name}.{ext}: zero bytes"
+        assert entry["npz"]["bytes"] > 100_000, f"{name}: a rotation is not that small"
+
+
+def test_a_corpus_artifact_resolves_from_path_wheel_cache_then_release(tmp_path, monkeypatch):
+    """The resolution order is the whole contract, and a local file must always win.
+
+    Corpus artifacts are ~10 MB of float32 rotation each at k=256 and ~110 MB across all of them, so
+    they are published as release assets and fetched on first use rather than bundled in every wheel.
+    That makes the resolver load-bearing: a caller who fitted their own corpus and passes its path
+    must never be served a downloaded one of the same name, and a truncated download must never be
+    mistaken for a cached artifact.
+    """
+    import hashlib
+    import json
+
+    res = tmp_path / "res"
+    cache = tmp_path / "cache"
+    res.mkdir()
+    cache.mkdir()
+    monkeypatch.setenv("VDJTOOLS_CORPUS_DIR", str(cache))
+    assert C.corpus_cache_dir() == cache
+    assert C.corpora_index(res) == {}, "a missing index is empty, not an error"
+
+    # a real artifact to serve, fitted here rather than read from the wheel -- the wheel may not
+    # carry one any more, and a test that needs the network is a test that fails offline
+    art, _ = C.synthesize("naive", loci=("TRG",), n_samples=12, size=60, seed=5, n_components=3)
+    src = pathlib.Path(art.save(tmp_path / "src.npz"))
+    npz, js = src.read_bytes(), src.with_suffix(".json").read_bytes()
+    served = tmp_path / "served"
+    served.mkdir()
+    (served / "vsig_demo.npz").write_bytes(npz)
+    (served / "vsig_demo.json").write_bytes(js)
+    index = {"demo": {"npz": {"sha256": hashlib.sha256(npz).hexdigest(), "bytes": len(npz)},
+                      "json": {"sha256": hashlib.sha256(js).hexdigest(), "bytes": len(js)}}}
+    (res / C.CORPORA_INDEX).write_text(json.dumps(index))
+
+    # the index names a corpus that is on nobody's disk yet
+    assert "demo" in C.corpora_index(res)
+
+    # a path wins over everything, even a name that is in the index
+    mine = tmp_path / "demo.npz"
+    mine.write_bytes(npz)
+    (tmp_path / "demo.json").write_bytes(js)
+    assert C.resolve_artifact(str(mine), sig="vsig", res_dir=res,
+                              repo="x/y") == mine, "a local path lost to a downloadable name"
+
+    # fetched from the "release" over file://, cached, and verified
+    got = C.fetch_artifact("demo", sig="vsig", res_dir=res, repo="x/y", quiet=True,
+                           base_url=served.as_uri())
+    assert got == cache / "vsig_demo.npz" and got.exists()
+    assert (cache / "vsig_demo.json").exists(), "the manifest must come with the arrays"
+    assert C.Corpus.load(got).name == "naive"
+
+    # second call is a cache hit: break the source and it still resolves
+    (served / "vsig_demo.npz").write_bytes(b"corrupt")
+    assert C.resolve_artifact("demo", sig="vsig", res_dir=res, repo="x/y") == got
+
+    # ...but a FRESH fetch of corrupted bytes must refuse rather than cache them
+    (cache / "vsig_demo.npz").unlink()
+    with pytest.raises(OSError, match="refusing to cache|hashed"):
+        C.fetch_artifact("demo", sig="vsig", res_dir=res, repo="x/y", quiet=True,
+                         base_url=served.as_uri())
+    assert not (cache / "vsig_demo.npz").exists(), "a failed download was left in the cache"
+
+    with pytest.raises(ValueError, match="no corpus named"):
+        C.fetch_artifact("nope", sig="vsig", res_dir=res, repo="x/y", quiet=True)

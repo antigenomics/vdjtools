@@ -3,6 +3,96 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.2.0 — 2026-09-28
+
+### Added: the three real corpora — `blood`, `tissue`, `deep-tcr`
+
+The seven corpora the docs have named since 4.0.0 all exist now. The three real ones are fitted on
+repertoires rather than drawn from the recombination models, which is the whole point of having both
+kinds: a synthetic corpus spans a *measured* range by construction, a real one carries the joint
+structure the generative model does not produce — selection-shaped V/J usage, isotype and SHM
+structure, and the cross-locus covariance of libraries prepared together.
+
+| corpus | samples | study_ids | fitted on |
+|---|---:|---:|---|
+| `blood` | 11,117 | 947 | public bulk RNA-seq blood, capped at 30 per study |
+| `blood-uncapped` | 22,441 | 947 | the same population, uncapped |
+| `tissue` | 21,131 | 1,934 | public bulk RNA-seq non-blood, capped at 30 per study |
+| `tissue-uncapped` | 33,874 | 1,934 | the same population, uncapped |
+| `deep-tcr` | 3,936 | 7 | targeted/amplicon deep TCR, TRA + TRB |
+
+**The population had to be re-derived, not inherited.** The previous reference slice selected on
+`has_TRB | has_IGH`, and that field carries two incompatible definitions — `>= 100 reads` in the base
+metadata table and "any row present" in roughly 24,600 appended rows — so a population built on it
+admits thousands of ultra-shallow repertoires. The harmonized sample table has no per-locus read
+column at all, so the floor is now applied against reads **measured off the store** in one streaming
+pass. Blood comes out at 22,441 task-disjoint samples against the 23,234 recorded for the old slice;
+that difference is the defect being removed.
+
+**TRG and TRD get their own floor, and it is a measurement.** They cannot support 100 reads at scale:
+at that floor tissue TRG has 367 samples in 78 study_ids, and at 30 it has 1,574 in 317; blood TRG
+goes from 5,686 to 13,381. So the five main loci keep 100 and TRG/TRD use 30, recorded per artifact.
+Each locus is fitted only on the rows that observed it, so this is a stratum rather than a filter on
+the corpus.
+
+**Both cap variants ship.** The per-study cap is the dominance control the predicate specifies — the
+top 10 submissions hold 17.7% of SRA blood — and shipping the uncapped fit beside it makes the cap's
+effect measurable rather than asserted. Emission is the expensive half and is done once; each extra
+fit is seconds.
+
+A real corpus's manifest carries no cohort label, no dataset name and no accession. What it records is
+the population as *rule text*, the per-locus floors, aggregate counts, the measured read band per
+locus, and the germline fingerprint the V/J columns are indexed by. A rotation is about features and
+components; a cohort label is not one of its inputs.
+
+### Changed: k = 256, and every component ships
+
+All nine corpora are fitted at **256 components** per locus, up from 128, and the full rotation ships.
+Truncating downward at apply time is exact, so a 256-component artifact serves any narrower request
+while the reverse needs a refit.
+
+**Widening is a strict superset, measured rather than assumed**: refitting `synthetic-blood` from 128
+to 256 reproduces all 128 original components with `|cos| = 1.000000` on TRB, IGH and TRG, and
+identical eigenvalues to `0.000e+00`. Existing numbers at 128 do not move.
+
+It buys real variance on the statistics half — `naive` TRB goes 0.4236 at 128 to 0.6283 at 256, and
+`tissue` TRB reaches 0.8541 — while on the geometry half 256 is well past diminishing returns: `rsig`
+reaches 0.90 in **7 to 18** components and is effectively full rank by 256, so `--components 32` is
+usually the right request there.
+
+### Changed: corpus artifacts are release assets, fetched on first use
+
+At k=256 a `vsig` artifact is ~10 MB and the nine corpora are ~110 MB across both halves — too much
+for every `pip install` to carry in order to use one of them. So the wheels now ship a few KB of
+**index** instead: `corpora.json`, naming every corpus with its size and SHA-256. The artifacts are
+published as GitHub release assets under their own `corpora-*` tag, and the library fetches one on
+first use into `$VDJTOOLS_CORPUS_DIR` (default `~/.cache/vdjtools/signature`), verifying it against
+the shipped digest before it is visible under its cache name.
+
+The resolution order is a local path, then the wheel, then the cache, then the release — so a caller
+who fitted their own corpus and passes its path is never served a download of the same name. A
+download that fails its digest is deleted rather than cached: a half-written rotation that loads is
+far worse than one that is missing. `vdjtools corpus --fetch all` / `mir corpus --fetch all` pre-warms
+the cache, which is the install-time step.
+
+`publish.yml` now publishes **only for a `v*` tag** in both repos. Without that guard, creating the
+`corpora-*` release would fire the publish workflow and try to upload whatever version `pyproject`
+happened to carry — a release that is not a release of the package. Every job is gated, not just the
+upload step: building twelve wheels for a data release is waste even when the upload is skipped.
+
+The release tag is deliberately not the library version. An artifact changes far less often than the
+code, and keying the download on the version would invalidate every cached corpus on a patch release
+— the same mistake the germline fingerprint already replaced for the load gate.
+
+### Fixed: four amplicon samples were being counted twice, with their loci split
+
+In `deep-tcr`, four samples have their TRA and TRB files in *different* source mirrors. Grouping by
+sample within each cohort turned each into two half-samples — losing their cross-locus pair columns
+and double-counting them — and the fitter's `sample_id` join then fanned 3,940 rows into 3,948,
+mapping raw rows to the wrong samples while the shapes still lined up. Enumeration is now keyed by
+sample across all cohorts, and the fitter asserts uniqueness on both sides of that join rather than
+trusting it.
+
 ## 4.1.0 — 2026-09-28
 
 ### Added: `synthetic-blood` and `synthetic-tissue`, two corpora that describe a real compartment

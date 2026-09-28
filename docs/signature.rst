@@ -19,13 +19,16 @@ Quickstart
 
 .. code-block:: bash
 
-   # four corpora ship with the wheel; name one, no build and no cohort needed
-   vdjtools signature --corpus synthetic-blood samples/*.tsv.gz -o sig.tsv
+   # nine corpora are published; name one and it is fetched on first use
+   vdjtools signature --corpus blood samples/*.tsv.gz -o sig.tsv
 
    # what exactly will I get?
-   vdjtools signature --corpus synthetic-blood --components 32 --describe
+   vdjtools signature --corpus blood --components 32 --describe
 
-   # or build your own -- still uses no samples from anybody's cohort
+   # pre-warm the cache instead of fetching lazily -- the install-time step
+   vdjtools corpus --fetch all
+
+   # or build your own synthetic corpus, which needs no cohort at all
    vdjtools corpus --corpus synthetic-tissue -o /tmp/st.npz
    vdjtools signature --corpus /tmp/st.npz samples/*.tsv.gz -o sig.tsv
 
@@ -49,54 +52,89 @@ through the same corpus, so the artifact has to be named, and the emitted row re
 was. Two matrices whose column names match but whose corpora differ are not comparable, and nothing
 about the numbers says so — which is why the choice is not allowed to be implicit.
 
-Seven corpora are planned and **four ship today**. Every one of the four is synthetic: each receptor
-is drawn from the bundled recombination models, so anyone who installs the library can rebuild the
-artifact bit-for-bit, and no sample from anybody's cohort is needed to use one.
+All nine corpora are published. Five are **synthetic** -- every receptor drawn from the bundled
+recombination models, so anyone can rebuild the artifact bit-for-bit and no cohort sample is needed to
+use one -- and three are **real**, fitted on repertoires. Both kinds exist on purpose: a synthetic
+corpus spans a *measured* range by construction, while a real one carries the joint structure the
+generative model does not produce (selection-shaped V/J usage, isotype and SHM structure, and the
+cross-locus covariance of libraries prepared together).
 
 .. list-table::
    :header-rows: 1
-   :widths: 18 10 20 52
+   :widths: 20 10 14 56
 
    * - corpus
-     - ships
+     - kind
+     - fitted on
      - what it is
-     - richness and clone sizes
    * - ``naive``
-     - yes
-     - synthetic, unselected
-     - every clone size 1 — what the recombination model emits
+     - synthetic
+     - 10,000 drawn
+     - every clone size 1 -- what the recombination model emits
    * - ``memory``
-     - yes
-     - synthetic, selected
+     - synthetic
+     - 10,000 drawn
      - Zipf rank-abundance, sampled by multinomial, zeros dropped
    * - ``synthetic-blood``
-     - yes
-     - synthetic, blood-like
-     - a drawn naive/memory mixture across measured blood ladders (TRB richness 74–3,162,
-       ``f1`` 0.215–0.949; n = 34,365 samples)
+     - synthetic
+     - 10,000 drawn
+     - a naive/memory mixture across measured blood ladders (TRB richness 74-3,162, ``f1``
+       0.215-0.949)
    * - ``synthetic-tissue``
-     - yes
-     - synthetic, tissue-like
-     - the same across measured tissue ladders (TRB richness 30–2,977, IGH 40–10,352;
-       n = 22,298 and 47,031)
-   * - ``deep-tcr``
-     - not yet
-     - real, targeted/amplicon TCR
-     - 7 cohorts, 4,080 samples
+     - synthetic
+     - 10,000 drawn
+     - the same across measured tissue ladders (TRB richness 30-2,977, IGH 40-10,352)
    * - ``blood``
-     - not yet
-     - real, bulk RNA-seq blood
-     - 23,234 samples across 947 study groups
+     - real
+     - 11,117 samples
+     - public bulk RNA-seq blood, 947 study groups, capped at 30 per study
+   * - ``blood-uncapped``
+     - real
+     - 22,441 samples
+     - the same population with no cap, so the cap's effect is measurable
    * - ``tissue``
-     - not yet
-     - real, bulk RNA-seq non-blood
-     - 13,577 samples across 1,024 study groups
+     - real
+     - 21,131 samples
+     - public bulk RNA-seq non-blood, 1,934 study groups, capped at 30 per study
+   * - ``tissue-uncapped``
+     - real
+     - 33,874 samples
+     - the same population with no cap
+   * - ``deep-tcr``
+     - real
+     - 3,936 samples
+     - targeted/amplicon deep TCR, **TRA and TRB only**
 
-**Use ``synthetic-blood`` or ``synthetic-tissue`` unless you have a reason not to.** ``naive`` and
-``memory`` are the two pure regimes, and neither is a bulk sample: ``naive`` has no clone-size
-structure at all, and ``memory`` at a fixed nominal size has a read count of exactly
-``size × reads_per_clone`` in *every* sample, so its sequencing depth does not vary either. They are
-reference points for what selection does to a rotation, not descriptions of a cohort.
+.. _sig-fetch:
+
+Artifacts are fetched, not bundled
+----------------------------------
+
+At 256 components a ``vsig`` artifact is about 10 MB of float32 rotation, and the nine corpora across
+both halves are roughly 110 MB. Making every ``pip install`` carry all of that in order to use one of
+them is the wrong trade, so the wheel ships a few KB of **index** -- ``corpora.json``, naming every
+corpus with its size and SHA-256 -- and the artifact itself is a GitHub release asset fetched on first
+use into ``$VDJTOOLS_CORPUS_DIR`` (default ``~/.cache/vdjtools/signature``) and verified against that
+digest.
+
+The resolution order is **a local path, then the wheel, then the cache, then the release**. A local
+path always wins, so a caller who fitted their own corpus and passes its path is never served a
+download of the same name. A download whose digest does not match is deleted rather than cached: a
+half-written rotation that loads is worse than one that is missing.
+
+``vdjtools corpus --fetch all`` (and ``mir corpus --fetch all``) pre-warms the cache -- the
+install-time step, since anything not pre-warmed is fetched lazily. The two halves are published by
+the library that owns each and share one cache directory, because a ``vsig``/``rsig`` pair belongs in
+one place.
+
+**Which one?** Use ``blood`` or ``tissue`` when your samples are bulk RNA-seq of that compartment and
+``deep-tcr`` for amplicon TCR: a real corpus is the closest reference to real data. Use
+``synthetic-blood`` / ``synthetic-tissue`` when you need a reference that is reproducible from the
+library alone, with no cohort behind it, or when your depths sit outside what the real corpora cover.
+``naive`` and ``memory`` are the two pure regimes and neither is a bulk sample -- ``naive`` has no
+clone-size structure at all, and ``memory`` at a fixed nominal size has a read count of exactly
+``size × reads_per_clone`` in *every* sample -- so they are reference points for what selection does to
+a rotation, not descriptions of a cohort.
 
 .. _sig-cohort-corpus:
 
@@ -222,6 +260,86 @@ TRB richness spans 43× and tissue IGH 259×. Bounds, centre and per-PC scaling 
 the draw and none of them extrapolates, so a corpus drawn across a tenth of the axis cannot
 standardise the rest of it.
 
+.. _sig-real-corpus:
+
+The three real corpora: how the population was selected
+-------------------------------------------------------
+
+A real corpus is fitted on repertoires, so what it means depends entirely on which repertoires. The
+selection is a rule, and each artifact records it:
+
+* **blood** -- public bulk RNA-seq, blood compartment. **tissue** -- the same, non-blood compartments.
+  Both **task-disjoint** by study group *and* by sample against the evaluation panel, because a
+  reference fitted on studies it will later be scored against makes the transfer claim circular.
+* **deep-tcr** -- targeted/amplicon deep TCR sequencing, TRA and TRB only.
+* A per-locus **read floor**, applied to reads *measured off the raw data*.
+
+**Why measured reads and not the metadata flag.** The previous reference slice selected on
+``has_TRB | has_IGH``, and that field carries two incompatible definitions: ``>= 100 reads`` in the
+base metadata table, and "any row present" in roughly 24,600 appended rows. A population built on it
+admits thousands of ultra-shallow repertoires. The harmonized sample table has no per-locus read
+column at all, so the floor is applied against a read count measured in one pass over the raw
+clonotypes. Blood comes out at 22,441 task-disjoint samples where the old slice recorded 23,234 — that
+difference is the defect being removed, not a change of scope.
+
+**TRG and TRD are a stratum with a lower floor, and the number is measured.** They cannot support 100
+reads at scale:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 14 18 18 18 18
+
+   * - cohort
+     - locus
+     - samples ≥100
+     - study_ids ≥100
+     - samples ≥30
+     - study_ids ≥30
+   * - blood
+     - TRG
+     - 5,686
+     - 442
+     - 13,381
+     - 705
+   * - blood
+     - TRD
+     - 3,563
+     - 331
+     - 9,525
+     - 580
+   * - tissue
+     - TRG
+     - 367
+     - 78
+     - 1,574
+     - 317
+   * - tissue
+     - TRD
+     - 378
+     - 42
+     - 1,059
+     - 189
+
+So the five main loci keep the 100-read floor and TRG/TRD use 30. Because each locus is fitted only on
+the rows that observed it, this is a stratum rather than a filter on the whole corpus, and
+``n_obs`` per column records exactly how many samples each column rests on. At a 30-read floor a TRG
+repertoire has a few dozen clonotypes: its richness, V usage and junction-length features are
+computable while the coverage-standardised diversity columns stay holes, which is the honest outcome
+rather than an extrapolated one.
+
+**Both cap variants ship.** Repertoire corpora are dominated by a handful of large submissions — the
+top 10 hold 17.7% of SRA blood, the top 50 hold 40.9% — so the predicate caps each study at 30
+samples, applied *before* any other row limit. The uncapped fit ships beside it so the cap's effect is
+measurable rather than asserted; emission is the expensive half and is done once, so each extra fit
+costs seconds.
+
+**What the manifest does not contain.** No cohort label, no dataset name, no accession, no sample id.
+A rotation is a function of features and components; a cohort label is not one of its inputs. What is
+recorded is the population as rule text, the per-locus floors, aggregate sample and study counts, the
+measured read band per locus, and the germline fingerprint the V/J and spectratype columns are indexed
+by — which is the load gate even for a real corpus, since nothing was drawn from those models but the
+columns are still named by them.
+
 What comes out
 --------------
 
@@ -336,7 +454,7 @@ How many components
 ``--components`` / ``n_components=`` takes either kind of answer:
 
 * an **integer** — a fixed count, identical at every locus. At fit time it is a cap: a block
-  narrower than the request (the five cross-locus ratios against a request of 128) gets its full
+  narrower than the request (the five cross-locus ratios against a request of 256) gets its full
   rotation, recorded per locus in the artifact.
 * a **fraction** in ``(0, 1)`` — cumulative variance explained. The count then differs per locus
   *and per corpus*, because some corpora are genuinely easier to explain. That is biology, not a
@@ -355,238 +473,112 @@ The two forms are not interchangeable — measured
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Read from the shipped artifacts' own stored spectra, so this is a measurement rather than a
-preference. ``p_raw`` is the locus's raw feature count, ``k`` what the shipped rotation stores, and
-``k@0.90`` / ``k@0.95`` the counts those variance fractions would need.
+preference. Every corpus is fitted at **k = 256** and ships every component; ``k@0.90`` is what that
+variance fraction would need on the same spectrum.
 
 .. list-table::
    :header-rows: 1
-   :widths: 8 10 8 10 8 10 10 10
+   :widths: 22 12 12 12 12 12 12
 
-   * - half
-     - corpus
-     - locus
-     - p_raw
-     - k
-     - k@0.90
-     - k@0.95
-     - var@k
-   * - vsig
-     - naive
-     - TRB
-     - 2261
-     - 128
+   * - corpus
+     - vsig TRB k@0.90
+     - vsig TRB var@256
+     - vsig IGH k@0.90
+     - vsig IGH var@256
+     - rsig TRB k@0.90
+     - rsig TRB var@256
+   * - ``naive``
      - 571
-     - 772
-     - 0.4236
-   * - vsig
-     - naive
-     - IGH
-     - 3744
-     - 128
+     - 0.6283
      - 676
-     - 839
-     - 0.4116
-   * - vsig
-     - naive
-     - TRG
-     - 767
-     - 128
-     - 282
-     - 365
-     - 0.7841
-   * - vsig
-     - memory
-     - TRB
-     - 2261
-     - 128
+     - 0.5768
+     - 14
+     - 0.9996
+   * - ``memory``
      - 501
-     - 648
-     - 0.4825
-   * - vsig
-     - memory
-     - IGH
-     - 3744
-     - 128
+     - 0.7305
      - 840
-     - 1008
-     - 0.3771
-   * - vsig
-     - memory
-     - TRG
-     - 767
-     - 128
-     - 220
-     - 340
-     - 0.8538
-   * - rsig
-     - naive
-     - TRB
-     - 772
-     - 128
-     - 17
-     - 32
-     - 0.9923
-   * - rsig
-     - naive
-     - IGH
-     - 775
-     - 128
-     - 12
-     - 35
-     - 0.9887
-   * - rsig
-     - naive
-     - TRD
-     - 772
-     - 128
-     - 5
-     - 11
-     - 0.9966
-   * - rsig
-     - memory
-     - TRB
-     - 772
-     - 128
-     - 11
-     - 19
-     - 0.9957
-   * - rsig
-     - memory
-     - IGH
-     - 775
-     - 128
-     - 8
-     - 26
-     - 0.9911
-   * - rsig
-     - memory
-     - TRD
-     - 772
-     - 128
-     - 3
-     - 4
-     - 0.9987
-   * - vsig
-     - synthetic-blood
-     - TRB
-     - 2261
-     - 128
+     - 0.5411
+     - 14
+     - 0.9996
+   * - ``synthetic-blood``
      - 633
-     - 829
-     - 0.4618
-   * - vsig
-     - synthetic-blood
-     - IGH
-     - 3744
-     - 128
+     - 0.6392
      - 844
-     - 1087
-     - 0.4630
-   * - vsig
-     - synthetic-blood
-     - TRG
-     - 767
-     - 128
-     - 162
-     - 281
-     - 0.8827
-   * - vsig
-     - synthetic-tissue
-     - TRB
-     - 2261
-     - 128
+     - 0.5926
+     - 14
+     - 0.9996
+   * - ``synthetic-tissue``
      - 483
-     - 629
-     - 0.5424
-   * - vsig
-     - synthetic-tissue
-     - IGH
-     - 3744
-     - 128
+     - 0.7320
      - 885
-     - 1134
-     - 0.5123
-   * - vsig
-     - synthetic-tissue
-     - TRG
-     - 767
-     - 128
-     - 124
-     - 243
-     - 0.9028
-   * - rsig
-     - synthetic-blood
-     - TRB
-     - 772
-     - 128
-     - 20
-     - 36
-     - 0.9910
-   * - rsig
-     - synthetic-blood
-     - IGH
-     - 775
-     - 128
-     - 13
-     - 36
-     - 0.9884
-   * - rsig
-     - synthetic-blood
-     - TRD
-     - 772
-     - 128
+     - 0.6263
+     - 18
+     - 0.9995
+   * - ``blood``
+     - 464
+     - 0.7525
+     - 951
+     - 0.5596
+     - 14
+     - 0.9996
+   * - ``blood-uncapped``
+     - 485
+     - 0.7386
+     - 973
+     - 0.5464
+     - 14
+     - 0.9995
+   * - ``tissue``
+     - 301
+     - 0.8541
+     - 1,069
+     - 0.5627
+     - 18
+     - 0.9995
+   * - ``tissue-uncapped``
+     - 311
+     - 0.8438
+     - 1,148
+     - 0.5487
+     - 18
+     - 0.9994
+   * - ``deep-tcr``
+     - 611
+     - 0.7501
+     - —
+     - —
      - 7
-     - 17
-     - 0.9952
-   * - rsig
-     - synthetic-tissue
-     - TRB
-     - 772
-     - 128
-     - 20
-     - 36
-     - 0.9910
-   * - rsig
-     - synthetic-tissue
-     - IGH
-     - 775
-     - 128
-     - 13
-     - 36
-     - 0.9883
-   * - rsig
-     - synthetic-tissue
-     - TRD
-     - 772
-     - 128
-     - 7
-     - 17
-     - 0.9949
+     - 1.0000
 
-The two halves sit on opposite sides of 128, and by a wide margin:
+``p_raw`` is 2,261 on TRB and 3,744 on IGH for every corpus (the layout's width does not depend on
+what it was fitted on); ``rsig`` carries 772 and 775.
 
-* **On the statistics half, 128 components are far short of 0.90 nearly everywhere.** Reaching it
-  needs 124 (TRG, ``synthetic-tissue``) to 885 (IGH, ``synthetic-tissue``) components, so
-  ``--components 0.90`` and anything above it **raises on every shipped vsig corpus and locus except
-  that one** rather than returning a narrower matrix. That is the intended refusal — the rotation
-  genuinely stops at 128 — and the message names the fraction actually reached. Use a count there, or
-  refit at a larger ``n_components``.
-* **On the geometry half, 128 is generous.** 0.90 needs 3 to 28 components, because its raw features
-  are a few hundred embedding coordinates rather than a few thousand sparse usage shares, so a
-  fraction is the natural knob and yields a far narrower matrix.
-* **A corpus changes the answer.** IGH needs *more* components under ``memory`` than ``naive`` (840
-  against 676) while every other locus needs fewer — clonal expansion concentrates most loci and
-  spreads IGH, whose isotype and SHM blocks only vary once clones are selected.
-* **Drawing across a real depth range concentrates the TR loci and spreads IGH further.** TRB at 0.90
-  needs 483 components under ``synthetic-tissue`` and 633 under ``synthetic-blood``, against 571 under
-  ``naive``; TRG drops to 124 and 162 from ``naive``'s 228. IGH goes the other way, 844 and 885
-  against 676. Variance at the shipped 128 rises on every locus of both cohort corpora — TRB 0.4618
-  and 0.5424 against ``naive``'s 0.4236 — because a corpus drawn across two decades of depth has a
-  genuine dominant direction (depth) that a fixed-depth corpus does not.
+The two halves sit on opposite sides of 256, and by a wide margin:
 
-Full per-locus numbers for all seven loci and all four shipped corpora are in each artifact's
-``manifest.json`` under ``variance_at_k`` beside the stored spectrum, so any threshold can be read off
-without a refit.
+* **On the statistics half, even 256 components are short of 0.90 everywhere.** Reaching it needs 301
+  (TRB, ``tissue``) to 1,148 (IGH, ``tissue-uncapped``), so ``--components 0.90`` **raises** rather
+  than returning a narrower matrix. That is the intended refusal — the rotation genuinely stops at 256
+  — and the message names the fraction actually reached. Use a count, or refit wider.
+* **On the geometry half, 256 is far past the point of diminishing returns.** 0.90 needs **7 to 18**
+  components and 0.95 needs 10 to 32, because its raw features are a few hundred embedding coordinates
+  rather than a few thousand sparse usage shares. ``--components 32`` there gives a far narrower matrix
+  at essentially no cost in explained variance, and is usually what you want.
+* **A real corpus concentrates TRB and spreads IGH.** ``tissue`` reaches 0.90 on TRB in 301 components
+  against ``naive``'s 571, while its IGH needs 1,069 against 676. Real IGH carries isotype and SHM
+  structure, and real libraries carry between-study heterogeneity, that a generative draw does not
+  produce; real TRB in tissue is dominated by a depth axis that concentrates it.
+* **The cap barely moves the rotation.** Capping blood at 30 samples per study changes TRB's
+  ``k@0.90`` from 485 to 464 and its variance at 256 from 0.7386 to 0.7525 — the cap is a guard
+  against a handful of submissions dominating the *centre and scale*, not a lever on the components.
+
+**Widening a fit is a strict superset — measured, not assumed.** Refitting ``synthetic-blood`` from
+k=128 to k=256 reproduces all 128 original components with ``|cos| = 1.000000`` on TRB, IGH and TRG and
+identical eigenvalues to ``0.000e+00``. That is why shipping 256 costs existing users nothing: their
+numbers at 128 are bit-for-bit the same, and truncating downward at apply time needs no refit.
+
+Full per-locus numbers for all nine corpora are in each artifact's ``manifest.json`` under
+``variance_at_k`` beside the stored spectrum, so any threshold can be read off without a refit.
 
 .. _sig-depth-sweep:
 

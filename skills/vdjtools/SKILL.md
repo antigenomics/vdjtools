@@ -219,25 +219,31 @@ and not the reverse.
 ```python
 from vdjtools.signature import (vsig, vsig_cohort, raw_and_channels, synthesize,
                                 Corpus, parse, support_of, channel_columns, pc_columns)
-corpus = Corpus.load("synthetic-blood.npz")   # a corpus is REQUIRED; there is no default
+corpus = Corpus.load(bundled_path("blood"))   # a corpus is REQUIRED; there is no default
 v = vsig({"TRB": df}, corpus)                 # {column: value}, in artifact order
 corpus.columns(n_components=32)               # exactly what an invocation will emit
 raw, chan = raw_and_channels({"TRB": df}, corpus.vocab)   # un-rotated, natural units
 ```
 ```bash
-vdjtools signature *.tsv --corpus synthetic-blood -o vsig.parquet    # a bundled corpus by name
-vdjtools signature --corpus synthetic-blood --components 32 --describe
-vdjtools corpus --corpus synthetic-tissue -o st.npz   # build + fit your own; uses no cohort
+vdjtools signature *.tsv --corpus blood -o vsig.parquet   # fetched on first use, then cached
+vdjtools signature --corpus blood --components 32 --describe
+vdjtools corpus --fetch all                              # pre-warm the cache (install-time step)
+vdjtools corpus --corpus synthetic-tissue -o st.npz      # build + fit your own; uses no cohort
 ```
 
-**Four corpora ship**: `synthetic-blood` and `synthetic-tissue` (each repertoire a naive/memory
-mixture drawn across three quantile ladders measured per locus on that compartment — richness, reads
-per expanded clone, and the singleton fraction that stands in for the naive share — through the
-cohort's measured rank correlations), plus the pure regimes `naive` and `memory`. Reach for a
-`synthetic-*` one: `memory` at a fixed size has the same read count in every sample, so it varies
-neither depth nor clone-size structure. `COHORT` holds the ladders, `SYNTHETIC` maps a name to
-`(regime, cohort)`, `corpus_plan` resolves it for both halves, `draw_plan` turns it into the
-per-sample draw.
+**Nine corpora, all at k=256.** Real: `blood` / `blood-uncapped` (11,117 / 22,441 bulk RNA-seq blood
+samples, 947 study groups), `tissue` / `tissue-uncapped` (21,131 / 33,874, 1,934 groups), `deep-tcr`
+(3,936 amplicon samples, TRA+TRB only). Synthetic: `synthetic-blood` and `synthetic-tissue` (a
+naive/memory mixture drawn across three measured per-locus ladders — richness, reads per expanded
+clone, singleton fraction — through the cohort's measured rank correlations) plus the pure regimes
+`naive` and `memory`, which vary neither depth nor clone-size structure at a fixed size.
+
+**Artifacts are release assets, fetched on first use** into `$VDJTOOLS_CORPUS_DIR` (default
+`~/.cache/vdjtools/signature`) and verified against the SHA-256 in the wheel's `corpora.json`.
+Resolution order is path -> wheel -> cache -> release, so a local path always wins; a digest mismatch
+is deleted, never cached. `corpus_cache_dir`, `corpora_index`, `fetch_artifact`, `resolve_artifact` are
+the API, shared by both halves. `COHORT` holds the synthetic ladders, `SYNTHETIC` maps a name to
+`(regime, cohort)`, `corpus_plan` resolves it, `draw_plan` turns it into the per-sample draw.
 
 **Submodules, four of them.** `layout` is the contract — `LOCI`, `raw_groups()`, `channels()`,
 `raw_columns(sig, locus, vocab)`, `channel_columns(sig)`, `pc_columns(sig, k)`,

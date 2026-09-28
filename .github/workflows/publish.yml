@@ -6,11 +6,17 @@ on:
       - published
   workflow_dispatch:
 
+# Only a version tag publishes. Corpus artifacts are attached to their own `corpora-*` release, and
+# without this guard creating that release fires this workflow and tries to upload whatever version
+# pyproject happens to carry -- a release that is not a release of the package.
 permissions:
   contents: read
 
 jobs:
   build-sdist:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +36,9 @@ jobs:
           path: dist/
 
   build-wheels:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.release.tag_name, 'v') }}
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -59,6 +68,9 @@ jobs:
           path: wheelhouse/*.whl
 
   test:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.release.tag_name, 'v') }}
     # The publish gate. `needs:` cannot reference another workflow, so CI's matrix (ci.yml, on
     # push) cannot gate this one -- and it did not: 3.9.1 uploaded to PyPI while CI was still in
     # its Test step. Same SHA, so CI covers the code, but nothing enforced the ORDER. One job on
@@ -91,11 +103,13 @@ jobs:
         run: python -c "import olga.load_model"
 
   publish:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.release.tag_name, 'v') }}
     name: Publish To PyPI
     needs: [test, build-sdist, build-wheels]
     # Only a published GitHub Release publishes to PyPI; workflow_dispatch runs build + wheels as a
     # dry run (no PyPI upload, never enters the pypi environment) so the release build can be tested.
-    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

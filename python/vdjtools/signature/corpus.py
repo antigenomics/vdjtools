@@ -31,7 +31,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
+import shutil
+import sys
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -651,22 +654,142 @@ def model_fingerprint(loci, source: str = "olga") -> dict[str, str]:
     return out
 
 
-def bundled_names() -> list[str]:
-    """Corpus names with an installed artifact."""
-    if not _RES.is_dir():
-        return []
-    return sorted(p.stem.removeprefix("vsig_") for p in _RES.glob("vsig_*.npz"))
+#: GitHub release the corpus artifacts are published under, in the repo that owns each half. A tag of
+#: its own rather than the library version: an artifact changes far less often than the code, and
+#: keying the download on the library version would invalidate every cached corpus on a patch release
+#: -- the same mistake the germline fingerprint replaced for the load gate.
+CORPUS_RELEASE = "corpora-v1"
+
+#: The shipped index of downloadable artifacts. A few KB of JSON rather than ~110 MB of rotations, so
+#: a plain install stays small while `--corpus` can still NAME every corpus, report its size before
+#: fetching anything, and verify what it downloaded.
+CORPORA_INDEX = "corpora.json"
 
 
-def bundled_path(name: "str | Path") -> "Path | None":
-    """Resolve a bundled corpus name or a filesystem path to an artifact, else ``None``."""
+def corpus_cache_dir() -> Path:
+    """Where downloaded corpus artifacts are cached.
+
+    ``VDJTOOLS_CORPUS_DIR`` overrides it; otherwise the usual per-user cache. Shared between the two
+    halves on purpose -- a ``vsig``/``rsig`` pair belongs in one place, and a cluster job that
+    pre-warms one warms both.
+    """
+    env = os.environ.get("VDJTOOLS_CORPUS_DIR")
+    if env:
+        return Path(env).expanduser()
+    base = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    return Path(base).expanduser() / "vdjtools" / "signature"
+
+
+def corpora_index(res_dir: Path) -> dict:
+    """``{name: {"npz": {"sha256", "bytes"}, "json": {...}}}`` from the shipped index, or ``{}``."""
+    p = Path(res_dir) / CORPORA_INDEX
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text())
+
+
+def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") -> Path:
+    """Fetch one file into ``dest``, verifying its digest before it is visible under that name.
+
+    Written to a temporary sibling and renamed only once the digest matches, so an interrupted or
+    corrupted download can never be mistaken for a cached artifact on the next run -- a half-written
+    rotation that loads is far worse than one that is missing.
+    """
+    import urllib.request
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    with urllib.request.urlopen(url) as r, tmp.open("wb") as f:
+        shutil.copyfileobj(r, f)
+    got = hashlib.sha256(tmp.read_bytes()).hexdigest()
+    if sha256 and got != sha256:
+        tmp.unlink(missing_ok=True)
+        raise OSError(f"{url} hashed {got[:12]}, the shipped index expects {sha256[:12]}; refusing "
+                      "to cache it. Either the release asset was replaced or the download truncated.")
+    if nbytes and tmp.stat().st_size != nbytes:
+        tmp.unlink(missing_ok=True)
+        raise OSError(f"{url} is {tmp.stat().st_size} bytes, the index expects {nbytes}")
+    tmp.replace(dest)
+    return dest
+
+
+def fetch_artifact(name: str, *, sig: str, res_dir: Path, repo: str, quiet: bool = False,
+                   base_url: "str | None" = None) -> Path:
+    """Download one corpus artifact and its manifest into the cache, verified. Returns the ``.npz``.
+
+    Both files, because :meth:`Corpus.load` reads the ``.json`` beside the ``.npz`` -- fetching only
+    the arrays would leave a corpus that cannot say what it was fitted on.
+
+    ``base_url`` overrides where the assets come from -- an internal mirror, or a ``file://`` URL,
+    which is what lets the resolution order be tested without a network.
+    """
+    idx = corpora_index(res_dir)
+    entry = idx.get(name)
+    if entry is None:
+        raise ValueError(f"no corpus named {name!r} in the shipped index; have "
+                         f"{', '.join(sorted(idx)) or '(none)'}")
+    cache = corpus_cache_dir()
+    npz = cache / f"{sig}_{name}.npz"
+    base = base_url or f"https://github.com/{repo}/releases/download/{CORPUS_RELEASE}"
+    for ext in ("npz", "json"):
+        part = entry.get(ext, {})
+        target = cache / f"{sig}_{name}.{ext}"
+        if target.exists() and (not part.get("sha256")
+                                or hashlib.sha256(target.read_bytes()).hexdigest()
+                                == part["sha256"]):
+            continue
+        url = f"{base}/{sig}_{name}.{ext}"
+        if not quiet:
+            mb = part.get("bytes", 0) / 1e6
+            print(f"[vdjtools] fetching {sig}_{name}.{ext} ({mb:.1f} MB) -> {cache}",
+                  file=sys.stderr, flush=True)
+        try:
+            _download(url, target, part.get("sha256"), part.get("bytes"))
+        except OSError as e:
+            raise OSError(
+                f"could not fetch {url}: {e}. Corpus artifacts are published as release assets "
+                f"rather than bundled in the wheel (they are ~110 MB across all of them). Download "
+                f"it by hand into {cache}, or point --corpus at a local .npz.") from e
+    return npz
+
+
+def resolve_artifact(name: "str | Path", *, sig: str, res_dir: Path, repo: str) -> "Path | None":
+    """A corpus artifact from a path, the wheel, the cache, or the release -- in that order.
+
+    The order is what makes a local file always win: a caller who fitted their own corpus and passes
+    its path must never be silently served a downloaded one of the same name.
+    """
     direct = Path(name)
     if direct.suffix == ".npz" and direct.exists():
         return direct
     if direct.with_suffix(".npz").exists():
         return direct.with_suffix(".npz")
-    cand = _RES / f"vsig_{name}.npz"
-    return cand if cand.exists() else None
+    cand = Path(res_dir) / f"{sig}_{name}.npz"
+    if cand.exists():
+        return cand
+    cached = corpus_cache_dir() / f"{sig}_{name}.npz"
+    if cached.exists():
+        return cached
+    if str(name) in corpora_index(res_dir):
+        return fetch_artifact(str(name), sig=sig, res_dir=res_dir, repo=repo)
+    return None
+
+
+def bundled_names() -> list[str]:
+    """Every corpus name this version knows -- installed, cached, or downloadable."""
+    got = {p.stem.removeprefix("vsig_") for p in _RES.glob("vsig_*.npz")} if _RES.is_dir() else set()
+    got |= {p.stem.removeprefix("vsig_")
+            for p in corpus_cache_dir().glob("vsig_*.npz")} if corpus_cache_dir().is_dir() else set()
+    return sorted(got | set(corpora_index(_RES)))
+
+
+def bundled_path(name: "str | Path") -> "Path | None":
+    """Resolve a corpus name or a filesystem path to a ``vsig`` artifact, else ``None``.
+
+    Downloads on first use if the name is in the shipped index and not yet cached; see
+    :func:`resolve_artifact` for the resolution order.
+    """
+    return resolve_artifact(name, sig="vsig", res_dir=_RES, repo="antigenomics/vdjtools")
 
 
 # ------------------------------------------------------------------- the synthetic corpora

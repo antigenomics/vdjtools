@@ -619,7 +619,9 @@ def corpus(
                                   "sizes) | synthetic-blood | synthetic-tissue (the naive/memory "
                                   "mixture, drawn across that real cohort's measured per-locus "
                                   "richness, read depth and singleton fraction)."),
-    out: Path = typer.Option(..., "--out", "-o", help="Artifact path; writes .npz and .json."),
+    out: Optional[Path] = typer.Option(None, "--out", "-o",
+                                       help="Artifact path; writes .npz and .json. Required unless "
+                                            "--fetch, which downloads into the cache instead."),
     n_samples: int = typer.Option(10000, "--samples", help="Repertoires in the corpus."),
     size: str = typer.Option("auto", "--size",
                              help="Receptors per repertoire: an integer, or n_eff / p05 / p95 for "
@@ -645,6 +647,12 @@ def corpus(
                                                       "corpus spanning 100 to 100000 receptors."),
     smoke: bool = typer.Option(False, "--smoke", help="Reduced build (200 samples of 1000) for "
                                                       "tests and the reproducibility check."),
+    fetch: Optional[str] = typer.Option(None, "--fetch", metavar="NAME|all",
+                                        help="Download a published corpus instead of building one, "
+                                             "into the cache ($VDJTOOLS_CORPUS_DIR or "
+                                             "~/.cache/vdjtools/signature). `all` pre-warms every "
+                                             "corpus -- the install-time step, since an artifact is "
+                                             "otherwise fetched on first use."),
     jobs: int = typer.Option(0, "--jobs", "-j", help="Worker PROCESSES across samples (not kernel "
                                                      "threads): 0 = every core, 1 = in-process. "
                                                      "The artifact is identical at any value."),
@@ -682,6 +690,25 @@ def corpus(
 
     from vdjtools.signature.corpus import synthesize
 
+    if fetch is not None:
+        from vdjtools.signature.corpus import (bundled_names, corpora_index, corpus_cache_dir,
+                                               fetch_artifact)
+        from vdjtools.signature.corpus import _RES as res
+        idx = corpora_index(res)
+        want = sorted(idx) if fetch == "all" else [fetch]
+        if not idx:
+            _err("this version ships no corpus index, so there is nothing to fetch; the corpora it "
+                 f"knows are {', '.join(bundled_names()) or '(none)'}")
+        for nm in want:
+            if nm not in idx:
+                _err(f"no published corpus named {nm!r}; have {', '.join(sorted(idx))}")
+            p = fetch_artifact(nm, sig="vsig", res_dir=res, repo="antigenomics/vdjtools")
+            typer.echo(f"{p}  {p.stat().st_size / 1e6:.2f} MB", err=True)
+        typer.echo(f"cache: {corpus_cache_dir()}", err=True)
+        raise typer.Exit(0)
+
+    if out is None:
+        _err("--out is required when building a corpus (it is not used by --fetch)")
     sz: object = None if size == "auto" else size
     if size not in ("auto", "n_eff", "p05", "p95"):
         try:
