@@ -82,7 +82,7 @@ examples = ["marimo", "matplotlib", "scikit-learn"]  # example notebooks (scipy 
 oracle = ["olga"]                      # Pgen cross-check oracle (tests only)
 test = ["pytest>=7.4", "pytest-cov"]
 bench = []  # DEPRECATED no-op alias: huggingface_hub (real-data fetch) is a BASE dep.
-docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx"]
+docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx", "sphinx-design", "sphinx-copybutton"]
 dev = ["ruff", "pytest>=7.4", "pybind11>=2.12"]
 all = ["scikit-learn"]                 # the antigenomics engines (arda-mapper, seqtree, vdjmatch) are base deps, not extras
 

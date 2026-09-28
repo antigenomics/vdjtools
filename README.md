@@ -18,23 +18,28 @@
   <img alt="license" src="https://img.shields.io/badge/license-GPLv3-green">
 </p>
 
-TCR/BCR immune-repertoire analysis — a clean-room **Python + C++** rewrite of the legacy
-Groovy/Java [vdjtools](https://doi.org/10.1371/journal.pcbi.1004503), standardised on the
-**AIRR schema** and **polars** DataFrames with minimal object-orientation.
+<p align="center"><b>
+  <a href="https://docs.isalgo.dev/vdjtools/getting-started.html">Get started</a> ·
+  <a href="https://docs.isalgo.dev/vdjtools/usage.html">Guides</a> ·
+  <a href="https://docs.isalgo.dev/vdjtools/cli.html">Commands</a> ·
+  <a href="https://docs.isalgo.dev/vdjtools/api.html">API</a> ·
+  <a href="https://docs.isalgo.dev/vdjtools/glossary.html">Glossary</a>
+</b></p>
 
-Built on the antigenomics ecosystem:
-[seqtree](https://github.com/antigenomics/seqtree) (fuzzy search / e-value engine),
-[vdjmatch](https://github.com/antigenomics/vdjmatch) (overlap + TCRnet),
-[arda](https://github.com/antigenomics/arda) (AIRR annotation + markup repair).
+Analysis of T- and B-cell receptor repertoire sequencing: read any format, measure diversity and
+overlap, correct batch effects, score generation probability against a native V(D)J model, and
+reduce a whole repertoire to one comparable feature vector.
 
-> **Status: stable** (version: the PyPI badge above). The native V(D)J model engine plus the
-> full analytics suite (diversity,
-> overlap/TCRnet, preprocessing, biomarkers, single-cell), **longitudinal clonotype dynamics**
-> (paired expansion testing + the VDJtrack recapture model), CDR features, and legacy-format
-> ingestion (MiXcr, MiGec, immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, arda). Clonotype
-> columns follow the AIRR **junction** convention (`junction_nt` / `junction_aa`). The legacy v1.x
-> tool lives on the [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch
-> and its releases remain available under the repository tags (`v0.0.1` … `1.2.1`).
+vdjtools reads the output of every common repertoire pipeline into one canonical
+[AIRR](https://docs.airr-community.org/) table backed by [polars](https://pola.rs), and every
+analysis takes and returns that same table — so results chain together instead of needing a
+converter between each step.
+
+A clean-room Python + C++ rewrite of the Groovy/Java
+[vdjtools](https://doi.org/10.1371/journal.pcbi.1004503), built on
+[arda](https://github.com/antigenomics/arda) (germline reference and annotation),
+[seqtree](https://github.com/antigenomics/seqtree) (fuzzy search and e-values) and
+[vdjmatch](https://github.com/antigenomics/vdjmatch) (overlap and TCRnet).
 
 ## Install
 
@@ -42,455 +47,156 @@ Built on the antigenomics ecosystem:
 pip install vdjtools
 ```
 
-Prebuilt wheels ship for CPython 3.10–3.13 on Linux, macOS (Apple Silicon), and Windows; the
-native `_core` C++ extension is bundled (the source distribution compiles it on install).
+That is the whole installation — every capability below works from it, with no extras to opt into.
+Wheels are prebuilt for CPython 3.10–3.13 on Linux, macOS (Apple Silicon) and Windows and include
+the native C++ extension; a source install compiles it. The three engines above are base
+dependencies, imported lazily so `import vdjtools` stays light.
 
-That one command gives you **everything vdjtools advertises** — no extras to opt into. The three
-antigenomics engines it delegates to are **base dependencies**:
-
-| Engine | Powers |
-|---|---|
-| [arda](https://github.com/antigenomics/arda) | the germline reference (V/D/J + CDR3 anchors), model engine, annotation |
-| [seqtree](https://github.com/antigenomics/seqtree) | fuzzy search / e-values → error correction, similarity overlap, TCRnet |
-| [vdjmatch](https://github.com/antigenomics/vdjmatch) | sample overlap, TCRnet, metaclonotypes |
-
-So `preprocess.correct()`, `overlap.tcrnet()`, `biomarker.metaclonotypes()` and
-`model.reference.load_germline()` all just work from a plain install — and downstream libraries
-can depend on plain `vdjtools` and rely on them being there. All three are imported **lazily**, so
-`import vdjtools` stays light; between them they add only `requests` on top of what vdjtools
-already needs. arda fetches its IMGT reference once, on first use.
-
-Two things are still optional, because each has a working alternative or is a side integration:
+Two optional extras exist because each has a working alternative:
 
 ```bash
-pip install "vdjtools[overlap]"   # scikit-learn — only for cluster_samples(method="mds");
-                                  # method="hclust" works out of the box (scipy)
-pip install "vdjtools[sc]"        # single-cell: anndata + awkward + mudata (scverse
-                                  # bridges), pyyaml (AIRR Cell export)
+pip install "vdjtools[overlap]"   # scikit-learn, for cluster_samples(method="mds")
+pip install "vdjtools[sc]"        # single-cell bridges: anndata, awkward, mudata, pyyaml
 ```
 
-MMseqs2 is needed **only** for arda's alignment/annotation path (`model.stitch.annotate`) — never
-for germline lookup, Pgen, generation, or the analytics. Install it via conda/brew if you need it.
+## Quickstart
 
-### Development
+```python
+from vdjtools import io as vio, stats, overlap
 
-Uses [uv](https://docs.astral.sh/uv/) — one repo-local `.venv`, no conda:
+sample = vio.read("clones.tsv")          # MiXcr, immunoSEQ, AIRR, Parquet, native — detected
+stats.diversity_stats(sample)            # richness, Chao1, Shannon, inverse Simpson, d50
+stats.segment_usage(sample, "v")         # V-gene usage
+
+cohort = vio.read_samples(vio.read_metadata("metadata.txt"), base_dir="samples/")
+overlap.overlap_matrix(cohort)           # pairwise repertoire overlap
+```
+
+The same thing with no Python:
 
 ```bash
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev,test]"       # builds the _core C++ extension (scikit-build-core)
+vdjtools diversity     sampleA.tsv sampleB.tsv -o diversity.tsv
+vdjtools segment-usage *.tsv --segment v -o usage.tsv
+vdjtools overlap       *.tsv -o overlap.tsv
 ```
 
-Or run the bootstrap script (portable across bash/zsh, uv-first with a `python -m venv` fallback):
+Every command writes to `-o` — TSV, or Parquet when the path ends in `.parquet` / `.pq` — or to
+stdout, so commands pipe. Analysis commands also take a metadata table (`-m` plus `--base-dir`) and
+parallelise over samples with `-t/--threads`.
 
-```bash
-bash setup.sh --dev-parents --tests   # or: zsh setup.sh
-```
-
-You need a C++ toolchain (Xcode CLT on macOS, build-essential on Linux) for the native `_core`
-extension. MMseqs2 is arda's aligner, needed **only** for the annotation path and the slow arda
-round-trip tests — `brew install mmseqs2`, or use the optional `environment.yml` conda env which
-bundles it.
+**[Getting started](https://docs.isalgo.dev/vdjtools/getting-started.html)** walks through this in
+about ten minutes, with no data to download.
 
 ## Where to start
 
 | You want to | Go to |
 |---|---|
-| Load samples and run diversity / overlap / usage | [Quickstart](#quickstart) · [User guide](https://docs.isalgo.dev/vdjtools/usage.html) |
-| Clean, filter, downsample, batch-correct a cohort | [Pre-processing](https://docs.isalgo.dev/vdjtools/preprocessing.html) |
-| Pgen, V(D)J markup, generate sequences, fit a model | [Model engine](#recombination-model-engine) · [Models](https://docs.isalgo.dev/vdjtools/model.html) |
-| One fixed feature vector per sample, for a classifier | [Repertoire signatures](#repertoire-signatures-extended) · [Signature](https://docs.isalgo.dev/vdjtools/signature.html) |
-| Single-cell / 10x / scirpy / Dandelion interop | [Single cell](https://docs.isalgo.dev/vdjtools/singlecell.html) |
-| Worked examples as notebooks | [Notebook gallery](https://docs.isalgo.dev/vdjtools/notebooks.html) |
+| Get a first result from a file you already have | [Getting started](https://docs.isalgo.dev/vdjtools/getting-started.html) |
+| Clean, filter, downsample or batch-correct a cohort | [Pre-processing](https://docs.isalgo.dev/vdjtools/preprocessing.html) |
+| Measure diversity, overlap, gene usage, spectratype | [Guides](https://docs.isalgo.dev/vdjtools/usage.html) |
+| Score Pgen, or fit a model to your own reads | [Model workshop](https://docs.isalgo.dev/vdjtools/model.html) |
+| Reduce each sample to one feature vector for a classifier | [Signatures](https://docs.isalgo.dev/vdjtools/signature.html) |
+| Work with 10x data, or hand off to scirpy / dandelion | [Single cell](https://docs.isalgo.dev/vdjtools/singlecell.html) |
+| Look up a command or a function | [Commands](https://docs.isalgo.dev/vdjtools/cli.html) · [API](https://docs.isalgo.dev/vdjtools/api.html) |
+| Check what a term means | [Glossary](https://docs.isalgo.dev/vdjtools/glossary.html) |
 
-## Quickstart
+## What is in the box
 
-Read any format, get one canonical AIRR frame, and run the analyses the tool is for:
+| Module | What it does |
+|---|---|
+| `vdjtools.io` | Readers for native vdjtools, AIRR Rearrangement TSV and Parquet; format-detecting converters for MiXcr, MiGec, Adaptive immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4 and arda; metadata-driven batches and hive-partitioned cohorts |
+| `vdjtools.stats` | Diversity (richness, Chao1, Efron-Thisted, Shannon, Simpson, d50), coverage-based Hill-number rarefaction with bootstrap intervals, spectratype, V/D/J/C usage |
+| `vdjtools.model` | Native V(D)J recombination model: Pgen over nucleotides and amino acids, the Hamming-1 ball, sequence generation, EM inference, tandem-D support, and a 13-command model workshop |
+| `vdjtools.overlap` | Exact and similarity-aware repertoire overlap, TCRnet and ALICE neighbourhood enrichment, sample clustering |
+| `vdjtools.preprocess` | Format conversion, the three filtering axes, frequency handling, downsampling, error correction, V/J-usage batch correction, pooling and joining |
+| `vdjtools.features` | CDR3 physicochemical profiles and k-mer summaries |
+| `vdjtools.biomarker` | Incidence association against binary, per-HLA-allele or stratified conditions; co-occurrence pairing; metaclonotypes |
+| `vdjtools.dynamics` | Longitudinal clonotype tracking: paired within-donor expansion testing, the VDJtrack recapture model, an edgeR NB-exact caller |
+| `vdjtools.signature` | One fixed, named, already-standardised feature vector per repertoire, rotated through a published corpus |
+| `vdjtools.sc` | Single-cell ingestion, chain pairing and QC, paired Pgen, round-trip interop with scirpy, dandelion and scRepertoire |
 
-```python
-from vdjtools import io as vio, stats, overlap
+## Recombination models, built in
 
-sample = vio.read("clones.tsv")                 # MiXcr / immunoSEQ / AIRR / Parquet / native — sniffed
-cohort = vio.read_samples(vio.read_metadata("metadata.txt"), base_dir="samples/")
-
-stats.diversity.diversity_stats(sample)         # richness, Chao, Shannon, Simpson, d50
-stats.usage.segment_usage(sample, segment="v")  # V / J / VJ usage
-stats.spectratype.spectratype(sample)           # junction-length spectrum
-overlap.overlap_matrix(cohort)                  # pairwise repertoire overlap
-```
-
-The same thing without Python at all:
-
-```bash
-vdjtools diversity     sampleA.tsv sampleB.tsv -o diversity.tsv
-vdjtools overlap       *.tsv -o overlap.tsv
-vdjtools segment-usage -m metadata.txt --base-dir samples/ -t 0 -o usage.tsv
-```
-
-## Command line
-
-`pip install vdjtools` installs the `vdjtools` command — the model engine (OLGA/IGoR-style) and the
-repertoire analytics (over sample files or a metadata table, like the legacy tool):
-
-```bash
-# recombination model engine — built-in models for all 7 loci (no download)
-vdjtools models                                # list the bundled models
-vdjtools generate -m TRB -n 1000 -o gen.tsv    # sample sequences   (cf. olga-generate_sequences)
-vdjtools pgen seqs.tsv -m TRB -o pgen.tsv      # Pgen per CDR3       (cf. olga-compute_pgen)
-vdjtools pgen seqs.tsv -m TRB --mismatches 1   # + the Hamming-1 ball; --v-col/--j-col to condition
-
-# model workshop — a model is a directory, or LOCUS[:source[:organism]]
-vdjtools model check TRB:learned                     # audit vs its germline; exits 1 on an error
-vdjtools model template --locus TRB -o tmpl/         # scaffold from arda, or your own --germline-v/-j
-vdjtools model learn clones.tsv -t tmpl/ -o fitted/  # EM on your sequences (--init template = fine-tune)
-vdjtools model log fitted/                           # log-likelihood per iteration
-vdjtools model diversity TRB:olga                    # entropy + total diversity estimate
-vdjtools model compare TRB:olga TRB:learned --by gene --dot diff.pdf
-vdjtools model loglik seqs.tsv TRB:learned           # log-likelihood, free parameters, AIC, BIC
-vdjtools model extend fitted/ --locus TRB -o bigger/ # add a larger allele library
-vdjtools model export TRB:olga --long -o marginals.tsv
-
-# data — convert any format to the canonical table (TSV, or Parquet by extension), preprocess
-vdjtools convert mixcr.txt.gz -o clones.parquet   # MiXcr/immunoSEQ/AIRR/… → canonical Parquet
-vdjtools downsample clones.parquet 100000 -o ds.tsv
-
-# filtering — THREE SEPARATE AXES, deliberately separate flags:
-#   --productive       the REARRANGEMENT encodes a chain   (AIRR: in frame, no stop codon)
-#   --functional-genes the GERMLINE GENE is real           (IMGT: F / ORF / P)
-#   --min-len/--max-len  junction_aa length, INCLUSIVE     (default sanity bound 5..60)
-# A productive rearrangement can still use a pseudogene V — filtering one says nothing
-# about the other.
-vdjtools filter clones.parquet --productive --min-freq 1e-4 -o productive.tsv
-vdjtools filter clones.parquet --nonproductive -o nonproductive.tsv   # isolate them instead
-vdjtools filter clones.parquet --functional-genes --keep-orf -o f_orf.tsv
-vdjtools filter clones.parquet --productive --keep-frequencies -o kept.tsv  # file's own freqs
-
-# cross-batch V/J-usage bias — correct the usage, and rewrite the clonotype tables
-vdjtools correct-vj s1.tsv s2.tsv s3.tsv s4.tsv -b A,A,B,B \
-    --transform sigmoid --usage-out usage.tsv --outdir corrected/
-
-vdjtools pool s1.tsv s2.tsv s3.tsv --join --min-samples 2 -o joint.tsv
-
-# repertoire analytics — sample files, or a cohort via -m/--metadata + --base-dir
-vdjtools diversity      sampleA.tsv sampleB.tsv -o diversity.tsv
-vdjtools overlap        *.tsv -o overlap.tsv
-vdjtools segment-usage  *.tsv --segment v -o usage.tsv
-vdjtools spectratype    *.tsv -o spectra.tsv
-vdjtools diversity      -m metadata.txt --base-dir samples/ --threads 8 -o div.tsv   # parallel cohort
-vdjtools spectratype    --cohort cohort_parquet/ -o spectra.tsv                       # one streamed pass
-
-# the portable signature — one fixed, named feature vector per sample (see below)
-vdjtools corpus         --corpus naive --smoke -o naive.npz      # fit once, no cohort needed
-vdjtools signature      --corpus naive.npz -m metadata.txt --base-dir samples/ -o sig.tsv
-
-# longitudinal — paired within-donor expansion test between two timepoints
-vdjtools dynamics day0.tsv day15.tsv -o tracked.tsv
-```
-
-Native vdjtools, AIRR Rearrangement, Parquet, and third-party inputs are auto-detected; every
-command writes to `-o` — **TSV, or Parquet when the path ends in `.parquet` / `.pq`** — or to stdout
-(so it pipes). Cohort commands parallelise over samples with `-t/--threads` or stream a pre-ingested
-Parquet cohort with `--cohort`. Run `vdjtools <command> --help` for options.
-
-## Analytics (Python API)
-
-Every reader returns one canonical `polars` clonotype frame (AIRR **junction** columns), and every
-analysis function takes and returns such frames — so results chain together and drop straight into
-plotting. A tour of the analysis modules (full runnable walkthrough in the
-[**User guide**](https://docs.isalgo.dev/vdjtools/usage.html)):
-
-```python
-from vdjtools import io as vio, stats, features, overlap, preprocess
-
-# load (auto-detects MiXcr / immunoSEQ / AIRR / native / … and converts), or a whole cohort:
-sample = vio.read("clones.tsv")
-cohort = vio.read_samples(vio.read_metadata("metadata.txt"), base_dir="samples/")
-
-# diversity, rarefaction, segment usage, spectratype
-stats.diversity_stats(sample)                 # observed, Chao1, Shannon, inverse-Simpson, d50, …
-stats.inext(sample, q=(0, 1, 2))              # Hill-number rarefaction/extrapolation + bootstrap CIs
-stats.segment_usage(sample, "v")              # V (or "j") usage;  stats.spectratype(sample)
-
-# CDR3 physicochemistry & k-mers
-features.physchem_profile(sample, region="all")
-
-# repertoire overlap & TCRnet (fuzzy/similarity/TCRnet via the [overlap] engine)
-overlap.overlap_metrics(sampleA, sampleB)     # F / D / Jaccard / Morisita-Horn …
-overlap.tcrnet(sample)                         # per-clonotype neighbourhood enrichment
-
-# preprocessing: downsample to a common depth, error-correct, filter, pool
-preprocess.downsample(sample, 100_000)
-preprocess.correct(preprocess.filter_productive(sample))
-
-# three filtering axes, kept apart: AIRR productivity, IMGT gene functionality, length
-preprocess.filter_productive(sample, recompute_frequencies=False)  # keep the file's freqs
-preprocess.filter_functional_genes(sample, keep=("F", "ORF"))      # IMGT axis
-preprocess.filter_length(sample, min_len=5, max_len=60)            # inclusive bounds
-
-# cross-batch V/J-usage bias: batch-correct usage, then resample the clonotype table
-usage = preprocess.correct_vj_usage(cohort, batch_col="batch", transform="sigmoid")
-fixed = preprocess.apply_vj_correction(sampleA, usage, sample_id="A0")
-```
-
-The **portable signature** — one repertoire in, a fixed named positional feature vector out, on a
-scale a downstream model can consume without fitting a scaler of its own. This is the statistics
-half (`vsig`); the geometry half (`rsig`, features of the prototype-sum embedding) is
-[mirpy](https://github.com/antigenomics/mirpy)'s `mir.signature`, and the two concatenate on
-`sample_id` into one contract:
-
-```python
-from vdjtools.signature import vsig, vsig_cohort
-from vdjtools.signature.corpus import Corpus
-
-corpus = Corpus.load("naive.npz")             # a corpus is REQUIRED -- no default
-v = vsig({"TRB": sample}, corpus)             # {column: value}, in artifact order
-```
-
-Every feature carries a variance-stabilising transform chosen from its support — Haldane–Anscombe
-logit for a proportion, Anscombe arcsine for a share, CLR (*k−1* parts) for a composition, log for
-a count — so that a read count, an isotype fraction and a principal component can sit in one
-matrix. `core ⊂ standard ⊂ full` are exact **index subsets** of one frozen column order. A locus
-that was not sequenced is `nan` plus a `mask:` column, never a zero.
-
-Longitudinal tracking — which clonotypes changed between two timepoints, and the VDJtrack recapture
-model (Pavlova, Zvyagin & Shugay 2024):
-
-```python
-from vdjtools import dynamics
-
-# paired within-donor test: emergent / expanded / persistent / contracted / vanishing
-tracked = dynamics.test_pair(day0, day15)                  # depth handled per-pair (effective N)
-grouped = dynamics.test_metaclonotypes(day0, day15, scope="1,0,0,1")  # 1-Hamming CDR3 ball first
-called  = dynamics.expansion_test(day0, day15)             # edgeR NB-exact caller (log2FC + p)
-
-# VDJtrack size-bucket recapture model — recapture fraction per clone-size class (Beta bands);
-# split by a group column + capture_test() for the group effect (see examples/vaccination_tracking.py)
-rates = dynamics.capture_rates(pre, post)
-```
-
-Incidence-based clonotype association (Emerson 2017 / Howie 2015 / De Witt 2018 / Vlasova 2026)
-— a choice of test, condition, and co-occurrence — and single-cell paired-chain Pgen:
-
-```python
-from vdjtools import biomarker, sc
-from vdjtools.biomarker import association, condition
-
-# feature vs condition: Fisher / chi2 / Bayesian / permutation; binary, per-HLA-allele, or CMH-stratified
-association(cohort, condition.binary(meta, "cmv"), test=["fisher", "bayes_bf"])
-association(cohort, condition.stratified(meta, "cmv", "hla"), stratum_col="_stratum")  # CMV | HLA (CMH)
-
-# feature vs feature: in-silico α-β pairing / same-chain co-specificity (θ lift + Fisher + FDR)
-biomarker.cooccurrence(cohort, chain_a="TRA", chain_b="TRB", evalue=True)
-
-sc.paired_pgen(sc.pair_chains(sc.read_10x("filtered_contig_annotations.csv")))  # pgen_alpha·pgen_beta
-```
-
-## Repertoire signatures (extended)
-
-An **optional** layer on top of the analytics above, for when the question is a *model* rather than
-a statistic: one AIRR sample in, one fixed-width, named, already-standardised feature vector out —
-so your matrix and a collaborator's are the same coordinate system, computed independently, with no
-scaler of your own.
-
-```bash
-vdjtools signature --corpus blood -m metadata.txt --base-dir samples/ -o vsig.tsv
-vdjtools signature --corpus blood --components 32 --describe   # exactly what you will get
-vdjtools corpus --fetch all                                   # pre-warm the corpus cache
-vdjtools corpus --corpus synthetic-tissue -o st.npz           # or build a synthetic one yourself
-```
-
-```python
-from vdjtools.signature import vsig, vsig_cohort, raw_and_channels, synthesize
-```
-
-Three stages, and a **corpus** fixes the last two: raw features come from this sample alone, then
-they are clamped to the corpus's winsorization bounds, then rotated by its per-locus PCA and scaled
-by its per-PC median and MAD. A corpus is required — a signature is comparable to another one only
-if both were rotated through the same one, and nothing about the numbers would say otherwise.
-
-**Nine corpora are published — three fitted on real repertoires, five synthetic, all at 256
-components per locus.** `blood` (11,117 bulk RNA-seq blood samples, 947 study groups), `tissue`
-(21,131 / 1,934) and `deep-tcr` (3,936 amplicon samples, TRA+TRB) are the real references, each with an
-uncapped variant so the per-study cap's effect is measurable. `synthetic-blood` and `synthetic-tissue`
-draw every repertoire as a naive/memory mixture across three quantile ladders measured per locus on
-that compartment — clonotype richness, reads per expanded clone, and the singleton fraction that
-stands in for the naive share — so they span the real depth range (blood TRB richness 74 to 3,162
-clonotypes) while needing **no cohort at all** to rebuild, bit-identically, at any core count.
-`naive` and `memory` remain the pure-regime references.
-
-Artifacts are **fetched on first use**, not bundled: at 256 components the nine corpora are ~110 MB
-across both halves, so the wheel ships a few KB of index (every name, size and SHA-256) and downloads
-what you name into `~/.cache/vdjtools/signature`, verified against that digest. A local path always
-wins over a download.
-
-Columns are `<sig>:<block>:<locus>:<feature>`. What comes out per locus is `vsig:pc:<locus>:PCnn`
-plus **channels**, which are never rotated and never clamped: `cov:*:cstar` (the coverage this
-sample actually attained, always emitted), `mask:*` (why a column is a hole), and `qc:*` (germline
-fallback fractions, and how much of the row the bounds clamped). A hole is `nan`, never `0`.
-
-`--components` takes a count (`128`) or a variance fraction (`0.95`); truncating downward later is
-exact and needs no refit.
-
-This command emits the statistics half (`vsig`). The geometry half (`rsig`) needs the prototype
-embedding and lives in [mirpy](https://github.com/antigenomics/mirpy) — `mir signature` emits it.
-
-Full documentation, including which corpus to use and how the winsorization side is chosen:
-[**Signature**](https://docs.isalgo.dev/vdjtools/signature.html) ·
-[**Channels**](https://docs.isalgo.dev/vdjtools/channels.html)
-
-## Recombination model engine
-
-Precomputed models for all **7 human loci** ship in the wheel — no OLGA or download needed:
+Models for all **seven human loci** ship in the wheel — no OLGA install and nothing to download:
 
 ```python
 from vdjtools.model import load_bundled, native
-from vdjtools.model.generate import generate
 
-model = load_bundled("TRB", source="olga")     # or source="learned" (fit to real repertoires)
-
-native.pgen_nt(model, "TGTGCCAGCAGC...")        # nucleotide generation probability (native C++)
-native.pgen_aa(model, "CASSLAPGATNEKLFF")       # amino-acid Pgen (codon-marginalised)
-native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # + the whole Hamming-1 ball
-native.pgen_aa_batch(model, seqs, mismatches=1, threads=0)  # Pgen over many CDR3s, thread-parallel (~11×)
-generate(model, 1000, seed=1)                    # sample a repertoire -> polars DataFrame
-                                                # seed= is process-stable from 3.3.0
+model = load_bundled("TRB", source="olga")            # or source="learned"
+native.pgen_aa(model, "CASSLAPGATNEKLFF")             # 3.595e-08
+native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # and its whole Hamming-1 ball
 ```
 
-Where Pgen *sums* over recombination scenarios, `model.viterbi` takes the **argmax** — the single
-most likely one, which is the V/D/J boundary markup:
+Pgen agrees with OLGA to 1e-15 on every locus while being several times faster, and adds tandem-D
+support that OLGA and IGoR lack. You can also fit a model to your own non-productive reads, audit it
+against its germline, compare two models parameter by parameter, and render its recombination Bayes
+net — see the [model workshop](https://docs.isalgo.dev/vdjtools/model.html).
 
-```python
-from vdjtools.model import best_scenario
+## Signatures
 
-sc = best_scenario(model, "TGTGCCAGCAGCTTAGGGACAGGGGGCTACGAGCAGTACTTC",
-                   v="TRBV19*01", j="TRBJ2-7*01")     # ALLELE names, as the model's tables are
-
-sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, in CDR3-nt space
-# -> 8, 'TRBD1*01', 15, 24, 26
-```
-
-It reuses the same tables and the same loops as `pgen_nt`, so the chosen D obeys `P(D|J)` — a
-TRBD2–TRBJ1 pair is genomically impossible and cannot be called.
-
-`infer_nt` goes the other way, reconstructing a **nucleotide** CDR3 from an amino-acid one — the
-VDJdb case, where a record carries `(V, J, CDR3aa)` and no nucleotides:
-
-```python
-from vdjtools.model import infer_nt
-
-sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
-sc.cdr3_nt, sc.pgen, sc.margin        # sequence, its exact Pgen, and how far ahead of the runner-up
-```
-
-Germline positions are pinned to their segment; each free N-region position takes the nucleotide the
-insertion model prefers. It reproduces the exponential brute-force oracle exactly on every record
-the oracle can resolve (25/25 TRG, 19/19 TRA) — fixing the germline trim first and then picking the
-best codon per residue only manages 9/25 and 4/19, because a trim chosen before the codons pins a
-codon the true optimum would have trimmed away.
-
-The search is native (the same Pi_L·Pi_R transfer matrix as `pgen_aa`, with `max` for the sums):
-**2.5 ms per human TRB CDR3, 0.5 ms per TRA** — all 80k VDJdb records in about 3 minutes. `v=`/`j=`
-take one allele, several (a list or the comma-separated string an ambiguous `v_call` carries), or
-nothing at all, in which case the DP marginalizes over every gene at essentially no extra cost.
-
-Matches OLGA's Pgen to machine precision across all 7 loci, and adds tandem-D (D-D) support that
-OLGA/IGoR lack. Learn a model from your own **non-functional** reads (out-of-frame *or* stop-codon
-— both escaped
-selection, which is all a generative model needs) with `model.infer.infer_native`.
-
-Explore any model's recombination **Bayes net** interactively (entropy, mutual information, marginals):
+One repertoire in, one fixed-width named feature vector out, standardised against a published
+reference corpus so your matrix and a collaborator's are in the same coordinate system without
+either of you fitting a scaler:
 
 ```bash
-pip install "vdjtools[examples]"
-marimo edit examples/model_explorer.py
+vdjtools signature --corpus blood samples/*.tsv.gz -o vsig.tsv
+mir       signature --corpus blood samples/*.tsv.gz -o rsig.tsv   # the geometry half, from mirpy
 ```
 
-Interactive **marimo** notebooks (data auto-loads from HuggingFace, or a local `~/hf/` copy):
+Nine corpora are published, all at 256 components per locus. `blood` (11,117 real samples, 947 study
+groups), `tissue` (21,131 / 1,934) and `deep-tcr` (3,936 amplicon samples, TRA+TRB) are fitted on
+real repertoires; the synthetic ones need no cohort at all and rebuild bit-identically anywhere.
+Artifacts are fetched and digest-verified on first use rather than bundled.
 
-- `examples/vaccination_tracking.py` — clonotype **tracking** + the recapture model across
-  yellow-fever / influenza / TBE vaccination time courses (`vdjtools.dynamics`).
-- `examples/aging.py` — cohort-**streaming** diversity, clone-size and spectratype vs age.
-- `examples/ankspond_motif.py` — the ankylosing-spondylitis TRBV9 **"AS27" motif**: disease vs HLA-B27 carriage.
-- `examples/biomarker_explorer.py` — Emerson public-TCR association + co-occurrence.
+`--corpus` is required: a signature is comparable to another one only if both were rotated through
+the same corpus, and nothing about the numbers would say otherwise.
+[Signatures](https://docs.isalgo.dev/vdjtools/signature.html) ·
+[How they were fitted](https://docs.isalgo.dev/vdjtools/signature-methods.html) ·
+[Channels](https://docs.isalgo.dev/vdjtools/channels.html)
 
 ## Performance
 
-The Pgen / generation / EM / diversity hot paths are a native C++ (pybind11) core; everything else is
-polars. Amino-acid Pgen matches OLGA to machine precision (1e-15) across all 7 loci while being
-several times faster, and the built-in models keep the resident set small. Single thread, Apple M3
-(arm64), bundled human TRB model:
+The Pgen, generation, EM and diversity hot paths are a native C++ core reached through pybind11;
+everything else is polars. Single thread, Apple M3, bundled human TRB model:
 
-| operation | throughput | vs OLGA |
-|---|---|---|
-| nucleotide Pgen (single-D VDJ) | **~0.5 ms/seq** | **9×** |
-| amino-acid Pgen | **~0.6–0.9 ms/seq** | **8.6×** |
-| Pgen + Hamming-1 ball (1 substitution) | **~15 ms/seq** | **8.7×** |
-| sequence generation | **~32 000 seq/s** | — |
+| Operation | Throughput | vs OLGA |
+|---|--:|--:|
+| Nucleotide Pgen, single-D VDJ | 0.5 ms/seq | **9×** |
+| Amino-acid Pgen | 0.6–0.9 ms/seq | **8.6×** |
+| Amino-acid Pgen over the Hamming-1 ball | 15 ms/seq | **8.7×** |
+| Sequence generation, raw draws | 32,100 seq/s | — |
+| Sequence generation, `productive_only=True` | 8,960 seq/s | — |
 
-Nucleotide Pgen (via the same transfer-matrix DP as the aa path — an in-frame CDR3 is an aa query with
-one codon fixed per position) is exact vs OLGA across all loci. Batched Pgen / 1-mismatch over many
-CDR3s parallelises over sequences (`native.pgen_aa_batch`, **~11× on 16 cores**, bitwise-identical to
-the serial result); the EM E-step parallelises over reads (~6.7× on 8 threads); diversity/rarefaction
-run on a native iNEXT kernel (bootstrap + parallel batch). Memory stays light — **~63 MB**
-resident for `import vdjtools` plus one loaded model, **~123 MB** with all seven bundled models
-resident. Reproduce the in-repo half with `RUN_BENCHMARK=1 pytest tests/python -k benchmark`;
-the standalone Pgen harness lives in the separate `2026-vdjtools-benchmark` repository.
+The productive filter costs 3.6× on TRB and 5.1× on IGH (19,900 raw draws/s against 3,930
+productive), because out-of-frame and stop-codon draws are discarded and redrawn. Batched Pgen
+parallelises over sequences (11× on 16 cores, bit-identical to serial); the EM E-step parallelises
+over reads (6.7× on 8 threads). Memory: 63 MB resident for `import vdjtools` plus one model, 123 MB
+with all seven loaded.
 
-## Capabilities
+Reproduce the in-repo half with `RUN_BENCHMARK=1 pytest tests/python -k benchmark`.
 
-Reference: the [User guide](https://docs.isalgo.dev/vdjtools/usage.html) walks through every
-module with runnable examples; the [API reference](https://docs.isalgo.dev/vdjtools/) documents
-every symbol.
+## Development
 
-- **IO** — canonical clonotype frame on AIRR **junction** columns (`junction_nt` / `junction_aa`);
-  readers for native vdjtools, AIRR Rearrangement TSV, and Parquet, plus format-detecting converters
-  for MiXcr (v1/2 + v3/4, incl. C-gene / BCR isotype), MiGec, Adaptive immunoSEQ (v1/v2),
-  IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4, and arda AIRR output
-  ([`vdjtools.io.convert`](python/vdjtools/io/convert.py)); metadata-driven batch + hive-partitioned cohorts.
-- **Model** — native V(D)J recombination model: generation probability (Pgen — nt, aa,
-  1-mismatch, V/J-agnostic, **thread-parallel batch**), sequence generation, and EM inference, all in a
-  native (pybind11) core. Supersedes OLGA and IGoR: arda-driven scenario enumeration, polars marginal
-  tables, read-parallelised EM, and **tandem-D (D-D)** support. Concordant with OLGA across all 7 loci;
-  precomputed OLGA + real-data-learned models bundled ([`load_bundled`](python/vdjtools/model/bundled.py)).
-- **Model workshop** ([user guide](https://docs.isalgo.dev/vdjtools/model.html)) — build a model on
-  **your own V(D)J germline library** (`from_germline`, FASTA + anchors) and fit it to **your own
-  sequences**; export and re-import every marginal as tables; **check** a model against its germline
-  (`check_model` — functional genes stuck at P=0, unreachable deletion mass, incomplete conditionals);
-  read the **EM training log** and per-iteration likelihood; **compare two models** (per-event
-  Jensen-Shannon / total variation, gene usage, a bnlearn-style comparison graph) and their **Pgen
-  distributions**; compute **log-likelihood, AIC and BIC** of a clonotype set under a model;
-  **fine-tune** it, **extend** it with a larger allele library, and **re-weight V/J usage** for
-  protocol bias. Plus information content per recombination event and a **total diversity estimate**
-  (human TRB: ~52 bits per rearrangement, ~45 bits per sequence, ~3·10¹³ effective sequences).
-- **Stats** — diversity (Chao1/Shannon/Simpson/…), spectratype, V/J/VJ usage.
-- **Features** — CDR physicochemical profiles, k-mer / V+k-mer summaries.
-- **Overlap** — sample overlap and TCRnet (via vdjmatch/seqtree), similarity-aware overlap, clustering.
-- **Preprocess** — downsampling, error-correction, VJ-usage batch-effect correction, pooling/joining.
-- **Biomarker** — incidence association (Fisher / χ² / Bayesian / permutation) against binary,
-  per-HLA-allele or CMH-stratified conditions; α-β and same-chain co-occurrence pairing;
-  metaclonotypes.
-- **Dynamics** — longitudinal clonotype tracking between timepoints: the paired within-donor
-  expansion test (emergent / expanded / persistent / contracted / vanishing), the VDJtrack
-  size-bucket **recapture model**, metaclonotype-grouped testing, and an edgeR NB-exact caller
-  ([`vdjtools.dynamics`](python/vdjtools/dynamics)).
-- **Single-cell** — CellRanger / AIRR Cell / arda ingestion, chain pairing + doublet & mispairing
-  QC, paired α/β Pgen, clustering evaluation, and **round-trip interop** with the downstream
-  single-cell stack ([`vdjtools.sc`](python/vdjtools/sc), [guide](docs/singlecell.rst)).
+Uses [uv](https://docs.astral.sh/uv/) — one repo-local `.venv`, no conda:
 
-  | Ecosystem | Out | Back in | Needs |
-  |---|---|---|---|
-  | [scirpy](https://github.com/scverse/scirpy) / scverse | `to_scirpy` (scirpy's `obsm["airr"]`, or a `MuData` with GEX) | `from_scirpy` | `scirpy` out; only `awkward` back |
-  | [dandelion](https://github.com/tuonglab/dandelion) | `to_dandelion` | `from_dandelion`, `read_h5ddl` | `sc-dandelion` out; only `h5py` back |
-  | [scRepertoire](https://github.com/BorchLab/scRepertoire) (R) | `write_screpertoire` (AIRR or 10x shaped) | — | nothing |
-  | Any AIRR consumer | `to_airr` / `write_airr` | `from_airr`, `read_airr_cell` | nothing |
+```bash
+uv venv && source .venv/bin/activate
+uv pip install -e ".[dev,test]"       # builds the _core C++ extension
+pytest tests/python -q
+```
 
-  All four read the same thing — a flat AIRR Rearrangement table with `sequence_id` + `cell_id` —
-  so there is one emitter and one inverse, and each bridge is a thin adapter. Writing a container
-  delegates to the library that owns it (no stale copy of someone else's schema to drift); reading
-  one is ours, so a result handed to you is always openable. `push_obs` pushes a vdjtools-computed
-  column (`pgen_paired`, mispairing flags) onto an `AnnData.obs` or `Dandelion.metadata` you did
-  not build. CLI: `vdjtools sc convert|pair|qc|pgen|export`.
+`bash setup.sh --dev-parents --tests` does the same and editable-installs sibling checkouts of
+seqtree, arda and vdjmatch if present. You need a C++ toolchain (Xcode Command Line Tools on macOS,
+`build-essential` on Linux). MMseqs2 is needed only for arda's annotation path.
+
+## Citing
+
+For the v2 rewrite, cite this repository. For the original tool, cite
+[Shugay et al., *PLoS Computational Biology* 2015](https://doi.org/10.1371/journal.pcbi.1004503).
+The VDJtrack recapture model in `vdjtools.dynamics` is Pavlova, Zvyagin and Shugay (2024).
 
 ## License
 
-GPL-3.0-or-later.
+GPL-3.0-or-later. The legacy Groovy/Java v1.x tool lives on the
+[`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch, with its releases
+under the repository tags `v0.0.1` … `1.2.1`.

@@ -16,6 +16,8 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.githubpages",
     "nbsphinx",
+    "sphinx_design",      # the landing page's card grids
+    "sphinx_copybutton",  # a copy button on every code block
 ]
 
 # The compiled _core ext is installed in the docs build env, so vdjtools imports; the
@@ -62,3 +64,7 @@ html_sidebars = {
     "index": [],
 }
 nbsphinx_execute = "never"
+
+# Copy the command, not the shell prompt or the REPL chevrons, when a block shows them.
+copybutton_prompt_text = r">>> |\.\.\. |\$ "
+copybutton_prompt_is_regex = True

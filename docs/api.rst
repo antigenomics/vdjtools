@@ -635,5 +635,5 @@ The ``vdjtools`` command-line application.
    ``signature`` and ``corpus`` are excluded above on purpose. Their help text is written for the
    terminal — worked examples in indented blocks, which are not valid reStructuredText — and it is
    the primary documentation for those two commands. Read it with ``vdjtools signature --help`` /
-   ``vdjtools corpus --help``, or see :doc:`signature`.
+   ``vdjtools corpus --help``, or see :doc:`cli` and :doc:`signature`.
 
