@@ -259,6 +259,17 @@ CDR3 features (``vdjtools.features``)
 
 Per-clonotype and sample-level CDR3 sequence features: amino-acid physicochemical region profiles and k-mer summaries. These are the primitives; the signature's own feature groups are in :doc:`signature`.
 
+.. note::
+
+   Two conventions worth knowing before reading any signature column. **The ``mask``
+   channels are a feature block, not diagnostics** -- which loci a donor resolved is
+   biology, and dropping those columns before modelling loses real signal; ``qc`` is the
+   block that describes the row rather than the donor. And **the blocks the rotation is
+   fitted on are reachable in their own right** through ``named=`` on
+   :func:`~vdjtools.signature.vsig`, carrying their declared transform rather than a
+   natural scale. :func:`~vdjtools.signature.layout.channel_table` lists every feature
+   with its ``kind`` and its transform; :doc:`channels` explains both conventions.
+
 ``vdjtools.features.physchem``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
