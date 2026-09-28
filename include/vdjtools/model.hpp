@@ -131,6 +131,34 @@ AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m,
                                         const std::vector<int>& v_idxs,
                                         const std::vector<int>& j_idxs, int k, int nthreads);
 
+// One row of :func:`infer_nt` -- the most likely nucleotide CDR3 for an amino-acid one, with the
+// scenario behind it. ``ok`` is false for a row no rearrangement explains (an unknown residue, or
+// nothing reachable under the pinned V/J); every other field is then unset.
+struct InferNt {
+    bool ok = false;
+    std::string nt;
+    int v = -1, len_v = 0, j = -1, len_j = 0, d = -1, d_start = 0, d_end = 0;
+    int n_candidates = 0;
+    double pgen = 0.0, scenario_p = 0.0, runner_up_pgen = 0.0;
+};
+
+// ``infer_nt`` over a whole table: scenario search, codon reconstruction and the exact marginal
+// re-score, all inside one call and parallelized across rows.
+//
+// This is the entry point a caller with more than one junction wants. Everything the Python side
+// used to do per candidate -- laying a scenario out and picking its codons -- is the DP below, so
+// the GIL is released for the whole batch rather than reacquired once per row.
+//
+// ``v_alts[i]`` / ``j_alts[i]`` are the gene indices to search for row i: one entry pins that
+// allele, several search all of them and let the model choose, and ``-1`` marginalizes over the
+// segment. An EMPTY list is not ``-1``: it names no allele, so it explains nothing and the row is
+// declined -- as does an empty ``aas[i]``, which is how a caller passes through a row it has
+// already refused. ``k`` is how many distinct candidates are re-scored with the exact ``pgen_nt``.
+std::vector<InferNt> infer_nt_batch(const PackedModel& m, const std::vector<std::string>& aas,
+                                    const std::vector<std::vector<int>>& v_alts,
+                                    const std::vector<std::vector<int>>& j_alts,
+                                    int k, int nthreads);
+
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.
 struct Counts {

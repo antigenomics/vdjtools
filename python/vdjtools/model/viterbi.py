@@ -570,132 +570,36 @@ def _gap_bound(prep, N: int, vdj: bool, dvars) -> list[float]:
             for g in range(N + 1)]
 
 
-def _scenario_template(prep, N: int, sc: tuple):
-    """``(template, specs)`` for one native scenario — the layout :func:`_aa_dp_max` consumes.
+def _infer_nt_cols(model, aas: list, vs: list, js: list, n_best: int, threads: int) -> dict:
+    """The production path for one or many rows: :func:`native.infer_nt_many`, nothing else.
 
-    The search returns scenarios, not nucleotide paths, because once the scenario is fixed the free
-    positions are just two short insertion blocks and picking their codons is this one cheap DP.
-    Carrying back-pointers through the whole sweep would cost far more than the handful of
-    reconstructions a caller actually needs.
-    """
-    _w, V, len_v, J, len_j, D, idx5, idx3, pos = sc
-    cutv, cutj = prep.cut["v"][V], prep.cut["j"][J]
-    if len_v > len(cutv) or len_j > len(cutj) or len_v + len_j > N:
-        return None
-    gv = [_NT2NUM[c] for c in cutv[:len_v]]
-    gj = [_NT2NUM[c] for c in cutj[len(cutj) - len_j:]]
-    if D is None:
-        got = list(_vj_scenarios(prep, N, gv, gj, len_v, len_j))
-        return (got[0][1], got[0][2]) if got else None
-    cutd = prep.cut["d"][D]
-    dc = [_NT2NUM[c] for c in cutd[idx5:len(cutd) - idx3]]
-    ld = len(dc)
-    lvd, ldj = pos - len_v, (N - len_j) - (pos + ld)
-    if lvd < 0 or ldj < 0:
-        return None
-    return _d_template(prep, N, gv, gj, len_v, len_j, lvd, ldj, pos, dc, ld)
+    Every stage is native and the GIL is released for the whole batch (#181). It did not start
+    that way: the scenario search and the marginal re-score were native from the beginning, but
+    laying a scenario out and picking its codons was Python, per candidate -- 35% of a human TRB
+    row and 87% of a TRA one. That is why batching alone bought 1.33x on TRB and why `threads` was
+    worth almost nothing on TRA: Amdahl on a GIL-bound fraction, not a pool that failed to start.
 
-
-def _infer_nt_many(model, prep, aas: list[str], vs: list, js: list, n_best: int,
-                   threads: int) -> list:
-    """The production path for one or many rows: native argmax DP, this module for the codons.
-
-    Three stages, and each is batched over the whole input rather than per row, because the per-row
-    Python around the native calls is what made the single-row path 86% of vdjdb-db's build (#181):
-
-    1. **One** :func:`native.best_aa_scenarios_batch` call for every ``(row, v_alt, j_alt)`` query.
-       The multi-allele mode makes that ragged, so the query's originating row is carried alongside
-       and the scenarios are regrouped after.
-    2. The codon reconstruction, which is pure Python and stays per candidate.
-    3. **One** :func:`score._pgen_nt_many` call over every row's candidates flattened together.
-
-    Returns ``Scenario | None`` per input row, in input order.
+    Returns the columns :func:`native.infer_nt_many` returns, one entry per row in input order.
     """
     from . import native
-    from .score import _pgen_nt_many
 
-    k = max(1, n_best)
-    n = len(aas)
-    # --- stage 1: flatten (row, v_alt, j_alt) -> one native batch -> regroup by row.
-    q_row, q_seq, q_v, q_j = [], [], [], []
-    for i, aa in enumerate(aas):
-        if aa is None:
-            continue
-        for vv in _mask(vs[i], [None]):
-            for jj in _mask(js[i], [None]):
-                q_row.append(i)
-                q_seq.append(aa)
-                q_v.append(vv)
-                q_j.append(jj)
-    scen: list[list] = [[] for _ in range(n)]
-    if q_seq:
-        got = native.best_aa_scenarios_batch(model, q_seq, q_v, q_j, k, threads)
-        for qi, w, vc, lv, jc, lj, dc, i5, i3, pos in got.select(
-                "row", "w", "v_call", "len_v", "j_call", "len_j",
-                "d_call", "idx5", "idx3", "pos").iter_rows():
-            scen[q_row[qi]].append((w, vc, lv, jc, lj, dc, i5, i3, pos))
-
-    # --- stage 2: reconstruct the codons, then re-score every row's candidates in one call.
-    cands: list[list] = [[] for _ in range(n)]
-    # Distinct nt reconstructed, BEFORE the top-n_best truncation: that is what Scenario's
-    # n_candidates has always reported, and it is larger than the re-scored count whenever a
-    # multi-allele call pooled more candidates than n_best.
-    n_cand = [0] * n
-    flat_nt, flat_v, flat_j, flat_row = [], [], [], []
-    for i, aa in enumerate(aas):
-        if aa is None or not scen[i]:
-            continue
-        N = 3 * len(aa)
-        best: dict[str, tuple] = {}
-        for sc in sorted(scen[i], key=lambda s: -s[0]):
-            built = _scenario_template(prep, N, sc)
-            if built is None:
-                continue
-            _p, nt = _aa_dp_max(aa, built[0], built[1])
-            if nt is None:
-                continue
-            # sc[0] is already the full joint weight: the native DP folds in P(V)P(delV)P(J)P(delJ)
-            # P(D|J)P(delD)P(insLen) *and* the same insertion Markov product this DP just re-walked.
-            if sc[0] > best.get(nt, (0.0,))[0]:
-                best[nt] = (sc[0], sc)
-        if not best:
-            continue
-        n_cand[i] = len(best)
-        top = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0]))[:k]
-        cands[i] = top
-        for nt, (_w, sc) in top:
-            flat_nt.append(nt)
-            flat_v.append(_pin(vs[i], sc[1]))
-            flat_j.append(_pin(js[i], sc[3]))
-            flat_row.append(i)
-    pgens = _pgen_nt_many(model, flat_nt, flat_v, flat_j, threads) if flat_nt else []
-
-    # --- regroup the re-scores and pick each row's winner.
-    scored: list[list] = [[] for _ in range(n)]
-    for pos, i in enumerate(flat_row):
-        scored[i].append((pgens[pos], flat_nt[pos]))
-    out: list = [None] * n
-    for i, aa in enumerate(aas):
-        if not scored[i]:
-            continue
-        by_nt = dict(cands[i])
-        rescored = sorted(((p, nt, by_nt[nt][1], by_nt[nt][0]) for p, nt in scored[i]),
-                          key=lambda t: (-t[0], t[1]))
-        pgen, best_nt, s, w = rescored[0]
-        N = 3 * len(aa)
-        _sw, V, len_v, J, len_j, D, idx5, idx3, _dpos = s
-        ld = len(prep.cut["d"][D]) - idx5 - idx3 if D is not None else 0
-        out[i] = Scenario(cdr3_nt=best_nt, v_call=V, j_call=J, v_end=len_v, j_start=N - len_j,
-                          d_call=D if ld else None, d_start=_dpos if ld else None,
-                          d_end=_dpos + ld if ld else None, pgen=pgen, scenario_p=w,
-                          n_candidates=n_cand[i],
-                          runner_up_pgen=rescored[1][0] if len(rescored) > 1 else 0.0)
-    return out
+    return native.infer_nt_many(model, aas, vs, js, max(1, n_best), threads)
 
 
-def _pin(spec, chosen):
-    """The V/J to re-score under: the caller's pin when it named one allele, else the DP's choice."""
-    return spec if spec is None or (isinstance(spec, str) and "," not in spec) else chosen
+def _scenario_at(cols: dict, i: int, n_aa: int) -> Scenario | None:
+    """One row of :func:`_infer_nt_cols` -> a :class:`Scenario`, or ``None`` when nothing explains
+    it. ``ok`` is read first: a declined row's V/J/D fields are meaningless, not merely unset."""
+    if not cols["ok"][i]:
+        return None
+    ld = int(cols["d_end"][i]) - int(cols["d_start"][i])
+    return Scenario(cdr3_nt=cols["cdr3_nt"][i], v_call=cols["v_call"][i],
+                    j_call=cols["j_call"][i], v_end=int(cols["len_v"][i]),
+                    j_start=3 * n_aa - int(cols["len_j"][i]), d_call=cols["d_call"][i],
+                    d_start=int(cols["d_start"][i]) if ld else None,
+                    d_end=int(cols["d_end"][i]) if ld else None,
+                    pgen=float(cols["pgen"][i]), scenario_p=float(cols["scenario_p"][i]),
+                    n_candidates=int(cols["n_candidates"][i]),
+                    runner_up_pgen=float(cols["runner_up_pgen"][i]))
 
 
 def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
@@ -782,13 +686,16 @@ def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
         them, and the stage-2 ``pgen_nt`` re-scoring includes the tandem-D mass in full. Raise
         ``n_best`` if a D-D model's ordering matters to you.
     """
-    prep = _prep(model_or_prep)
     aa = cdr3_aa.upper()
     if not aa or any(a not in _AA2CODONS for a in aa):
         return None
-    N = 3 * len(aa)
     if isinstance(model_or_prep, Model):
-        return _infer_nt_many(model_or_prep, prep, [aa], [v], [j], n_best, 1)[0]
+        # threads=1 deliberately: one row must not spin up a pool. No `prepare` either -- the
+        # native path reads the packed model, and preparing one is a real first-call cost.
+        return _scenario_at(_infer_nt_cols(model_or_prep, [aa], [v], [j],
+                                           n_best, 1), 0, len(aa))
+    prep = _prep(model_or_prep)
+    N = 3 * len(aa)
     v_opts = _v_aa_options(prep, aa, N, v)
     j_opts = _j_aa_options(prep, aa, N, j)
     if v is None:                                        # nothing known -> start from a guess
@@ -939,28 +846,31 @@ def infer_nt_batch(model: Model, cdr3_aas, v=None, j=None, *, n_best: int = 8,
         raise ValueError("v must have the same length as cdr3_aas")
     if j is not None and len(j) != n:
         raise ValueError("j must have the same length as cdr3_aas")
-    vs = list(v) if v is not None else [None] * n
-    js = list(j) if j is not None else [None] * n
-    prep = _prep(model)
-    # An unencodable row is dropped from the query set here and comes back as a null row, matching
-    # infer_nt's own guard -- the DP has no codons for a residue outside the genetic code.
+    # An unencodable row is declined here and comes back as a null row, matching infer_nt's own
+    # guard -- the DP has no codons for a residue outside the genetic code.
     clean = [a.upper() if a and all(c in _AA2CODONS for c in a.upper()) else None for a in aas]
-    got = _infer_nt_many(model, prep, clean, vs, js, n_best, threads)
-    return pl.DataFrame(
-        {
-            "cdr3_nt": pl.Series([s.cdr3_nt if s else None for s in got], dtype=pl.Utf8),
-            "v_call": pl.Series([s.v_call if s else None for s in got], dtype=pl.Utf8),
-            "j_call": pl.Series([s.j_call if s else None for s in got], dtype=pl.Utf8),
-            "v_end": pl.Series([s.v_end if s else None for s in got], dtype=pl.Int64),
-            "j_start": pl.Series([s.j_start if s else None for s in got], dtype=pl.Int64),
-            "d_call": pl.Series([s.d_call if s else None for s in got], dtype=pl.Utf8),
-            "d_start": pl.Series([s.d_start if s else None for s in got], dtype=pl.Int64),
-            "d_end": pl.Series([s.d_end if s else None for s in got], dtype=pl.Int64),
-            "pgen": pl.Series([s.pgen if s else None for s in got], dtype=pl.Float64),
-            "scenario_p": pl.Series([s.scenario_p if s else None for s in got], dtype=pl.Float64),
-            "n_candidates": pl.Series([s.n_candidates if s else None for s in got],
-                                      dtype=pl.Int64),
-            "runner_up_pgen": pl.Series([s.runner_up_pgen if s else None for s in got],
-                                        dtype=pl.Float64),
-        }
-    )
+    cols = _infer_nt_cols(model, clean, list(v) if v is not None else [None] * n,
+                          list(j) if j is not None else [None] * n, n_best, threads)
+    n_aa = pl.Series([len(a) if a else 0 for a in clean], dtype=pl.Int64)
+    df = pl.DataFrame({
+        "ok": pl.Series(cols["ok"], dtype=pl.Boolean),
+        "cdr3_nt": pl.Series(cols["cdr3_nt"], dtype=pl.Utf8),
+        "v_call": pl.Series(cols["v_call"], dtype=pl.Utf8),
+        "j_call": pl.Series(cols["j_call"], dtype=pl.Utf8),
+        "v_end": pl.Series(cols["len_v"], dtype=pl.Int64),
+        "j_start": 3 * n_aa - pl.Series(cols["len_j"], dtype=pl.Int64),
+        "d_call": pl.Series(cols["d_call"], dtype=pl.Utf8),
+        "d_start": pl.Series(cols["d_start"], dtype=pl.Int64),
+        "d_end": pl.Series(cols["d_end"], dtype=pl.Int64),
+        "pgen": pl.Series(cols["pgen"], dtype=pl.Float64),
+        "scenario_p": pl.Series(cols["scenario_p"], dtype=pl.Float64),
+        "n_candidates": pl.Series(cols["n_candidates"], dtype=pl.Int64),
+        "runner_up_pgen": pl.Series(cols["runner_up_pgen"], dtype=pl.Float64),
+    })
+    # A zero-length D contributed nothing, so its span is null rather than an empty interval --
+    # the same distinction `Scenario` draws. Then every column of a declined row goes null at once.
+    return (df
+            .with_columns(pl.when(pl.col("d_end") != pl.col("d_start")).then(pl.col(c))
+                          for c in ("d_start", "d_end"))
+            .with_columns(pl.when("ok").then(pl.col(c)) for c in df.columns if c != "ok")
+            .drop("ok"))

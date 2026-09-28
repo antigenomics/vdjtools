@@ -137,6 +137,55 @@ PYBIND11_MODULE(_core, m) {
           "the per-sequence calls; returns one numpy column per scenario field, with 'row' indexing "
           "seqs and 'rank' the position within that row's top-k. threads=0 -> auto.");
 
+    m.def("infer_nt_batch",
+          [](const PackedModel& mm, const std::vector<std::string>& aas,
+             const std::vector<std::vector<int>>& v_alts,
+             const std::vector<std::vector<int>>& j_alts, int k, int threads) {
+              std::vector<vdjtools::InferNt> got;
+              {
+                  py::gil_scoped_release nogil;
+                  got = vdjtools::infer_nt_batch(mm, aas, v_alts, j_alts, k, threads);
+              }
+              // One column per field: a declined row is present with ok=false, never absent, so
+              // the caller can join positionally without working out which rows went missing.
+              size_t n = got.size();
+              std::vector<int8_t> ok(n);
+              std::vector<std::string> nt(n);
+              std::vector<int> v(n), len_v(n), j(n), len_j(n), d(n), d_start(n), d_end(n), nc(n);
+              std::vector<double> pgen(n), scen_p(n), runner(n);
+              for (size_t i = 0; i < n; ++i) {
+                  const auto& r = got[i];
+                  ok[i] = static_cast<int8_t>(r.ok);
+                  nt[i] = r.nt;
+                  v[i] = r.v; len_v[i] = r.len_v; j[i] = r.j; len_j[i] = r.len_j;
+                  d[i] = r.d; d_start[i] = r.d_start; d_end[i] = r.d_end;
+                  nc[i] = r.n_candidates;
+                  pgen[i] = r.pgen; scen_p[i] = r.scenario_p; runner[i] = r.runner_up_pgen;
+              }
+              auto ints = [](const std::vector<int>& x) {
+                  return py::array_t<int>(x.size(), x.data());
+              };
+              auto dbls = [](const std::vector<double>& x) {
+                  return py::array_t<double>(x.size(), x.data());
+              };
+              py::dict out;
+              out["ok"] = py::array_t<int8_t>(ok.size(), ok.data());
+              out["cdr3_nt"] = py::cast(nt);
+              out["v"] = ints(v); out["len_v"] = ints(len_v);
+              out["j"] = ints(j); out["len_j"] = ints(len_j);
+              out["d"] = ints(d); out["d_start"] = ints(d_start); out["d_end"] = ints(d_end);
+              out["n_candidates"] = ints(nc);
+              out["pgen"] = dbls(pgen); out["scenario_p"] = dbls(scen_p);
+              out["runner_up_pgen"] = dbls(runner);
+              return out;
+          },
+          py::arg("model"), py::arg("aas"), py::arg("v_alts"), py::arg("j_alts"),
+          py::arg("k") = 8, py::arg("threads") = 0,
+          "infer_nt over a whole table: scenario search, codon reconstruction and the exact "
+          "marginal re-score, all native and parallelized across rows. v_alts[i]/j_alts[i] are the "
+          "gene indices to search for row i (one = a pin, several = search all, [-1] or empty = "
+          "marginalize); an empty aas[i] declines that row. threads=0 -> auto.");
+
     py::class_<Counts>(m, "Counts")
         .def_readonly("v_choice", &Counts::v_choice)
         .def_readonly("j_choice", &Counts::j_choice)

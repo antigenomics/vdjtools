@@ -481,3 +481,83 @@ def best_aa_scenarios_batch(
                    if names_d.size else np.full(d.shape, None, dtype=object)),
         "idx5": cols["idx5"], "idx3": cols["idx3"], "pos": cols["pos"],
     })
+
+
+def _alts(spec, alias: dict, idx_of: dict, kind: str) -> list[int]:
+    """A ``v=``/``j=`` entry -> the gene indices to search.
+
+    Three input modes, because real annotation tables carry all three: ``None`` (nothing known, so
+    marginalize over the segment), one name, or **several** -- a list, or the comma-separated string
+    an AIRR ``v_call`` holds when the aligner could not choose. The multi case is not a pin: every
+    listed allele is searched and the model picks the most plausible.
+
+    An **empty** candidate set is a fourth thing and not the same as ``None``: it names no allele,
+    so it explains nothing and the row is declined.
+    """
+    if spec is None:
+        return [-1]
+    names = [s.strip() for s in spec.split(",")] if isinstance(spec, str) else list(spec)
+    # An EMPTY candidate set is not ``None``: it explains nothing, and the row is declined. Folding
+    # the two together would answer a call that named no allele by marginalizing over all of them.
+    return [_gene_idx(idx_of, alias.get(n, n), kind) for n in names if n]
+
+
+def infer_nt_many(model: Model, cdr3_aas: list, v: list | None = None, j: list | None = None,
+                  k: int = 8, threads: int = 0, *, resolve_genes: bool = True) -> dict:
+    """:func:`vdjtools.model.infer_nt` over many CDR3s, entirely in the native layer.
+
+    The whole pipeline -- scenario search, codon reconstruction, exact marginal re-score -- runs in
+    one call with the GIL released, which is what makes ``threads`` worth anything: the
+    reconstruction used to be Python and held the GIL for 35% of a human TRB row (#181).
+
+    Args:
+        model: A recombination :class:`Model`.
+        cdr3_aas: Junction amino-acid sequences. A falsy entry declines that row.
+        v: Optional per-row V calls (same length). Each entry is an allele, comma-separated
+            alleles, a list, or ``None`` to marginalize. ``None`` for the argument marginalizes
+            every row.
+        j: Optional per-row J calls (as ``v``).
+        k: Distinct nucleotide candidates re-scored per row.
+        threads: **Kernel threads** -- not worker processes. ``0`` = auto
+            (``hardware_concurrency - 2``); batches under 64 rows stay single-threaded so their
+            result is bitwise-identical to a serial run.
+        resolve_genes: Resolve a **gene**-level call to a representative allele, as
+            :func:`best_aa_scenarios`.
+
+    Returns:
+        Parallel columns, one entry per input row in input order: ``ok`` (0 for a row nothing
+        explains), ``cdr3_nt``, ``v_call``, ``len_v``, ``j_call``, ``len_j``, ``d_call``,
+        ``d_start``, ``d_end``, ``n_candidates``, ``pgen``, ``scenario_p``, ``runner_up_pgen``.
+        The V/J/D names of a declined row are meaningless, not merely unset -- read ``ok`` first.
+
+    Raises:
+        KeyError: If any ``v``/``j`` entry names no gene the model carries.
+        ValueError: If ``v`` or ``j`` is given with a length other than ``len(cdr3_aas)``.
+    """
+    import numpy as np
+
+    from .._core import infer_nt_batch as _batch
+
+    pm, vi, ji = pack(model)
+    aas = [s.upper() if s else "" for s in cdr3_aas]
+    if v is not None and len(v) != len(aas):
+        raise ValueError("v must have the same length as cdr3_aas")
+    if j is not None and len(j) != len(aas):
+        raise ValueError("j must have the same length as cdr3_aas")
+    alias = gene_to_allele(model) if resolve_genes else {}
+    v_alts = [_alts(x, alias, vi, "V") for x in (v if v is not None else [None] * len(aas))]
+    j_alts = [_alts(x, alias, ji, "J") for x in (j if j is not None else [None] * len(aas))]
+    cols = _batch(pm, aas, v_alts, j_alts, k, threads)
+
+    # Index -> allele name by fancy-indexing, so naming every row stays vectorized.
+    names_v = np.array([a for a, _i in sorted(vi.items(), key=lambda kv: kv[1])], dtype=object)
+    names_j = np.array([a for a, _i in sorted(ji.items(), key=lambda kv: kv[1])], dtype=object)
+    names_d = np.array(model.genomic["genes_d"]["d_allele"].to_list()
+                       if model.chain_type == "VDJ" else [], dtype=object)
+    d = cols["d"]
+    cols["v_call"] = names_v[np.maximum(cols.pop("v"), 0)]
+    cols["j_call"] = names_j[np.maximum(cols.pop("j"), 0)]
+    cols["d_call"] = (np.where(d >= 0, names_d[np.maximum(d, 0)], None) if names_d.size
+                      else np.full(d.shape, None, dtype=object))
+    del cols["d"]
+    return cols

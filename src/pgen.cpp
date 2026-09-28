@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #include <thread>
 
@@ -1653,5 +1654,267 @@ AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m, const std::vector<
     return out;
 }
 
+// ---------------------------------------------------------------------------------------------
+// infer_nt: the scenario search, the codon reconstruction and the marginal re-score, in one call.
+//
+// `best_aa_scenarios` above returns SCENARIOS; turning one into nucleotides is a 25-state
+// max-product DP over the CDR3, and until #181 that DP lived in Python (`viterbi._aa_dp_max`).
+// Measured there at 35% of a human TRB row and 87% of a TRA one -- and it held the GIL, which is
+// what capped the batch entry point at 1.33x however many threads it was handed. It is the same DP
+// here, factor for factor, including its tie-break: two paths of exactly equal weight resolve to
+// the lexicographically larger nucleotide string, so a run stays reproducible.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+constexpr int kMaxNt = 3 * 128;  // CDR3 nucleotides; a longer junction is not a junction
+
+enum : int8_t { kGerm = 0, kLeft = 1, kRight = 2 };
+
+// One scenario laid out per CDR3 position: the germline nucleotide, or -1 plus which insertion
+// junction scores the position when it is free. `kLeft` reads 5'->3' (VD, or VJ on a VJ chain),
+// `kRight` reads 3'->5' (DJ) -- the same two spec kinds `viterbi._d_template` builds.
+struct Layout {
+    int N = 0;
+    int8_t tpl[kMaxNt], kind[kMaxNt], first[kMaxNt], last[kMaxNt];
+    const double *Rl = nullptr, *bl = nullptr, *Rr = nullptr, *br = nullptr;
+};
+
+bool layout_of(const PackedModel& m, int N, const AaScenario& sc, Layout& o) {
+    if (N <= 0 || N > kMaxNt) return false;
+    if (sc.v < 0 || sc.v >= m.nV() || sc.j < 0 || sc.j >= m.nJ()) return false;
+    const auto& cv = m.cut_v[sc.v];
+    const auto& cj = m.cut_j[sc.j];
+    int lcv = static_cast<int>(cv.size()), lcj = static_cast<int>(cj.size());
+    if (sc.len_v < 0 || sc.len_j < 0) return false;
+    if (sc.len_v > lcv || sc.len_j > lcj || sc.len_v + sc.len_j > N) return false;
+
+    o.N = N;
+    std::fill(o.tpl, o.tpl + N, static_cast<int8_t>(-1));
+    std::fill(o.kind, o.kind + N, static_cast<int8_t>(kGerm));
+    std::fill(o.first, o.first + N, static_cast<int8_t>(0));
+    std::fill(o.last, o.last + N, static_cast<int8_t>(0));
+    for (int p = 0; p < sc.len_v; ++p) o.tpl[p] = cv[p];
+    int right = N - sc.len_j;
+    for (int p = 0; p < sc.len_j; ++p) o.tpl[right + p] = cj[lcj - sc.len_j + p];
+
+    auto block = [&](int lo, int hi, int8_t kind) {
+        for (int p = lo; p < hi; ++p) {
+            o.kind[p] = kind;
+            o.first[p] = static_cast<int8_t>(p == lo);
+            o.last[p] = static_cast<int8_t>(p == hi - 1);
+        }
+    };
+    if (sc.d < 0) {  // VJ chain: the whole gap is one VJ insertion
+        int ins = N - sc.len_v - sc.len_j;
+        if (ins >= static_cast<int>(m.ins_vj.size()) || m.ins_vj[ins] == 0.0) return false;
+        block(sc.len_v, sc.len_v + ins, kLeft);
+        o.Rl = m.R_vj.data();
+        o.bl = m.bias_vj.data();
+        return true;
+    }
+    if (sc.d >= m.nD()) return false;
+    const auto& cd = m.cut_d[sc.d];
+    int ld = std::max(0, static_cast<int>(cd.size()) - sc.idx5 - sc.idx3);
+    if (sc.pos < sc.len_v || sc.pos + ld > right) return false;   // lvd >= 0 and ldj >= 0
+    for (int p = 0; p < ld; ++p) o.tpl[sc.pos + p] = cd[sc.idx5 + p];
+    block(sc.len_v, sc.pos, kLeft);
+    block(sc.pos + ld, right, kRight);
+    o.Rl = m.R_vd.data();
+    o.bl = m.bias_vd.data();
+    o.Rr = m.R_dj.data();
+    o.br = m.bias_dj.data();
+    return true;
+}
+
+// The max-product codon DP for one laid-out scenario: germline positions are pinned to their
+// segment and each free position takes the nucleotide maximising the insertion model covering it,
+// subject to every complete codon translating to the requested residue.
+//
+// State s = (nt[i-1], nt[i-2]) packed as (p1+1)*5 + (p2+1); placing `nt` moves to (nt+1)*5+(p1+1).
+// The states carry NO path -- a backpointer table does, and a position's nucleotide is read
+// straight off its state -- so the hot loop copies no strings. A tie (two paths at exactly equal
+// weight) is resolved by walking both backpointer chains, which costs nothing on the paths that do
+// not tie, and is the same lexicographic-max rule the Python reference used.
+struct CodonDP {
+    std::vector<int8_t> bp;  // [i*25 + s] = the state at position i-1 this path came from
+    double w[25], nw[25];
+    char pa[kMaxNt], pb[kMaxNt];
+
+    void trace(int i, int s, char* buf) const {
+        for (int p = i; p >= 0; --p) {
+            buf[p] = "ACGT"[s / 5 - 1];
+            s = bp[static_cast<size_t>(p) * 25 + s];
+        }
+    }
+
+    double run(const Layout& L, const std::string& aa, std::string& out) {
+        const int N = L.N;
+        bp.assign(static_cast<size_t>(N) * 25, 0);
+        std::fill(w, w + 25, 0.0);
+        w[0] = 1.0;  // (nt[-1], nt[-2]) = (-1, -1)
+        for (int i = 0; i < N; ++i) {
+            std::fill(nw, nw + 25, 0.0);
+            int8_t* bpi = &bp[static_cast<size_t>(i) * 25];
+            const bool codon_end = (i % 3 == 2);
+            const char aa_i = aa[i / 3];
+            const int lo = L.tpl[i] < 0 ? 0 : L.tpl[i];
+            const int hi = L.tpl[i] < 0 ? 3 : L.tpl[i];
+            for (int s = 0; s < 25; ++s) {
+                if (w[s] == 0.0) continue;
+                const int p1 = s / 5 - 1, p2 = s % 5 - 1;
+                for (int nt = lo; nt <= hi; ++nt) {
+                    double ww = w[s];
+                    if (L.kind[i] == kLeft) {
+                        ww *= L.first[i] ? L.bl[nt] : L.Rl[nt * 4 + p1];
+                    } else if (L.kind[i] == kRight) {
+                        if (!L.first[i]) ww *= L.Rr[p1 * 4 + nt];
+                        if (L.last[i]) ww *= L.br[nt];
+                    }
+                    if (ww <= 0.0) continue;
+                    if (codon_end && CODON[p2 * 16 + p1 * 4 + nt] != aa_i) continue;
+                    const int ns = (nt + 1) * 5 + (p1 + 1);
+                    if (ww > nw[ns]) {
+                        nw[ns] = ww;
+                        bpi[ns] = static_cast<int8_t>(s);
+                    } else if (ww == nw[ns] && i > 0) {
+                        trace(i - 1, s, pa);
+                        trace(i - 1, bpi[ns], pb);
+                        if (std::memcmp(pa, pb, static_cast<size_t>(i)) > 0)
+                            bpi[ns] = static_cast<int8_t>(s);
+                    }
+                }
+            }
+            std::copy(nw, nw + 25, w);
+            bool any = false;
+            for (int s = 0; s < 25 && !any; ++s) any = w[s] != 0.0;
+            if (!any) return 0.0;
+        }
+        int bs = -1;
+        for (int s = 0; s < 25; ++s) {
+            if (w[s] == 0.0) continue;
+            if (bs < 0 || w[s] > w[bs]) {
+                bs = s;
+            } else if (w[s] == w[bs]) {
+                trace(N - 1, s, pa);
+                trace(N - 1, bs, pb);
+                if (std::memcmp(pa, pb, static_cast<size_t>(N)) > 0) bs = s;
+            }
+        }
+        if (bs < 0) return 0.0;
+        trace(N - 1, bs, pa);
+        out.assign(pa, pa + N);
+        return w[bs];
+    }
+};
+
+// -2 = "whatever allele this scenario chose"; anything else is the caller's own pin (-1 included,
+// which marginalizes over the segment). A call naming exactly one allele is a pin; a call offering
+// several is not, so the re-score follows the winner.
+constexpr int kFromScenario = -2;
+
+int pin_of(const std::vector<int>& alts) {
+    return alts.size() == 1 ? alts[0] : kFromScenario;
+}
+
+bool alts_ok(const std::vector<int>& alts, int n) {
+    for (int a : alts) if (a < -1 || a >= n) return false;
+    return true;
+}
+
+InferNt infer_nt_one(const PackedModel& m, const std::string& aa, const std::vector<int>& valts,
+                     const std::vector<int>& jalts, int k, CodonDP& dp) {
+    InferNt r;
+    const int N = 3 * static_cast<int>(aa.size());
+    if (aa.empty() || k <= 0 || N > kMaxNt) return r;
+    if (!alts_ok(valts, m.nV()) || !alts_ok(jalts, m.nJ())) return r;
+
+    // Every (V alternative, J alternative) the call offers, pooled. Ragged on purpose: a multi-
+    // allele call is several searches whose candidates compete on the model's own weight.
+    std::vector<AaScenario> pool;
+    for (int vv : valts) {
+        for (int jj : jalts) {
+            auto got = best_aa_scenarios(m, aa, vv, jj, k);
+            pool.insert(pool.end(), got.begin(), got.end());
+        }
+    }
+    std::stable_sort(pool.begin(), pool.end(),
+                     [](const AaScenario& a, const AaScenario& b) { return a.w > b.w; });
+
+    // Distinct nucleotide sequence -> the best-weight scenario that produced it. A linear scan,
+    // because the pool is |V alts| x |J alts| x k entries -- single digits in every real call.
+    std::vector<std::pair<std::string, AaScenario>> best;
+    Layout L;
+    std::string nt;
+    for (const AaScenario& sc : pool) {
+        if (!layout_of(m, N, sc, L)) continue;
+        if (dp.run(L, aa, nt) <= 0.0) continue;
+        auto it = std::find_if(best.begin(), best.end(),
+                               [&](const std::pair<std::string, AaScenario>& kv) {
+                                   return kv.first == nt;
+                               });
+        if (it == best.end()) best.emplace_back(nt, sc);
+        else if (sc.w > it->second.w) it->second = sc;
+    }
+    if (best.empty()) return r;
+    // Distinct candidates reconstructed, BEFORE the top-k truncation: that is the count
+    // `Scenario.n_candidates` reports, and a multi-allele call pools more of them than k.
+    r.n_candidates = static_cast<int>(best.size());
+    std::sort(best.begin(), best.end(), [](const std::pair<std::string, AaScenario>& a,
+                                           const std::pair<std::string, AaScenario>& b) {
+        return a.second.w != b.second.w ? a.second.w > b.second.w : a.first < b.first;
+    });
+    if (static_cast<int>(best.size()) > k) best.resize(static_cast<size_t>(k));
+
+    // Stage 2: the exact marginal. Stage 1 maximises the JOINT P(nt, scenario); this function's
+    // contract is the marginal P(nt), and the re-score is what turns one into the other.
+    const int pv = pin_of(valts), pj = pin_of(jalts);
+    std::vector<int8_t> code(static_cast<size_t>(N));
+    std::vector<std::pair<double, size_t>> scored(best.size());
+    for (size_t c = 0; c < best.size(); ++c) {
+        const std::string& s = best[c].first;
+        for (int p = 0; p < N; ++p)
+            code[p] = static_cast<int8_t>(s[p] == 'A' ? 0 : s[p] == 'C' ? 1 : s[p] == 'G' ? 2 : 3);
+        scored[c] = {pgen_nt(m, code, pv == kFromScenario ? best[c].second.v : pv,
+                             pj == kFromScenario ? best[c].second.j : pj), c};
+    }
+    std::sort(scored.begin(), scored.end(),
+              [&](const std::pair<double, size_t>& a, const std::pair<double, size_t>& b) {
+                  return a.first != b.first ? a.first > b.first
+                                            : best[a.second].first < best[b.second].first;
+              });
+
+    const AaScenario& sc = best[scored[0].second].second;
+    const int ld = sc.d >= 0 && sc.d < m.nD()
+                       ? std::max(0, static_cast<int>(m.cut_d[sc.d].size()) - sc.idx5 - sc.idx3)
+                       : 0;
+    r.ok = true;
+    r.nt = best[scored[0].second].first;
+    r.v = sc.v;
+    r.len_v = sc.len_v;
+    r.j = sc.j;
+    r.len_j = sc.len_j;
+    r.d = ld ? sc.d : -1;
+    r.d_start = sc.pos;
+    r.d_end = sc.pos + ld;
+    r.pgen = scored[0].first;
+    r.scenario_p = sc.w;
+    r.runner_up_pgen = scored.size() > 1 ? scored[1].first : 0.0;
+    return r;
+}
+
+}  // namespace
+
+std::vector<InferNt> infer_nt_batch(const PackedModel& m, const std::vector<std::string>& aas,
+                                    const std::vector<std::vector<int>>& v_alts,
+                                    const std::vector<std::vector<int>>& j_alts,
+                                    int k, int nthreads) {
+    if (v_alts.size() != aas.size() || j_alts.size() != aas.size())
+        throw std::invalid_argument("v_alts and j_alts must have one entry per sequence");
+    return run_batch(aas.size(), nthreads, [&](size_t i) {
+        CodonDP dp;  // per row, so nothing is shared between workers
+        return infer_nt_one(m, aas[i], v_alts[i], j_alts[i], k, dp);
+    });
+}
 
 }  // namespace vdjtools

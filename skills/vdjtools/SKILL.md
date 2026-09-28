@@ -172,13 +172,20 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   **`infer_nt_batch(model, aas, v=, j=, n_best=8, threads=0)`** is `infer_nt` over a whole table →
   one row per input row in input order (`cdr3_nt`, `v_call`, `j_call`, `v_end`, `j_start`, `d_call`,
   `d_start`, `d_end`, `pgen`, `scenario_p`, `n_candidates`, `runner_up_pgen`), a declined row present
-  with nulls. Identical to the per-row loop field for field at any thread count. On the released
-  VDJdb key set, 4,000 human TRB keys: **0.880 → 0.662 ms/row (1.33x)** against a 4-thread per-row
-  pool. Batching alone stops there because the codon reconstruction is pure Python — 35% of TRB and
-  **87% of TRA**, which is why TRA does not scale with `threads`. `n_best` reaches all three stages:
-  `4` is 2.58x/2.95x for 97.7%/**100%** the same `cdr3_nt`, `2` is 4.63x/5.93x for 90.2%/99.2%.
-  NOTE: a low `n_best` degrades `Scenario.margin` before `cdr3_nt` — 470 of 4,000 TRB rows lose their
-  `runner_up_pgen` at `4` against 193 at `8`. `threads` is **kernel threads**; never wrap it in a pool.
+  with nulls. Identical to the per-row loop field for field at any thread count (0 mismatches on
+  4,134 row-comparisons over three loci and four call modes). The whole pipeline is native --
+  scenario search, codon reconstruction, exact marginal re-score -- so the GIL is released for the
+  batch. On the released VDJdb key set, 3,000-key samples of 111,655 human TRB / 52,191 TRA keys:
+  **0.8529 → 0.0863 ms/key on TRB (9.89x) and 0.6682 → 0.0071 on TRA (94.05x)** against a 4-thread
+  per-row pool; 130.1 s → 10.0 s over the whole human key set. `threads` scales — 3.75x at 4 and
+  11.57x at 16 on TRB — because the reconstruction is no longer Python holding the GIL (it was 35%
+  of a TRB row and 87% of a TRA one, which capped batching alone at 1.34x).
+  `threads` is **kernel threads**, never worker processes: one batched call uses the library's own
+  threads, and a pool around it only oversubscribes the machine.
+  NOTE: `n_best` is now a weak speed knob — `4` buys 1.39x/1.19x and costs agreement (97.7%/99.9%
+  the same `cdr3_nt`), and it degrades `Scenario.margin` first: 347 of 2,961 scored TRB rows lose
+  their `runner_up_pgen` at `4` against 122 at the default `8`. A **gene**-level V/J call works as
+  of 4.4.0; before it, stage 1 resolved it and the re-score raised `KeyError`.
   WARNING: this is the argmax of a *probability* model, not an aligner. On 25,000 real TRB clonotypes
   against the observed nt markup, top-1 places `v_end` exactly **59.8%** and `j_start` **90.3%**,
   against **73.3% / 97.7%** for germline alignment (`arda.cdr3fix`) at a twelfth of the cost — many

@@ -127,17 +127,19 @@ def test_the_batch_does_not_carry_the_reference_paths_dead_knobs():
     assert p["threads"].default == 0 and p["n_best"].default == 8
 
 
-def test_more_threads_buy_wall_time_but_cannot_buy_all_of_it(trb):
-    """The GIL is released for the native stages, so threads must help -- measurably, not notionally.
+def test_quadrupling_the_threads_roughly_quarters_the_wall_time(trb):
+    """Doubling the workers must roughly halve the wall time, which is the whole test of whether a
+    pool is parallelism or overhead with extra steps.
 
-    The bar is deliberately **not** "quadrupling the workers quarters the wall time", which is the
-    right test for a fully native batch (``test_thread_scaling.py``) and the wrong one here. The
-    codon reconstruction is pure Python and holds the GIL: measured at 35% of the per-row cost on
-    human TRB and 87% on TRA, which caps a 4-thread run at ~1.9x by Amdahl and makes the TRA batch
-    essentially flat in ``threads``. Measured 1.86x on 4,000 real VDJdb TRB keys, 16-core M-series.
+    This bar used to be 1.25x on purpose, because the codon reconstruction was pure Python and held
+    the GIL -- 35% of a human TRB row and 87% of a TRA one, which capped a 4-thread run at ~1.9x by
+    Amdahl and made the TRA batch flat in ``threads``. The reconstruction is native as of #181, so
+    the whole batch runs with the GIL released and the honest bar is the native one. Measured 3.99x
+    at 4 threads and 9.53x at 16 on 2,000 real VDJdb human TRB keys, 16-core M-series; 2.5x is the
+    floor a shared CI box should still clear.
 
-    So this asserts the guard is there, not that it scales freely. Do not "fix" this test upward
-    without first moving the reconstruction off the GIL.
+    If this fails, the question is whether something reacquired the GIL per row -- not whether the
+    threshold is too keen.
     """
     import time
 
@@ -154,4 +156,23 @@ def test_more_threads_buy_wall_time_but_cannot_buy_all_of_it(trb):
     t4 = time.perf_counter() - t
 
     assert one.equals(many), "threads changed the answer"
-    assert t1 / t4 > 1.25, f"4 threads bought only {t1 / t4:.2f}x -- is the GIL still released?"
+    assert t1 / t4 > 2.5, f"4 threads bought only {t1 / t4:.2f}x -- is the GIL still released?"
+
+
+def test_a_gene_level_call_survives_the_marginal_rescore(trb):
+    """A **gene**-level V/J call must reach an answer, not a ``KeyError`` from the second stage.
+
+    Real annotation tables carry gene-level calls (``TRBV18``, 2,371 V and 1,784 J of them in
+    VDJdb) and the scenario search has always resolved them to a representative allele. The
+    marginal re-score did not: it was handed the caller's **raw** name, and ``pgen_nt`` raises on a
+    gene name on purpose -- so a call stage 1 accepted, stage 2 rejected. Every name is resolved
+    once to a model index now, before either stage sees it.
+    """
+    aa, v, j = CASES[0][0], CASES[0][1], CASES[0][2]
+    gene_v, gene_j = v.split("*")[0], j.split("*")[0]
+    by_gene = infer_nt(trb, aa, gene_v, gene_j)
+    by_allele = infer_nt(trb, aa, v, j)
+    assert by_gene is not None, "a gene-level call scored nothing"
+    assert by_gene == by_allele, "the gene name resolved to something other than its *01 allele"
+    batch = infer_nt_batch(trb, [aa, aa], v=[gene_v, v], j=[gene_j, j])
+    assert batch.row(0) == batch.row(1)

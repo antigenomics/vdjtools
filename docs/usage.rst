@@ -547,7 +547,7 @@ nothing because the underlying DP sweeps V and J anyway. Reported timings: 2.5 m
 CDR3, 0.5 ms per TRA, so all 80k VDJdb records take about three minutes.
 
 On a whole table, call :func:`~vdjtools.model.viterbi.infer_nt_batch` instead — the per-row Python
-around the native DP is the cost, not the DP. It returns **one row per input row, in input order**,
+around the native DP was the cost, not the DP. It returns **one row per input row, in input order**,
 with ``Scenario``'s fields as columns and a null row where the model explains nothing, and it is the
 per-row loop's answer field for field at any ``threads``.
 
@@ -557,19 +557,30 @@ per-row loop's answer field for field at any ``threads``.
 
    df = infer_nt_batch(model, chains["cdr3"], v=chains["v_call"], j=chains["j_call"])
 
-Measured on the released VDJdb key set (4,000 human TRB keys, 16 cores): 0.880 ms/row for the
-per-row loop in a 4-thread pool against **0.662 ms/row** batched. Batching stops there, because the
-codon reconstruction is pure Python — 35% of the cost on TRB and **87% on TRA**, which is why the
-TRA batch does not speed up with more ``threads`` at all. ``n_best`` is the knob that reaches every
-stage: ``4`` is 2.58x on TRB for the same ``cdr3_nt`` on 97.7% of rows, and 2.95x on TRA for 100%
-of them.
+Measured on the released VDJdb key set (samples of 3,000 from 111,655 allele-resolvable human TRB
+keys and 52,191 TRA, 16-core M-series): **0.0863 ms/key on TRB and 0.0071 ms/key on TRA**, against
+0.8529 and 0.6682 ms/key for the same per-row calls in a 4-thread slice pool — 9.89x and 94.05x.
+Over the whole human key set that is 130.1 s down to 10.0 s.
+
+The whole pipeline is native — scenario search, codon reconstruction and the exact marginal
+re-score — so the GIL is released for the batch rather than reacquired once per row, and
+``threads`` scales: on TRB, 1.96x / 3.75x / 7.37x / 11.57x at 2 / 4 / 8 / 16 threads against one.
+The reconstruction was Python until this changed, and it was 35% of a TRB row and 87% of a TRA one,
+which is why batching alone reached only 1.34x.
 
 .. warning::
 
    ``threads`` is **kernel threads**, not worker processes, and the batch already parallelizes
-   across rows — do not wrap it in a pool of your own. Lowering ``n_best`` degrades ``margin``
-   before it degrades ``cdr3_nt``: 470 of 4,000 TRB rows lose their runner-up at ``n_best=4``,
-   against 193 at the default ``8``.
+   across rows — do not wrap it in a pool of your own. One batched call using the library's own
+   threads is the supported shape; a process pool around it oversubscribes the machine and reads as
+   "batching did not help".
+
+.. note::
+
+   ``n_best`` defaults to ``8`` and is now a weak speed knob: ``4`` buys 1.39x on TRB and 1.19x on
+   TRA, and costs agreement — the same ``cdr3_nt`` on 97.7% of TRB rows, and 347 of 2,961 scored
+   rows left with no ``runner_up_pgen`` against 122 at the default. ``margin`` degrades well before
+   ``cdr3_nt`` does, so lower it only if you do not report the margin.
 
 .. warning::
 
