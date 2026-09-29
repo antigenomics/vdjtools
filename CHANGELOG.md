@@ -3,6 +3,25 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.6.1 — 2026-09-29
+
+### Fixed — the changelog guard failed every CI job, and skipped the 4.6.0 upload
+
+`test_changelog_covers_every_release` asserted that the checkout carries release tags, to stop the
+comparison passing by being empty. **`actions/checkout` clones without tags by default**, so
+`git tag --list` returned nothing, the assertion fired inside a fixture, and all four Python jobs
+errored on both platforms — including 3.12, which had been green. `publish.yml` runs the same
+suite as a precondition for upload, so **4.6.0 built every wheel and published none**, exactly as
+4.4.0 did for a different reason.
+
+The assertion was the bug, not the tags: a checkout with no tags cannot answer the question, and
+that is a property of the *checkout*, not a defect in the repository. It skips now — verified in
+a real `--no-tags` clone — and both pytest checkouts fetch tags (`fetch-depth: 0`) so the guard
+actually runs in CI rather than skipping everywhere. With tags present it still catches a typo'd
+heading; that was re-verified by breaking the file.
+
+**4.6.0 is not on PyPI.** Everything in it ships here.
+
 ## 4.6.0 — 2026-09-29
 
 ### Added — `io.strip_allele_values`: the allele strip, resolved once per distinct call

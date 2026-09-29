@@ -41,7 +41,14 @@ def versions() -> tuple[dict[str, str], set[str]]:
         pytest.skip("not a git checkout, so there are no tags to compare against")
     sections = dict(SECTION.findall((ROOT / "CHANGELOG.md").read_text()))
     tags = {t[1:] for t in r.stdout.split() if re.fullmatch(r"v\d+\.\d+\.\d+", t)}
-    assert tags, "no release tags found; the comparison would pass by being empty"
+    if not tags:
+        # A checkout with no tags cannot answer this question, and that is a property of the
+        # CHECKOUT, not a defect in the repository. `actions/checkout` clones without tags by
+        # default, so asserting here failed all four Python jobs on both platforms and, because
+        # `publish.yml` runs the same suite before uploading, SKIPPED the 4.6.0 release with every
+        # wheel already built. The workflows now fetch tags so this really runs in CI; the skip is
+        # for an sdist, a tarball, or anyone's shallow clone.
+        pytest.skip("this checkout carries no release tags (shallow clone or sdist)")
     return sections, {t for t in tags if _parts(t) >= FIRST_DOCUMENTED}
 
 
