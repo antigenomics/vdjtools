@@ -22,6 +22,7 @@ from .convert import (
     read_rtcr,
     read_trust4,
     read_vidjil,
+    translate_junctions,
 )
 from .read import read_airr, read_parquet, read_vdjtools
 from .schema import (
@@ -68,6 +69,7 @@ __all__ = [
     "read_vidjil",
     "read_rtcr",
     "read_trust4",
+    "translate_junctions",
     "read_arda",
     "read_metadata",
     "read_samples",

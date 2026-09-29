@@ -126,7 +126,7 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   a cell heavy then light then b_light, each by rank.
 - **Legacy format readers** (`io.convert`) are polars expressions, not a dict per input row (4.5.0):
   a 42,877-row immunoSEQ export is **356 -> 67 ms**, and all ten shipped fixtures are byte-identical
-  to the previous output. `_core.translate_junctions` does the junction translation, including the
+  to the previous output. `io.translate_junctions` (public, C++, 13.4x) does the junction translation, including the
   bidirectional out-of-frame walk.
 - **Infer (EM)**: `vdjtools.model.infer.infer` / `infer_native(template, seqs, masks=, dd_allowed=,
   nd_prior=, single_d=, init="align"|"uniform"|"template")`; **`infer_frame(template_or_locus,

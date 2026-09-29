@@ -41,7 +41,7 @@ from __future__ import annotations
 import numpy as np
 import polars as pl
 
-from ..io.schema import COUNT, J_CALL, V_CALL, recompute_frequency, strip_allele
+from ..io.schema import COUNT, J_CALL, V_CALL, recompute_frequency, strip_allele_values
 
 
 def _winsor(value: str, group: "list[str]", winsor_q: "float | None") -> pl.Expr:
@@ -112,8 +112,8 @@ def correct_vj_usage(samples_or_df: "pl.DataFrame | list[pl.DataFrame]", batch_c
             raise ValueError(f"missing required column {c!r}")
 
     long = long.with_columns(
-        strip_allele(pl.col(V_CALL)).alias(V_CALL),
-        strip_allele(pl.col(J_CALL)).alias(J_CALL),
+        strip_allele_values(long[V_CALL]).alias(V_CALL),
+        strip_allele_values(long[J_CALL]).alias(J_CALL),
         pl.col(V_CALL).str.slice(0, 3).alias("locus"),
     )
     count_expr = pl.col(COUNT).sum() if weighted else pl.len()
@@ -249,8 +249,8 @@ def apply_vj_correction(sample_df: pl.DataFrame, corrected_usage: pl.DataFrame, 
     # left helper cols mirror the corrected-usage key names, so join left_on->right_on(key).
     left_map = {"locus": "_locus", V_CALL: "_vk", J_CALL: "_jk"}
     work = sample_df.with_row_index("_row").with_columns(
-        strip_allele(pl.col(V_CALL)).alias("_vk"),
-        strip_allele(pl.col(J_CALL)).alias("_jk"),
+        strip_allele_values(sample_df[V_CALL]).alias("_vk"),
+        strip_allele_values(sample_df[J_CALL]).alias("_jk"),
         pl.col(V_CALL).str.slice(0, 3).alias("_locus"),
     )
     work = work.join(fac, left_on=[left_map[k] for k in key], right_on=key,

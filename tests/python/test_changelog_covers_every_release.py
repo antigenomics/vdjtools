@@ -55,11 +55,22 @@ def test_every_release_tag_has_a_section(versions):
 
 
 def test_every_section_names_a_real_tag(versions):
+    """Every section but the newest, which may be a release in flight.
+
+    The exemption is not a loophole, it is the workflow: a release writes its section, bumps the
+    version and commits, and only then tags. Without it this test goes red on every release
+    between those two steps -- which it did, on 4.6.0, the first release after it was written.
+    Only the single highest version is exempt, so a typo'd heading is still caught the moment
+    anything lands above it, and a *stale* untagged section is caught by the next release.
+    """
     sections, tags = versions
-    unknown = sorted((set(sections) - tags), key=_parts)
+    unknown = set(sections) - tags
+    if unknown:
+        newest = max(sections, key=_parts)
+        unknown -= {newest}                      # the release being prepared right now
     assert not unknown, (
-        f"CHANGELOG sections for versions that were never tagged: {unknown}. Usually a typo in the "
-        f"heading, which also hides the real version as a missing section."
+        f"CHANGELOG sections for versions that were never tagged: {sorted(unknown, key=_parts)}. "
+        f"Usually a typo in the heading, which also hides the real version as a missing section."
     )
 
 

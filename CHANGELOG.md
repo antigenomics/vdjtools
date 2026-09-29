@@ -3,7 +3,59 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## Unreleased
+## 4.6.0 — 2026-09-29
+
+### Added — `io.strip_allele_values`: the allele strip, resolved once per distinct call
+
+`strip_allele` is an expression, so it runs its split / strip / regex / unique / sort / join once
+per **row**. A repertoire has 10^5-10^6 rows and 10^1-10^2 distinct segment calls, so it was
+answering the same handful of questions hundreds of thousands of times. Measured on `TRBV` calls
+with 261 distinct values:
+
+| rows | distinct | expression | per distinct | gain |
+|---|---|---|---|---|
+| 10,000 | 261 | 4.28 ms | 1.10 ms | 3.9x |
+| 50,000 | 261 | 20.63 ms | 1.74 ms | 11.9x |
+| 200,000 | 261 | 82.45 ms | 3.29 ms | **25.1x** |
+| 1,000,000 | 261 | 431.53 ms | 13.32 ms | **32.4x** |
+
+`strip_allele_values(series)` is built **from** the expression rather than beside it, so the two
+cannot state the rule differently; only its domain changes. Eight call sites that already held a
+column now use it — four in `signature.features` (which run per sample per locus) and four in
+`preprocess.batch`.
+
+**Two faster expressions were measured and rejected.** Replacing `list.eval` with whole-string
+regexes is **100.4 ms against 91.5**, i.e. slower: the cost is the list machinery (split / unique /
+sort / join), not the per-row sub-expression. Casting to `Categorical` first is 92.5 ms, because
+polars decodes a categorical back to strings for these operations instead of working on its
+dictionary. There is no faster expression — the win is doing the work 261 times instead of a
+million, which is also why this is **not** a C++ candidate: a native pass over every row would
+still be a pass over every row.
+
+`strip_allele` is unchanged and stays the right call for a LazyFrame, a `group_by` aggregation or
+a filter predicate. The twelve call sites of that kind were left alone.
+
+### Added — `io.translate_junctions`, the batched translation that existed and could not be reached
+
+`_core.translate_junctions` shipped in 4.5.0 and made the format readers 5.32x, but the only
+public translation was the scalar `io.convert.translate`: the C++ was reachable through
+`vdjtools._core` or a private helper and nowhere else. A caller holding a nucleotide column had
+no batched entry point. `vdjtools.io.translate_junctions(nt, threads=0)` is that entry point
+— a `pl.Series` or any iterable in, a `pl.Series` out, input order, nulls preserved.
+
+**66.5 -> 5.0 ms on 50,000 junctions of 39 nt, 13.4x**, and identical to
+`to_unified_cdr3aa(translate(nt))` on every frame offset at every length from 3 to 59, with and
+without non-ACGT bases.
+
+**The scalar `translate` is not deprecated and is not the slow path for its own callers.** The
+anchor checks in `model.collapse` and `model.reference` translate a **single codon**, and a
+pybind11 round trip costs **498 ns against the dict walk's 264 ns** — routing those through C++
+would be 1.9x slower. Batch when you hold a column; keep the dict when you hold a codon. That
+measurement is why they were left alone rather than swept up.
+
+`seqtree` has no translation and deliberately gets none: it carries `Alphabet::{AminoAcid,
+Nucleotide, NucleotideIUPAC}` for indexing and scoring and nothing that maps codons to residues.
+The genetic code belongs where the AIRR data model is, and two owners for it is how they drift.
 
 ### Python 3.10 had no test coverage at all for five CI runs, and the red X was read as a flake
 

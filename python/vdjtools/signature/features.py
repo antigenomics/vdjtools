@@ -31,7 +31,7 @@ from ..io.schema import (
     JUNCTION_AA,
     V_CALL,
     resolve_duplicates,
-    strip_allele,
+    strip_allele_values,
 )
 from . import transform as T
 from .layout import AMINO_ACIDS, KMER_K, LOCI, SPECTRATYPE_LENGTHS
@@ -444,7 +444,7 @@ def usage_group(df: pl.DataFrame, col: str, genes: list[str]) -> dict[str, float
     if df.height == 0:
         return dict.fromkeys(genes, np.nan)
     pos = {g: i for i, g in enumerate(genes)}
-    calls = df.select(strip_allele(pl.col(col)).alias("g"))["g"]
+    calls = strip_allele_values(df[col])
     gi = _codes(calls, pos, len(genes))                 # last cell closes the composition
     acc = np.bincount(gi, weights=_w(df), minlength=len(genes) + 1)
     coords = T.clr(acc, m=df.height)
@@ -470,7 +470,7 @@ def spec_group(df: pl.DataFrame, names: list[str], v_genes: list[str]) -> dict[s
     lo, hi = SPECTRATYPE_LENGTHS[0], SPECTRATYPE_LENGTHS[-1]
     vpos = {g: i for i, g in enumerate(v_genes)}
     resid = len(v_genes) * nl                           # last cell closes the composition
-    vi = _codes(df.select(strip_allele(pl.col(V_CALL)).alias("g"))["g"], vpos, -1)
+    vi = _codes(strip_allele_values(df[V_CALL]), vpos, -1)
     # int64, not the UInt32 ``len_chars`` returns: the clip below subtracts ``lo`` and an unsigned
     # length underflows on a junction shorter than the shortest spectratype bin.
     ln = df[JUNCTION_AA].str.len_chars().to_numpy().astype(np.int64)
@@ -494,7 +494,7 @@ def iso_group(df: pl.DataFrame) -> dict[str, float]:
     # Strip the allele first. The classes are gene names matched by equality, so a frame calling
     # ``IGHG1*01`` would match nothing and come back 100% uncalled -- a plausible composition
     # (some cohorts really are mostly uncalled) rather than an error anybody sees.
-    calls = (df.select(strip_allele(pl.col(C_CALL).cast(pl.Utf8)).alias("c"))["c"].to_list()
+    calls = (strip_allele_values(df[C_CALL]).to_list()
              if C_CALL in df.columns else [None] * df.height)
     gene_iso = {g: i for i, (_iso, names) in enumerate(ISOTYPES.items()) for g in names}
     ci = _codes(pl.Series("c", calls, dtype=pl.Utf8), gene_iso, len(ISOTYPES))
@@ -568,7 +568,7 @@ def qc_channel(raw: pl.DataFrame, clean: pl.DataFrame, locus: str,
             out[f"{seg.lower()}_fallback_frac"] = np.nan
             continue
         w = _w(clean)
-        genes = clean.select(strip_allele(pl.col(col)).alias("g"))["g"]
+        genes = strip_allele_values(clean[col])
         # ``is_in`` leaves a null call null; an uncalled gene IS a fallback, so it counts as missing.
         miss = (~genes.is_in(list(known[seg]))).fill_null(True).to_numpy()
         out[f"{seg.lower()}_fallback_frac"] = float(w[miss].sum())

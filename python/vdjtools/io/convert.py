@@ -265,22 +265,35 @@ def _unified_expr(col: str) -> pl.Expr:
     return pl.col(col).cast(pl.Utf8).str.replace_all(r"[atgc#~_?]+", "_")
 
 
-def _translated(nt: pl.Series) -> pl.Series:
-    """:func:`translate` then :func:`to_unified_cdr3aa` over a whole column, natively.
+def translate_junctions(nt, *, threads: int = 0) -> pl.Series:
+    """:func:`translate` then :func:`to_unified_cdr3aa` over a whole column, in C++.
+
+    Args:
+        nt: A polars Series of junction nucleotide strings, or any iterable of ``str | None``.
+        threads: Worker threads inside the native call; ``0`` picks them the way every other
+            batch in ``_core`` does. The GIL is released, so do not wrap this in a pool.
+
+    Returns:
+        A ``pl.Series`` of amino-acid junctions, one per input row, in input order. A null or
+        empty nucleotide stays **null**, as the scalar form's ``if nt else None`` did.
 
     The translation is a codon walk -- bidirectional on an out-of-frame junction, which polars
-    cannot express -- and it was the last per-row Python in the readers: a 42,877-row immunoSEQ
-    export walks ~40,000 of them, so deduplicating over distinct sequences saves almost nothing.
-    ``_core.translate_junctions`` is the same function in C++, checked against this module's
-    scalar pair on 4,009 sequences (every frame offset, with and without non-ACGT bases).
+    cannot express -- and it was the last per-row Python in the format readers: a 42,877-row
+    immunoSEQ export walks ~40,000 distinct sequences, so deduplicating saves almost nothing.
+    Checked against this module's scalar pair on 4,009 sequences at every frame offset, with and
+    without non-ACGT bases: 0 mismatches. Measured 66.5 -> 5.0 ms on 50,000 x 39 nt (**13.4x**).
 
-    A null or empty junction stays null, as the scalar form's ``if nt else None`` did.
+    NOTE the scalar :func:`translate` is not deprecated and is not slow *for its callers*: the
+    anchor checks in ``model.collapse`` and ``model.reference`` translate a **single codon**, and
+    a pybind11 round trip costs 498 ns against the dict walk's 264 ns -- routing those through
+    C++ would be 1.9x slower. Batch when you hold a column; keep the dict when you hold a codon.
     """
-    from .._core import translate_junctions
+    s = nt if isinstance(nt, pl.Series) else pl.Series("junction_nt", list(nt), dtype=pl.Utf8)
+    from .._core import translate_junctions as _native
 
-    aa = pl.Series("aa", translate_junctions(nt.fill_null("").to_list()), dtype=pl.Utf8)
-    blank = pl.Series("aa", [None] * nt.len(), dtype=pl.Utf8)
-    return aa.zip_with(nt.is_not_null() & (nt.str.len_bytes() > 0), blank)
+    aa = pl.Series("aa", _native(s.fill_null("").to_list(), threads), dtype=pl.Utf8)
+    blank = pl.Series("aa", [None] * s.len(), dtype=pl.Utf8)
+    return aa.zip_with(s.is_not_null() & (s.str.len_bytes() > 0), blank)
 
 
 def _finalize(df: pl.DataFrame) -> pl.DataFrame:
@@ -429,7 +442,7 @@ def read_rtcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFram
         pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
     )
     return _finalize(got.with_columns(
-        _translated(got[JUNCTION_NT]).alias(JUNCTION_AA)))
+        translate_junctions(got[JUNCTION_NT]).alias(JUNCTION_AA)))
 
 
 
@@ -461,7 +474,7 @@ def read_imgt(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFram
         pl.lit(1, pl.Int64).alias(COUNT),   # per-read; _finalize collapses and sums
     ).filter(pl.col(JUNCTION_NT).str.contains(r"^[ATGC]+$")))   # reject empty / N-containing
     return _finalize(got.with_columns(
-        _translated(got[JUNCTION_NT]).alias(JUNCTION_AA)))
+        translate_junctions(got[JUNCTION_NT]).alias(JUNCTION_AA)))
 
 
 def read_immunoseq(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
@@ -518,7 +531,7 @@ def read_immunoseq(path: str | os.PathLike, n_rows: int | None = None) -> pl.Dat
         _adaptive_col(raw, vg, vf, vt).alias(V_CALL),
         _adaptive_col(raw, dg, df_, dt).alias(D_CALL),
         _adaptive_col(raw, jg, jf, jt).alias(J_CALL),
-        _translated(got[JUNCTION_NT]).alias("_aa_tr"),
+        translate_junctions(got[JUNCTION_NT]).alias("_aa_tr"),
     ).with_columns(
         pl.when((pl.col("_status") == "in") & pl.col("_aa_src").is_not_null()
                 & (pl.col("_aa_src").str.len_bytes() > 0))
