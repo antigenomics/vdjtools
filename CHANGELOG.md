@@ -3,6 +3,71 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.7.0 — 2026-09-29
+
+### The V/J boundary, answered by the germline instead of by the argmax history (#182)
+
+`model.germline_boundary` reports where the V and J germlines stop, in **CDR3 nucleotide space**.
+`infer_nt_batch` carries it as `v_end_germline` / `j_start_germline` beside the existing
+`v_end` / `j_start`, which are unchanged.
+
+`Scenario.v_end` is a property of the argmax recombination **history**, and it is the right answer
+to that question. It is the wrong answer to "where does the V germline stop", because maximising
+`P(sequence)` explains N-region nucleotides as templated whenever it can, so the boundary walks
+outward. Reading a boundary off it is the defect #182 reports.
+
+The replacement needs **no DP and no recombination model** — only the germline and the genetic
+code. An exonuclease does not stop on a codon boundary, so the last residue a germline touches is
+usually part germline and part N region, and an amino-acid alignment can only round that to a whole
+residue. What the amino acid still fixes is which nucleotides are admissible: 17 of the 20 residues
+open every one of their codons with the same base, so against a germline `GGA` (Gly) an observed
+Glu can only be `GAA` or `GAG` — both begin with the germline's `G`, so the germline demonstrably
+reaches one nucleotide further. The decision itself lives in `arda.cdr3fix.boundary_nt` (arda
+2.31.0), because arda owns the protein alignment and the germline; **this uses the model's own
+`cdr3_segment`**, never arda's anchor table and never `cut_segment`, whose palindromic P
+nucleotides are exactly the nucleotides an aligner does not credit to the germline.
+
+Measured against `isalgo/airr_control`'s `human.trb.ntvj`, on the **8,132** VDJdb human TRB
+junctions whose boundary every control observation agrees on and whose V and J the bundled
+`olga:human_T_beta` model carries. The control's `VEnd`/`JStart` are a maximal nucleotide
+alignment, which reproduces to 93.5 % V / 98.8 % J against our own `*01` germline, the residual
+being allele polymorphism:
+
+| exact | `Scenario` | `germline_boundary` |
+|---|---:|---:|
+| `v.end`, VDJdb residues `(nt + 1) // 3` | 7,244 (89.08 %) | **7,554 (92.89 %)** |
+| `j.start`, VDJdb residues `ceil(nt / 3)` | 7,483 (92.02 %) | **7,966 (97.96 %)** |
+| V boundary, nucleotides | 5,293 (65.09 %) | **6,536 (80.37 %)** |
+| J boundary, nucleotides | 5,301 (65.19 %) | **6,056 (74.47 %)** |
+
+The same residue answer from an amino-acid alignment alone — VDJdb's legacy k-mer scanner, which
+takes the longest common substring of the junction and the translated germline, and `arda.cdr3fix`
+2.30.1 — is **71.79 %** on `v.end`. So the codon decision buys **21 points** over rounding and 4
+over the argmax history, and it is the first thing here to beat the k-mer scanner rather than tie it.
+
+**One column gets worse, and it is the amino-acid alignment rather than the codon decision.**
+Crediting the V germline two or more residues too far happens on 61 records against 39 for the
+argmax history and 9 for the unextended alignment: a residue past the real boundary that happens to
+encode the germline's residue extends the amino-acid run, and reaching 2 nucleotides into the codon
+after it then costs a whole residue. It is the same 16 % of records whose residue count is wrong to
+begin with, and the nucleotides that would give it away are exactly the ones not observed.
+
+The two sides are bounded by different things and the numbers say which. The V residue count is
+right on 83.99 % of records and the codon extension on **95.71 %** of those, so V is limited by the
+protein alignment. The J count is right on 97.97 % and the extension on **76.02 %**, because the
+nucleotide a J boundary turns on is the codon's third — the one position the genetic code leaves
+free. `j.start` in VDJdb's residue convention therefore cannot move at all and does not: it is
+defined as the first *fully* J-templated residue, which is the same residue whether the germline
+reaches one or two nucleotides into the one before it.
+
+`germline_boundary` is computed for **every** row of `infer_nt_batch`, including one the DP
+declined — the germline explains what it explains whether or not a recombination was found. It
+declines only when there is no germline to align to: no call, a call the model does not carry, or a
+non-functional allele. Cost is **2.67 us/row** against `infer_nt_batch`'s 82.81, i.e. 3.2 %.
+
+`arda-mapper` floor is now **2.31.0**, a hard floor: `germline_boundary` imports `boundary_nt` by
+name.
+
 ## 4.6.1 — 2026-09-29
 
 Everything in 4.6.0, which **built every wheel and published none**: it carried a

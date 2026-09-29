@@ -30,6 +30,10 @@ MODES = [("CASSQDLNTEAFF", "TRBV4-3*01", "TRBJ1-1*01"),               # pinned
 FIELDS = ("cdr3_nt", "v_call", "j_call", "v_end", "j_start", "d_call", "d_start", "d_end",
           "pgen", "scenario_p", "n_candidates", "runner_up_pgen")
 
+# Not `Scenario` fields and not from the DP: the boundary a germline alignment supports, appended
+# after every history column. `test_germline_boundary.py` owns them.
+GERMLINE = ("v_end_germline", "j_start_germline")
+
 
 @pytest.fixture(scope="module")
 def trb():
@@ -48,7 +52,7 @@ def test_the_batch_is_the_per_row_loop_exactly(trb):
     got = infer_nt_batch(trb, [c[0] for c in cases], v=[c[1] for c in cases],
                          j=[c[2] for c in cases])
     assert got.height == len(cases)
-    assert list(got.columns) == list(FIELDS)
+    assert list(got.columns) == list(FIELDS) + list(GERMLINE)
     for i in (0, 1, 2, 3, 61, 98):
         aa, v, j = cases[i]
         ref = infer_nt(trb, aa, v=v, j=j)

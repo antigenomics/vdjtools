@@ -74,6 +74,11 @@ Import, germline reference and stitching
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: vdjtools.model.boundary
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. automodule:: vdjtools.model.data
    :members:
    :undoc-members:
