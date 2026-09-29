@@ -6,6 +6,7 @@ OLGA's format with :func:`from_olga`; native models round-trip through :func:`sa
 :func:`load_model` with no OLGA dependency.
 """
 from . import analyze, check, score
+from .boundary import germline_boundary
 from .bundled import list_bundled, load_bundled
 from .check import check_model
 from .collapse import collapse_alleles
@@ -46,6 +47,7 @@ __all__ = [
     "EventKind",
     "Manifest",
     "Model",
+    "germline_boundary",
     "from_olga",
     "from_arda",
     "from_germline",

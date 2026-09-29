@@ -584,6 +584,62 @@ re-score — so the GIL is released for the batch rather than reacquired once pe
 The reconstruction was Python until this changed, and it was 35% of a TRB row and 87% of a TRA one,
 which is why batching alone reached only 1.34x.
 
+Read a boundary from the germline, not from the history
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``Scenario.v_end`` is a property of the argmax recombination **history**, and the right answer to
+that question. It is the wrong answer to "where does the V germline stop": maximising
+``P(sequence)`` explains N-region nucleotides as templated whenever it can, so the boundary walks
+outward. :func:`~vdjtools.model.boundary.germline_boundary` answers the boundary question instead,
+and needs no DP and no model — only the germline and the genetic code.
+
+.. code-block:: python
+
+   from vdjtools.model import germline_boundary
+
+   b = germline_boundary(model, chains["cdr3"], v=chains["v_call"], j=chains["j_call"])
+   b["v_end"], b["j_start"]         # 0-based, half-open, CDR3-nt space; null where no germline
+
+An exonuclease does not stop on a codon boundary, so the last residue a germline touches is usually
+part germline and part N region, and an amino-acid alignment can only round that to a whole residue.
+What the amino acid still fixes is which nucleotides are admissible: **17 of the 20 residues open
+every one of their codons with the same base**, so against a germline ``GGA`` (Gly) an observed Glu
+can only be ``GAA`` or ``GAG`` — both begin with the germline's ``G``, so the germline demonstrably
+reaches one nucleotide further, and an aligner reading the observed sequence counts it as germline
+whether it was templated or an insertion reproduced it.
+
+Measured against ``isalgo/airr_control``'s ``human.trb.ntvj``, on the 8,132 VDJdb human TRB
+junctions whose boundary every control observation agrees on:
+
+.. list-table::
+   :header-rows: 1
+
+   * - exact
+     - ``Scenario``
+     - ``germline_boundary``
+   * - ``v.end``, VDJdb residues ``(nt + 1) // 3``
+     - 7,244 (89.08 %)
+     - **7,554 (92.89 %)**
+   * - ``j.start``, VDJdb residues ``ceil(nt / 3)``
+     - 7,483 (92.02 %)
+     - **7,966 (97.96 %)**
+   * - V boundary, nucleotides
+     - 5,293 (65.09 %)
+     - **6,536 (80.37 %)**
+   * - J boundary, nucleotides
+     - 5,301 (65.19 %)
+     - **6,056 (74.47 %)**
+
+The same residue answer from an amino-acid alignment alone — VDJdb's legacy k-mer scanner, and
+``arda.cdr3fix`` 2.30.1 — is **71.79 %** on ``v.end``, so the codon decision buys 21 points over
+rounding. ``j.start`` in VDJdb's residue convention cannot move and does not: it is the first
+*fully* J-templated residue, the same residue whether the germline reaches one or two nucleotides
+into the one before it. The nucleotide answer moves a great deal, and is the one to read.
+
+``infer_nt_batch`` carries both columns as ``v_end_germline`` / ``j_start_germline``, computed for
+every row **including one the DP declined** — the germline explains what it explains whether or not
+a recombination was found.
+
 .. warning::
 
    ``threads`` is **kernel threads**, not worker processes, and the batch already parallelizes

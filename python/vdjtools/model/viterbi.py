@@ -835,6 +835,17 @@ def infer_nt_batch(model: Model, cdr3_aas, v=None, j=None, *, n_best: int = 8,
         unlike :func:`native.best_aa_scenarios_batch`, which returns k rows per query and so signals
         a declined query by absence.)
 
+        Two further columns, ``v_end_germline`` and ``j_start_germline``, are **not**
+        :class:`Scenario` fields and do not come from the DP at all: they are
+        :func:`boundary.germline_boundary`, the boundary a germline alignment supports. **Read
+        those when you want a boundary and ``v_end``/``j_start`` when you want the history.** The
+        argmax history is the wrong statistic for a boundary and measurably so -- 89.08 % against
+        92.89 % on ``v.end`` and 92.02 % against 97.96 % on ``j.start``, on 8,132 human TRB
+        junctions with external nucleotide truth (``antigenomics/vdjtools#182``; the whole
+        measurement is in :func:`boundary.germline_boundary`). They are computed for **every** row,
+        including one the DP declined, because the germline explains what it explains whether or
+        not a recombination was found; they go null only when there is no germline to align to.
+
     Raises:
         ValueError: If ``v`` or ``j`` is given with a length other than ``len(cdr3_aas)``.
     """
@@ -869,8 +880,16 @@ def infer_nt_batch(model: Model, cdr3_aas, v=None, j=None, *, n_best: int = 8,
     })
     # A zero-length D contributed nothing, so its span is null rather than an empty interval --
     # the same distinction `Scenario` draws. Then every column of a declined row goes null at once.
-    return (df
-            .with_columns(pl.when(pl.col("d_end") != pl.col("d_start")).then(pl.col(c))
-                          for c in ("d_start", "d_end"))
-            .with_columns(pl.when("ok").then(pl.col(c)) for c in df.columns if c != "ok")
-            .drop("ok"))
+    out = (df
+           .with_columns(pl.when(pl.col("d_end") != pl.col("d_start")).then(pl.col(c))
+                         for c in ("d_start", "d_end"))
+           .with_columns(pl.when("ok").then(pl.col(c)) for c in df.columns if c != "ok")
+           .drop("ok"))
+    # Appended AFTER the null-out above, deliberately: a germline alignment does not need the DP
+    # to have succeeded, so these survive a declined row.
+    from .boundary import germline_boundary
+
+    # `aas`, not `clean`: a residue outside the genetic code declines the DP, and the germline
+    # prefix that ends at it is still perfectly well defined.
+    return out.hstack(germline_boundary(model, aas, v, j)
+                      .rename({"v_end": "v_end_germline", "j_start": "j_start_germline"}))

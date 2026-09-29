@@ -170,6 +170,20 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   single most likely recombination for a KNOWN nt CDR3, i.e. the V/D/J boundary markup. Max-product
   over the same loops `pgen_nt` sums, so the D obeys `p_d_given_j` (TRBD2×TRBJ1 = 0). Coordinates
   are 0-based half-open in CDR3-nt space.
+- **V/J boundary** **`germline_boundary(model, aas, v=, j=)`** (exported at `vdjtools.model`, and
+  the two extra columns of `infer_nt_batch`) → one row per input row, `v_end` = nucleotides the V
+  germline explains, `j_start` = index of the first nucleotide the J germline explains, both in
+  CDR3-nt space, null where there is no germline to align to. **Read this for a boundary and
+  `Scenario.v_end`/`j_start` for a history** — the argmax history is measurably the wrong statistic
+  for a boundary (#182), because maximising `P(sequence)` explains N-region nucleotides as templated
+  and the boundary walks outward. Needs **no DP and no model**, only the germline and the genetic
+  code: the amino-acid alignment gives the residue, and `arda.cdr3fix.boundary_nt` decides how far
+  into that residue's codon the germline reaches (17 of 20 residues open every codon with the same
+  base, so it is frequently forced). On 8,132 human TRB junctions with external nucleotide truth,
+  VDJdb's residue convention: `v.end` **92.89 %** exact against the argmax history's 89.08 % and
+  **71.79 %** for VDJdb's k-mer scanner and `arda.cdr3fix` 2.30.1; `j.start` **97.96 %** against
+  92.02 %. In nucleotides, **80.37 %** V and **74.47 %** J against 65.09 % / 65.19 %. Uses the
+  **model's own** `cdr3_segment` — never arda's anchors, never `cut_segment`. 2.67 us/row.
 - **aa → nt** **`infer_nt(model, cdr3_aa, v=, j=, n_best=8)`** → the same `Scenario`, with `pgen`
   the exact `pgen_nt` of the returned sequence — the VDJdb case, where a record has `(V, J, CDR3aa)`
   and no nucleotides. Two stages: the argmax over every scenario `pgen_aa` sums (germline pinned,
@@ -193,7 +207,7 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   **`infer_nt_batch(model, aas, v=, j=, n_best=8, threads=0)`** is `infer_nt` over a whole table →
   one row per input row in input order (`cdr3_nt`, `v_call`, `j_call`, `v_end`, `j_start`, `d_call`,
   `d_start`, `d_end`, `pgen`, `scenario_p`, `n_candidates`, `runner_up_pgen`), a declined row present
-  with nulls. Identical to the per-row loop field for field at any thread count (0 mismatches on
+  with nulls, plus `v_end_germline`/`j_start_germline` (see below, and they survive a declined row). Identical to the per-row loop field for field at any thread count (0 mismatches on
   4,134 row-comparisons over three loci and four call modes). The whole pipeline is native --
   scenario search, codon reconstruction, exact marginal re-score -- so the GIL is released for the
   batch. On the released VDJdb key set, 3,000-key samples of 111,655 human TRB / 52,191 TRA keys:
