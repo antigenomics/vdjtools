@@ -80,7 +80,9 @@ sc = ["scikit-learn", "pyyaml", "anndata", "awkward", "mudata"]  # single-cell â
 interop = ["scirpy", "sc-dandelion"]  # TEST-ONLY: the downstream tools themselves. Not needed to USE the bridges -- to_scirpy/to_dandelion raise a clear install hint, and from_scirpy/read_h5ddl need only awkward/h5py from [sc]. Installed in CI so tests/python/test_sc_interop.py actually round-trips against the real containers instead of skipping. NOTE the PyPI name is `sc-dandelion`; it imports as `dandelion`.
 examples = ["marimo", "matplotlib", "scikit-learn"]  # example notebooks (scipy + huggingface_hub are base deps)
 oracle = ["olga"]                      # Pgen cross-check oracle (tests only)
-test = ["pytest>=7.4", "pytest-cov"]
+test = ["pytest>=7.4", "pytest-cov",
+        # test_working_notes_stay_private parses pyproject.toml; tomllib is 3.11+.
+        "tomli>=1.1; python_version<'3.11'"]
 bench = []  # DEPRECATED no-op alias: huggingface_hub (real-data fetch) is a BASE dep.
 docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx", "sphinx-design", "sphinx-copybutton"]
 dev = ["ruff", "pytest>=7.4", "pybind11>=2.12"]

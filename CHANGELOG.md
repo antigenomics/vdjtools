@@ -3,6 +3,30 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## Unreleased
+
+### Python 3.10 had no test coverage at all for five CI runs, and the red X was read as a flake
+
+`test_working_notes_stay_private.py` imported `tomllib`, which is stdlib only from **3.11**, while
+`requires-python` is **>=3.10**. Because it fails at *import*, pytest reported
+`Interrupted: 1 error during collection` and ran **nothing** on 3.10 -- `19 deselected, 1 error` --
+so from `19ecbb8` (2026-09-28 15:54 UTC) the 3.10 leg of CI on both ubuntu and macos was a red X
+with no signal behind it rather than one failing assertion. A collection error is not one broken
+test; it is the whole suite quietly not running, and it looks identical to a flake in the job list.
+
+Fixed with a conditional import and an explicit `tomli>=1.1; python_version<'3.11'` in the `[test]`
+extra. `tomli` is already present wherever pytest runs on 3.10 -- pytest requires it there -- but
+leaning on another project's transitive pin to keep a CI leg alive is the same shape as the bug.
+
+**Runtime 3.10 support was never affected.** Verified from the *published* 4.5.0 `cp310` wheel in a
+clean 3.10.20 venv rather than from this tree: `infer_nt`, `infer_nt_batch` (a declined row coming
+back null), `generate(engine="native")`, `native.pgen_nt_batch` and `_core.translate_junctions` all
+behave. The full suite on 3.10 is **1175 passed, 20 skipped**; the nine fewer passes than 3.12's
+1184 are scirpy/dandelion skips in that environment, not a version defect.
+
+`tomllib` was the only 3.11+ dependency in the tree -- `StrEnum`, `typing.Self`, `TaskGroup`,
+`except*`, `datetime.UTC` and `itertools.batched` appear nowhere in `python/` or `tests/`.
+
 ## 4.5.0 — 2026-09-29
 
 ### Every per-item loop in the package, audited and fixed where it mattered

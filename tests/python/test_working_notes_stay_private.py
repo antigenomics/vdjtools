@@ -18,8 +18,12 @@ from __future__ import annotations
 
 import re
 import subprocess
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib                    # stdlib from 3.11
+except ModuleNotFoundError:           # 3.10: declared in the [test] extra
+    import tomli as tomllib
 
 import pytest
 
