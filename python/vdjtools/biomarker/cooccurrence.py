@@ -316,7 +316,10 @@ def _cmh_by_depth(cohort, universe, si, M_a, M_b, ia, ib, k, key, chain_a, chain
 
 def _dense(pairs: pl.DataFrame, si: dict, n_feat: int) -> np.ndarray:
     """Boolean [n_universe × n_feat] matrix from a (feature-idx, sample) long frame."""
-    rows = np.array([si.get(s, -1) for s in pairs[SAMPLE_ID].to_list()], dtype=np.int64)
+    # Mapped in one pass, not a dict lookup per row: `pairs` is (features x samples present),
+    # which on a real screen is 10^5-10^6 rows. -1 marks a sample outside the shared universe.
+    rows = (pairs[SAMPLE_ID].replace_strict(list(si), list(si.values()), default=-1,
+                                            return_dtype=pl.Int64).to_numpy())
     keep = rows >= 0                                   # drop samples outside the shared universe
     m = np.zeros((len(si), n_feat), dtype=bool)
     m[rows[keep], pairs["_fi"].to_numpy()[keep]] = True

@@ -2330,4 +2330,51 @@ GenBatch generate_batch(const PackedModel& m, int n, uint64_t seed, bool product
     return out;
 }
 
+AlignVotes align_init_votes(const PackedModel& m, const std::vector<std::string>& seqs,
+                            bool joint) {
+    AlignVotes out;
+    out.v.assign(static_cast<size_t>(m.nV()), 0.0);
+    out.j.assign(static_cast<size_t>(m.nJ()), 0.0);
+    if (joint) out.vj.assign(static_cast<size_t>(m.nV()) * m.nJ(), 0.0);
+
+    std::vector<int8_t> read;
+    std::vector<int> best_v, best_j;
+    for (const std::string& raw : seqs) {
+        read.resize(raw.size());
+        for (size_t p = 0; p < raw.size(); ++p) {
+            switch (raw[p]) {
+                case 'A': case 'a': read[p] = 0; break;
+                case 'C': case 'c': read[p] = 1; break;
+                case 'G': case 'g': read[p] = 2; break;
+                case 'T': case 't': read[p] = 3; break;
+                default: read[p] = -1; break;   // matches no germline base, as in the reference
+            }
+        }
+        const int slen = static_cast<int>(read.size());
+        best_v.clear();
+        int top = -1;
+        for (int v : m.func_v) {
+            const int sc = common_prefix(m.cut_v[v], read.data(), slen);
+            if (sc > top) { top = sc; best_v.clear(); best_v.push_back(v); }
+            else if (sc == top) best_v.push_back(v);
+        }
+        best_j.clear();
+        top = -1;
+        for (int j : m.func_j) {
+            const int sc = common_suffix(m.cut_j[j], read.data(), slen);
+            if (sc > top) { top = sc; best_j.clear(); best_j.push_back(j); }
+            else if (sc == top) best_j.push_back(j);
+        }
+        if (best_v.empty() || best_j.empty()) continue;
+        const double wv = 1.0 / static_cast<double>(best_v.size());
+        const double wj = 1.0 / static_cast<double>(best_j.size());
+        for (int v : best_v) out.v[v] += wv;
+        for (int j : best_j) out.j[j] += wj;
+        if (joint)
+            for (int v : best_v)
+                for (int j : best_j) out.vj[static_cast<size_t>(v) * m.nJ() + j] += wv * wj;
+    }
+    return out;
+}
+
 }  // namespace vdjtools

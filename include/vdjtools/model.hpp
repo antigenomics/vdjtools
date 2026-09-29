@@ -201,6 +201,24 @@ struct GenBatch {
 GenBatch generate_batch(const PackedModel& m, int n, uint64_t seed, bool productive_only,
                         int nthreads);
 
+// Alignment-vote seeding for EM: each read votes its longest-matching V and J germline, the vote
+// split across every gene tied for the longest match. Returns ``(v_votes, j_votes, vj_votes)``,
+// the last a flat [nV*nJ] joint filled only when ``joint`` is set (a VJ chain needs P(J|V)).
+//
+// Deliberately single-threaded: the votes accumulate in read order, which makes the result
+// bitwise-identical to the Python reference rather than merely equal to tolerance. It is ~50-70
+// microseconds per read there (nV + nJ germline comparisons, each a Python character loop) and it
+// runs before EVERY fit, native path included.
+//
+// Splitting a tie matters and is not a detail: germline-identical paralogs (TRBV6-2/6-5/6-6,
+// IGKV2-28/2D-28) tie exactly, and handing the whole family to one representative seeds the rest
+// at P(V)=0 -- which the E-step's zero-probability skip then makes absorbing.
+struct AlignVotes {
+    std::vector<double> v, j, vj;
+};
+
+AlignVotes align_init_votes(const PackedModel& m, const std::vector<std::string>& seqs, bool joint);
+
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.
 struct Counts {

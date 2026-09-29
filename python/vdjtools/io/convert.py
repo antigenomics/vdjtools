@@ -432,21 +432,14 @@ def read_rtcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFram
         _translated(got[JUNCTION_NT]).alias(JUNCTION_AA)))
 
 
-_IMGT_GENE = re.compile(r"(?:IG|TR)[A-Z0-9-]+")
-_ATGC_ONLY = re.compile(r"^[ATGC]+$")
-
-
-def _imgt_gene(field: str | None) -> str | None:
-    """IMGT/HighV-QUEST ``"Homsap IGHV2-26*01 F"`` → ``"IGHV2-26"`` (strip species/allele/flag)."""
-    gene = extract_vdj(field)  # first tie, allele stripped -> "Homsap IGHV2-26"
-    if gene is None:
-        return None
-    m = _IMGT_GENE.search(gene)
-    return m.group(0) if m else None
 
 
 def _imgt_gene_expr(col: str | None) -> pl.Expr:
-    """:func:`_imgt_gene` as an expression: strip species/allele/flag, keep the IMGT gene token."""
+    """IMGT/HighV-QUEST ``"Homsap IGHV2-26*01 F"`` -> ``"IGHV2-26"``, over a whole column.
+
+    :func:`_vdj_expr` takes the first tie and strips the allele, leaving ``"Homsap IGHV2-26"``;
+    the extract then drops the species prefix and the functionality flag around the gene token.
+    """
     if col is None:
         return pl.lit(None, pl.Utf8)
     return _vdj_expr(col).str.extract(r"((?:IG|TR)[A-Z0-9-]+)", 1)

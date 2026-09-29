@@ -241,11 +241,17 @@ def write_prepared(clones: pl.DataFrame, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     cols = [c for c in _PREPARED_FIELDS if c in clones.columns]
-    lines = []
-    for i, row in enumerate(clones.iter_rows(named=True)):
-        fields = "|".join("" if row.get(c) is None else str(row[c]) for c in cols)
-        lines.append(f">{i}|{fields}\n{row['junction']}")
-    text = "\n".join(lines) + "\n"
+    # Built as one column, not a Python string per clonotype: a real repertoire is 10^5-10^6 rows
+    # and this is the hand-off to arda, so it runs on every EM build. Every field here is a string
+    # or an integer, so a polars cast and `str()` agree exactly -- with a float they would not.
+    if clones.height == 0:
+        text = "\n"
+    else:
+        rec = (pl.lit(">") + pl.int_range(pl.len()).cast(pl.Utf8) + pl.lit("|")
+               + pl.concat_str([pl.col(c).cast(pl.Utf8).fill_null("") for c in cols],
+                               separator="|")
+               + pl.lit("\n") + pl.col("junction").cast(pl.Utf8))
+        text = clones.select(rec.str.join("\n").alias("r")).item() + "\n"
     if path.suffix == ".gz":
         import gzip
 

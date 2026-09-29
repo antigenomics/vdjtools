@@ -200,6 +200,27 @@ PYBIND11_MODULE(_core, m) {
           "gene indices to search for row i (one = a pin, several = search all, [-1] or empty = "
           "marginalize); an empty aas[i] declines that row. threads=0 -> auto.");
 
+    m.def("align_init_votes",
+          [](const PackedModel& mm, const std::vector<std::string>& seqs, bool joint) {
+              vdjtools::AlignVotes a;
+              {
+                  py::gil_scoped_release nogil;
+                  a = vdjtools::align_init_votes(mm, seqs, joint);
+              }
+              py::dict out;
+              auto dbl = [](const std::vector<double>& x) {
+                  return py::array_t<double>(x.size(), x.data());
+              };
+              out["v"] = dbl(a.v); out["j"] = dbl(a.j); out["vj"] = dbl(a.vj);
+              return out;
+          },
+          py::arg("model"), py::arg("seqs"), py::arg("joint") = false,
+          // NOTE: no call_guard -- the lambda releases the GIL itself, and doing both asserts
+          // inside pybind11 (`PyGILState_Check` in gil.h).
+          "Alignment-vote seeding for EM: each read votes its longest-matching V and J germline, "
+          "the vote split across every gene tied for the longest match. Accumulated in read order, "
+          "so the result is bitwise-identical to the Python reference.");
+
     m.def("generate_batch",
           [](const PackedModel& mm, int n, uint64_t seed, bool productive_only, int threads) {
               vdjtools::GenBatch b;

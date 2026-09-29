@@ -484,7 +484,22 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen (matches OLGA to 1e-15)
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)     # + the Hamming-1 ball
    native.pgen_aa_batch(model, seqs, threads=0)   # many sequences, thread-parallel (~11x)
+   native.pgen_nt_batch(model, nts, threads=0)    # the nucleotide batch (new in 4.5.0)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
+   generate(model, 10 ** 6, engine="native")      # 149-577x, its own random stream
+
+.. note::
+
+   ``generate`` has two engines. ``engine="reference"`` (the default) is the Python ancestral
+   sampler; ``engine="native"`` is the same Bayes net in C++ and is **149-577x** faster on one core
+   — TRB 25,428 to 6,196,346 sequences per second, and IGH with ``productive_only=True`` 4,029 to
+   2,325,649. Each draw is seeded from ``(seed, row)``, so the output never depends on ``threads``.
+
+   The two are **different random streams**. They agree in distribution — TRB V-usage correlation
+   0.99766 against a 20,000-draw reference sample, nucleotide length means within 0.036 nt — but
+   not sequence by sequence, so a ``seed`` does not carry across them. Every artifact shipped with
+   this library that was drawn from ``generate`` was built with the reference engine, which is why
+   that remains the default: anything that has to reproduce one must stay on it.
 
 .. important::
 
@@ -543,8 +558,9 @@ it.
 
 ``v=``/``j=`` accept one allele, several (a list, or the comma-separated string an ambiguous AIRR
 ``v_call`` carries), or ``None`` — the search then marginalizes over every gene, which costs almost
-nothing because the underlying DP sweeps V and J anyway. Reported timings: 2.5 ms per human TRB
-CDR3, 0.5 ms per TRA, so all 80k VDJdb records take about three minutes.
+nothing because the underlying DP sweeps V and J anyway. Measured on the released VDJdb key set:
+**1.006 ms per human TRB junction and 0.079 ms per TRA** on one core. Use
+:func:`~vdjtools.model.viterbi.infer_nt_batch` on a table — it is another order of magnitude.
 
 On a whole table, call :func:`~vdjtools.model.viterbi.infer_nt_batch` instead — the per-row Python
 around the native DP was the cost, not the DP. It returns **one row per input row, in input order**,

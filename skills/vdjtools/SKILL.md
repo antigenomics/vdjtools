@@ -93,8 +93,11 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   **`set_marginals(m, frame)`** → back to a `Model` (a hand-edited TSV is a first-class input).
 - **Pgen (native)** `vdjtools.model.native`: `pgen_nt`, `pgen_aa(m, aa, v=None, j=None, mismatches=0)`
   (0=exact, 1=Hamming-1 ball; v/j=None marginalises), **`pgen_aa_batch(m, seqs, v=, j=, mismatches=,
-  threads=)`** (thread-parallel across sequences, bitwise-identical to serial, ~11× on 16 cores).
-  Pure-Python reference impls in `vdjtools.model.pgen`.
+  threads=)`** and **`pgen_nt_batch(m, seqs, v=, j=, threads=)`** (thread-parallel across sequences,
+  bitwise-identical to serial, ~11x on 16 cores). **Use the batch for more than one sequence** --
+  the nt one is new in 4.5.0, and before it existed every caller either looped in Python or wrapped
+  that loop in a pool dispatching one task per sequence. `pgen_nt_batch` raises on a non-ACGT base
+  rather than scoring a silent 0. Pure-Python reference impls in `vdjtools.model.pgen`.
 - **Pgen of a motif**: **`pgen_aa_degenerate(m, allowed, v=None, j=None)`** (+
   `pgen_aa_degenerate_batch(m, allowed, v=, j=, threads=)`) — `allowed` is one item per position,
   each a string of permitted residues: `"C"` pins, `"ILV"` allows a subset, **`""` or `"X"` is a
@@ -103,10 +106,28 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `pgen_aa` bitwise; all-wildcard gives the length marginal `P(L,V,J)`. WARNING: `X` means wildcard
   **only here** — `pgen_aa(m, "CASS…LXF")` matches residues by exact character and returns a silent
   `0.0`. An unrecognised residue raises `ValueError` rather than scoring 0.
-- **Generate**: `vdjtools.model.generate.generate(model, n, seed=, productive_only=)` → `pl.DataFrame`.
+- **Generate**: `vdjtools.model.generate.generate(model, n, seed=, productive_only=, engine=,
+  threads=)` → `pl.DataFrame`.
+  **`engine="native"` is 149-577x the default** (4.5.0): TRB 25,428 -> 6,196,346 seq/s, and with
+  `productive_only=True` IGH **4,029 -> 2,325,649 seq/s**, which is the one that matters because
+  pool generation is the dominant serial cost of a synthetic corpus build. Each draw is seeded from
+  `(seed, row)`, so the output never depends on `threads`.
+  WARNING: the two engines are **different random streams** -- they agree in distribution (TRB V
+  usage correlation 0.99766 against a 20,000-draw reference; nt length means to 0.036) but not
+  sequence by sequence. Every shipped artifact drawn from `generate` was built with
+  `engine="reference"`, which is why that is still the default: anything that must reproduce one
+  stays there.
   NOTE: `seed=` is reproducible **across processes** only from **3.3.0**: `collapse_alleles` used
   unordered polars `group_by`, so the collapsed table's row order varied per process and the same
   seed drew a different allele. Expectations recorded from `generate()` before 3.3.0 are stale.
+- **Single-cell pairing**: `sc.resolve_chains` / `sc.pair_chains` are window functions over the
+  whole frame, not a loop over cells (4.5.0): at 20,000 cells / 47,657 contigs, **12.69 s -> 24.6 ms**
+  and **24.92 s -> 46.1 ms**. Row order is unchanged -- cells in first-appearance order, and within
+  a cell heavy then light then b_light, each by rank.
+- **Legacy format readers** (`io.convert`) are polars expressions, not a dict per input row (4.5.0):
+  a 42,877-row immunoSEQ export is **356 -> 67 ms**, and all ten shipped fixtures are byte-identical
+  to the previous output. `_core.translate_junctions` does the junction translation, including the
+  bidirectional out-of-frame walk.
 - **Infer (EM)**: `vdjtools.model.infer.infer` / `infer_native(template, seqs, masks=, dd_allowed=,
   nd_prior=, single_d=, init="align"|"uniform"|"template")`; **`infer_frame(template_or_locus,
   clones_df)`** takes a clonotype frame and builds the V/J masks for you. `init="template"` is the

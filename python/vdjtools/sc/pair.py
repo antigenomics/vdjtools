@@ -49,31 +49,6 @@ def _role(locus_expr: pl.Expr) -> pl.Expr:
     )
 
 
-def _keep_light(
-    group: pl.DataFrame,
-    *,
-    secondary_ratio: float,
-    secondary_min_umi: int,
-    secondary_min_dup: int,
-) -> pl.DataFrame:
-    """Keep the top light chain, plus a second only if it clears every threshold."""
-    if group.height <= 1:
-        return group
-    ranked = group.sort(_SORT, descending=_DESC, nulls_last=True)
-    first, second = ranked.row(0, named=True), ranked.row(1, named=True)
-    first_dup = max(1, int(first[COUNT] or 0))
-    first_umi = max(1, int(first[UMI_COUNT] or 0))
-    second_dup = int(second[COUNT] or 0)
-    second_umi = int(second[UMI_COUNT] or 0)
-    keep_two = (
-        second_dup / first_dup > secondary_ratio
-        and second_umi / first_umi > secondary_ratio
-        and second_umi >= secondary_min_umi
-        and second_dup >= secondary_min_dup
-    )
-    return ranked.head(2) if keep_two else ranked.head(1)
-
-
 def resolve_chains(
     rearr: pl.DataFrame,
     *,
@@ -103,24 +78,40 @@ def resolve_chains(
         The cleaned per-cell contigs (same columns as the input), ordered by cell then
         rank. Contigs on loci outside the receptor roles are dropped.
     """
-    withrole = rearr.with_columns(_role(pl.col(LOCUS)).alias("_role"))
-    withrole = withrole.filter(pl.col("_role").is_not_null())
-    kept: list[pl.DataFrame] = []
-    for _, cell in withrole.group_by(CELL_ID, maintain_order=True):
-        heavies = cell.filter(pl.col("_role") == "heavy")
-        if heavies.height:
-            kept.append(heavies.sort(_SORT, descending=_DESC, nulls_last=True).head(1))
-        for role in ("light", "b_light"):
-            grp = cell.filter(pl.col("_role") == role)
-            if grp.height:
-                kept.append(_keep_light(
-                    grp, secondary_ratio=secondary_ratio,
-                    secondary_min_umi=secondary_min_umi,
-                    secondary_min_dup=secondary_min_dup,
-                ))
-    if not kept:
+    # One pass with window functions, not a loop over cells. The per-cell loop concatenated a
+    # frame per (cell, role) -- on 10^4-10^6 cells that is that many slices and that many
+    # allocations, for arithmetic that is two `over(cell, role)` expressions.
+    withrole = (rearr.with_row_index("_i")
+                .with_columns(_role(pl.col(LOCUS)).alias("_role"))
+                .filter(pl.col("_role").is_not_null()))
+    if withrole.height == 0:
         return rearr.head(0)
-    return pl.concat(kept).drop("_role")
+
+    grp = [CELL_ID, "_role"]
+    ranked = (withrole.sort(_SORT, descending=_DESC, nulls_last=True)
+              .with_columns(pl.int_range(pl.len()).over(grp).alias("_rank")))
+    # A light chain's runner-up is kept only if it clears EVERY threshold against its own group's
+    # best -- which `first().over(...)` is, after that sort. Denominators are floored at 1, exactly
+    # as the per-group scalar form's `max(1, ...)` was, so a zero-count best cannot divide by zero.
+    # A heavy chain never keeps a second: `keep` below gates the rank-1 branch on the role.
+    first_dup = pl.max_horizontal(pl.col(COUNT).fill_null(0).first().over(grp), pl.lit(1))
+    first_umi = pl.max_horizontal(pl.col(UMI_COUNT).fill_null(0).first().over(grp), pl.lit(1))
+    keep_two = ((pl.col(COUNT).fill_null(0) / first_dup > secondary_ratio)
+                & (pl.col(UMI_COUNT).fill_null(0) / first_umi > secondary_ratio)
+                & (pl.col(UMI_COUNT).fill_null(0) >= secondary_min_umi)
+                & (pl.col(COUNT).fill_null(0) >= secondary_min_dup))
+    keep = ((pl.col("_rank") == 0)
+            | ((pl.col("_role") != "heavy") & (pl.col("_rank") == 1) & keep_two))
+
+    # Restore the loop's output order: cells in first-appearance order, and within a cell
+    # heavy, then light, then b_light, each by rank. Sorting by cell id instead would silently
+    # reorder every caller's rows.
+    return (ranked.filter(keep)
+            .with_columns(pl.col("_i").min().over(CELL_ID).alias("_cell"),
+                          pl.col("_role").replace_strict({"heavy": 0, "light": 1, "b_light": 2},
+                                                         return_dtype=pl.Int8).alias("_ro"))
+            .sort(["_cell", "_ro", "_rank"])
+            .drop("_i", "_role", "_rank", "_cell", "_ro"))
 
 
 def pair_chains(
@@ -160,29 +151,8 @@ def pair_chains(
     if resolve:
         rearr = resolve_chains(rearr)
 
-    rows: list[dict] = []
-    for cell_id, cell in rearr.group_by(CELL_ID, maintain_order=True):
-        cid = cell_id[0] if isinstance(cell_id, tuple) else cell_id
-        alphas = cell.filter(pl.col(LOCUS) == light_locus).sort(
-            _SORT, descending=_DESC, nulls_last=True)
-        betas = cell.filter(pl.col(LOCUS) == heavy_locus).sort(
-            _SORT, descending=_DESC, nulls_last=True)
-        if alphas.height == 0 or betas.height == 0:
-            continue  # incomplete cell: counted in chain_multiplicity, not emitted
-        pairs = [(a, b) for b in betas.to_dicts() for a in alphas.to_dicts()]
-        multi = len(pairs) > 1
-        for idx, (a, b) in enumerate(pairs, start=1):
-            rows.append({
-                "cell_id": str(cid),
-                "pair_id": f"{cid}_{idx}" if multi else str(cid),
-                "alpha_v_call": a.get(V_CALL), "alpha_j_call": a.get(J_CALL),
-                "alpha_junction_aa": a.get(JUNCTION_AA),
-                "alpha_umi_count": a.get(UMI_COUNT), "alpha_duplicate_count": a.get(COUNT),
-                "beta_v_call": b.get(V_CALL), "beta_j_call": b.get(J_CALL),
-                "beta_junction_aa": b.get(JUNCTION_AA),
-                "beta_umi_count": b.get(UMI_COUNT), "beta_duplicate_count": b.get(COUNT),
-            })
-
+    # The Cartesian product is a join on cell_id, not a loop that calls `.to_dicts()` per cell --
+    # which built a Python dict per contig per cell and then one per emitted pair.
     schema = {
         "cell_id": pl.Utf8, "pair_id": pl.Utf8,
         "alpha_v_call": pl.Utf8, "alpha_j_call": pl.Utf8, "alpha_junction_aa": pl.Utf8,
@@ -190,9 +160,40 @@ def pair_chains(
         "beta_v_call": pl.Utf8, "beta_j_call": pl.Utf8, "beta_junction_aa": pl.Utf8,
         "beta_umi_count": pl.Int64, "beta_duplicate_count": pl.Int64,
     }
-    if not rows:
+    keep = [CELL_ID, V_CALL, J_CALL, JUNCTION_AA, UMI_COUNT, COUNT]
+
+    def side(locus: str, tag: str) -> pl.DataFrame:
+        """One side's contigs, ranked within the cell exactly as the loop's sort ranked them."""
+        return (rearr.with_row_index("_i")
+                .filter(pl.col(LOCUS) == locus)
+                .sort(_SORT, descending=_DESC, nulls_last=True)
+                .select(*keep, "_i")
+                .with_columns(pl.int_range(pl.len()).over(CELL_ID).alias(f"_{tag}r"),
+                              pl.len().over(CELL_ID).alias(f"_{tag}n"))
+                .rename({c: f"{tag}_{c}" for c in keep if c != CELL_ID} | {"_i": f"_{tag}i"}))
+
+    a, b = side(light_locus, "alpha"), side(heavy_locus, "beta")
+    if a.height == 0 or b.height == 0:      # incomplete cells are counted, never emitted
         return pl.DataFrame(schema=schema)
-    return pl.from_dicts(rows, schema=schema)
+
+    # `pair_id` numbering must match the loop's `for b in betas for a in alphas`: beta-major, from
+    # 1, and bare when the cell yields exactly one pair.
+    idx = pl.col("_betar") * pl.col("_alphan") + pl.col("_alphar") + 1
+    cid = pl.col(CELL_ID).cast(pl.Utf8)
+    pairs = (a.join(b, on=CELL_ID, how="inner")
+             .with_columns(pl.when(pl.col("_alphan") * pl.col("_betan") > 1)
+                           .then(cid + pl.lit("_") + idx.cast(pl.Utf8))
+                           .otherwise(cid).alias("pair_id"))
+             # cells in first-appearance order, then the loop's (beta, alpha) pair order
+             .sort([pl.col("_alphai").min().over(CELL_ID), "_betar", "_alphar"]))
+    return pairs.select(
+        cid.alias("cell_id"), "pair_id",
+        *[pl.col(f"{tag}_{c}").cast(dt).alias(f"{tag}_{name}")
+          for tag in ("alpha", "beta")
+          for c, name, dt in ((V_CALL, "v_call", pl.Utf8), (J_CALL, "j_call", pl.Utf8),
+                              (JUNCTION_AA, "junction_aa", pl.Utf8),
+                              (UMI_COUNT, "umi_count", pl.Int64), (COUNT, "duplicate_count", pl.Int64))],
+    )
 
 
 def chain_multiplicity(rearr: pl.DataFrame, *, locus_pair: str = "TRA_TRB") -> pl.DataFrame:

@@ -414,9 +414,15 @@ def write_airr_cell(
     cell_rows: list[dict] = []
     receptor_rows: list[dict] = []
 
-    for cell_id, grp in rearr.group_by(CELL_ID, maintain_order=True):
-        cid = cell_id[0] if isinstance(cell_id, tuple) else cell_id
-        contigs = grp.to_dicts()
+    # Grouped once, in Python, from a single `to_dicts()`. The dicts are not an inefficiency here
+    # -- they are the output, because this writes a nested YAML document -- but `group_by` plus a
+    # `to_dicts()` PER CELL was one polars slice and one conversion per cell, which is the part
+    # that scaled with the cell count rather than with the data.
+    by_cell: dict = {}
+    for contig in rearr.to_dicts():
+        by_cell.setdefault(contig.get(CELL_ID), []).append(contig)
+
+    for cid, contigs in by_cell.items():
         receptor_ids: list[str] = []
 
         if receptors:

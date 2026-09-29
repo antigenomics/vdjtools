@@ -3,20 +3,168 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
-## 4.4.1 — 2026-09-29
+## 4.5.0 — 2026-09-29
 
-The thread-scaling guard added in 4.4.0 asserted a single number that a small box cannot reach.
+### Every per-item loop in the package, audited and fixed where it mattered
+
+All **84 modules** were read for one pattern: Python iterating over data where a batched native
+call, a polars expression, or a grouped computation does the same work. Twenty-one have no
+Python-level iteration at all; most of the rest iterate over *structure* — columns, loci, genes,
+events, marginals — which is not the same thing. What was found, and what was done:
+
+**Two native entry points that did not exist.**
+
+`native.pgen_nt_batch` is the batch nucleotide Pgen. It was the one native Pgen with no batch, so
+any caller with more than one sequence either looped in Python or wrapped that loop in a
+`ThreadPoolExecutor` handing out **one task per sequence** — the only pool in the package
+dispatching per item rather than per contiguous slice, and the shape rejected everywhere else here.
+Three call sites paid for it and all three are one call now: `model.score._pgen_nt_many` (its pool
+is gone), the `pgen` CLI command (which splits nucleotide from amino-acid input once and makes one
+batched call per kind), and `sc.paired_pgen`, which scores each chain's **distinct** clonotype keys
+through `pgen_aa_batch` instead of looping `pgen_aa` per row.
+
+`_core.translate_junctions` translates a whole junction column the way the legacy converters do —
+including the bidirectional out-of-frame walk polars cannot express — and is checked against this
+repo's own `to_unified_cdr3aa(translate(nt))` on 4,009 sequences at every frame offset, with and
+without non-ACGT bases: **0 mismatches**.
+
+**`generate(engine="native")` — the ancestral sampler in C++.** Measured on one core:
+
+| locus | reference seq/s | native seq/s | gain |
+|---|---|---|---|
+| TRB | 25,428 | 6,196,346 | **244x** |
+| TRA | 46,125 | 7,263,921 | 158x |
+| TRG | 52,221 | 7,794,484 | 149x |
+| IGH, `productive_only` | 4,029 | 2,325,649 | **577x** |
+| TRD, `productive_only` | 6,057 | 3,373,886 | 557x |
+
+IGH is the one that mattered: pool generation, not featurisation, is the dominant serial cost of a
+synthetic corpus build, at 77 s of single-core work per 5.2M sequences.
+
+Every draw is seeded from `(seed, row)`, so the output depends on the seed and the row index alone
+and **never on the thread count** — identical at 1, 8 and auto. A corpus whose contents depend on
+the builder's core count cannot be compared with one built anywhere else.
+
+**The default engine stays `"reference"`.** The two are different random streams: every shipped
+artifact drawn from this function was built with the Python sampler, so its `seed` stream is
+frozen. They agree in *distribution* — against a 200,000-draw native sample, TRB V usage
+correlation **0.99020 / 0.99406 / 0.99766** and total variation **0.0337 / 0.0247 / 0.0156** for a
+reference draw of 4,000 / 10,000 / 20,000. It tightens as `1/sqrt(n_ref)`, which is what two
+samplers of the same distribution do and what a mis-indexed deletion would not; nucleotide length
+means agree to 0.036 nt and the productive fraction to 0.002.
+
+**The format readers stopped looping over rows.** Nine converters each built one Python dict per
+input row and handed `_finalize` a list of them, so a 42,877-row immunoSEQ export was 42,877 dict
+allocations plus a schema inference pass over them before any of the work polars exists for. They
+are expressions now, and **all ten shipped fixtures are byte-identical to the previous output**,
+compared as written parquet — which is how the rewrite was driven, baseline first.
+
+| fixture | rows | before | after | gain |
+|---|---|---|---|---|
+| immunoseq | 42,877 | 356.1 ms | 66.9 ms | **5.32x** |
+| imgthighvquest | 7,199 | 117.8 ms | 31.5 ms | 3.74x |
+| migec | 2,420 | 7.7 ms | 4.9 ms | 1.58x |
+| rtcr | 693 | 5.5 ms | 4.3 ms | 1.29x |
+| mixcr | 262 | 3.5 ms | 3.5 ms | 1.01x |
+
+The small files are fixed overhead, not row cost — 8.31 to 1.56 microseconds per row is the change,
+and it shows up where there are rows.
+
+**The single-cell per-cell loops are window functions.** `sc.resolve_chains` and `sc.pair_chains`
+each looped over cells, slicing a frame and calling `.to_dicts()` per cell — so the cost scaled
+with the cell count rather than with the data. Output equality is asserted at every size:
+
+| cells | contigs | `resolve_chains` | `pair_chains` |
+|---|---|---|---|
+| 400 | 929 | 267.3 → 5.1 ms (52x) | 495.3 → 8.8 ms (57x) |
+| 4,000 | 9,536 | 2,694.4 → 8.7 ms (311x) | 4,999.4 → 18.2 ms (274x) |
+| 20,000 | 47,657 | 12,690.5 → 24.6 ms (**517x**) | 24,924.7 → 46.1 ms (**540x**) |
+
+The loop's row order is reproduced exactly — cells in first-appearance order, and within a cell
+heavy then light then b_light, each by rank. Sorting by cell id instead would have silently
+reordered every caller's rows.
+
+**The second pass found the one that mattered most: `_align_init`.** EM seeds gene usage from an
+alignment vote before the first iteration — each read voting its longest-matching V and J germline
+— and that was a Python loop doing `nV + nJ` germline comparisons per read, each a character walk.
+It runs before **every** fit, the native EM path included, and it also built a whole prepared model
+it did not need. Now one native pass, with the votes still accumulated in read order so the seeded
+tables are **bitwise-identical**:
+
+| locus | genes | 20,000 reads, was | now | gain |
+|---|---|---|---|---|
+| TRB | 59 V x 13 J | 436.9 ms | 13.98 ms | **31.2x** |
+| TRA | 47 V x 61 J | 572.1 ms | 15.61 ms | **36.6x** |
+| IGH | 75 V x 6 J | 403.6 ms | 15.39 ms | 26.2x |
+| TRG | 9 V x 5 J | 122.2 ms | 8.46 ms | 14.4x |
+
+Splitting a tied vote is load-bearing and survives unchanged: germline-identical paralogs
+(TRBV6-2/6-5/6-6, IGKV2-28/2D-28) tie exactly, and handing the family to one representative seeds
+the rest at `P(V) = 0`, which the E-step's zero-probability skip then makes absorbing.
+
+`biomarker.cooccurrence._dense` mapped sample ids through a Python dict per row of a
+(features x samples) frame; that is one `replace_strict` pass. `collapse._rep` was a
+`map_elements` at eight sites — **54,972 Python calls per IGH model load** for a string
+concatenation — and is now an expression; the output is identical across all seven loci, and the
+**wall time did not move** (0.90x-1.09x), because a model load is dominated by polars' own query
+overhead rather than by those calls. It is kept as the better code, not as a speedup.
+
+**Two more, measured.** `dynamics.expansion._exact_p` evaluated `betabinom.pmf` once per clonotype
+when the pmf depends only on the total, and a repertoire's totals repeat heavily — 20,000
+clonotypes over totals 1..60 carry 59 distinct ones. Grouped by total, with the
+minimum-likelihood region found by position in the sorted pmf rather than a mask per row:
+**10.3x to 307.5x** (614.6 → 3.31 ms at n=20,000). The region is identical; its mass is now summed
+in ascending-probability order, so a p-value can differ in its last bits — max relative difference
+**1.08e-14** over four cohort shapes and three dispersions, and ascending order is the more
+accurate of the two. `model.data.write_prepared` builds the arda hand-off as one column instead of
+a Python string per clonotype: **4.6x** (20.9 → 4.5 ms on 20,000 rows), byte-identical.
+
+**Measured and deliberately left alone, with the numbers, so nobody re-derives this.** Steady
+state on a 16-core M-series, after warm-up — which matters, because several of these look an order
+of magnitude worse on a first call and that is polars query compilation, not the code:
+
+| thing | measured | why it stays |
+|---|---|---|
+| `load_bundled` | 36 ms TRB, 57 ms IGH | parquet read plus `repair_anchors`; caching it is not allowed |
+| `collapse_alleles` | 13-53 ms per locus | once per model load, over a few hundred alleles |
+| `check_model` | 12.9 ms TRB, 24.4 ms IGH | a diagnostic, run on demand |
+| `from_arda` | 9.3 ms | its two `map_elements` run over ~500 germline alleles, once |
+| `prepare` | 10-15 ms cold | the reference path's tables |
+| `entropy_table` / `mutual_information` | 8.7-19.1 ms | see below |
+| `stitch_frame` | 1.01 microseconds/row | its germline lookups were hoisted long ago |
+| `efron_thisted` | ~210 operations | bounded by `max_depth=20`, independent of clonotype count |
+
+`model.analyze`'s group-wise entropies were **converted and then reverted**: a first-call profile
+said `entropy_table` was 386 ms and 90% of it was polars `group_by` iterated in Python, so the loops
+were rewritten as aggregations. Bit-identical output, and **slower** — 0.6x on TRB
+`mutual_information`. The steady state was 8.7 ms all along and aggregation overhead on a
+few-hundred-row table exceeds what slicing costs. Recorded because the first measurement was the
+misleading one, not the code.
+
+`io.read_vidjil` keeps its loop because it parses a JSON document, not a table — there is no column
+to express the work over — but it now declares its schema, so an all-null D call cannot come out as
+dtype `Null`. `overlap.similarity`'s identity block and `biomarker.metaclonotype`'s union-find do
+work proportional to their output, not to the input, and `overlap.alice` already makes one
+`pgen_aa_batch` call per allele pair.
+
+**Every pool in the package was re-checked** and each wraps something that releases the GIL or is a
+process pool over contiguous slices: `io.batch.map_samples` (polars read, 3.85x at 8 workers),
+`model.data.build_all` (arda subprocess + native E-step), `signature.cohort.parallel_rows` and
+`signature.corpus`'s two builders (spawned processes, no serial fallback). The one that dispatched
+per item is gone.
+
+### The thread-scaling guard needed two bars, not one
+
 `test_quadrupling_the_threads_roughly_quarters_the_wall_time` demanded 2.5x at 4 threads; a 4-vCPU
-CI runner measured **2.25x**, which is real parallelism at 56% efficiency and not a defect. It
-failed the pre-publish test job, so **4.4.0 built every wheel and published none** -- the library
-code in it is what ships here, unchanged.
+CI runner measures **2.25x**, which is real parallelism at 56% efficiency and not a defect. It is
+two bars now: **1.8x at 4 threads everywhere** (a GIL-bound stage gives ~1.7x there, and Amdahl on
+a 35% serial fraction caps it at 1.96x even with no contention), and **2.5x only where 8 or more
+cores are usable**, which is where near-linear scaling is visible and where the 1.86x the Python
+codon reconstruction used to give would be caught. `available_cores` is the gate, not
+`os.cpu_count` — a CI container's quota is invisible to the latter.
 
-It is now two bars, because one number cannot separate the hypotheses on every box: **1.8x at 4
-threads everywhere** (a GIL-bound stage gives ~1.7x on 4 vCPUs, and Amdahl on a 35% serial
-fraction caps it at 1.96x even with no contention), and **2.5x only where 8 or more cores are
-usable**, which is where near-linear scaling is visible and where the 1.86x the Python
-reconstruction used to give would be caught. `available_cores` is the gate, not `os.cpu_count` --
-a CI container's quota is invisible to the latter.
+This is why **4.4.0 built every wheel and published none**: the guard failed the pre-publish test
+job. The library code in it is what ships here.
 
 ## 4.4.0 — 2026-09-29
 
