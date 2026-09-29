@@ -192,6 +192,11 @@ job. The library code in it is what ships here.
 
 ## 4.4.0 — 2026-09-29
 
+**NOT PUBLISHED.** Its own pre-publish thread-scaling guard failed on a 4-vCPU runner, so
+every wheel built and none was uploaded; the tag stays for the history and the GitHub
+Release was withdrawn. Everything below shipped in **4.5.0**, whose section records the
+corrected guard. Nothing needs to be installed from here.
+
 ### `infer_nt` batched, and the codon reconstruction moved into C++ (#181)
 
 `infer_nt` wrapped a native DP in per-row Python, and on a real annotation table that wrapper was
@@ -1054,6 +1059,46 @@ because the new frozen reference was compared with `==`, asserting bit-identity 
 rather than across versions. Nothing reached PyPI under that version; 3.17.1 is the first release of
 this work.
 
+## 3.17.0 — 2026-09-26
+
+### Changed — the D-germline walk is shared across 3' trims
+
+`pgen_aa_vdj` enumerated `(D allele, ndel5, ndel3)` states and re-threaded the surviving germline
+through the 25-state codon DP from scratch for each one. The emission at `idx3` is a **prefix** of
+the emission at `idx3-1`, so the trims of one `(D, 5' cut)` are nested: one forward pass now covers
+every 3' trim of that chain and the `len(D)` factor leaves the cost. `best_vdj`, the argmax mirror,
+had always done this; the sum never did.
+
+| locus | measured |
+|---|---|
+| IGH | 9,212 live D states are 767 prefix chains; inner nucleotide steps at a 20-aa junction 4,736,568 -> 588,010 (8.1x); 250 junctions 2,557 -> 703 microseconds each (**3.6x**) |
+| TRB | 2.9x |
+| TRD | 2.4x |
+| the four D-less loci | unmoved |
+
+End to end on 120 synthetic seven-locus samples, `--preset classify`: 198.5 -> 64.6 s, 1,654 -> 539
+ms/sample (3.1x).
+
+**Output is bitwise unchanged, by construction and by measurement.** The walk records each join and
+a second pass adds them in the original `(ndel3, position)` order; summing straight out of the walk
+would reassociate, and a last-bit move is a silent data bug where a Pgen is compared against a
+quantile frozen outside the block. Verified on **1,708 of 1,708** float64 values across 7 loci x
+uncollapsed and collapsed models x `pgen_nt` / `pgen_aa` / `pgen_aa(mismatches=1)`, agnostic and
+V/J-restricted. The seven-locus OLGA concordance still reproduces `r(log10 Pgen) = 1.00000`, IGH at
+max relative error 1.0e-13.
+
+Adds `tests/python/fixtures/pgen_golden.json`, the repo's first stored Pgen reference, compared with
+`==` rather than a tolerance — because a tolerance measurably does not catch this bug class:
+stopping the walk one nucleotide short moves IGH Pgen by a median **7.9e-7** relative, under the
+`rtol=1e-6` every OLGA test here uses, while the worst junction moves **4.3%**. The same fixture
+closes a longer-standing gap: IGH, the 9,212-state locus, had no OLGA comparison anywhere in the
+suite.
+
+Three sites carrying the same structure are deliberately left alone and each now says why at its own
+definition: `pgen_aa_vdj_dd` (no bundled model has `P(n_D=2) > 0`), `d_middle` (its match loop exits
+on the first mismatch, so the V x J enumeration around it is the cost) and `accum_vdj` (soft counts,
+pinned at `atol=1e-12`).
+
 ## 3.16.0 — 2026-09-26
 
 The signature hot path, measured rather than assumed. Headline: **`vsig:pgen` is 96.6% of a
@@ -1295,6 +1340,14 @@ pinned `Model` per model ever prepared. Now capped at 8. The bound is load-beari
 the model is also what keeps the `id()` key honest, since an id can only be reused once its owner
 is collected — so eviction has to drop the id and the model together.
 
+### Changed — the seqtree floor is 1.0.0
+
+`seqtree>=0.6.1` predated seqtree's semver guarantee, which starts at 1.0.0, so the floor did not
+actually bound what pip could resolve. Both the full suite (1,189 tests) and the docs build are
+green against seqtree 1.0.0, vdjmatch 0.3.1 and arda-mapper 2.23.0; only the seqtree floor moves,
+because the vdjmatch and arda floors each pin a specific fix and raising them would exclude working
+versions for no stated reason.
+
 ### Audited — every pool and every cache, with measurements
 
 Recorded in `CLAUDE.md` under "Pools and caches: the standing audit". All three thread pools wrap a
@@ -1316,16 +1369,6 @@ VJ chain measures pool startup and reports a 0.83x *slowdown*.
 
 Every `lru_cache` in the package loads a frozen artifact keyed on that artifact's identity, and
 every one is bounded; none memoises a computation whose inputs are not fully in the key.
-
-## Unreleased
-
-### Changed — the seqtree floor is 1.0.0
-
-`seqtree>=0.6.1` predated seqtree's semver guarantee, which starts at 1.0.0, so the floor did not
-actually bound what pip could resolve. Both the full suite (1,189 tests) and the docs build are
-green against seqtree 1.0.0, vdjmatch 0.3.1 and arda-mapper 2.23.0; only the seqtree floor moves,
-because the vdjmatch and arda floors each pin a specific fix and raising them would exclude working
-versions for no stated reason.
 
 ## 3.13.0 — 2026-09-24
 
@@ -1711,6 +1754,44 @@ Measurements: `bench/results/vdjtools_germline_pgen_shift.md` in the benchmark r
 records what the **3.9.1** collapse fix already moved — 6,676 of 41,322 VDJdb human TRB junctions
 (16.2%) went from `Pgen` exactly `0.0` to positive, all of them `TRBJ2-7`, with max
 `|Δlog10| = 0.000000` across every junction that was already non-zero.
+
+## 3.9.2 — 2026-08-16
+
+### Added — `Manifest.builder_version`
+
+A germline defect lives in the **builder**, not the schema, so `model_version` could not answer
+"was this built before or after the fix" — the 3.9.1 J-anchor defect had to be sized by comparing a
+shipped model's posterior against an unaffected reference fit. Set by `data.build_model`, and
+backward compatible: `""` means "predates 3.9.2", not "missing".
+
+`test_the_learned_set_is_never_a_mix_of_builders` asserts the seven loci agree on one builder
+version. It deliberately does **not** require every model to be stamped — that could only be
+satisfied by regenerating, which would encode "always rebuild" as policy. The mixed state is the
+dangerous one, and this caught exactly that: an interrupted all-loci run left 4 loci at `3.9.2` and
+3 at `""`.
+
+### Fixed — the PyPI upload is gated on a green suite
+
+3.9.1 uploaded to PyPI while `ci.yml` was still in its Test step. Same commit, so the code was
+covered, but nothing enforced the **order**, and a CI-only failure could have landed on an
+already-published version. `needs:` cannot reference another workflow, so `publish.yml` gets its own
+`test` job (ubuntu, 3.12, the same extras `ci.yml` uses, so the OLGA oracle suite actually runs) and
+`publish` needs it. It runs in parallel with the wheel builds, so it costs no extra wall time.
+
+### Changed — the bundled models are deliberately NOT regenerated
+
+3.9.1 fixed the builder, and fixing a builder does not fix already-built parquet, so `learned` human
+TRA still carries 11 J germlines from the wrong side of the anchor and reads `TRAJ35` ~774x low.
+Nothing consumes that: **0 of VDJdb's 30,937** human TRA records use any of the 11 alleles, which is
+real absence rather than coincidence — neighbours `TRAJ34` (891) and `TRAJ36` (494) are well covered.
+Regeneration is a multi-hour all-loci Aldan-3 job and is not run to populate a metadata field. Users
+needing `TRAJ35` usage take `load_bundled("TRA", "arda")`, which cannot carry the defect.
+
+The rule this produced is in `CLAUDE.md` as a decision test rather than a judgement call: **if no
+germline entering a locus changed, that locus's model cannot change, so regenerating it is pure
+cost.** Measured, not assumed — rebuilding on the same corpus reproduced TRB and TRG
+**bit-identically** (max `|dlog10| = 0.0000`), because neither had an affected allele. Only TRA
+moved.
 
 ## 3.9.1 — 2026-08-16
 
@@ -2446,7 +2527,7 @@ scoreable and extendable. See the new [user guide](https://docs.isalgo.dev/vdjto
   HuggingFace. VDJdb is fetched from the latest `antigenomics/vdjdb-db` release (cached to
   `./data_dump/`) instead of a hardcoded local checkout.
 
-## 3.0.0
+## 3.0.0 — 2026-07-18
 
 ### Added — longitudinal clonotype dynamics (`vdjtools.dynamics`)
 
