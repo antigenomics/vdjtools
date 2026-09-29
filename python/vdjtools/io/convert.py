@@ -210,12 +210,89 @@ def _pick(lower: dict[str, str], *names: str) -> str | None:
     return None
 
 
-def _finalize(rows: list[dict]) -> pl.DataFrame:
-    """Filter bad rows, collapse to unique clonotypes (summed counts), coerce to canonical."""
-    if not rows:
+#: Stands in for a null inside the Adaptive dedup join. Joining on null keys does not match in
+#: polars, and the triples genuinely contain nulls, so they are carried as a byte no gene name has.
+_NULL_KEY = "\x00"
+
+
+def _adaptive_col(raw: pl.DataFrame, gene, family, ties) -> pl.Series:
+    """:func:`_adaptive_call` over a column, once per DISTINCT ``(gene, family, ties)`` triple.
+
+    The resolution is a shipped-table lookup with a legacy-rewrite fallback, so it is not one
+    expression -- but it is a pure function of the triple, and an export of tens of thousands of
+    rearrangements carries a few dozen distinct triples. Deduplication, not a cache: the table is
+    built and dropped inside this call, and the mapping back onto the column is a join.
+    """
+    def key(col):
+        e = pl.col(col).cast(pl.Utf8) if col else pl.lit(None, pl.Utf8)
+        return e.fill_null(_NULL_KEY)
+
+    names = ["_g", "_f", "_t"]
+    keys = raw.select([key(c).alias(n) for c, n in zip((gene, family, ties), names)])
+    uniq = keys.unique(maintain_order=True)
+    resolved = [_adaptive_call(*(None if x == _NULL_KEY else x for x in row))
+                for row in uniq.iter_rows()]
+    table = uniq.with_columns(pl.Series("_call", resolved, dtype=pl.Utf8))
+    return keys.join(table, on=names, how="left")["_call"]
+
+
+def _vdj_expr(col: str | None) -> pl.Expr:
+    """:func:`extract_vdj` as one polars expression -- a whole column in one pass, not per row.
+
+    The same four steps in the same order (first comma-separated tie, allele stripped, quotes and
+    surrounding space removed), and an empty result is null, matching the scalar form's ``None``.
+    A ``None`` column name yields an all-null column, which is how an absent optional D/C is
+    expressed without a branch at every call site.
+    """
+    if col is None:
+        return pl.lit(None, pl.Utf8)
+    gene = (pl.col(col).cast(pl.Utf8)
+            .str.split(",").list.first()
+            .str.split("*").list.first()
+            .str.replace_all('"', "", literal=True)
+            .str.strip_chars())
+    return pl.when(gene.str.len_bytes() > 0).then(gene).otherwise(None)
+
+
+def _upper_expr(col: str) -> pl.Expr:
+    """A nucleotide column, upper-cased, with empty as null -- ``(x or "").upper() or None``."""
+    up = pl.col(col).cast(pl.Utf8).fill_null("").str.to_uppercase()
+    return pl.when(up.str.len_bytes() > 0).then(up).otherwise(None)
+
+
+def _unified_expr(col: str) -> pl.Expr:
+    """:func:`to_unified_cdr3aa` as an expression: each run of non-coding markers to one ``_``."""
+    return pl.col(col).cast(pl.Utf8).str.replace_all(r"[atgc#~_?]+", "_")
+
+
+def _translated(nt: pl.Series) -> pl.Series:
+    """:func:`translate` then :func:`to_unified_cdr3aa` over a whole column, natively.
+
+    The translation is a codon walk -- bidirectional on an out-of-frame junction, which polars
+    cannot express -- and it was the last per-row Python in the readers: a 42,877-row immunoSEQ
+    export walks ~40,000 of them, so deduplicating over distinct sequences saves almost nothing.
+    ``_core.translate_junctions`` is the same function in C++, checked against this module's
+    scalar pair on 4,009 sequences (every frame offset, with and without non-ACGT bases).
+
+    A null or empty junction stays null, as the scalar form's ``if nt else None`` did.
+    """
+    from .._core import translate_junctions
+
+    aa = pl.Series("aa", translate_junctions(nt.fill_null("").to_list()), dtype=pl.Utf8)
+    blank = pl.Series("aa", [None] * nt.len(), dtype=pl.Utf8)
+    return aa.zip_with(nt.is_not_null() & (nt.str.len_bytes() > 0), blank)
+
+
+def _finalize(df: pl.DataFrame) -> pl.DataFrame:
+    """Filter bad rows, collapse to unique clonotypes (summed counts), coerce to canonical.
+
+    Takes the frame the reader built with expressions. It used to take a list of one dict per
+    input row: on a 42,877-row immunoSEQ export that was 42,877 dict allocations plus a schema
+    inference pass over them, before any of the work polars is for.
+    """
+    if df.height == 0:
         return schema.add_locus(schema.normalize(pl.DataFrame(schema={c: pl.Utf8 for c in
                                 (V_CALL, D_CALL, J_CALL, JUNCTION_AA, JUNCTION_NT)})))
-    df = pl.DataFrame(rows)
     df = df.with_columns(pl.col(COUNT).cast(pl.Int64, strict=False))
     keep = (
         pl.col(JUNCTION_NT).is_not_null() & (pl.col(JUNCTION_NT).str.len_bytes() > 0)
@@ -267,17 +344,14 @@ def read_mixcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
     aa_c = _pick(lo, "aa. seq. cdr3", "aaseqcdr3", "aaseqimputedcdr3")
     if not (count_c and v_c and j_c and nt_c and aa_c):
         raise ValueError(f"not a MiXcr table (need count / V,J hits / CDR3 nt+aa); have {raw.columns}")
-    rows = []
-    for r in raw.iter_rows(named=True):
-        cnt = r[count_c]
-        rows.append({
-            V_CALL: extract_vdj(r[v_c]), D_CALL: extract_vdj(r[d_c]) if d_c else None,
-            J_CALL: extract_vdj(r[j_c]), C_CALL: extract_vdj(r[c_c]) if c_c else None,
-            JUNCTION_NT: (r[nt_c] or "").upper() or None,
-            JUNCTION_AA: r[aa_c],  # MiXcr aa is milib-based — kept verbatim (no unify)
-            COUNT: _to_int(cnt),
-        })
-    return _finalize(rows)
+    return _finalize(raw.select(
+        _vdj_expr(v_c).alias(V_CALL), _vdj_expr(d_c).alias(D_CALL),
+        _vdj_expr(j_c).alias(J_CALL), _vdj_expr(c_c).alias(C_CALL),
+        _upper_expr(nt_c).alias(JUNCTION_NT),
+        # MiXcr aa is milib-based -- kept verbatim (no unify)
+        pl.col(aa_c).cast(pl.Utf8).alias(JUNCTION_AA),
+        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+    ))
 
 
 def read_migec(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
@@ -292,14 +366,13 @@ def read_migec(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
     d_c = _pick(lo, "d segments")
     if not (count_c and nt_c and aa_c and v_c and j_c):
         raise ValueError(f"not a MiGEC table; have {raw.columns}")
-    rows = [{
-        V_CALL: extract_vdj(r[v_c]), D_CALL: extract_vdj(r[d_c]) if d_c else None,
-        J_CALL: extract_vdj(r[j_c]),
-        JUNCTION_NT: (r[nt_c] or "").upper() or None,
-        JUNCTION_AA: to_unified_cdr3aa(r[aa_c]),
-        COUNT: _to_int(r[count_c]),
-    } for r in raw.iter_rows(named=True)]
-    return _finalize(rows)
+    return _finalize(raw.select(
+        _vdj_expr(v_c).alias(V_CALL), _vdj_expr(d_c).alias(D_CALL),
+        _vdj_expr(j_c).alias(J_CALL),
+        _upper_expr(nt_c).alias(JUNCTION_NT),
+        _unified_expr(aa_c).alias(JUNCTION_AA),
+        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+    ))
 
 
 def read_mitcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
@@ -331,14 +404,13 @@ def read_mitcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
     d_c = _pick(lo, "d.gene")
     if not (count_c and nt_c and aa_c and v_c and j_c):
         raise ValueError(f"not a MiTCR/tcR table; have {raw.columns}")
-    rows = [{
-        V_CALL: extract_vdj(r[v_c]), D_CALL: extract_vdj(r[d_c]) if d_c else None,
-        J_CALL: extract_vdj(r[j_c]),
-        JUNCTION_NT: (r[nt_c] or "").upper() or None,
-        JUNCTION_AA: to_unified_cdr3aa(r[aa_c]),
-        COUNT: _to_int(r[count_c]),
-    } for r in raw.iter_rows(named=True)]
-    return _finalize(rows)
+    return _finalize(raw.select(
+        _vdj_expr(v_c).alias(V_CALL), _vdj_expr(d_c).alias(D_CALL),
+        _vdj_expr(j_c).alias(J_CALL),
+        _upper_expr(nt_c).alias(JUNCTION_NT),
+        _unified_expr(aa_c).alias(JUNCTION_AA),
+        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+    ))
 
 
 def read_rtcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
@@ -351,16 +423,13 @@ def read_rtcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFram
     nt_c = _pick(lo, "junction nucleotide sequence")
     if not (count_c and v_c and j_c and nt_c):
         raise ValueError(f"not an RTCR table; have {raw.columns}")
-    rows = []
-    for r in raw.iter_rows(named=True):
-        nt = (r[nt_c] or "").upper() or None
-        rows.append({
-            V_CALL: extract_vdj(r[v_c]), D_CALL: None, J_CALL: extract_vdj(r[j_c]),
-            JUNCTION_NT: nt,
-            JUNCTION_AA: to_unified_cdr3aa(translate(nt)) if nt else None,
-            COUNT: _to_int(r[count_c]),
-        })
-    return _finalize(rows)
+    got = raw.select(
+        _vdj_expr(v_c).alias(V_CALL), pl.lit(None, pl.Utf8).alias(D_CALL),
+        _vdj_expr(j_c).alias(J_CALL), _upper_expr(nt_c).alias(JUNCTION_NT),
+        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+    )
+    return _finalize(got.with_columns(
+        _translated(got[JUNCTION_NT]).alias(JUNCTION_AA)))
 
 
 _IMGT_GENE = re.compile(r"(?:IG|TR)[A-Z0-9-]+")
@@ -376,6 +445,13 @@ def _imgt_gene(field: str | None) -> str | None:
     return m.group(0) if m else None
 
 
+def _imgt_gene_expr(col: str | None) -> pl.Expr:
+    """:func:`_imgt_gene` as an expression: strip species/allele/flag, keep the IMGT gene token."""
+    if col is None:
+        return pl.lit(None, pl.Utf8)
+    return _vdj_expr(col).str.extract(r"((?:IG|TR)[A-Z0-9-]+)", 1)
+
+
 def read_imgt(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
     """Read an IMGT/HighV-QUEST ``1_Summary`` table (per-read → collapsed clonotypes)."""
     raw = _read_tsv(path, n_rows=n_rows)
@@ -386,18 +462,13 @@ def read_imgt(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFram
     junc_c = _pick(lo, "junction")
     if not (v_c and j_c and junc_c):
         raise ValueError(f"not an IMGT/HighV-QUEST table; have {raw.columns[:8]}…")
-    rows = []
-    for r in raw.iter_rows(named=True):
-        nt = (r[junc_c] or "").upper()
-        if not _ATGC_ONLY.match(nt):  # reject empty / N-containing junctions
-            continue
-        rows.append({
-            V_CALL: _imgt_gene(r[v_c]), D_CALL: _imgt_gene(r[d_c]) if d_c else None,
-            J_CALL: _imgt_gene(r[j_c]),
-            JUNCTION_NT: nt, JUNCTION_AA: to_unified_cdr3aa(translate(nt)),
-            COUNT: 1,  # per-read output; _finalize collapses identical junctions and sums
-        })
-    return _finalize(rows)
+    got = (raw.select(
+        _imgt_gene_expr(v_c).alias(V_CALL), _imgt_gene_expr(d_c).alias(D_CALL),
+        _imgt_gene_expr(j_c).alias(J_CALL), _upper_expr(junc_c).alias(JUNCTION_NT),
+        pl.lit(1, pl.Int64).alias(COUNT),   # per-read; _finalize collapses and sums
+    ).filter(pl.col(JUNCTION_NT).str.contains(r"^[ATGC]+$")))   # reject empty / N-containing
+    return _finalize(got.with_columns(
+        _translated(got[JUNCTION_NT]).alias(JUNCTION_AA)))
 
 
 def read_immunoseq(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
@@ -428,31 +499,38 @@ def read_immunoseq(path: str | os.PathLike, n_rows: int | None = None) -> pl.Dat
     if not (count_c and full_c and len_c and idx_c and vg and jg):
         raise ValueError(f"not an immunoSEQ table; have {raw.columns[:6]}…")
 
-    def _cell(r, c):
-        return r[c] if c else None
+    # The junction is sliced out of the full rearrangement by the vIndex + cdr3Length coordinates,
+    # per row -- which `str.slice` takes as expressions, so it stays one pass.
+    start = pl.col(idx_c).cast(pl.Int64, strict=False)
+    ln = pl.col(len_c).cast(pl.Int64, strict=False)
+    nt = (pl.when(start.is_not_null() & ln.is_not_null() & (start >= 0) & (ln > 0))
+          .then(pl.col(full_c).cast(pl.Utf8).str.slice(start, ln).str.to_uppercase())
+          .otherwise(None))
+    count = pl.col(count_c).cast(pl.Float64, strict=False)
+    if count2_c:
+        # `_to_int` skips non-numeric AND non-positive cells: v1 writes "null" *or* "0" into
+        # templates and the real count is in reads. Falling back only on null loses the "0" case.
+        alt = pl.col(count2_c).cast(pl.Float64, strict=False)
+        count = pl.when(count.is_not_null() & (count > 0)).then(count).otherwise(alt)
 
-    rows = []
-    for r in raw.iter_rows(named=True):
-        full, vidx, clen = r[full_c], r[idx_c], r[len_c]
-        nt = None
-        if full and vidx not in (None, "") and clen not in (None, ""):
-            start, ln = int(vidx), int(clen)
-            if start >= 0 and ln > 0:
-                nt = full[start:start + ln].upper() or None
-        status = (_cell(r, frame_c) or "").strip().lower()
-        aa_src = _cell(r, aa_c)
-        if status == "in" and aa_src:
-            junc_aa = to_unified_cdr3aa(aa_src)
-        else:
-            junc_aa = to_unified_cdr3aa(translate(nt)) if nt else None
-        rows.append({
-            V_CALL: _adaptive_call(_cell(r, vg), _cell(r, vf), _cell(r, vt)),
-            D_CALL: _adaptive_call(_cell(r, dg), _cell(r, df_), _cell(r, dt)),
-            J_CALL: _adaptive_call(_cell(r, jg), _cell(r, jf), _cell(r, jt)),
-            JUNCTION_NT: nt, JUNCTION_AA: junc_aa,
-            COUNT: _to_int(r[count_c], r[count2_c] if count2_c else None),
-        })
-    return _finalize(rows)
+    got = raw.select(
+        pl.when(nt.str.len_bytes() > 0).then(nt).otherwise(None).alias(JUNCTION_NT),
+        (pl.col(frame_c).cast(pl.Utf8).str.strip_chars().str.to_lowercase()
+         if frame_c else pl.lit(None, pl.Utf8)).alias("_status"),
+        (_unified_expr(aa_c) if aa_c else pl.lit(None, pl.Utf8)).alias("_aa_src"),
+        count.cast(pl.Int64).alias(COUNT),
+    )
+    # Adaptive's own amino acid when it says the read is in-frame, else translate the junction.
+    return _finalize(got.with_columns(
+        _adaptive_col(raw, vg, vf, vt).alias(V_CALL),
+        _adaptive_col(raw, dg, df_, dt).alias(D_CALL),
+        _adaptive_col(raw, jg, jf, jt).alias(J_CALL),
+        _translated(got[JUNCTION_NT]).alias("_aa_tr"),
+    ).with_columns(
+        pl.when((pl.col("_status") == "in") & pl.col("_aa_src").is_not_null()
+                & (pl.col("_aa_src").str.len_bytes() > 0))
+        .then(pl.col("_aa_src")).otherwise(pl.col("_aa_tr")).alias(JUNCTION_AA),
+    ).drop("_status", "_aa_src", "_aa_tr"))
 
 
 def read_vidjil(path: str | os.PathLike, sample_id: int = 0) -> pl.DataFrame:
@@ -494,7 +572,13 @@ def read_vidjil(path: str | os.PathLike, sample_id: int = 0) -> pl.DataFrame:
             JUNCTION_NT: nt, JUNCTION_AA: to_unified_cdr3aa(junction.get("aa")),
             COUNT: _to_int(cnt),
         })
-    return _finalize(rows)
+    # The loop stays: this is a JSON document, not a table, so there is no column to express the
+    # work over -- the per-clone Python is the parsing itself. It hands `_finalize` a frame with a
+    # declared schema so an all-null D call cannot come out as dtype Null.
+    return _finalize(pl.DataFrame(rows, schema={
+        V_CALL: pl.Utf8, D_CALL: pl.Utf8, J_CALL: pl.Utf8,
+        JUNCTION_NT: pl.Utf8, JUNCTION_AA: pl.Utf8, COUNT: pl.Int64,
+    }))
 
 
 def read_trust4(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
@@ -517,18 +601,13 @@ def read_trust4(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFr
     v_c, d_c, j_c, c_c = _pick(lo, "v"), _pick(lo, "d"), _pick(lo, "j"), _pick(lo, "c")
     if not (count_c and nt_c and aa_c and v_c and j_c):
         raise ValueError(f"not a TRUST4 report (need count / CDR3nt+aa / V,J); have {raw.columns}")
-    rows = []
-    for r in raw.iter_rows(named=True):
-        nt = (r[nt_c] or "").upper()
-        if not _ATGC_ONLY.match(nt):  # skip TRUST4 partial / out-of-frame / N-containing CDR3s
-            continue
-        rows.append({
-            V_CALL: extract_vdj(r[v_c]), D_CALL: extract_vdj(r[d_c]) if d_c else None,
-            J_CALL: extract_vdj(r[j_c]), C_CALL: extract_vdj(r[c_c]) if c_c else None,
-            JUNCTION_NT: nt, JUNCTION_AA: to_unified_cdr3aa(r[aa_c]),
-            COUNT: _to_int(r[count_c]),
-        })
-    return _finalize(rows)
+    return _finalize(raw.select(
+        _vdj_expr(v_c).alias(V_CALL), _vdj_expr(d_c).alias(D_CALL),
+        _vdj_expr(j_c).alias(J_CALL), _vdj_expr(c_c).alias(C_CALL),
+        _upper_expr(nt_c).alias(JUNCTION_NT), _unified_expr(aa_c).alias(JUNCTION_AA),
+        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+    # skip TRUST4 partial / out-of-frame / N-containing CDR3s
+    ).filter(pl.col(JUNCTION_NT).str.contains(r"^[ATGC]+$")))
 
 
 def read_arda(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:

@@ -143,8 +143,9 @@ def test_read_vidjil_skips_segless_clones(tmp_path):
 
 def test_convert_helper_edges():
     """Translation / normalisation / count helpers on their edge inputs."""
-    assert convert._finalize([]).columns == [*COLUMNS, LOCUS]
-    assert convert._finalize([]).height == 0
+    # `_finalize` takes the frame the reader built with expressions, not a list of row dicts.
+    assert convert._finalize(pl.DataFrame()).columns == [*COLUMNS, LOCUS]
+    assert convert._finalize(pl.DataFrame()).height == 0
     assert convert.translate("") == ""
     assert convert.to_unified_cdr3aa(None) is None
     assert convert._to_int("null", "x") == 0          # nothing numeric → 0

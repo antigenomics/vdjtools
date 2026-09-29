@@ -102,6 +102,13 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("idx5", &vdjtools::AaScenario::idx5)
         .def_readonly("idx3", &vdjtools::AaScenario::idx3)
         .def_readonly("pos", &vdjtools::AaScenario::pos);
+    m.def("translate_junctions", &vdjtools::translate_junctions, py::arg("seqs"),
+          py::arg("threads") = 0, py::call_guard<py::gil_scoped_release>(),
+          "Translate junction nucleotides the legacy-converter way and collapse the non-coding "
+          "runs, for a whole column at once: to_unified_cdr3aa(translate(nt)). An out-of-frame "
+          "junction is translated inward from both ends with the untranslatable middle collapsed "
+          "to '_'. threads=0 -> auto.");
+
     m.def("pgen_nt_batch", &vdjtools::pgen_nt_batch, py::arg("model"), py::arg("seqs"),
           py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
           py::arg("threads") = 0, py::call_guard<py::gil_scoped_release>(),

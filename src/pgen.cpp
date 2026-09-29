@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cctype>
 #include <stdexcept>
 #include <thread>
 
@@ -831,6 +832,82 @@ std::vector<double> pgen_nt_batch(const PackedModel& m, const std::vector<std::s
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
     return run_batch(seqs.size(), nthreads,
                      [&](size_t i) { return pgen_nt(m, code[i], vi(i), ji(i)); });
+}
+
+namespace {
+
+// One codon -> its residue, or 'X' when it is not clean ACGT (the legacy converters' contract).
+inline char codon_aa(char a, char b, char c) {
+    auto code = [](char x) {
+        switch (x) {
+            case 'A': case 'a': return 0;
+            case 'C': case 'c': return 1;
+            case 'G': case 'g': return 2;
+            case 'T': case 't': return 3;
+            default: return -1;
+        }
+    };
+    const int i = code(a), j = code(b), k = code(c);
+    return (i < 0 || j < 0 || k < 0) ? 'X' : CODON[i * 16 + j * 4 + k];
+}
+
+inline bool non_coding_marker(char c) {
+    return c == '#' || c == '~' || c == '_' || c == '?' ||
+           c == 'a' || c == 'c' || c == 'g' || c == 't';
+}
+
+// `translate` then `to_unified_cdr3aa`, in one pass over one sequence.
+std::string translate_junction(const std::string& in) {
+    if (in.empty()) return "";
+    const int oof = static_cast<int>(in.size() % 3);
+    std::string seq = in;
+    if (oof) {                                   // pad the middle so both ends are in frame
+        const size_t mid = in.size() / 2;
+        seq = in.substr(0, mid) + std::string(static_cast<size_t>(3 - oof), '?') + in.substr(mid);
+    }
+    const int n = static_cast<int>(seq.size());
+    std::string left;
+    int left_end = -1;
+    for (int i = 0; i + 2 < n; i += 3) {
+        if (seq[i] == '?' || seq[i + 1] == '?' || seq[i + 2] == '?') { left_end = i; break; }
+        left.push_back(codon_aa(seq[i], seq[i + 1], seq[i + 2]));
+    }
+    std::string out;
+    if (oof == 0) {
+        out = left;
+    } else {
+        std::string right;
+        int right_end = -1;
+        for (int i = n; i > 2; i -= 3) {
+            if (seq[i - 3] == '?' || seq[i - 2] == '?' || seq[i - 1] == '?') { right_end = i; break; }
+            right.push_back(codon_aa(seq[i - 3], seq[i - 2], seq[i - 1]));
+        }
+        std::reverse(right.begin(), right.end());
+        std::string mid;
+        if (left_end >= 0 && right_end > left_end)
+            for (int i = left_end; i < right_end; ++i)
+                mid.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(seq[i]))));
+        out = left + mid + right;
+    }
+    // Collapse each run of non-coding markers to a single '_'.
+    std::string unified;
+    unified.reserve(out.size());
+    bool in_run = false;
+    for (char c : out) {
+        if (non_coding_marker(c)) {
+            if (!in_run) { unified.push_back('_'); in_run = true; }
+        } else {
+            unified.push_back(c);
+            in_run = false;
+        }
+    }
+    return unified;
+}
+
+}  // namespace
+
+std::vector<std::string> translate_junctions(const std::vector<std::string>& seqs, int nthreads) {
+    return run_batch(seqs.size(), nthreads, [&](size_t i) { return translate_junction(seqs[i]); });
 }
 
 namespace {

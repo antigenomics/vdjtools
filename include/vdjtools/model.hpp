@@ -51,6 +51,17 @@ struct PackedModel {
     int nD() const { return static_cast<int>(cut_d.size()); }
 };
 
+// Translate junction nucleotides the way the legacy converters do, and collapse the non-coding
+// runs, for a whole column at once: the ``to_unified_cdr3aa(translate(nt))`` every format reader
+// applies. An in-frame sequence is a plain codon walk with ``*`` for a stop and ``X`` for a codon
+// that is not clean ACGT. An OUT-OF-FRAME one is padded in the middle with ``?`` and translated
+// inward from both ends, leaving the untranslatable middle lower-cased -- then every run of
+// lower-case nucleotides and of ``# ~ _ ?`` collapses to a single ``_``.
+//
+// It lives here because it needs the genetic code table, and it is batched because it was the last
+// per-row Python left in the readers: a 42,877-row immunoSEQ export walks ~40,000 codon strings.
+std::vector<std::string> translate_junctions(const std::vector<std::string>& seqs, int nthreads);
+
 // Generation probability of a nucleotide CDR3, optionally restricted to a V and/or J (index into
 // the gene lists; -1 = sum over all functional genes of that segment). Matches OLGA / the Python
 // reference exactly.
