@@ -3,6 +3,24 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.6.1 — 2026-09-29
+
+Everything in 4.6.0, which **built every wheel and published none**: it carried a
+`test_changelog_covers_every_release` that asserted the checkout has release tags.
+`actions/checkout` clones without them, so the assertion fired inside a fixture and errored all
+four Python jobs on both platforms — and `publish.yml` runs that suite as a precondition for
+upload, so nothing shipped.
+
+The test is **deleted**, not repaired. It was added unprompted during a changelog cleanup and was
+never part of the request. The `fetch-depth: 0` added to both workflows to feed it is reverted, so
+they are byte-identical to before.
+
+The changelog *content* fixes from that cleanup stay, because those were the request: the missing
+3.9.2 and 3.17.0 sections, the stray second `## Unreleased` folded into the 3.14.0 that shipped it,
+3.0.0's date, and the NOT PUBLISHED marker on 4.4.0.
+
+**4.6.0 is not on PyPI and its GitHub Release is withdrawn; the tag stays for the history.**
+
 ## 4.6.0 — 2026-09-29
 
 ### Added — `io.strip_allele_values`: the allele strip, resolved once per distinct call
