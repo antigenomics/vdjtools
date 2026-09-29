@@ -805,6 +805,34 @@ std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::s
     });
 }
 
+// Batch nucleotide Pgen, parallelized across sequences exactly as ``pgen_aa_batch`` is. The
+// encoding pass is deliberately serial and ahead of the threads: `run_batch`'s callable must not
+// throw (an escaping exception in a worker terminates the process), and a non-ACGT base must raise
+// rather than score 0 -- a silent zero here is indistinguishable from a real answer.
+std::vector<double> pgen_nt_batch(const PackedModel& m, const std::vector<std::string>& seqs,
+                                  const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
+                                  int nthreads) {
+    std::vector<std::vector<int8_t>> code(seqs.size());
+    for (size_t i = 0; i < seqs.size(); ++i) {
+        code[i].resize(seqs[i].size());
+        for (size_t p = 0; p < seqs[i].size(); ++p) {
+            switch (seqs[i][p]) {
+                case 'A': code[i][p] = 0; break;
+                case 'C': code[i][p] = 1; break;
+                case 'G': code[i][p] = 2; break;
+                case 'T': code[i][p] = 3; break;
+                default:
+                    throw std::invalid_argument("pgen_nt_batch: sequence " + std::to_string(i) +
+                                                " has a non-ACGT base");
+            }
+        }
+    }
+    auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
+    auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
+    return run_batch(seqs.size(), nthreads,
+                     [&](size_t i) { return pgen_nt(m, code[i], vi(i), ji(i)); });
+}
+
 namespace {
 
 // Per-position residue sets -> per-position allowed-codon masks. ``allowed[c]`` is the string of
@@ -1915,6 +1943,314 @@ std::vector<InferNt> infer_nt_batch(const PackedModel& m, const std::vector<std:
         CodonDP dp;  // per row, so nothing is shared between workers
         return infer_nt_one(m, aas[i], v_alts[i], j_alts[i], k, dp);
     });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ancestral sampling, natively. The Python reference is a per-sequence loop of ~20 numpy calls --
+// 4,200 seq/s measured, and pool generation is the dominant serial cost of a synthetic corpus
+// build (77 s of single-core work per 5.2M sequences). Same Bayes net, same factors, in C++.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+constexpr int kDrawAttempts = 10000;  // per slot, under `productive_only`
+
+// splitmix64: seeds a slot's generator from (seed, slot) so a draw is a pure function of both.
+inline uint64_t splitmix64(uint64_t& x) {
+    uint64_t z = (x += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+// xoshiro256++ -- small state, so seeding it per slot is free (mt19937_64's 2.5 KB is not).
+struct Rng {
+    uint64_t s[4];
+
+    explicit Rng(uint64_t seed, uint64_t slot) {
+        uint64_t x = seed ^ (slot * 0xD1B54A32D192ED03ULL);
+        for (uint64_t& w : s) w = splitmix64(x);
+    }
+    static inline uint64_t rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
+    inline uint64_t next() {
+        const uint64_t r = rotl(s[0] + s[3], 23) + s[0];
+        const uint64_t t = s[1] << 17;
+        s[2] ^= s[0]; s[3] ^= s[1]; s[1] ^= s[2]; s[0] ^= s[3]; s[2] ^= t;
+        s[3] = rotl(s[3], 45);
+        return r;
+    }
+    // Uniform in [0,1) from the top 53 bits, as numpy does -- same construction, different stream.
+    inline double uniform() { return static_cast<double>(next() >> 11) * (1.0 / 9007199254740992.0); }
+};
+
+// A categorical as (value, cumulative) with the zero-probability atoms dropped and the rest
+// renormalized -- `generate._cum`'s contract.
+struct Cat {
+    std::vector<int> value;
+    std::vector<double> cum;
+
+    bool empty() const { return value.empty(); }
+    int pick(Rng& r) const {
+        double u = r.uniform();
+        size_t i = static_cast<size_t>(
+            std::lower_bound(cum.begin(), cum.end(), u) - cum.begin());
+        return value[std::min(i, value.size() - 1)];
+    }
+};
+
+Cat make_cat(const double* p, int n, const std::vector<int>* only = nullptr) {
+    Cat c;
+    double tot = 0.0;
+    auto add = [&](int i) { if (p[i] > 0.0) { c.value.push_back(i); tot += p[i]; } };
+    if (only) { for (int i : *only) add(i); } else { for (int i = 0; i < n; ++i) add(i); }
+    double run = 0.0;
+    for (int i : c.value) { run += p[i] / tot; c.cum.push_back(run); }
+    return c;
+}
+
+// Everything the sampler needs, built once per call and shared read-only across the workers.
+struct GenPrep {
+    bool vdj = false;
+    Cat v, j_marg;
+    std::vector<Cat> j_given_v, d_given_j, del_v, del_j, del_d, del_d2, d2_given_d1;
+    Cat ins_vd, ins_dj, ins_vj, ins_dd, n_d;
+    double Rcum_vd[16], Rcum_dj[16], Rcum_vj[16], Rcum_dd[16];      // [prev*4 + to], cumulative
+    double bcum_vd[4], bcum_dj[4], bcum_vj[4], bcum_dd[4];
+};
+
+void fill_chain(const std::vector<double>& R, const std::vector<double>& bias,
+                double* Rcum, double* bcum) {
+    if (R.size() < 16 || bias.size() < 4) {
+        std::fill(Rcum, Rcum + 16, 0.0);
+        std::fill(bcum, bcum + 4, 0.0);
+        return;
+    }
+    for (int prev = 0; prev < 4; ++prev) {          // R is [to*4 + from]; normalize the column
+        double tot = 0.0;
+        for (int to = 0; to < 4; ++to) tot += R[to * 4 + prev];
+        double run = 0.0;
+        for (int to = 0; to < 4; ++to) {
+            run += tot > 0.0 ? R[to * 4 + prev] / tot : 0.0;
+            Rcum[prev * 4 + to] = run;
+        }
+    }
+    double tot = 0.0, run = 0.0;
+    for (int i = 0; i < 4; ++i) tot += bias[i];
+    for (int i = 0; i < 4; ++i) { run += tot > 0.0 ? bias[i] / tot : 0.0; bcum[i] = run; }
+}
+
+int pick_chain(Rng& r, const double* cum4) {
+    double u = r.uniform();
+    for (int i = 0; i < 3; ++i) if (u < cum4[i]) return i;
+    return 3;
+}
+
+GenPrep build_gen_prep(const PackedModel& m) {
+    GenPrep g;
+    g.vdj = m.vdj;
+    g.v = make_cat(m.pv.data(), m.nV(), &m.func_v);
+    if (m.vdj) {
+        g.j_marg = make_cat(m.pj.data(), m.nJ(), &m.func_j);
+        g.d_given_j.resize(m.nJ());
+        for (int j : m.func_j)
+            g.d_given_j[j] = make_cat(m.pd_given_j.data() + static_cast<size_t>(j) * m.nD(),
+                                      m.nD(), &m.func_d);
+    } else {
+        g.j_given_v.resize(m.nV());
+        for (int v : m.func_v)
+            g.j_given_v[v] = make_cat(m.pjv.data() + static_cast<size_t>(v) * m.nJ(),
+                                      m.nJ(), &m.func_j);
+    }
+    g.del_v.resize(m.nV());
+    for (int v : m.func_v)
+        g.del_v[v] = make_cat(m.del_v.data() + static_cast<size_t>(v) * m.nbins_v, m.nbins_v);
+    g.del_j.resize(m.nJ());
+    for (int j : m.func_j)
+        g.del_j[j] = make_cat(m.del_j.data() + static_cast<size_t>(j) * m.nbins_j, m.nbins_j);
+    if (m.vdj) {
+        const int nd = m.nbins_d5 * m.nbins_d3;     // the 5'/3' trim is drawn jointly
+        g.del_d.resize(m.nD());
+        for (int d : m.func_d)
+            g.del_d[d] = make_cat(m.del_d.data() + static_cast<size_t>(d) * nd, nd);
+        if (m.dd) {
+            g.del_d2.resize(m.nD());
+            g.d2_given_d1.resize(m.nD());
+            for (int d : m.func_d) {
+                g.del_d2[d] = make_cat(m.del_d2.data() + static_cast<size_t>(d) * nd, nd);
+                g.d2_given_d1[d] = make_cat(
+                    m.pd2_given_d1.data() + static_cast<size_t>(d) * m.nD(), m.nD(), &m.func_d);
+            }
+            const double nd_p[2] = {m.p_nd1, m.p_nd2};
+            g.n_d = make_cat(nd_p, 2);              // value 0 -> n_D=1, value 1 -> n_D=2
+        }
+        g.ins_vd = make_cat(m.ins_vd.data(), static_cast<int>(m.ins_vd.size()));
+        g.ins_dj = make_cat(m.ins_dj.data(), static_cast<int>(m.ins_dj.size()));
+        if (m.dd) g.ins_dd = make_cat(m.ins_dd.data(), static_cast<int>(m.ins_dd.size()));
+        fill_chain(m.R_vd, m.bias_vd, g.Rcum_vd, g.bcum_vd);
+        fill_chain(m.R_dj, m.bias_dj, g.Rcum_dj, g.bcum_dj);
+        fill_chain(m.R_dd, m.bias_dd, g.Rcum_dd, g.bcum_dd);
+    } else {
+        g.ins_vj = make_cat(m.ins_vj.data(), static_cast<int>(m.ins_vj.size()));
+        fill_chain(m.R_vj, m.bias_vj, g.Rcum_vj, g.bcum_vj);
+    }
+    return g;
+}
+
+// An N-region: first nucleotide from the steady-state bias, the rest from the dinucleotide chain.
+// `from_right` walks 3'->5', which is how the DJ junction is parameterized.
+void draw_insert(Rng& r, int len, const double* Rcum, const double* bcum, bool from_right,
+                 std::string& out) {
+    if (len <= 0) return;
+    size_t base = out.size();
+    out.resize(base + static_cast<size_t>(len));
+    if (from_right) {
+        int prev = pick_chain(r, bcum);
+        out[base + len - 1] = "ACGT"[prev];
+        for (int k = len - 2; k >= 0; --k) {
+            prev = pick_chain(r, Rcum + prev * 4);
+            out[base + k] = "ACGT"[prev];
+        }
+    } else {
+        int prev = pick_chain(r, bcum);
+        out[base] = "ACGT"[prev];
+        for (int k = 1; k < len; ++k) {
+            prev = pick_chain(r, Rcum + prev * 4);
+            out[base + k] = "ACGT"[prev];
+        }
+    }
+}
+
+void append_seg(const std::vector<int8_t>& cut, int from, int to, std::string& out) {
+    for (int p = from; p < to; ++p) out.push_back("ACGT"[cut[p]]);
+}
+
+// D's contribution under a jointly drawn 5'/3' trim. `min1` re-draws until it is non-empty, which
+// is what a tandem D needs to stay in the Pgen partition; it gives up rather than looping forever.
+int draw_d_seg(Rng& r, const PackedModel& m, const Cat& del, int d, bool min1, std::string& out) {
+    const auto& cut = m.cut_d[d];
+    const int L = static_cast<int>(cut.size());
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        if (del.empty()) return 0;
+        const int flat = del.pick(r);
+        const int i5 = flat / m.nbins_d3, i3 = flat % m.nbins_d3;
+        const int from = i5, to = L - i3;
+        if (to > from) {
+            append_seg(cut, from, to, out);
+            return to - from;
+        }
+        if (!min1) return 0;
+    }
+    return 0;
+}
+
+// One draw into `nt`; returns the genes used (d/d2 = -1 when they contributed nothing).
+struct Drawn { int v, d, d2, j; };
+
+Drawn draw_one(Rng& r, const PackedModel& m, const GenPrep& g, std::string& nt) {
+    nt.clear();
+    Drawn out{-1, -1, -1, -1};
+    out.v = g.v.pick(r);
+    out.j = g.vdj ? g.j_marg.pick(r) : g.j_given_v[out.v].pick(r);
+
+    // V and J each contribute at least one nucleotide -- the Pgen model's own invariant.
+    const auto& cutv = m.cut_v[out.v];
+    const int lv = std::max(1, static_cast<int>(cutv.size()) - g.del_v[out.v].pick(r));
+    append_seg(cutv, 0, std::min(lv, static_cast<int>(cutv.size())), nt);
+
+    const auto& cutj = m.cut_j[out.j];
+    const int Lj = static_cast<int>(cutj.size());
+    const int dj = std::min(g.del_j[out.j].pick(r), Lj - 1);
+
+    if (!g.vdj) {
+        draw_insert(r, g.ins_vj.empty() ? 0 : g.ins_vj.pick(r), g.Rcum_vj, g.bcum_vj, false, nt);
+        append_seg(cutj, dj, Lj, nt);
+        return out;
+    }
+
+    const int d = g.d_given_j[out.j].pick(r);
+    const bool tandem = m.dd && !g.n_d.empty() && g.n_d.pick(r) == 1 &&
+                        d >= 0 && !g.d2_given_d1[d].empty();
+    std::string mid;
+    if (tandem) {
+        const int d2 = g.d2_given_d1[d].pick(r);
+        std::string d1c, d2c;
+        const int l1 = draw_d_seg(r, m, g.del_d[d], d, true, d1c);
+        const int l2 = draw_d_seg(r, m, g.del_d2[d2], d2, true, d2c);
+        draw_insert(r, g.ins_vd.pick(r), g.Rcum_vd, g.bcum_vd, false, mid);
+        mid += d1c;
+        draw_insert(r, g.ins_dd.empty() ? 0 : g.ins_dd.pick(r), g.Rcum_dd, g.bcum_dd, false, mid);
+        mid += d2c;
+        draw_insert(r, g.ins_dj.pick(r), g.Rcum_dj, g.bcum_dj, true, mid);
+        out.d = l1 ? d : -1;
+        out.d2 = l2 ? d2 : -1;
+    } else {
+        std::string d1c;
+        const int l1 = draw_d_seg(r, m, g.del_d[d], d, false, d1c);
+        draw_insert(r, g.ins_vd.pick(r), g.Rcum_vd, g.bcum_vd, false, mid);
+        mid += d1c;
+        draw_insert(r, g.ins_dj.pick(r), g.Rcum_dj, g.bcum_dj, true, mid);
+        out.d = l1 ? d : -1;
+    }
+    nt += mid;
+    append_seg(cutj, dj, Lj, nt);
+    return out;
+}
+
+// Translate whole codons, dropping any trailing partial one -- `reference.translate`'s contract.
+std::string translate_nt(const std::string& nt) {
+    auto code = [](char c) { return c == 'A' ? 0 : c == 'C' ? 1 : c == 'G' ? 2 : 3; };
+    std::string aa;
+    aa.reserve(nt.size() / 3);
+    for (size_t p = 0; p + 2 < nt.size(); p += 3)
+        aa.push_back(CODON[code(nt[p]) * 16 + code(nt[p + 1]) * 4 + code(nt[p + 2])]);
+    return aa;
+}
+
+bool is_productive(const std::string& nt, const std::string& aa) {
+    return !nt.empty() && nt.size() % 3 == 0 && aa.find('*') == std::string::npos;
+}
+
+}  // namespace
+
+GenBatch generate_batch(const PackedModel& m, int n, uint64_t seed, bool productive_only,
+                        int nthreads) {
+    if (n < 0) throw std::invalid_argument("generate_batch: n must be >= 0");
+    const GenPrep g = build_gen_prep(m);
+    if (g.v.empty() || (!m.vdj && n > 0 && g.j_given_v.empty()))
+        throw std::invalid_argument("generate_batch: the model has no usable V genes");
+
+    struct One { std::string nt, aa; Drawn genes; bool productive; };
+    auto per = run_batch(static_cast<size_t>(n), nthreads, [&](size_t slot) {
+        Rng r(seed, slot + 1);                 // the slot index alone fixes this draw
+        One o;
+        for (int attempt = 0; attempt < kDrawAttempts; ++attempt) {
+            o.genes = draw_one(r, m, g, o.nt);
+            o.aa = translate_nt(o.nt);
+            o.productive = is_productive(o.nt, o.aa);
+            if (!productive_only || o.productive) return o;
+        }
+        o.nt.clear();                          // signals the budget ran out; reported below
+        return o;
+    });
+
+    GenBatch out;
+    out.nt.reserve(per.size());
+    out.aa.reserve(per.size());
+    for (auto* c : {&out.v, &out.d, &out.d2, &out.j}) c->reserve(per.size());
+    out.productive.reserve(per.size());
+    for (const One& o : per) {
+        if (productive_only && o.nt.empty())
+            throw std::runtime_error("generate_batch: a slot exhausted its attempt budget "
+                                     "(are productive draws this rare?)");
+        out.nt.push_back(o.nt);
+        out.aa.push_back(o.aa);
+        out.v.push_back(o.genes.v);
+        out.d.push_back(o.genes.d);
+        out.d2.push_back(o.genes.d2);
+        out.j.push_back(o.genes.j);
+        out.productive.push_back(static_cast<int8_t>(o.productive));
+    }
+    return out;
 }
 
 }  // namespace vdjtools

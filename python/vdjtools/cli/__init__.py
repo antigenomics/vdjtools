@@ -181,16 +181,22 @@ def pgen(
     vs = df[v_col].to_list() if v_col and v_col in df.columns else [None] * len(seqs)
     js = df[j_col].to_list() if j_col and j_col in df.columns else [None] * len(seqs)
 
-    pg: list[float] = []
-    for s, v, j in zip(seqs, vs, js):
-        if s is None or s == "":
-            pg.append(0.0)
+    # One batched native call per kind, never one call per sequence: both batch entry points
+    # release the GIL and thread across the input. Detection is per sequence, so the two kinds are
+    # interleaved -- split by index, score each group, scatter back into input order.
+    pg: list[float] = [0.0] * len(seqs)
+    groups: dict[bool, list[int]] = {True: [], False: []}
+    for i, s in enumerate(seqs):
+        if s:
+            groups[_is_nt(s) if seq_type == "auto" else (seq_type == "nt")].append(i)
+    for is_nt, idx in groups.items():
+        if not idx:
             continue
-        nt = _is_nt(s) if seq_type == "auto" else (seq_type == "nt")
-        if nt:
-            pg.append(native.pgen_nt(m, s, v, j))
-        else:
-            pg.append(native.pgen_aa(m, s, v, j, mismatches=mismatches))
+        sub, subv, subj = [seqs[i] for i in idx], [vs[i] for i in idx], [js[i] for i in idx]
+        got = (native.pgen_nt_batch(m, sub, subv, subj) if is_nt else
+               native.pgen_aa_batch(m, sub, subv, subj, mismatches=mismatches))
+        for i, p in zip(idx, got):
+            pg[i] = p
     _write(df.with_columns(pl.Series("pgen", pg)), out)
 
 

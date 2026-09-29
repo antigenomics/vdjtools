@@ -102,6 +102,13 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("idx5", &vdjtools::AaScenario::idx5)
         .def_readonly("idx3", &vdjtools::AaScenario::idx3)
         .def_readonly("pos", &vdjtools::AaScenario::pos);
+    m.def("pgen_nt_batch", &vdjtools::pgen_nt_batch, py::arg("model"), py::arg("seqs"),
+          py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
+          py::arg("threads") = 0, py::call_guard<py::gil_scoped_release>(),
+          "Batch nucleotide Pgen over many sequences, parallelized across sequences and identical "
+          "to the per-sequence calls at any thread count. Raises on a non-ACGT base. threads=0 -> "
+          "auto.");
+
     m.def("best_aa_scenarios", &vdjtools::best_aa_scenarios, py::arg("model"), py::arg("aa"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1, py::arg("k") = 8,
           py::call_guard<py::gil_scoped_release>(),
@@ -185,6 +192,31 @@ PYBIND11_MODULE(_core, m) {
           "marginal re-score, all native and parallelized across rows. v_alts[i]/j_alts[i] are the "
           "gene indices to search for row i (one = a pin, several = search all, [-1] or empty = "
           "marginalize); an empty aas[i] declines that row. threads=0 -> auto.");
+
+    m.def("generate_batch",
+          [](const PackedModel& mm, int n, uint64_t seed, bool productive_only, int threads) {
+              vdjtools::GenBatch b;
+              {
+                  py::gil_scoped_release nogil;
+                  b = vdjtools::generate_batch(mm, n, seed, productive_only, threads);
+              }
+              auto ints = [](const std::vector<int>& x) {
+                  return py::array_t<int>(x.size(), x.data());
+              };
+              py::dict out;
+              out["junction_nt"] = py::cast(b.nt);
+              out["junction_aa"] = py::cast(b.aa);
+              out["v"] = ints(b.v); out["d"] = ints(b.d);
+              out["d2"] = ints(b.d2); out["j"] = ints(b.j);
+              out["productive"] = py::array_t<int8_t>(b.productive.size(), b.productive.data());
+              return out;
+          },
+          py::arg("model"), py::arg("n"), py::arg("seed") = 0, py::arg("productive_only") = false,
+          py::arg("threads") = 0,
+          "Ancestral sampling from the model, natively. Every draw is seeded from (seed, slot), so "
+          "the result depends on the seed and the row index alone and never on the thread count. A "
+          "DIFFERENT random stream from the Python reference sampler: the two agree in "
+          "distribution, not sequence by sequence.");
 
     py::class_<Counts>(m, "Counts")
         .def_readonly("v_choice", &Counts::v_choice)

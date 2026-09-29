@@ -34,16 +34,46 @@ def _infer_locus(vcalls: pl.Series) -> str | None:
     return m[0] if m.len() else None
 
 
-def _chain_pgen(model, aa, v, j, condition_vj: bool) -> float | None:
-    if not isinstance(aa, str) or not aa:
-        return None
-    try:
-        return native.pgen_aa(model, aa, v if condition_vj else None,
-                              j if condition_vj else None)
-    except (KeyError, ValueError):
-        # Unknown allele or an unscoreable junction (non-standard residue). Null, not a
-        # marginalised value: marginalising silently is the 2.38x trap above.
-        return None
+def _chain_scores(model, aas: list, vs: list, js: list, condition_vj: bool) -> list:
+    """Pgen per row for one chain -- one native batch over the **distinct** clonotype keys.
+
+    Three things this has to get right, and a per-row loop over ``native.pgen_aa`` only got the
+    first two:
+
+    * **Deduplicate, do not cache.** Cells of an expanded clone share a clonotype key and the
+      native Pgen is deterministic in ``(junction, v, j)``, so scoring the distinct keys within one
+      call is exact deduplication -- nothing survives the call.
+    * **An unnameable V/J is a null for its own rows only.** The model is keyed by allele and
+      raises on anything else, deliberately: mapping an unknown call to "marginalise" returned a
+      value 2.38x too high with no error. ``pgen_aa_batch`` resolves names itself and would raise
+      for the **whole batch**, so names are resolved here first and the unresolvable keys never
+      enter it.
+    * **Batch it.** ``pgen_aa_batch`` releases the GIL and threads across the input; the per-row
+      loop was serial, and a whole barcoded dataset is tens of thousands of receptors.
+    """
+    n = len(aas)
+    if model is None:
+        return [None] * n
+    _pm, vi, ji = native.pack(model)
+    row_key: list = [None] * n
+    nameable: dict = {}
+    for i in range(n):
+        aa = aas[i]
+        if not isinstance(aa, str) or not aa:
+            continue
+        k = (aa, vs[i], js[i]) if condition_vj else (aa, None, None)
+        row_key[i] = k
+        if k not in nameable:
+            try:
+                native._gene_idx(vi, k[1], "V")
+                native._gene_idx(ji, k[2], "J")
+                nameable[k] = True
+            except KeyError:
+                nameable[k] = False
+    keys = [k for k, good in nameable.items() if good]
+    scored = dict(zip(keys, native.pgen_aa_batch(
+        model, [k[0] for k in keys], [k[1] for k in keys], [k[2] for k in keys]))) if keys else {}
+    return [None if k is None else scored.get(k) for k in row_key]
 
 
 def _warn_if_all_null(values, model, locus, col) -> None:
@@ -111,29 +141,15 @@ def paired_pgen(
     def _call(name):
         return aliases.get(name, name) if name else name
 
-    pa: list[float | None] = []
-    pb: list[float | None] = []
-    pp: list[float | None] = []
-    # Memoize each chain's Pgen over its distinct clonotype key — cells sharing a clonotype
-    # (expanded clones) otherwise recompute the identical native Pgen. Exact: native Pgen is
-    # deterministic in (junction, v, j), so a cached value equals the per-row call.
-    ca: dict = {}
-    cb: dict = {}
+    def col(name):
+        return (paired[name].to_list() if name in paired.columns
+                else [None] * paired.height)
 
-    def _memo(cache, model, aa, v, j):
-        if model is None or not aa:
-            return None
-        k = (aa, v, j) if condition_vj else (aa,)
-        if k not in cache:
-            cache[k] = _chain_pgen(model, aa, v, j, condition_vj)
-        return cache[k]
-
-    for r in paired.iter_rows(named=True):
-        a = _memo(ca, ma, r.get(ALPHA_AA), _call(r.get(ALPHA_V)), _call(r.get(ALPHA_J)))
-        b = _memo(cb, mb, r.get(BETA_AA), _call(r.get(BETA_V)), _call(r.get(BETA_J)))
-        pa.append(a)
-        pb.append(b)
-        pp.append(a * b if (a is not None and b is not None) else None)
+    pa = _chain_scores(ma, col(ALPHA_AA), [_call(x) for x in col(ALPHA_V)],
+                       [_call(x) for x in col(ALPHA_J)], condition_vj)
+    pb = _chain_scores(mb, col(BETA_AA), [_call(x) for x in col(BETA_V)],
+                       [_call(x) for x in col(BETA_J)], condition_vj)
+    pp = [a * b if (a is not None and b is not None) else None for a, b in zip(pa, pb)]
 
     _warn_if_all_null(pa, ma, a_loc, ALPHA_V)
     _warn_if_all_null(pb, mb, b_loc, BETA_V)

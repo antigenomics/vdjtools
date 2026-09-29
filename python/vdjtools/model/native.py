@@ -351,6 +351,45 @@ def pgen_aa_batch(
     return _batch(pm, seqs, v_idxs, j_idxs, mismatches, threads)
 
 
+def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
+                  j: list | None = None, threads: int = 0) -> list[float]:
+    """Nucleotide Pgen over many sequences, parallelized natively across the batch.
+
+    The counterpart of :func:`pgen_aa_batch`, and the entry point to use on more than one
+    sequence. Calling :func:`pgen_nt` in a loop pays the per-call Python each time, and wrapping
+    that loop in a thread pool dispatches one task per sequence -- which is what this replaces.
+
+    Args:
+        model: A recombination :class:`Model`.
+        cdr3_nts: Junction/CDR3 nucleotide sequences.
+        v: Optional per-sequence V **alleles** (same length as ``cdr3_nts``); ``None`` marginalises
+            over all V for every sequence, and individual entries may be ``None``. A gene-level
+            name raises, as in :func:`pgen_nt`.
+        j: Optional per-sequence J alleles (as ``v``).
+        threads: **Kernel threads**, not worker processes; ``0`` = auto
+            (``hardware_concurrency - 2``). Batches under 64 sequences stay single-threaded so the
+            result is bitwise-identical to a serial run.
+
+    Returns:
+        Per-sequence Pgen in input order.
+
+    Raises:
+        KeyError: If any ``v``/``j`` entry names no allele the model carries.
+        ValueError: If ``v``/``j`` has the wrong length, or a sequence has a non-ACGT base.
+    """
+    from .._core import pgen_nt_batch as _batch
+
+    pm, vi, ji = pack(model)
+    seqs = [s.upper() for s in cdr3_nts]
+    v_idxs = [_gene_idx(vi, x, "V") for x in v] if v is not None else []
+    j_idxs = [_gene_idx(ji, x, "J") for x in j] if j is not None else []
+    if v_idxs and len(v_idxs) != len(seqs):
+        raise ValueError("v must have the same length as cdr3_nts")
+    if j_idxs and len(j_idxs) != len(seqs):
+        raise ValueError("j must have the same length as cdr3_nts")
+    return _batch(pm, seqs, v_idxs, j_idxs, threads)
+
+
 def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str | None = None,
                       k: int = 8, *, resolve_genes: bool = True) -> list[tuple]:
     """Top-``k`` recombination scenarios for an amino-acid CDR3, best first.

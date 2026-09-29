@@ -85,6 +85,15 @@ std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
                                              const std::vector<int>& v_idxs,
                                              const std::vector<int>& j_idxs, int nthreads);
 
+// Batch nucleotide Pgen over many sequences, parallelized across sequences exactly as
+// ``pgen_aa_batch`` is, and bitwise-identical to the per-sequence ``pgen_nt`` calls for any
+// ``nthreads``. Sequences are validated and encoded serially up front: a worker may not throw, and
+// a non-ACGT base has to be an error rather than a silent 0. Per-sequence v_idxs/j_idxs; empty →
+// all -1 (gene-agnostic). nthreads=0 → auto (hw-2); batches under 64 stay single-threaded.
+std::vector<double> pgen_nt_batch(const PackedModel& m, const std::vector<std::string>& seqs,
+                                  const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
+                                  int nthreads);
+
 // Batch aa Pgen over many sequences, parallelized across sequences (mismatches: 0 = exact,
 // 1 = Hamming-1 ball). Bitwise-identical to the per-sequence calls. Per-sequence v/j indices;
 // empty v_idxs/j_idxs → all -1 (gene-agnostic). nthreads=0 → auto (hw-2).
@@ -158,6 +167,28 @@ std::vector<InferNt> infer_nt_batch(const PackedModel& m, const std::vector<std:
                                     const std::vector<std::vector<int>>& v_alts,
                                     const std::vector<std::vector<int>>& j_alts,
                                     int k, int nthreads);
+
+// One batch of ancestral draws from the model -- the native counterpart of
+// ``vdjtools.model.generate``. Columns, one entry per returned sequence.
+struct GenBatch {
+    std::vector<std::string> nt, aa;          // the CDR3/junction nucleotides and their translation
+    std::vector<int> v, d, d2, j;             // gene indices; d/d2 = -1 when none contributed
+    std::vector<int8_t> productive;           // in-frame and stop-free
+};
+
+// Sample ``n`` recombinations: pick genes, deletions, insertion lengths and non-templated
+// nucleotides (through the dinucleotide Markov chain), assemble the CDR3.
+//
+// **Every draw is seeded from ``(seed, slot)``**, so the result depends on the seed and the slot
+// index alone -- never on ``nthreads``. That is a correctness property rather than a nicety: a
+// corpus whose contents depend on the builder's core count cannot be compared with one built
+// anywhere else. ``productive_only`` re-draws a slot (advancing that slot's own stream) until the
+// draw is in-frame and stop-free, and throws once a slot exhausts ``kDrawAttempts``.
+//
+// NOTE: this is a DIFFERENT random stream from the Python reference sampler, which draws from
+// numpy's PCG64. The two agree in distribution, not sequence by sequence.
+GenBatch generate_batch(const PackedModel& m, int n, uint64_t seed, bool productive_only,
+                        int nthreads);
 
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.

@@ -133,18 +133,15 @@ def _unpack(sequences, v, j, seq_col, v_col, j_col) -> tuple[list[str], list, li
     return seqs, vs, js
 
 
-#: Below this many sequences, thread startup costs more than the nt Pgen it saves.
-_NT_THREAD_MIN = 32
-
-
 def _pgen_nt_many(model: Model, seqs: list[str], vres: list, jres: list,
                   threads: int) -> list[float]:
-    """Nucleotide Pgen over many sequences, threaded.
+    """Nucleotide Pgen over many sequences, batched natively.
 
-    There is no native nt batch entry point, but the ``pgen_nt`` binding releases the GIL
-    (``py::call_guard<py::gil_scoped_release>`` in ``src/_bindings.cpp``), so a plain thread pool
-    gets the same parallelism. Worth it: a V/J-marginalized nt Pgen sums over every V and J and
-    costs tens of milliseconds, which is minutes for a Monte-Carlo diversity estimate on one core.
+    One :func:`native.pgen_nt_batch` call. This used to be a ``ThreadPoolExecutor`` handing out
+    **one task per sequence** around ``native.pgen_nt``, because no native nt batch existed -- the
+    only pool in this package that dispatched per item rather than per contiguous slice. The
+    parallelism was real (the ``pgen_nt`` binding releases the GIL), but the dispatch was not free
+    and the shape was the one this repo forbids everywhere else.
 
     **Measured**, 256 generated TRB junctions on 16 cores: 8.08 s at one thread, 4.21 s at two,
     2.19 s at four, 1.17 s at eight, 0.71 s at sixteen -- 1.92x / 3.68x / 6.92x / 11.4x. Doubling
@@ -154,19 +151,12 @@ def _pgen_nt_many(model: Model, seqs: list[str], vres: list, jres: list,
 
     The cost is per-locus, not uniform: a VJ chain marginalizes in 0.01-0.02 ms (TRG, TRA) against
     36.88 ms on TRB and 40.70 ms on TRD, because the D-D sum is where the time goes. On a VJ chain
-    the pool is pure startup cost -- which is what ``_NT_THREAD_MIN`` is really guarding.
+    the threads are pure startup cost, which is what the native batch's own 64-sequence floor
+    guards.
     """
-    if threads == 1 or len(seqs) < _NT_THREAD_MIN:
-        return [native.pgen_nt(model, s, a, b) for s, a, b in zip(seqs, vres, jres)]
-    from concurrent.futures import ThreadPoolExecutor
-
-    from ..cores import available_cores
-
-    native.pack(model)  # populate the pack cache once, before the workers race for it
-    n_workers = threads if threads > 0 else max(1, available_cores(2) - 2)
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        return list(pool.map(lambda t: native.pgen_nt(model, t[0], t[1], t[2]),
-                             zip(seqs, vres, jres)))
+    if not seqs:
+        return []
+    return native.pgen_nt_batch(model, seqs, vres, jres, threads=threads)
 
 
 def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
