@@ -60,7 +60,9 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=5000)
     ap.add_argument("--min-donors", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--n-best", type=int, default=8)
+    # The SHIPPED default, so the script reports what a caller actually gets. It is also the
+    # better one for the D: 8 scores 72.58 % against 4's 74.30 % on this sample.
+    ap.add_argument("--n-best", type=int, default=4)
     args = ap.parse_args()
 
     from vdjtools.model import annotate_junctions
@@ -95,12 +97,18 @@ def main() -> None:
               f"of {have_nt['cdr3nt'].str.len_chars().mean():.1f} nt")
 
     # ---- the boundaries, on the sequence the pipeline inferred
+    #
+    # ⚠ The two sides do NOT share an offset, and assuming they did printed 2.73 % for a boundary
+    # that is right 78 % of the time. Both truth columns are indices of a real base: `VEnd` is the
+    # LAST V nucleotide and `JStart` is the FIRST J one. `v_end_nt` is a COUNT of leading V
+    # nucleotides, so it is `VEnd + 1`; `j_start_nt` is an index, so it is `JStart` outright.
     print()
-    for col, ref, label in (("v_end_nt", "VEnd", "v_end_nt"), ("j_start_nt", "JStart", "j_start_nt")):
+    for col, ref, off, label in (("v_end_nt", "VEnd", 1, "v_end_nt (a count)"),
+                                 ("j_start_nt", "JStart", 0, "j_start_nt (an index)")):
         sub = df.filter(pl.col(col).is_not_null() & pl.col(ref).is_not_null() & (pl.col(col) >= 0))
         if not sub.height:
             continue
-        d = sub[col] - 1 - sub[ref]
+        d = sub[col] - off - sub[ref]
         print(f"{label}: exact {(d == 0).sum():,}/{sub.height:,} = {(d == 0).sum()/sub.height:.2%}, "
               f"within 1 nt {(d.abs() <= 1).sum()/sub.height:.2%}")
 

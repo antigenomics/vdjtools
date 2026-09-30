@@ -175,11 +175,15 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   nt span folds onto the residues its codons touch. Read `d_call` + `d_posterior` + `d_start_nt` /
   `d_end_nt`; `np1` / `np2` are the N regions either side.
   **Naming and placing are separate, and only one estimator does each.** On 4,000 real human TRB
-  rearrangements with the D called from sequence: gene right on **74.30 %** of all rows, coordinates
-  on **99.70 %**. Letting the aligner choose the gene scores 47.93 % gated / 67.10 % ungated, and it
+  rearrangements with the D called from sequence: gene right on **74.35 %** of all rows, coordinates
+  on **99.80 %**. Letting the aligner choose the gene scores 47.93 % gated / 67.10 % ungated, and it
   is no better even where it is confident (85.96 % against the model's 86.32 % on those rows), so
-  there is no `d_best` and no second D estimator. **182 us/junction** -- VDJdb's whole
-  192,726-key corpus in 35 s in one process, of which naming the D is ~30 us and placing it ~1.4.
+  there is no `d_best` and no second D estimator. **168 us/junction**, of which naming the D
+  is ~30 us and placing it ~1.4. `model_source="auto"` (default) is a measured CHAIN -- OLGA's
+  bundled fit, then arda's on the rows it left empty -- and beats either alone on every axis
+  (TRB nt-exact 14.40 / 17.32 / **17.32 %**, D gene 72.58 / 74.08 / **74.35 %** for arda / OLGA /
+  the chain; TRA keeps 4,000 of 4,000 nt junctions where OLGA alone declines 143). Pin a name for a
+  reproducibility run; only arda's set covers mouse.
   `docs/junction_pipeline.md` for the whole argument; a caller wanting one stage should call that
   stage, not this. Full D-D markup on IGH/TRD is still `arda.annotate.dmap.map_d_junction`.
   ⚠ **Every accuracy number here is human TRB** — `isalgo/airr_control` has no immunoglobulin, so

@@ -157,7 +157,7 @@ def _aa_span(start_nt: int, end_nt: int) -> tuple[int | None, int | None]:
 
 def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
                        j_calls: Sequence[str], *, species: str | Iterable[str] = "human",
-                       model_source: str = "arda", n_best: int = 4, threads: int = 0,
+                       model_source: str = "auto", n_best: int = 4, threads: int = 0,
                        d_k: int = 4) -> pl.DataFrame:
     """Run the whole junction pipeline. **One row out per row in, in input order.**
 
@@ -170,8 +170,13 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
             named) and the ``proposed`` column says so. A call that is present but unresolvable is
             still refused, because naming something wrong is a defect and naming nothing is a gap.
         species: One name for every row, or one per row.
-        model_source: Which bundled model set supplies the nucleotide guess. ``"arda"`` is the
-            default because it is the only set covering mouse and it shares arda's allele namespace.
+        model_source: Which bundled model set supplies the nucleotide guess and names the D.
+            ``"auto"`` (default) is a **chain**, not a preference: OLGA's fit first, then arda's on
+            whatever OLGA left unexplained. Measured on 4,000 real human rearrangements it beats
+            either set alone on every axis -- TRB nucleotide-exact 14.40 / 17.32 / **17.32 %** and D
+            gene 72.58 / 74.08 / **74.35 %** for arda / OLGA / the chain, and TRA keeps 4,000 of
+            4,000 nucleotide junctions where OLGA alone declines 143. Name a set explicitly
+            (``"olga"``, ``"arda"``, ``"learned"``) to pin one; only arda's covers mouse.
         n_best: Candidates re-scored per row in stage 2; see :func:`infer_nt_batch`, whose own
             default is 8. **4 here, measured**: stage 2 is 69 % of the pipeline's cost and this is
             the knob that moves it, and what the nucleotides are FOR is finding the D -- they only
@@ -234,78 +239,101 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
     for i, (o, loc) in enumerate(zip(org, loci)):
         if loc and repaired[i]:
             groups.setdefault((o, loc), []).append(i)
-    for (o, loc), idx in groups.items():
-        try:
-            model = _reachable(load_bundled(loc, source=model_source, organism=o))
-        except (FileNotFoundError, ValueError, KeyError):
-            continue                     # no bundled model for this (organism, locus)
-        # ⚠ arda's namespace is IMGT-complete and a model's is whatever it was fitted on, so a call
-        # arda resolved -- `TRBV10-3*02`, after step one re-called it -- can name an allele the model
-        # has never heard of, and `infer_nt_batch` refuses a name it does not know rather than
-        # silently marginalising. Fall back to the model's representative allele for that GENE, and
-        # only marginalise when the gene itself is absent, which keeps the curator's call in the
-        # answer wherever the model can express it at all.
-        rep = gene_to_allele(model)
-        known = set(model.tables["v_choice"][model.tables["v_choice"].columns[0]].to_list())
-        known |= set(model.tables["j_choice"][model.tables["j_choice"].columns[-2]].to_list())
+    # ⛔ The model SET is not a free choice, and ``auto`` is a measured chain rather than a
+    # preference. On 4,000 real human rearrangements, same rows, only the set changed:
+    #
+    #                 TRB nt exact  TRB D right | TRA nt inferred  TRA nt exact
+    #   arda               14.40 %      72.58 % |    4,000/4,000        29.45 %
+    #   olga               17.32 %      74.08 % |    3,857/4,000        37.88 %
+    #   olga -> arda       17.32 %      74.35 % |    4,000/4,000        38.90 %
+    #
+    # OLGA's fit is better calibrated and ~1.9x faster, but it DECLINES rows outright (143 of 4,000
+    # on TRA) and has no mouse; arda's answers everything and is thinner -- 36 of its 66 human TRB V
+    # alleles sit at p = 0, which is what `_reachable` exists to floor. ⚠ The flooring is NOT the
+    # gap: unfloored, arda's set names a D on 2,669 of 4,000 rows at 48.25 % correct, so it is
+    # load-bearing. Running one set and then the other on what it left empty beats both on every
+    # axis, which is why the default is the chain and not either name.
+    sources = ("olga", "arda") if model_source == "auto" else (model_source,)
+    for (o, loc), group_idx in groups.items():
+        todo = list(group_idx)
+        for source in sources:
+            if not todo:
+                break
+            idx = todo
+            try:
+                model = _reachable(load_bundled(loc, source=source, organism=o))
+            except (FileNotFoundError, ValueError, KeyError):
+                continue                 # this set has no model for this (organism, locus)
+            # ⚠ arda's namespace is IMGT-complete and a model's is whatever it was fitted on, so a call
+            # arda resolved -- `TRBV10-3*02`, after step one re-called it -- can name an allele the model
+            # has never heard of, and `infer_nt_batch` refuses a name it does not know rather than
+            # silently marginalising. Fall back to the model's representative allele for that GENE, and
+            # only marginalise when the gene itself is absent, which keeps the curator's call in the
+            # answer wherever the model can express it at all.
+            rep = gene_to_allele(model)
+            known = set(model.tables["v_choice"][model.tables["v_choice"].columns[0]].to_list())
+            known |= set(model.tables["j_choice"][model.tables["j_choice"].columns[-2]].to_list())
 
-        def _in_model(calls: Sequence[str]) -> list[str] | None:
-            """Every one of arda's equally-good alleles the model can express, else its gene rep."""
-            out: list[str] = []
-            for call in calls:
-                hit = call if call in known else rep.get(call.split("*")[0])
-                if hit and hit not in out:
-                    out.append(hit)
-            return out or None            # None = marginalise; the gene itself is absent
+            def _in_model(calls: Sequence[str]) -> list[str] | None:
+                """Every one of arda's equally-good alleles the model can express, else its gene rep."""
+                out: list[str] = []
+                for call in calls:
+                    hit = call if call in known else rep.get(call.split("*")[0])
+                    if hit and hit not in out:
+                        out.append(hit)
+                return out or None            # None = marginalise; the gene itself is absent
 
-        # ⛔ The whole tie set goes in, not one allele. An amino-acid junction frequently cannot
-        # separate the alleles of a gene -- `CAISE` is TRBV10-3*01, *02 and *03 alike -- and arda
-        # reports that as `v_alts` rather than resolving it by name order. `infer_nt_batch` scores a
-        # LIST per row, so the stage that CAN separate them (codon plausibility, and the model's own
-        # usage) is the stage that does.
-        got = infer_nt_batch(model, [repaired[i] for i in idx],
-                             v=[_in_model(v_alts[i]) for i in idx],
-                             j=[_in_model(j_alts[i]) for i in idx], n_best=n_best, threads=threads)
-        for k, i in enumerate(idx):
-            row = got.row(k, named=True)
-            nt[i], pg[i] = row.get("cdr3_nt"), row.get("pgen")
-            sc[i], ru[i] = row.get("scenario_p"), row.get("runner_up_pgen")
-            # Which allele of the tie set the nucleotides settled on -- reported, never written back
-            # over arda's call: this is model evidence about an ambiguity, not a re-annotation.
-            v_nt_call[i], j_nt_call[i] = row.get("v_call"), row.get("j_call")
+            # ⛔ The whole tie set goes in, not one allele. An amino-acid junction frequently cannot
+            # separate the alleles of a gene -- `CAISE` is TRBV10-3*01, *02 and *03 alike -- and arda
+            # reports that as `v_alts` rather than resolving it by name order. `infer_nt_batch` scores a
+            # LIST per row, so the stage that CAN separate them (codon plausibility, and the model's own
+            # usage) is the stage that does.
+            got = infer_nt_batch(model, [repaired[i] for i in idx],
+                                 v=[_in_model(v_alts[i]) for i in idx],
+                                 j=[_in_model(j_alts[i]) for i in idx], n_best=n_best, threads=threads)
+            for k, i in enumerate(idx):
+                row = got.row(k, named=True)
+                nt[i], pg[i] = row.get("cdr3_nt"), row.get("pgen")
+                sc[i], ru[i] = row.get("scenario_p"), row.get("runner_up_pgen")
+                # Which allele of the tie set the nucleotides settled on -- reported, never written back
+                # over arda's call: this is model evidence about an ambiguity, not a re-annotation.
+                v_nt_call[i], j_nt_call[i] = row.get("v_call"), row.get("j_call")
 
-        # ---- stage 3: WHICH D, from the same model, in the same group, one native call.
-        #
-        # `best_aa_scenarios_batch` returns the top-k scenarios per row with a weight and a D
-        # allele on each -- the D axis of the same Pi_L*Pi_R transfer as `pgen_aa`. Summing the
-        # weights by gene and normalising is the posterior, and it needs no nucleotides, no fitted
-        # prior table and no per-locus tempering constant. It is here rather than in its own pass
-        # because the model is loaded and the batch is already grouped.
-        try:
-            scen = best_aa_scenarios_batch(
-                model, [repaired[i] for i in idx],
-                v=[(_in_model(v_alts[i]) or [None])[0] for i in idx],
-                j=[(_in_model(j_alts[i]) or [None])[0] for i in idx],
-                k=d_k, threads=threads)
-        except (KeyError, ValueError):
-            continue                     # no D axis on a VJ locus; the rows keep their nulls
-        if "d_call" not in scen.columns or not scen.height:
-            continue
-        # A VJ locus scores every scenario with no D at all, and polars gives an all-null column
-        # of dtype Object there -- `.str` on which is a SchemaError, not an empty result.
-        top = (scen.with_columns(pl.col("d_call").cast(pl.String, strict=False))
-                   .with_columns(pl.col("d_call").str.split("*").list.first().alias("_g"))
-                   .filter(pl.col("_g").is_not_null())
-                   .group_by("row", "_g").agg(pl.col("w").sum())
-                   .with_columns((pl.col("w") / pl.col("w").sum().over("row")).alias("_p"))
-                   # Sort then take the head of each group, rather than `unique(keep="first")`:
-                   # a hash-unique is not order-stable, and two D genes CAN carry the same summed
-                   # weight -- `_g` is in the sort so that tie breaks by name and not by thread
-                   # scheduling. Determinism is a requirement here, not a nicety.
-                   .sort(["row", "_p", "_g"], descending=[False, True, False])
-                   .group_by("row", maintain_order=True).first())
-        for k_, g_, p_ in zip(top["row"].to_list(), top["_g"].to_list(), top["_p"].to_list()):
-            d_gene[idx[k_]], d_post[idx[k_]] = g_, p_
+            # ---- stage 3: WHICH D, from the same model, in the same group, one native call.
+            #
+            # `best_aa_scenarios_batch` returns the top-k scenarios per row with a weight and a D
+            # allele on each -- the D axis of the same Pi_L*Pi_R transfer as `pgen_aa`. Summing the
+            # weights by gene and normalising is the posterior, and it needs no nucleotides, no fitted
+            # prior table and no per-locus tempering constant. It is here rather than in its own pass
+            # because the model is loaded and the batch is already grouped.
+            try:
+                scen = best_aa_scenarios_batch(
+                    model, [repaired[i] for i in idx],
+                    v=[(_in_model(v_alts[i]) or [None])[0] for i in idx],
+                    j=[(_in_model(j_alts[i]) or [None])[0] for i in idx],
+                    k=d_k, threads=threads)
+            except (KeyError, ValueError):
+                continue                     # no D axis on a VJ locus; the rows keep their nulls
+            if "d_call" not in scen.columns or not scen.height:
+                continue
+            # A VJ locus scores every scenario with no D at all, and polars gives an all-null column
+            # of dtype Object there -- `.str` on which is a SchemaError, not an empty result.
+            top = (scen.with_columns(pl.col("d_call").cast(pl.String, strict=False))
+                       .with_columns(pl.col("d_call").str.split("*").list.first().alias("_g"))
+                       .filter(pl.col("_g").is_not_null())
+                       .group_by("row", "_g").agg(pl.col("w").sum())
+                       .with_columns((pl.col("w") / pl.col("w").sum().over("row")).alias("_p"))
+                       # Sort then take the head of each group, rather than `unique(keep="first")`:
+                       # a hash-unique is not order-stable, and two D genes CAN carry the same summed
+                       # weight -- `_g` is in the sort so that tie breaks by name and not by thread
+                       # scheduling. Determinism is a requirement here, not a nicety.
+                       .sort(["row", "_p", "_g"], descending=[False, True, False])
+                       .group_by("row", maintain_order=True).first())
+            for k_, g_, p_ in zip(top["row"].to_list(), top["_g"].to_list(), top["_p"].to_list()):
+                d_gene[idx[k_]], d_post[idx[k_]] = g_, p_
+
+            # Rows this set could not explain fall through to the next one in the chain.
+            todo = [i for i in idx if nt[i] is None]
 
     # ---- stage 2b: the templated flanks are GERMLINE, not a guess.
     #

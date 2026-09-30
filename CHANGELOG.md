@@ -25,7 +25,7 @@ fitted prior table. The aligner then places that gene greedily and **ungated** (
 where it sits only leaves a row with nothing to draw.
 
 On 4,000 real human TRB rearrangements whose D comes from the nucleotides: the gene is right on
-**74.30 %** of all rows and **99.70 %** have coordinates. Letting the aligner choose the gene as well
+**74.35 %** of all rows and **99.80 %** have coordinates. Letting the aligner choose the gene as well
 reaches 47.93 % gated, 67.10 % ungated, and it is no better even where it is confident — 85.96 %
 against the model's 86.32 % on those rows. So there is no `d_best`, no `d_posterior_call`, no
 `d_entropy` and no `arda.dpost` port: a second D estimator was measured and is not needed.
@@ -35,11 +35,19 @@ against the model's 86.32 % on those rows. So there is no `d_best`, no `d_poster
 read off the inferred nucleotide junction, and every amino-acid bound is recomputed from them, so a
 view showing both alphabets cannot draw them disagreeing.
 
-**182 µs per junction**, so VDJdb's whole corpus — 192,726 distinct `(species, cdr3, V, J)` keys —
-annotates in **35 s in one process**: 190,093 nucleotide junctions, a D gene on 123,916 of the
-124,489 TRB keys, and coordinates on 121,232 of those. Every stage is batched (one `markup_batch`,
-then one native threaded `infer_nt_batch` and one `best_aa_scenarios_batch` per organism and locus on
-a model loaded once), so do **not** wrap the call in a pool of your own.
+**New — `model_source="auto"`, the default, is a measured chain rather than a preference.** OLGA's
+bundled fit is better calibrated and cheaper to score; arda's answers every row and is the only one
+covering mouse. Running OLGA's first and arda's on what it left empty beats both on every axis:
+human TRB nucleotide-exact 14.40 / 17.32 / **17.32 %** and D gene 72.58 / 74.08 / **74.35 %** for
+arda / OLGA / the chain, and human TRA keeps **4,000 of 4,000** nucleotide junctions where OLGA
+alone declines 143. Pin a set by name for a reproducibility run.
+
+**116 µs per key on the real corpus** — VDJdb's 192,726 distinct `(species, cdr3, V, J)` keys in
+**22.3 s in one process**: 190,199 nucleotide junctions, a D gene on 124,022 of the 124,489 TRB keys,
+and coordinates on 121,336 of those. The 65,107 TRA keys have no D to find. Every stage
+is batched (one `markup_batch`, then one native threaded `infer_nt_batch` and one
+`best_aa_scenarios_batch` per organism, locus and model set, on a model loaded once), so do **not**
+wrap the call in a pool of your own.
 
 **A blank V or J is handled**, not refused: arda proposes that side from the junction, and the
 `proposed` column says which side was never curated. 3,130 of VDJdb's 192,726 curation keys leave a

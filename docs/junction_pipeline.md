@@ -61,7 +61,7 @@ over D genes. Same model as stage 2, already loaded, same `(organism, locus)` gr
 threaded call. No fitted prior table, no per-locus tempering constant, no nucleotides.
 
 `k = 4`, and that is not a speed compromise — accuracy **falls** as `k` rises (74.33 % at 4, 74.22 %
-at 8, 73.20 % at 16, 72.95 % at 64). The truncation is doing the regularising; the low-weight
+at 8, 73.20 % at 16, 72.95 % at 64, measured on one set). The truncation is doing the regularising; the low-weight
 scenarios it admits only dilute the winner.
 
 Out: `d_call` (a **gene** — an amino-acid junction does not identify a D allele) and `d_posterior`.
@@ -76,7 +76,7 @@ It was measured on 4,000 real human TRB rearrangements from `isalgo/airr_control
 | E-value-gated alignment chooses and places | 47.93 % | 55.75 % |
 | gated alignment, model posterior where it declines (the old `d_best`) | 71.40 % | 55.75 % |
 | ungated alignment chooses and places | 67.10 % | 88.15 % |
-| **model names, greedy alignment places** | **74.30 %** | **99.70 %** |
+| **model names, greedy alignment places** | **74.35 %** | **99.80 %** |
 
 The gate is not what held the alignment back, and the alignment is not better where it *is*
 confident: on the 2,230 rows it speaks for, the model's posterior is right 86.32 % against its
@@ -96,8 +96,8 @@ Greedy gapless local alignment of every allele of the **chosen gene** against th
 because the gene is already named and refusing to say where it sits does not improve the name — it
 just leaves a row with nothing to draw.
 
-⚠ The trade, stated: `d_start_nt` is exact on 60.88 % of correctly-called rows here against 66.67 %
-under the E-value gate. But it is exact on **1,807 rows rather than 1,278**, because it answers 3,988
+⚠ The trade, stated: `d_start_nt` is exact on 64.71 % of correctly-called rows here against 66.67 %
+under the E-value gate. But it is exact on **1,922 rows rather than 1,278**, because it answers 3,992
 rather than 2,230. For a database drawing V/N/D/N/J that is the trade to take.
 
 Out: `d_start_nt` / `d_end_nt` (1-based closed, junction space) and `np1` / `np2`, sliced from the
@@ -157,9 +157,13 @@ check that says stage 2b already did it.
 ## Cost, measured on the corpus it exists for
 
 VDJdb's whole curation corpus — **192,726 distinct `(species, cdr3, V, J)` keys** — annotates in
-**35.1 s in one process, 182 µs per key**. 190,093 keys get a nucleotide junction, 123,916 of the
-124,489 TRB keys get a D gene, and 121,232 of those get coordinates to draw; the 65,107 TRA keys have
-no D to find.
+**22.3 s in one process, 116 µs per key**. 190,199 keys get a nucleotide junction, **124,022 of the
+124,489 TRB keys get a D gene**, and 121,336 of those get coordinates to draw; the 65,107 TRA keys
+have no D to find.
+
+That is 1.57× faster than pinning arda's set (35.1 s, 182 µs) as well as more accurate, because
+OLGA's fit answers most rows and is the cheaper one to score. On the human TRB benchmark alone the
+figure is 168 µs/junction.
 
 | stage | µs/junction |
 |---|---:|
@@ -173,6 +177,30 @@ table, then one native threaded `infer_nt_batch` and one `best_aa_scenarios_batc
 `(organism, locus)` on a model that is loaded once, then a thin Python loop over arda's C++ aligner.
 A pool around it would re-import both libraries and re-load every model per worker, which is the
 failure this project keeps writing down.
+
+## Which model set — `model_source="auto"` is a chain, not a preference
+
+Both bundled fits were scored on the same 4,000 real human rearrangements, changing nothing but the
+set:
+
+| | TRB nt exact | TRB D gene right | TRA nt inferred | TRA nt exact | µs/junction |
+|---|---:|---:|---:|---:|---:|
+| `"arda"` | 14.40 % | 72.58 % | 4,000/4,000 | 29.45 % | 272 |
+| `"olga"` | 17.32 % | 74.08 % | 3,857/4,000 | 37.88 % | 141 |
+| **`"auto"` — OLGA, then arda on what it left** | **17.32 %** | **74.35 %** | **4,000/4,000** | **38.90 %** | **168** |
+
+OLGA's fit is better calibrated and cheaper to score; arda's answers everything and is the only one
+covering mouse. Neither dominates, so the default runs one and then the other on the rows the first
+left empty — which does dominate, on every column above.
+
+⚠ **The flooring is not what makes arda's set weaker, and it is load-bearing.** 36 of its 66 human
+TRB V alleles sit at probability 0, so `_reachable` has to floor them before anything conditions;
+*unfloored*, that set names a D on 2,669 of 4,000 rows at 48.25 % correct against the floored
+72.58 %. Improving the bundled fit is the real fix and it belongs in whatever produces that table,
+not here.
+
+Pin a set by name (`"olga"`, `"arda"`, `"learned"`) when you need one model's numbers and not the
+best available answer — a reproducibility run, or a comparison against a published fit.
 
 ## Contract
 
