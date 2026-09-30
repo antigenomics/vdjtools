@@ -3,6 +3,92 @@
 Notable changes to vdjtools v2. Releases before 3.0.0 are recorded in the git tags
 (`v2.5.0` … `v2.9.0`) and their commit history.
 
+## 4.8.0 — 2026-09-30
+
+### Added: the junction pipeline — one call from `(junction_aa, V, J)` to a D with coordinates
+
+`model.annotate_junctions`. A VDJdb-style record is an amino-acid junction and two gene calls and
+nothing else, and every downstream question is answered off that, each answer feeding the next. Four
+stages, every one of them an existing entry point of arda's or of this repository's — the design note
+is `docs/junction_pipeline.md`:
+
+1. **arda** `cdr3fix.markup_batch` — confirm or replace the V/J call, repair the junction, place the
+   boundaries in residues and in nucleotides.
+2. **here** `infer_nt_batch` — the most plausible **nucleotide** junction for that amino-acid
+   junction, conditioned on the confirmed calls. The templated flanks are then written from the
+   called allele's own germline: only the N region is unknowable from amino acids, and the
+   reconstruction differed from the observed V span on **23.93 %** of real rearrangements before
+   that splice (nucleotide-exact junctions 12.70 % → 14.30 %).
+3. **arda** `map_d_junction` — the D, and a tandem D2 on IGH/TRD, by gapless local alignment against
+   the V..J interior **of that nucleotide junction**, under the E-value gate and the genomic-order
+   mask, given the boundaries from stage 1.
+4. **here** — the nucleotide D coordinates folded back onto amino-acid positions.
+
+**The nucleotide detour is the point.** A D contributing one amino acid is invisible in a translated
+junction but not in nucleotides: the residues at each end of the D are part germline and part N
+region, so their codons carry D bases. A nucleotide span therefore folds onto *the residues whose
+codons it touches*, which is why a one-residue D can correctly report a two-residue span.
+
+Measured against **4,000 real human TRB rearrangements** from `isalgo/airr_control`, whose V/D/J and
+`DStart`/`DEnd` come from the actual sequence and which the pipeline never sees
+(`appendix/bench_junction_pipeline.py`, reproducible — the sample is deterministic):
+
+| | called | correct when called | correct over all rows |
+|---|---|---|---|
+| D by alignment on the inferred nt | 56.2 % | **85.98 %** | 48.30 % |
+| D by the length-and-prior posterior | 100 % | 69.67 % | 69.67 % |
+| **`d_best` — alignment, posterior as fallback** | 100 % | — | **71.53 %** |
+
+So **neither route replaces the other**, which is the answer to whether the probabilistic D is still
+needed now that the nucleotide one exists: it answers the 1,753 rows the alignment declines and is
+right on 52.99 % of them. Where the D is called correctly its position lands exactly on 67.24 % of
+rows and within one nucleotide on 85.35 %.
+
+307 µs per junction, 58 s for a 190,000-key corpus. Stage 2 is 69 % of that and stage 3 — the D
+alignment — is 2 %; `n_best=4` is the measured default here against `infer_nt_batch`'s own 8, because
+what the nucleotides are *for* is finding the D and they only have to be right where the D is (249 µs
+against 303, D accuracy unchanged).
+
+### Added: `model.posterior_d`, `posterior_d_batch`, `load_d_prior` — moved from `arda.dpost`
+
+Closes [#183](https://github.com/antigenomics/vdjtools/issues/183) and
+[antigenomics/arda#144](https://github.com/antigenomics/arda/issues/144),
+[#142](https://github.com/antigenomics/arda/issues/142). arda owns the germline reference and the
+markup against it; this repository owns the recombination model and everything probabilistic about
+it, and a posterior that marginalises insertion-length and D-trimming distributions and multiplies in
+`P(D | J)` is on this side of that line.
+
+**Ported, not rewritten.** Over 3,000 real human TRB junctions it agrees with `arda.dpost` on every
+field of every row, so the measured accuracy travels intact (in-model human IGH 82 %, TRB 82 %,
+TRD 87 %, mouse TRB 85 %; out-of-model against nucleotide calls 94/85/91/85 %).
+
+`posterior_d_batch` is the batch entry point arda#142 asked for: **one row out per row in, in input
+order**, `None` — never an exception — for a record the model cannot explain. The marginalisation it
+does per record is a convolution of the D-length and insDJ distributions that does **not** depend on
+the record, so it is precomputed once per prior: 105 → 63 µs/key, identical answers.
+
+The prior table itself stays in arda's tree and is read through `arda.scenarios.load_prior_table`,
+because `arda.hmm` and `arda.scenarios` are parameterised by the same file and a copy here would be a
+second copy of a fitted artifact.
+
+### Fixed: `infer_nt_batch` raised on the per-row list form it documents
+
+`germline_boundary`'s call-name helper only ever split a string, so passing a **list** of alleles for
+a row — one of the three forms `infer_nt` documents, and how a caller propagates a set of
+equally-good alleles — raised `'list' object has no attribute 'split'` after the scenario search had
+already succeeded.
+
+### Fixed: more than half of human TRB was unanswerable under a conditioned V
+
+A bundled model is an EM fit, and an allele the training cohort never showed comes out at **p = 0** in
+two places at once: `v_choice` (36 of 66 TRB V alleles, `TRBV2`, `TRBV13`, `TRBV17`, `TRBV27` among
+them) and `v_3_del` (34 with an all-zero deletion profile). Conditioning on one returned no scenario
+at all, so every curated record naming it got no nucleotide junction and therefore no D.
+`model.junction` floors those zeros before stage 2 — allele choice per row (the V and J are pinned
+there, so their usage is a constant factor and the winner cannot change), V/J deletion profiles only
+where the whole profile is zero, nothing about the D. Verified over every allele the fit *did* see:
+**not one answer moves**, and 34 of 36 zero-usage TRB alleles become answerable.
+
 ## 4.7.0 — 2026-09-29
 
 ### The V/J boundary, answered by the germline instead of by the argmax history (#182)

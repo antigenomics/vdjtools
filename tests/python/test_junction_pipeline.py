@@ -1,0 +1,124 @@
+"""The junction pipeline: `(junction_aa, V, J)` -> repair -> nucleotides -> D.
+
+What is pinned here is the **contract and the coordinate algebra**, not the accuracy: accuracy is
+measured against real nucleotide rearrangements from `isalgo/airr_control` by
+`appendix/bench_junction_pipeline.py`, and recorded in the CHANGELOG and in
+`docs/junction_pipeline.md`.
+"""
+from __future__ import annotations
+
+import polars as pl
+import pytest
+
+from vdjtools.model import JUNCTION_COLUMNS, annotate_junctions, load_bundled
+from vdjtools.model.junction import _aa_span, _reachable
+
+TRB = (["CASSLAPGATNEKLFF", "CASSPGQGAYEQYF", "CAWSVSDLAKNIQYF"],
+       ["TRBV5-1*01", "TRBV5-1*01", "TRBV30*01"],
+       ["TRBJ1-4*01", "TRBJ2-7*01", "TRBJ2-4*01"])
+
+
+def test_one_row_out_per_row_in_in_input_order():
+    """The contract a consumer joins on. A row nothing can explain is present with nulls."""
+    cdr3 = [*TRB[0], "CAVTDDKIIF", "GARBAGE", ""]
+    v = [*TRB[1], "TRAV12-2*01", "TRBV9*01", "TRBV9*01"]
+    j = [*TRB[2], "TRAJ30*01", "TRBJ1-1*01", "TRBJ1-1*01"]
+    out = annotate_junctions(cdr3, v, j, species="human")
+    assert out.height == len(cdr3)
+    assert out["cdr3_aa"].to_list() == cdr3, "input order, row for row"
+    assert set(JUNCTION_COLUMNS) >= set(out.columns)
+    assert out["d_call"][3] is None, "a VJ locus has no D"
+
+
+def test_ragged_input_raises_rather_than_truncating():
+    with pytest.raises(ValueError, match="ragged"):
+        annotate_junctions(["CASSLAPGATNEKLFF"], [], [])
+    with pytest.raises(ValueError, match="ragged"):
+        annotate_junctions(TRB[0], TRB[1], TRB[2], species=["human"])
+    assert annotate_junctions([], [], []).height == 0
+
+
+def test_the_nucleotide_junction_is_exactly_three_times_the_repaired_one():
+    """Stage 2's output has to be in the same coordinate frame as stage 1's, or stage 3 is nonsense."""
+    out = annotate_junctions(*TRB, species="human").filter(pl.col("cdr3_nt").is_not_null())
+    assert out.height
+    for nt, aa in zip(out["cdr3_nt"], out["cdr3_repaired"]):
+        assert len(nt) == 3 * len(aa), (nt, aa)
+
+
+def test_the_d_sits_inside_the_boundaries_stage_one_placed():
+    """Stage 3 is given the interior, not left to re-derive it from an inferred sequence.
+
+    Re-deriving it matched germline against the CALLED allele while the nucleotides came from the
+    model's representative allele of the same gene, so the prefix broke at the first synonymous
+    difference and a spurious D won inside the V -- `CATSIRFTDTQYF` placed a TRBD2 at nucleotide 6.
+    """
+    out = annotate_junctions(*TRB, species="human").filter(pl.col("d_call").is_not_null())
+    assert out.height
+    for r in out.iter_rows(named=True):
+        assert r["d_start_nt"] > r["v_end_nt"], r
+        assert r["d_end_nt"] <= r["j_start_nt"], r
+
+
+@pytest.mark.parametrize("start_nt, end_nt, want", [
+    (4, 6, (1, 1)),        # exactly one codon
+    (5, 7, (1, 2)),        # straddles a boundary: two residues, one codon's worth of nucleotides
+    (1, 3, (0, 0)),
+    (13, 19, (4, 6)),
+    (-1, -1, (None, None)),
+])
+def test_a_nucleotide_span_folds_onto_the_residues_whose_codons_it_touches(start_nt, end_nt, want):
+    """The point of the nucleotide detour: a 1-residue D can still report a 2-residue span.
+
+    It is part of both flanking codons, and those codons are exactly the evidence a translated
+    junction throws away.
+    """
+    assert _aa_span(start_nt, end_nt) == want
+
+
+def test_flooring_the_model_creates_answers_and_changes_none():
+    """`_reachable`, and the invariant that makes it safe.
+
+    36 of 66 human TRB V alleles come out of the EM fit at p = 0, and 34 have an all-zero deletion
+    profile, so conditioning on one returned no scenario at all. Flooring is only allowed because
+    this stage pins the V and the J, which makes their usage a constant factor per row: measured over
+    every allele the fit DID see, not one answer moves.
+    """
+    from vdjtools.model import infer_nt
+
+    m = load_bundled("TRB", source="arda", organism="human")
+    f = _reachable(m)
+    t = m.tables["v_choice"]
+    col = t.columns[0]
+    fitted = [r[col] for r in t.filter(pl.col("p") > 0).to_dicts()]
+    zeroed = [r[col] for r in t.filter(pl.col("p") <= 0).to_dicts()]
+    assert len(zeroed) > 10, "the premise: the shipped fit really does zero many alleles"
+
+    moved = 0
+    for allele in fitted:
+        a = infer_nt(m, "CASSTQENTEAFF", v=allele, j="TRBJ1-1*01")
+        b = infer_nt(f, "CASSTQENTEAFF", v=allele, j="TRBJ1-1*01")
+        if a is not None and b is not None and (a.cdr3_nt, a.d_call) != (b.cdr3_nt, b.d_call):
+            moved += 1
+    assert moved == 0, f"{moved} fitted alleles changed answer -- flooring is not neutral"
+    assert sum(infer_nt(f, "CASSTQENTEAFF", v=x, j="TRBJ1-1*01") is not None
+               for x in zeroed[:8]) >= 6, "zero-usage alleles must become answerable"
+
+
+def test_d_best_prefers_the_alignment_and_falls_back_to_the_posterior():
+    """Both routes ship, and `d_best` is the measured combination of them.
+
+    On 4,000 real human TRB rearrangements: alignment 56 % of rows at 85 % correct, posterior 100 %
+    at 70 %, the combination 72.9 % of ALL rows -- so the probabilistic route is not redundant now
+    that the nucleotide route exists, and the order is not arbitrary.
+    """
+    out = annotate_junctions(*TRB, species="human")
+    for r in out.iter_rows(named=True):
+        if r["d_call"]:
+            assert r["d_best_source"] == "alignment"
+            assert r["d_best"] == r["d_call"].split("*")[0]
+        elif r["d_posterior_call"]:
+            assert r["d_best_source"] == "posterior"
+            assert r["d_best"] == r["d_posterior_call"]
+        else:
+            assert r["d_best"] is None and r["d_best_source"] is None

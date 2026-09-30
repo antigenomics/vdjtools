@@ -117,8 +117,20 @@ def germline_boundary(model: Model, cdr3_aas, v=None, j=None):
     j_start: list[int | None] = [None] * n
 
     def allele(name):
+        """One allele name from any of the three per-row call forms `infer_nt` documents.
+
+        ⚠ Including a LIST. `infer_nt_batch` accepts "an allele, comma-separated alleles or a list"
+        per row and its scenario search honours all three, but this helper only ever split a string,
+        so passing the list form -- which is how a caller propagates a set of equally-good alleles --
+        raised `'list' object has no attribute 'split'` here after the search had already succeeded.
+        The boundary is read off ONE germline, and the leading entry is the caller's own first choice.
+        """
         if not name:
             return None
+        if isinstance(name, (list, tuple)):
+            name = name[0] if name else ""
+            if not name:
+                return None
         first = name.split(",")[0].strip()
         return alias.get(first, first)
 
