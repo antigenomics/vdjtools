@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  # Per-ref, so pushing to a PR branch supersedes the run already in flight instead of leaving it
+  # burning runners with a stale verdict -- two live runs on one PR is two competing answers.
+  # Same group arda's ci.yml uses. NOT applied to publish.yml: a release must never be cancelled.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cpp:
     name: C++ tests (${{ matrix.os }})
