@@ -35,6 +35,12 @@ against the model's 86.32 % on those rows. So there is no `d_best`, no `d_poster
 read off the inferred nucleotide junction, and every amino-acid bound is recomputed from them, so a
 view showing both alphabets cannot draw them disagreeing.
 
+**182 µs per junction**, so VDJdb's whole corpus — 192,726 distinct `(species, cdr3, V, J)` keys —
+annotates in **35 s in one process**: 190,093 nucleotide junctions, a D gene on 123,916 of the
+124,489 TRB keys, and coordinates on 121,232 of those. Every stage is batched (one `markup_batch`,
+then one native threaded `infer_nt_batch` and one `best_aa_scenarios_batch` per organism and locus on
+a model loaded once), so do **not** wrap the call in a pool of your own.
+
 **A blank V or J is handled**, not refused: arda proposes that side from the junction, and the
 `proposed` column says which side was never curated. 3,130 of VDJdb's 192,726 curation keys leave a
 side out, and they now get a nucleotide junction and a D like any other row.

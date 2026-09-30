@@ -12,7 +12,8 @@ fitting by EM, and a generation sampler that reaches 2.3 M productive sequences/
 **The junction pipeline** (`model.annotate_junctions`, `docs/junction_pipeline.md`). From a bare
 amino-acid junction with its V and J calls: a repaired junction, confirmed or corrected gene calls,
 V/J boundaries in residues and nucleotides, the most plausible nucleotide junction, and a D with
-coordinates in both alphabets. 307 µs per junction.
+coordinates in both alphabets. **182 µs per junction** — VDJdb's whole 192,726-key
+corpus in 35 s, one process.
 
 **Repertoire statistics.** Diversity (including iNEXT and rarefaction), spectratype, V/J usage,
 functional summaries, and hypermutation; pairwise and cohort overlap; decontamination; a

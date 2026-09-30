@@ -154,6 +154,26 @@ Re-deriving them by matching germline against the inferred sequence was measured
 answer (`v_end_nt` exact on 1.85 % of rows either way, `j_start_nt` 78.12 % either way) — which is the
 check that says stage 2b already did it.
 
+## Cost, measured on the corpus it exists for
+
+VDJdb's whole curation corpus — **192,726 distinct `(species, cdr3, V, J)` keys** — annotates in
+**35.1 s in one process, 182 µs per key**. 190,093 keys get a nucleotide junction, 123,916 of the
+124,489 TRB keys get a D gene, and 121,232 of those get coordinates to draw; the 65,107 TRA keys have
+no D to find.
+
+| stage | µs/junction |
+|---|---:|
+| 1 — arda `markup_batch` | ~54 |
+| 2 — `infer_nt_batch` + the germline flank splice | the remainder, and the bulk of it |
+| 3 — `best_aa_scenarios_batch`, naming the D | ~30 |
+| 3b — `d_local_align`, placing it | ~1.4 |
+
+⛔ **Do not wrap this in a pool.** Every stage is already batched: one `markup_batch` for the whole
+table, then one native threaded `infer_nt_batch` and one `best_aa_scenarios_batch` per
+`(organism, locus)` on a model that is loaded once, then a thin Python loop over arda's C++ aligner.
+A pool around it would re-import both libraries and re-load every model per worker, which is the
+failure this project keeps writing down.
+
 ## Contract
 
 `annotate_junctions(junction_aas, v_calls, j_calls, species=…)` returns a `polars.DataFrame` with

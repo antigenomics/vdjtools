@@ -178,7 +178,8 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   rearrangements with the D called from sequence: gene right on **74.30 %** of all rows, coordinates
   on **99.70 %**. Letting the aligner choose the gene scores 47.93 % gated / 67.10 % ungated, and it
   is no better even where it is confident (85.96 % against the model's 86.32 % on those rows), so
-  there is no `d_best` and no second D estimator. ~280 us/junction, of which the D is ~31.
+  there is no `d_best` and no second D estimator. **182 us/junction** -- VDJdb's whole
+  192,726-key corpus in 35 s in one process, of which naming the D is ~30 us and placing it ~1.4.
   `docs/junction_pipeline.md` for the whole argument; a caller wanting one stage should call that
   stage, not this. Full D-D markup on IGH/TRD is still `arda.annotate.dmap.map_d_junction`.
   ⚠ **Every accuracy number here is human TRB** — `isalgo/airr_control` has no immunoglobulin, so
