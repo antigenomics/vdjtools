@@ -6,9 +6,9 @@ of them have an external answer in `isalgo/airr_control`, whose rows are REAL nu
 rearrangements with V/D/J called from the sequence and `VEnd`/`DStart`/`DEnd`/`JStart` beside them:
 
 * the inferred nucleotide junction -- against the observed one, exactly;
-* the D gene by nucleotide alignment (stage 3) -- against the nucleotide caller's;
-* the D gene by the length-and-prior posterior (`posterior_d_batch`) -- against the same truth,
-  which is what says whether the probabilistic route is still needed now the nucleotide one exists.
+* the V and J boundaries on it -- against `VEnd` / `JStart`;
+* the D gene, which the MODEL names -- against the nucleotide caller's;
+* where that D was placed -- against `DStart` / `DEnd`.
 
 The input to the pipeline is only `(cdr3aa, v gene, j gene)`: the nucleotides are hidden from it and
 used only for scoring.
@@ -94,52 +94,34 @@ def main() -> None:
               f"{ham['mismatches'].median():.0f}, mean {ham['mismatches'].mean():.2f} "
               f"of {have_nt['cdr3nt'].str.len_chars().mean():.1f} nt")
 
-    # ---- the two D answers, against the same truth
-    for label, col in (("alignment on the inferred nt (stage 3)", "d_call"),
-                       ("length-and-prior posterior", "d_posterior_call")):
-        sub = df.filter(pl.col(col).is_not_null())
-        ok = sub.filter(gene(col).str.contains(d_true, literal=True)
-                        if False else gene(col) == d_true)
-        print(f"\nD gene, {label}: called {sub.height:,}/{df.height:,} "
-              f"({sub.height / df.height:.1%}), correct {ok.height:,} = "
-              f"{ok.height / max(sub.height, 1):.2%} of called, "
-              f"{ok.height / df.height:.2%} of all")
+    # ---- the boundaries, on the sequence the pipeline inferred
+    print()
+    for col, ref, label in (("v_end_nt", "VEnd", "v_end_nt"), ("j_start_nt", "JStart", "j_start_nt")):
+        sub = df.filter(pl.col(col).is_not_null() & pl.col(ref).is_not_null() & (pl.col(col) >= 0))
+        if not sub.height:
+            continue
+        d = sub[col] - 1 - sub[ref]
+        print(f"{label}: exact {(d == 0).sum():,}/{sub.height:,} = {(d == 0).sum()/sub.height:.2%}, "
+              f"within 1 nt {(d.abs() <= 1).sum()/sub.height:.2%}")
 
-    both = df.filter(pl.col("d_call").is_not_null() & pl.col("d_posterior_call").is_not_null())
-    if both.height:
-        a = both.filter(gene("d_call") == d_true).height
-        p = both.filter(gene("d_posterior_call") == d_true).height
-        agree = both.filter(gene("d_call") == gene("d_posterior_call")).height
-        print(f"\nhead to head on the {both.height:,} where both answer: alignment {a} correct, "
-              f"posterior {p} correct, they agree on {agree} ({agree / both.height:.2%})")
-        # what does the posterior add where the alignment declines?
-        only_p = df.filter(pl.col("d_call").is_null() & pl.col("d_posterior_call").is_not_null())
-        if only_p.height:
-            print(f"posterior-only rows (alignment declined): {only_p.height:,}, correct "
-                  f"{only_p.filter(gene('d_posterior_call') == d_true).height:,} = "
-                  f"{only_p.filter(gene('d_posterior_call') == d_true).height / only_p.height:.2%}")
-
-    # ---- the combination the pipeline actually reports
-    sub = df.filter(pl.col("d_best").is_not_null())
-    ok = sub.filter(pl.col("d_best") == d_true)
-    print(f"\nD gene, `d_best` (alignment, posterior as fallback): called {sub.height:,}/"
-          f"{df.height:,}, correct {ok.height:,} = {ok.height / df.height:.2%} of all")
-    for src in ("alignment", "posterior"):
-        part = sub.filter(pl.col("d_best_source") == src)
-        if part.height:
-            print(f"  from the {src:<9}: {part.height:,} rows, correct "
-                  f"{part.filter(pl.col('d_best') == d_true).height / part.height:.2%}")
-
-    # ---- where the D sits, in nucleotides (truth coordinates are 0-based half-open)
-    pos = df.filter(pl.col("d_start_nt").is_not_null() & (gene("d_call") == d_true))
+    # ---- the D: the model names the gene, the aligner places it
+    sub = df.filter(pl.col("d_call").is_not_null())
+    ok = sub.filter(pl.col("d_call") == d_true)
+    print(f"\nD gene (model posterior): named {sub.height:,}/{df.height:,} "
+          f"({sub.height/df.height:.1%}), correct {ok.height:,} = {ok.height/df.height:.2%} of all")
+    coords = df.filter(pl.col("d_start_nt").is_not_null())
+    print(f"D placed (greedy alignment): {coords.height:,}/{df.height:,} = "
+          f"{coords.height/df.height:.2%} of all rows have coordinates to draw")
+    pos = ok.filter(pl.col("d_start_nt").is_not_null()).with_columns(
+        ds=(pl.col("d_start_nt") - 1 - pl.col("DStart")),
+        de=(pl.col("d_end_nt") - 1 - pl.col("DEnd")))
     if pos.height:
-        pos = pos.with_columns((pl.col("d_start_nt") - 1 - pl.col("DStart")).alias("ds"),
-                               (pl.col("d_end_nt") - 1 - pl.col("DEnd")).alias("de"))
-        print(f"\nD position on the {pos.height:,} correctly called: d_start exact "
+        print(f"D position on the {pos.height:,} correctly called and placed: d_start exact "
               f"{pos.filter(pl.col('ds') == 0).height / pos.height:.2%}, within 1 nt "
               f"{pos.filter(pl.col('ds').abs() <= 1).height / pos.height:.2%}; d_end exact "
               f"{pos.filter(pl.col('de') == 0).height / pos.height:.2%}, within 1 nt "
               f"{pos.filter(pl.col('de').abs() <= 1).height / pos.height:.2%}")
+        print(f"gene right AND d_start exact: {pos.filter(pl.col('ds') == 0).height:,} rows")
 
 
 if __name__ == "__main__":

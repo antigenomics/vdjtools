@@ -15,10 +15,13 @@ each answer is the next one's input:
    templated flanks are then written from the called allele's own germline: only the N region is
    unknowable from amino acids, and the reconstruction differed from the observed V span on 23.93 %
    of real rearrangements before this.
-3. **arda** ``annotate.dmap.map_d_junction`` finds the D -- and a tandem D2 on IGH/TRD -- by gapless
-   local alignment against the V..J interior of that nucleotide junction, under the E-value gate and
-   the genomic-order mask.
-4. here: the nucleotide D coordinates are folded back onto amino-acid positions.
+3. **vdjtools** :func:`~vdjtools.model.native.best_aa_scenarios_batch` names the D GENE: the
+   model's own scenario weights, grouped by D and normalised. Same native call as stage 2, same
+   model, already loaded -- no second model, no fitted prior table, no per-locus tempering constant.
+4. **arda** ``_markup.d_local_align`` PLACES that gene: greedy gapless local alignment of its
+   germline inside the ``[v_end_nt, j_start_nt)`` interior, ungated, so a row gets coordinates
+   whether or not the alignment is confident. The nucleotide span is then folded onto the residues
+   whose codons it touches.
 
 **Why the nucleotide detour is the point.** A D that contributes one amino acid is invisible in a
 translated junction, but it is not invisible in nucleotides: the residues at each end of the D are
@@ -27,11 +30,29 @@ throws that away; searching the inferred nucleotide junction keeps it, and the D
 OVERLAP ``v_end`` / ``j_start`` for exactly the same reason -- an exonuclease does not cut on a
 codon boundary.
 
-The alignment call is reported beside :func:`~vdjtools.model.dpost.posterior_d_batch`, the
-model-only answer that needs no nucleotides at all, and ``d_best`` is the two combined -- the
-alignment where it speaks, the posterior where it declines. Measured against real nucleotide D calls
-that is **73.05 %** correct where the alignment alone reaches 48.77 % (it answers 57.2 % of rows)
-and the posterior alone 71.15 %, so neither route replaces the other and both ship.
+**Naming the D and placing it are separate questions, and only one estimator answers each.**
+Letting the alignment choose the gene as well as the position was measured and dropped. Against the
+nucleotide D calls of 4,000 real human TRB rearrangements (`isalgo/airr_control`, never shown to the
+pipeline):
+
+====================================================  ==========  ================
+route                                                 gene right  has coordinates
+====================================================  ==========  ================
+E-value-gated alignment chooses and places              47.93 %       55.75 %
+gated alignment, model posterior where it declines      71.40 %       55.75 %
+**model names the gene, greedy alignment places it**  **74.30 %**   **99.70 %**
+====================================================  ==========  ================
+
+⛔ The gate is not what held the alignment back -- opening it reaches 67.10 % -- and the alignment's
+gene call is not better where it IS confident: on the 2,230 rows it speaks for, the model's own
+posterior is right 86.32 % against its 85.96 %, and a hybrid of the two scores *below* the model
+alone (74.12 % against 74.33 %). So there is one gene estimator, and the aligner does what only it
+can do: say where.
+
+⚠ Position is the one axis the gate bought something on -- ``d_start_nt`` is exact on 60.88 % of
+correctly-called rows here against 66.67 % under the gate -- but it is exact on 1,807 rows rather
+than 1,278, because it answers 3,988 rows rather than 2,230. For a database drawing V/N/D/N/J that
+is the trade to take.
 """
 from __future__ import annotations
 
@@ -51,16 +72,18 @@ JUNCTION_COLUMNS = (
     # stage 2 -- the most plausible nucleotide junction
     "cdr3_nt", "pgen", "scenario_p", "runner_up_pgen", "v_alts", "j_alts",
     "v_call_nt", "j_call_nt",
-    # stage 3/4 -- D by nucleotide alignment, in nt and in aa
-    "d_call", "d_start_nt", "d_end_nt", "d_start_aa", "d_end_aa", "d_support",
-    "d2_call", "d2_start_nt", "d2_end_nt", "np1", "np2", "np3",
-    # the model-only second opinion, and the two combined
-    "d_posterior_call", "d_posterior", "d_entropy", "d_best", "d_best_source",
+    # stage 3/4 -- the D gene from the model, placed by alignment, in nt and in aa
+    "d_call", "d_posterior", "d_start_nt", "d_end_nt", "d_start_aa", "d_end_aa", "np1", "np2",
 )
 
-_NULL_D = {"d_call": None, "d_start_nt": None, "d_end_nt": None, "d_start_aa": None,
-           "d_end_aa": None, "d_support": None, "d2_call": None, "d2_start_nt": None,
-           "d2_end_nt": None, "np1": None, "np2": None, "np3": None}
+#: The D block of a row nothing could be said about. Dtypes are pinned here too: an all-null
+#: column has no dtype of its own, and a consumer joining two corpora needs one that does not move.
+_NULL_D: dict[str, object] = {"d_call": None, "d_posterior": None, "d_start_nt": None,
+                              "d_end_nt": None, "d_start_aa": None, "d_end_aa": None,
+                              "np1": None, "np2": None}
+_D_DTYPES = {"d_call": pl.String, "d_posterior": pl.Float64, "d_start_nt": pl.Int64,
+             "d_end_nt": pl.Int64, "d_start_aa": pl.Int64, "d_end_aa": pl.Int64,
+             "np1": pl.String, "np2": pl.String}
 
 
 #: Tables whose zeros are floored per ROW. Both are a choice of allele, and this stage pins the V
@@ -135,8 +158,7 @@ def _aa_span(start_nt: int, end_nt: int) -> tuple[int | None, int | None]:
 def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
                        j_calls: Sequence[str], *, species: str | Iterable[str] = "human",
                        model_source: str = "arda", n_best: int = 4, threads: int = 0,
-                       d_max_evalue: float | None = None,
-                       posterior: bool = True) -> pl.DataFrame:
+                       d_k: int = 4) -> pl.DataFrame:
     """Run the whole junction pipeline. **One row out per row in, in input order.**
 
     Args:
@@ -158,21 +180,23 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
             within the sample's own noise); 8 buys nothing and 2 starts losing rows.
         threads: Kernel threads inside the native calls. ``0`` = auto. Do **not** wrap this in a
             pool of your own -- stage 2 already parallelises across the batch.
-        d_max_evalue: Override arda's shipped E-value gate on the D call.
-        posterior: Also compute the model-only D posterior (:func:`posterior_d_batch`). It is a
-            second opinion on ``d_call`` and costs about as much as the rest of the pipeline.
+        d_k: Scenarios kept per row when naming the D (:func:`best_aa_scenarios_batch`). **4,
+            measured**: accuracy FALLS as this rises -- 74.33 % at 4, 74.22 % at 8, 73.20 % at 16,
+            72.95 % at 64 -- because the truncation is doing the regularising, and the low-weight
+            scenarios it admits only dilute the winner. So the cheap setting is also the good one
+            (30.1 us/junction at 4 against 50.1 at 64).
 
     Returns:
         A frame with :data:`JUNCTION_COLUMNS`. A row the model cannot explain carries nulls in the
         stages that failed and keeps stage 1 -- never dropped, never an exception, because a corpus
         legitimately contains species and loci with no shipped model.
     """
-    from arda.annotate.dmap import map_d_junction
+    from arda._markup import d_local_align
+    from arda.annotate.dmap import _d_germlines
     from arda.cdr3fix import load_anchors as _anchors, markup_batch, resolve_species
 
     from .bundled import load_bundled
-    from .native import gene_to_allele
-    from .dpost import posterior_d_batch
+    from .native import best_aa_scenarios_batch, gene_to_allele
     from .viterbi import infer_nt_batch
 
     n = len(junction_aas)
@@ -197,6 +221,8 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
     ru: list[float | None] = [None] * n
     v_nt_call: list[str | None] = [None] * n
     j_nt_call: list[str | None] = [None] * n
+    d_gene: list[str | None] = [None] * n
+    d_post: list[float | None] = [None] * n
     org = [resolve_species(s) for s in sp]
     loci = mk["locus"].to_list()
     repaired = mk["cdr3_repaired"].to_list()
@@ -248,6 +274,39 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
             # over arda's call: this is model evidence about an ambiguity, not a re-annotation.
             v_nt_call[i], j_nt_call[i] = row.get("v_call"), row.get("j_call")
 
+        # ---- stage 3: WHICH D, from the same model, in the same group, one native call.
+        #
+        # `best_aa_scenarios_batch` returns the top-k scenarios per row with a weight and a D
+        # allele on each -- the D axis of the same Pi_L*Pi_R transfer as `pgen_aa`. Summing the
+        # weights by gene and normalising is the posterior, and it needs no nucleotides, no fitted
+        # prior table and no per-locus tempering constant. It is here rather than in its own pass
+        # because the model is loaded and the batch is already grouped.
+        try:
+            scen = best_aa_scenarios_batch(
+                model, [repaired[i] for i in idx],
+                v=[(_in_model(v_alts[i]) or [None])[0] for i in idx],
+                j=[(_in_model(j_alts[i]) or [None])[0] for i in idx],
+                k=d_k, threads=threads)
+        except (KeyError, ValueError):
+            continue                     # no D axis on a VJ locus; the rows keep their nulls
+        if "d_call" not in scen.columns or not scen.height:
+            continue
+        # A VJ locus scores every scenario with no D at all, and polars gives an all-null column
+        # of dtype Object there -- `.str` on which is a SchemaError, not an empty result.
+        top = (scen.with_columns(pl.col("d_call").cast(pl.String, strict=False))
+                   .with_columns(pl.col("d_call").str.split("*").list.first().alias("_g"))
+                   .filter(pl.col("_g").is_not_null())
+                   .group_by("row", "_g").agg(pl.col("w").sum())
+                   .with_columns((pl.col("w") / pl.col("w").sum().over("row")).alias("_p"))
+                   # Sort then take the head of each group, rather than `unique(keep="first")`:
+                   # a hash-unique is not order-stable, and two D genes CAN carry the same summed
+                   # weight -- `_g` is in the sort so that tie breaks by name and not by thread
+                   # scheduling. Determinism is a requirement here, not a nicety.
+                   .sort(["row", "_p", "_g"], descending=[False, True, False])
+                   .group_by("row", maintain_order=True).first())
+        for k_, g_, p_ in zip(top["row"].to_list(), top["_g"].to_list(), top["_p"].to_list()):
+            d_gene[idx[k_]], d_post[idx[k_]] = g_, p_
+
     # ---- stage 2b: the templated flanks are GERMLINE, not a guess.
     #
     # Only the N region is unknowable from amino acids. The reconstruction is free to differ from the
@@ -259,7 +318,7 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
     # tidiness: the residues at each boundary are part germline and part N region, and their codons
     # are exactly the evidence the nucleotide detour exists to recover, so the D search must see the
     # real bases there.
-    anchors = load_anchors_for = None
+    anchors = None
     for i in range(n):
         if not nt[i] or v_end_nt[i] < 0 or j_start_nt[i] < 0:
             continue
@@ -274,65 +333,54 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
             seq = seq[:js] + (ja.germline_nt[len(ja.germline_nt) - tail:].upper() if tail else "")
         nt[i] = seq
 
-    # ---- stage 3 + 4: D by nucleotide alignment, then folded back onto residues.
+    # ---- stage 4: PLACE that gene, greedily, on the nucleotides.
     #
-    # Per row, because the D search is arda's C++ gapless local aligner behind a per-record entry
-    # point and the loop around it is not the cost -- the alignment is, and it is already native.
+    # Naming and placing are different questions and this stage only answers the second one, so it
+    # is ungated: the gene is already chosen, and refusing to say where it sits does not make the
+    # name any better -- it just leaves a row with nothing to draw. Every allele of the gene is
+    # tried and the best-scoring placement wins, which is what "greedy" means here.
+    #
+    # ⚠ The interior is `[v_end_nt, j_start_nt)` and those bounds are read off the nucleotide
+    # junction itself -- stage 2b wrote the templated flanks from germline, so the germline prefix
+    # and suffix of `cdr3_nt` ARE `v_end_nt` and `j_start_nt`. Re-deriving them by matching germline
+    # against the inferred sequence was measured and returns the same numbers (v_end_nt exact on
+    # 1.85 % of rows against 1.85 %, j_start_nt 78.12 % against 78.12 %), which is the check that
+    # says stage 2b already did it.
+    germ_by_gene: dict[tuple[str, str], dict[str, list[str]]] = {}
+
+    def _germlines(organism: str, locus: str) -> dict[str, list[str]]:
+        """``{gene: [allele sequences]}`` for one locus. Built once, not per row."""
+        hit = germ_by_gene.get((organism, locus))
+        if hit is None:
+            hit = {}
+            for allele, seq in _d_germlines(organism).get(locus, ()):  # type: ignore[misc]
+                hit.setdefault(allele.split("*")[0], []).append(seq.upper())
+            germ_by_gene[(organism, locus)] = hit
+        return hit
+
     d_rows: list[dict] = []
     for i in range(n):
-        if not nt[i] or v_end_nt[i] < 0 or j_start_nt[i] < 0:
-            d_rows.append(dict(_NULL_D))
+        seq, gene = nt[i], d_gene[i]
+        if not seq or not gene or v_end_nt[i] < 0 or j_start_nt[i] < 0:
+            d_rows.append(dict(_NULL_D) | ({"d_call": gene, "d_posterior": d_post[i]}
+                                           if gene else {}))
             continue
-        # The interior comes from STAGE ONE, not from re-matching germline against an inferred
-        # sequence: the nucleotides were reconstructed under whichever allele of the gene the model
-        # carries, so an exact prefix match against arda's called allele breaks at the first
-        # synonymous difference and opens the window inside the V.
-        call = map_d_junction(nt[i], v_res[i], j_res[i], org[i], d_max_evalue=d_max_evalue,
-                              v_end=v_end_nt[i], j_start=j_start_nt[i])
-        s_aa, e_aa = _aa_span(call.d_sequence_start, call.d_sequence_end)
+        lo, hi = max(int(v_end_nt[i]), 0), min(int(j_start_nt[i]), len(seq))
+        mid = seq[lo:hi] if hi > lo else ""
+        alleles = _germlines(org[i], loci[i]).get(gene, ())
+        if not mid or not alleles:
+            d_rows.append(dict(_NULL_D) | {"d_call": gene, "d_posterior": d_post[i]})
+            continue
+        best = max((d_local_align(mid, g) for g in alleles), key=lambda r: r[0])
+        s_nt, e_nt = lo + best[1] + 1, lo + best[2] + 1      # 1-based closed, as everywhere
+        s_aa, e_aa = _aa_span(s_nt, e_nt)
         d_rows.append({
-            "d_call": call.d_call or None,
-            "d_start_nt": call.d_sequence_start if call.d_call else None,
-            "d_end_nt": call.d_sequence_end if call.d_call else None,
-            "d_start_aa": s_aa if call.d_call else None,
-            "d_end_aa": e_aa if call.d_call else None,
-            "d_support": call.d_support or None,
-            "d2_call": call.d2_call or None,
-            "d2_start_nt": call.d2_sequence_start if call.d2_call else None,
-            "d2_end_nt": call.d2_sequence_end if call.d2_call else None,
-            "np1": call.np1 or None, "np2": call.np2 or None, "np3": call.np3 or None,
+            "d_call": gene, "d_posterior": d_post[i],
+            "d_start_nt": s_nt, "d_end_nt": e_nt, "d_start_aa": s_aa, "d_end_aa": e_aa,
+            # The N regions fall out of the bounds, so they are sliced rather than re-derived --
+            # one definition of where the D is, not two that can disagree in a drawing.
+            "np1": seq[lo:s_nt - 1] or None, "np2": seq[e_nt:hi] or None,
         })
-
-    # ---- the model-only second opinion on which D.
-    if posterior:
-        post = posterior_d_batch(repaired, v_res, j_res, species=sp)
-    else:
-        post = [None] * n
-
-    # ---- the answer to use: the alignment where it speaks, the posterior where it declines.
-    #
-    # Measured on 4,000 real human TRB rearrangements from `isalgo/airr_control`, scored against
-    # their own nucleotide D call (`appendix/bench_junction_pipeline.py`):
-    #
-    #   alignment on the inferred nt  called 57.2 %, correct 85.31 % of called, 48.77 % of all
-    #   length-and-prior posterior    called  100 %, correct 71.17 % of called, 71.15 % of all
-    #   this combination              called  100 %,                            73.05 % of all
-    #
-    # So neither replaces the other and the order is not arbitrary. Where both answer the alignment
-    # is the better one (1,951 correct against 1,875 of the same 2,287), and on the 1,712 it declines
-    # the posterior is still right 56.72 % of the time -- which is the whole reason the probabilistic
-    # route survives now that the nucleotide route exists.
-    d_best, d_src = [], []
-    for row, p in zip(d_rows, post):
-        if row["d_call"]:
-            d_best.append(row["d_call"].split("*")[0])
-            d_src.append("alignment")
-        elif p is not None:
-            d_best.append(p.d_call)
-            d_src.append("posterior")
-        else:
-            d_best.append(None)
-            d_src.append(None)
 
     out = mk.with_columns(
         pl.Series("cdr3_nt", nt, dtype=pl.String),
@@ -341,12 +389,5 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
         pl.Series("runner_up_pgen", ru, dtype=pl.Float64),
         pl.Series("v_call_nt", v_nt_call, dtype=pl.String),
         pl.Series("j_call_nt", j_nt_call, dtype=pl.String),
-        pl.Series("d_posterior_call", [p.d_call if p else None for p in post], dtype=pl.String),
-        pl.Series("d_posterior", [p.posterior if p else None for p in post], dtype=pl.Float64),
-        pl.Series("d_entropy", [p.entropy if p else None for p in post], dtype=pl.Float64),
-        pl.Series("d_best", d_best, dtype=pl.String),
-        pl.Series("d_best_source", d_src, dtype=pl.String),
-    ).hstack(pl.DataFrame(d_rows, schema={k: (pl.String if k in
-                                              ("d_call", "d_support", "d2_call", "np1", "np2",
-                                               "np3") else pl.Int64) for k in _NULL_D}))
+    ).hstack(pl.DataFrame(d_rows, schema=_D_DTYPES))
     return out.select([c for c in JUNCTION_COLUMNS if c in out.columns])

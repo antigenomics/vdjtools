@@ -53,20 +53,88 @@ The model is `load_bundled(source="arda", organism=…, locus=…)`, so the nucl
 germline namespace agree by construction. Rows are grouped by `(organism, locus)` because a model
 is per locus.
 
-### Stage 3 — arda, `map_d_junction`
+### Stage 3 — vdjtools, `best_aa_scenarios_batch`: WHICH D
 
-Gapless local alignment of every D germline of the locus against the **V..J interior of the
-inferred nucleotide junction**, with the Karlin–Altschul E-value gate and the genomic-order mask
-(TRBD2 cannot reach the TRBJ1 cluster). Tandem D-D is searched on IGH and TRD. No mmseqs pass: the
-boundaries from stage 1 give the interior directly.
+The model's own top-`k` scenarios per row carry a weight and a D allele each — the D axis of the same
+`Pi_L·Pi_R` transfer as `pgen_aa`. Summing those weights by gene and normalising **is** the posterior
+over D genes. Same model as stage 2, already loaded, same `(organism, locus)` grouping, one native
+threaded call. No fitted prior table, no per-locus tempering constant, no nucleotides.
 
-Out: `d_call`, `d_sequence_start` / `d_sequence_end` (1-based closed, junction space), `d2_*`,
-`np1` / `np2` / `np3`.
+`k = 4`, and that is not a speed compromise — accuracy **falls** as `k` rises (74.33 % at 4, 74.22 %
+at 8, 73.20 % at 16, 72.95 % at 64). The truncation is doing the regularising; the low-weight
+scenarios it admits only dilute the winner.
+
+Out: `d_call` (a **gene** — an amino-acid junction does not identify a D allele) and `d_posterior`.
+
+#### Why the aligner does not choose the gene
+
+It was measured on 4,000 real human TRB rearrangements from `isalgo/airr_control`, whose D and
+`DStart`/`DEnd` come from the nucleotides and are never shown to the pipeline:
+
+| route | gene right, of all rows | has coordinates |
+|---|---:|---:|
+| E-value-gated alignment chooses and places | 47.93 % | 55.75 % |
+| gated alignment, model posterior where it declines (the old `d_best`) | 71.40 % | 55.75 % |
+| ungated alignment chooses and places | 67.10 % | 88.15 % |
+| **model names, greedy alignment places** | **74.30 %** | **99.70 %** |
+
+The gate is not what held the alignment back, and the alignment is not better where it *is*
+confident: on the 2,230 rows it speaks for, the model's posterior is right 86.32 % against its
+85.96 %, and they agree on 92.91 %. A hybrid — alignment where gated, model elsewhere — scores
+**74.12 %**, below the model alone. So there is one gene estimator.
+
+⛔ This is why `vdjtools.model.dpost` (the port of `arda.dpost`) does **not** ship. It is dominated
+on both axes by a group-by over a call the pipeline already makes: 69.67 % against 74.33 % correct,
+56.3 µs/junction against 30.1, and it needs a fitted `d_prior.tsv` and a per-locus `beta` that this
+does not. `d_best` / `d_best_source` are gone with it — they existed only to reconcile two gene
+estimators.
+
+### Stage 3b — arda, `d_local_align`: WHERE
+
+Greedy gapless local alignment of every allele of the **chosen gene** against the
+`[v_end_nt, j_start_nt)` interior of the inferred nucleotide junction; best score wins. **Ungated**,
+because the gene is already named and refusing to say where it sits does not improve the name — it
+just leaves a row with nothing to draw.
+
+⚠ The trade, stated: `d_start_nt` is exact on 60.88 % of correctly-called rows here against 66.67 %
+under the E-value gate. But it is exact on **1,807 rows rather than 1,278**, because it answers 3,988
+rather than 2,230. For a database drawing V/N/D/N/J that is the trade to take.
+
+Out: `d_start_nt` / `d_end_nt` (1-based closed, junction space) and `np1` / `np2`, sliced from the
+bounds rather than re-derived — one definition of where the D is, not two that can disagree in a
+drawing.
 
 **The D is allowed to overlap the V end and the J start**, and that is deliberate: an exonuclease
 does not cut on a codon boundary, so the residue at each boundary is part germline and part
 junction, and forcing the D strictly inside `[v_end, j_start]` would discard the flanking-codon
 evidence that made the nucleotide detour worth taking.
+
+Full D-D markup on IGH and TRD, with the E-value gate and the genomic-order mask, is still
+`arda.annotate.dmap.map_d_junction`; this stage answers the single-D question a database draws.
+
+#### ⚠ B cells: covered, unvalidated, and missing an SHM term
+
+The bundled `arda` model set covers human **IGH**, IGK, IGL, TRA, TRB, TRD, TRG and mouse TRA/TRB,
+so the D call reaches IGH — wider coverage than the `d_prior.tsv` route it replaces, which had
+tables for human IGH/TRB/TRD and mouse TRB only. An IGH junction goes through end to end and comes
+back with a gene, a posterior and coordinates.
+
+⛔ **But every accuracy number on this page is human TRB.** `isalgo/airr_control` carries human and
+mouse TRA/TRB and no immunoglobulin at all, so there is no B-cell truth set here and **74.30 % must
+not be quoted for IGH.**
+
+⛔ **And this pipeline has no somatic-hypermutation term anywhere in it.** Stage 2 reconstructs
+nucleotides under a germline recombination model and stage 2b writes the templated flanks from
+germline, so a hypermutated V tail is priced as insertion — which moves `v_end_nt`, which moves the
+interior, which moves where the D can be placed. For a memory B cell that is the normal case, not a
+corner case.
+
+✅ The SHM-aware route exists and is deliberately kept: **`arda.hmm`** threads an
+`arda.shmmodel.ShmModel` into the same semi-Markov recursion, so the templated V length is *priced*
+rather than cut at the first mismatch. Measured on `IGHV3-30*18` / `IGHJ4*02`, one substitution in
+the V tail gives `del_v >= len(v_nt) - 3` without a model and `del_v == 0` with one. It needs real
+nucleotides, which is exactly the input this pipeline does not have — so the two are complements,
+not alternatives, and neither replaces the other.
 
 ### Stage 4 — vdjtools, fold back to amino acids
 
@@ -78,10 +146,13 @@ A nucleotide position `p` (1-based) sits in residue `(p - 1) // 3` (0-based). So
 which is the **span of residues whose codons the D touches** — the honest amino-acid answer to a
 nucleotide question, and the reason a 1-residue D can still report a 2-residue span.
 
-`vdjtools.model.posterior_d_batch` stays as the independent, model-only answer to "which D": it
-marginalises the insertion-length and D-trimming distributions and needs no nucleotides at all. The
-pipeline reports it beside the alignment call, so a consumer can see when the two disagree rather
-than having to pick one.
+The **nucleotides are the authority** and every amino-acid bound is recomputed from them, so the two
+alphabets cannot disagree in a drawing that shows both. That also settles what "recompute the bounds
+from the most plausible nucleotide sequence" means for V and J: stage 2b writes the templated flanks
+from germline, so the germline prefix and suffix of `cdr3_nt` **are** `v_end_nt` and `j_start_nt`.
+Re-deriving them by matching germline against the inferred sequence was measured and returns the same
+answer (`v_end_nt` exact on 1.85 % of rows either way, `j_start_nt` 78.12 % either way) — which is the
+check that says stage 2b already did it.
 
 ## Contract
 

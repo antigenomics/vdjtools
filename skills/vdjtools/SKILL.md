@@ -170,17 +170,23 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   `(junction_aa, V, J, species)` record. Four stages: arda `cdr3fix.markup_batch` (confirm/replace the
   call, repair the junction, boundaries in residues **and** nucleotides) → `infer_nt_batch` (the most
   plausible nucleotide junction, templated flanks written from germline so only the N region is
-  inferred) → arda `map_d_junction` (D by alignment on those nucleotides, given the stage-1 interior)
-  → the nt D coordinates folded onto the residues whose codons they touch. **Use `d_best`**, the
-  alignment where it speaks and the posterior where it declines: 71.53 % correct over all rows against
-  48.30 % and 69.67 % for either route alone, on 4,000 real human TRB rearrangements with the D called
-  from sequence. 307 us/junction. `docs/junction_pipeline.md` for the whole argument; a caller wanting
-  one stage should call that stage, not this.
-- **D posterior** **`posterior_d_batch(cdr3_aas, v, j, species=)`** (`vdjtools.model.dpost`, was
-  `arda.dpost` before 4.8.0) → `DPosterior | None` per row, in input order: which D and where, from
-  the junction's LENGTH and `P(D | J)` alone, with no nucleotides. Answers every row where the
-  alignment route answers 56 %, and is the fallback inside `d_best`. Priors exist for human IGH/TRB/TRD
-  and mouse TRB; everything else is `None` rather than a guess.
+  inferred) → `best_aa_scenarios_batch` names the **D gene** off the model's own scenario weights →
+  arda `_markup.d_local_align` **places** that gene greedily inside `[v_end_nt, j_start_nt)`, and the
+  nt span folds onto the residues its codons touch. Read `d_call` + `d_posterior` + `d_start_nt` /
+  `d_end_nt`; `np1` / `np2` are the N regions either side.
+  **Naming and placing are separate, and only one estimator does each.** On 4,000 real human TRB
+  rearrangements with the D called from sequence: gene right on **74.30 %** of all rows, coordinates
+  on **99.70 %**. Letting the aligner choose the gene scores 47.93 % gated / 67.10 % ungated, and it
+  is no better even where it is confident (85.96 % against the model's 86.32 % on those rows), so
+  there is no `d_best` and no second D estimator. ~280 us/junction, of which the D is ~31.
+  `docs/junction_pipeline.md` for the whole argument; a caller wanting one stage should call that
+  stage, not this. Full D-D markup on IGH/TRD is still `arda.annotate.dmap.map_d_junction`.
+  ⚠ **Every accuracy number here is human TRB** — `isalgo/airr_control` has no immunoglobulin, so
+  they must not be quoted for IGH. The D call does reach IGH (the bundled `arda` set covers human
+  IGH/IGK/IGL/TRA/TRB/TRD/TRG and mouse TRA/TRB), but the pipeline has **no SHM term**: a
+  hypermutated V tail is priced as insertion, which moves `v_end_nt` and therefore the D interior.
+  For B cells with real nucleotides use `arda.hmm(..., shm=ShmModel)`, which prices the mutated tail
+  instead of cutting at the first mismatch — a complement to this, not an alternative.
 - **Scenario (argmax)** `vdjtools.model.viterbi`: **`best_scenario(model, cdr3_nt, v=, j=)`** →
   `Scenario(cdr3_nt, v_call, j_call, v_end, j_start, d_call, d_start, d_end, scenario_p, ...)` — the
   single most likely recombination for a KNOWN nt CDR3, i.e. the V/D/J boundary markup. Max-product

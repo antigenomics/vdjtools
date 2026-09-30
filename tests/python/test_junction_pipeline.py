@@ -105,20 +105,40 @@ def test_flooring_the_model_creates_answers_and_changes_none():
                for x in zeroed[:8]) >= 6, "zero-usage alleles must become answerable"
 
 
-def test_d_best_prefers_the_alignment_and_falls_back_to_the_posterior():
-    """Both routes ship, and `d_best` is the measured combination of them.
+def test_the_model_names_the_d_and_the_alignment_places_it():
+    """One gene estimator, one placer, and the bounds they agree on.
 
-    On 4,000 real human TRB rearrangements: alignment 56 % of rows at 85 % correct, posterior 100 %
-    at 70 %, the combination 72.9 % of ALL rows -- so the probabilistic route is not redundant now
-    that the nucleotide route exists, and the order is not arbitrary.
+    Letting the aligner choose the gene as well was measured and dropped: on 4,000 real human TRB
+    rearrangements the model's posterior is right on 74.30 % of ALL rows against the gated
+    alignment's 47.93 %, it is no worse where the alignment is confident (86.32 % against 85.96 %
+    on those 2,230 rows), and a hybrid of the two scores below the model alone. What the alignment
+    is for is saying WHERE, ungated, so a row has coordinates to draw -- 99.70 % of rows do.
     """
     out = annotate_junctions(*TRB, species="human")
+    placed = 0
     for r in out.iter_rows(named=True):
-        if r["d_call"]:
-            assert r["d_best_source"] == "alignment"
-            assert r["d_best"] == r["d_call"].split("*")[0]
-        elif r["d_posterior_call"]:
-            assert r["d_best_source"] == "posterior"
-            assert r["d_best"] == r["d_posterior_call"]
-        else:
-            assert r["d_best"] is None and r["d_best_source"] is None
+        if not r["d_call"]:
+            assert r["d_start_nt"] is None and r["d_posterior"] is None
+            continue
+        assert "*" not in r["d_call"], "the D is reported as a GENE; the allele is not identifiable"
+        assert 0.0 < r["d_posterior"] <= 1.0
+        if r["d_start_nt"] is None:
+            continue
+        placed += 1
+        # The D sits inside the junction, the way round it was written, and its residues are the
+        # ones its codons touch -- one definition of where it is, not two that can disagree.
+        assert 1 <= r["d_start_nt"] <= r["d_end_nt"] <= len(r["cdr3_nt"])
+        assert r["d_start_aa"] == (r["d_start_nt"] - 1) // 3
+        assert r["d_end_aa"] == (r["d_end_nt"] - 1) // 3
+        assert r["cdr3_nt"][r["v_end_nt"]:r["d_start_nt"] - 1] == (r["np1"] or "")
+        assert r["cdr3_nt"][r["d_end_nt"]:r["j_start_nt"]] == (r["np2"] or "")
+    assert placed, "no D was placed at all"
+
+
+def test_the_retired_d_columns_are_gone():
+    """`d_best` existed only to reconcile two gene estimators, and there is one now."""
+    for gone in ("d_best", "d_best_source", "d_posterior_call", "d_entropy", "d_support",
+                 "d2_call", "np3"):
+        assert gone not in JUNCTION_COLUMNS
+    import vdjtools.model as M
+    assert not hasattr(M, "posterior_d"), "the dominated posterior must not ship"

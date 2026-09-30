@@ -13,18 +13,27 @@ row, in input order.
 
 Four stages, each an existing entry point: arda repairs the junction and places the boundaries,
 `infer_nt_batch` infers the nucleotides (the templated flanks are written from germline, so only the
-N region is inferred), arda aligns the D against those nucleotides, and the nucleotide D coordinates
-fold onto the residues whose codons they touch. That last step is the point: a D contributing one
-amino acid is invisible in a translated junction but not in nucleotides, because the residues at
-each end of it are part germline and part N region.
+N region is inferred), the model names the D gene, and the aligner places it on those nucleotides —
+whose coordinates then fold onto the residues their codons touch. That last step is the point: a D
+contributing one amino acid is invisible in a translated junction but not in nucleotides, because
+the residues at each end of it are part germline and part N region.
 
-Read **`d_best`** for the D. Measured on 4,000 real human TRB rearrangements whose D is called from
-the sequence: 71.5 % correct over all rows, against 48.3 % for the alignment alone (which answers
-56 % of rows, at 85.98 % accuracy) and 69.7 % for the posterior alone. 307 µs per junction.
+**Naming the D and placing it are separate questions, and one estimator answers each.** The model
+names the gene (`d_call`, with `d_posterior`) from its own scenario weights — no second model, no
+fitted prior table. The aligner then places that gene greedily and **ungated** (`d_start_nt` /
+`d_end_nt`, with `np1` / `np2` either side), because the gene is already chosen and refusing to say
+where it sits only leaves a row with nothing to draw.
 
-**New — `model.posterior_d`, `posterior_d_batch`, `load_d_prior`**, moved here from `arda.dpost`
-(arda 2.33.0 removes them). Ported, not rewritten: the answers are unchanged. The batch form is new
-and 1.7× faster per key than the loop it replaces. **Requires `arda-mapper>=2.34.0`.**
+On 4,000 real human TRB rearrangements whose D comes from the nucleotides: the gene is right on
+**74.30 %** of all rows and **99.70 %** have coordinates. Letting the aligner choose the gene as well
+reaches 47.93 % gated, 67.10 % ungated, and it is no better even where it is confident — 85.96 %
+against the model's 86.32 % on those rows. So there is no `d_best`, no `d_posterior_call`, no
+`d_entropy` and no `arda.dpost` port: a second D estimator was measured and is not needed.
+**Requires `arda-mapper>=2.34.0`.**
+
+**The nucleotides are the authority.** `v_end_nt`, `j_start_nt`, `d_start_nt` and `d_end_nt` are all
+read off the inferred nucleotide junction, and every amino-acid bound is recomputed from them, so a
+view showing both alphabets cannot draw them disagreeing.
 
 **A blank V or J is handled**, not refused: arda proposes that side from the junction, and the
 `proposed` column says which side was never curated. 3,130 of VDJdb's 192,726 curation keys leave a
