@@ -67,6 +67,8 @@ screpertoire_airr.tsv
 /NOTES.md
 /ROADMAP.md
 /STATUS.md
+# The detailed changelog. `CHANGELOG.md` is the slim one a USER reads.
+/CHANGELOG_local.md
 
 # Session instructions: they name in-flight analyses and the
 # cohorts a bug was found on. Kept local, never in a published history.

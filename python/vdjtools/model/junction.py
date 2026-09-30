@@ -143,7 +143,10 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
         junction_aas: Junction amino acids, Cys104 through Phe/Trp118 **inclusive** -- VDJdb's
             ``cdr3`` convention, not arda's ``cdr3_aa``.
         v_calls, j_calls: Per-row V and J calls. Any spelling ``arda.cdr3fix.resolve_allele``
-            accepts; a comma- or ``+``-joined list takes its leading entry.
+            accepts; a comma- or ``+``-joined list takes its leading entry. **A blank is allowed**
+            -- arda proposes that side from the junction (the locus comes from the side that is
+            named) and the ``proposed`` column says so. A call that is present but unresolvable is
+            still refused, because naming something wrong is a defect and naming nothing is a gap.
         species: One name for every row, or one per row.
         model_source: Which bundled model set supplies the nucleotide guess. ``"arda"`` is the
             default because it is the only set covering mouse and it shares arda's allele namespace.
