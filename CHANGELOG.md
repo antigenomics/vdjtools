@@ -61,6 +61,14 @@ training cohort never showed comes out at probability zero — 36 of 66 human TR
 conditioning on one produced no scenario at all. The pipeline floors those before inferring;
 verified across every allele the fit did see, no answer changes.
 
+**⚠ What is not measured, for B cells.** Every figure above is human TRB: the truth set this is
+scored against carries TRA and TRB and no immunoglobulin, so **none of them may be quoted for IGH**.
+The D call does reach IGH, on a wider model set than the prior tables it replaces — but this pipeline
+has **no somatic-hypermutation term**, so a hypermutated V tail is priced as insertion, which moves
+`v_end_nt` and therefore where the D can sit. For B cells with real nucleotides that is
+`arda.hmm(..., shm=ShmModel)`, which prices the mutated tail instead of cutting at the first
+mismatch — a complement to this, not an alternative.
+
 ## 4.7.0
 
 `model.germline_boundary(model, aas, v=, j=)` — where the V and J germlines stop, in CDR3 nucleotide

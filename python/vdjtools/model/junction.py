@@ -68,7 +68,11 @@ JUNCTION_COLUMNS = (
     # stage 1 -- arda cdr3fix
     "cdr3_aa", "cdr3_repaired", "v_call", "j_call", "locus", "species",
     "v_end", "j_start", "v_end_nt", "j_start_nt", "v_flags", "j_flags", "good", "fix_needed",
-    "n_errors", "errors",
+    # ``proposed`` names the side the submission left BLANK and the junction supplied, which is a
+    # different fact from the `allele` flag (the submission named another allele of the same gene).
+    # It is the column that lets a consumer drop its own segment proposer, so it has to reach the
+    # frame -- it was in arda's markup and filtered out here, which no test noticed.
+    "proposed", "n_errors", "errors",
     # stage 2 -- the most plausible nucleotide junction
     "cdr3_nt", "pgen", "scenario_p", "runner_up_pgen", "v_alts", "j_alts",
     "v_call_nt", "j_call_nt",

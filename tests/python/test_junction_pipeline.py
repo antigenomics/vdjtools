@@ -172,3 +172,20 @@ def test_a_pinned_set_that_does_not_exist_is_not_silently_ignored():
     mouse = (["CASSLAPGATNEKLFF"], ["TRBV13-1*01"], ["TRBJ1-4*01"])
     assert annotate_junctions(*mouse, species="mouse")["cdr3_nt"][0] is not None
     assert annotate_junctions(*mouse, species="mouse", model_source="nosuchset")["cdr3_nt"][0] is None
+
+
+def test_a_blank_call_is_proposed_and_says_so_in_the_frame():
+    """`proposed` has to REACH the caller: it is what lets a consumer delete its segment proposer.
+
+    A submission may leave one side out -- 3,130 of VDJdb's 192,726 curation keys do -- and arda
+    proposes that side from the junction, the locus coming from the side that IS named. Saying which
+    side was never curated is a different fact from the `allele` flag, which means the submission
+    named a different allele of the same gene.
+    """
+    out = annotate_junctions(["CASSLAPGATNEKLFF"] * 3, ["", "TRBV9*01", "TRBV9*01"],
+                             ["TRBJ2-1*01", "", "TRBJ1-4*01"], species="human")
+    assert "proposed" in JUNCTION_COLUMNS and "proposed" in out.columns
+    assert out["proposed"].to_list() == ["V", "J", ""]
+    # and a proposed side is a complete row, not a stub
+    for r in out.head(2).iter_rows(named=True):
+        assert r["good"] and r["cdr3_nt"] and r["v_end_nt"] >= 0 and r["j_start_nt"] >= 0

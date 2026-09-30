@@ -40,7 +40,17 @@ is rewritten: a residue that disagrees with germline inside the templated run is
 indistinguishable from one junction.
 
 Out: `cdr3_repaired`, `v_call`, `j_call` (possibly re-called), `v_end` / `j_start` in residues,
-`v_end_nt` / `j_start_nt` in nucleotides, `v_flags` / `j_flags`, `good`.
+`v_end_nt` / `j_start_nt` in nucleotides, `v_flags` / `j_flags`, `good`, and **`proposed`**.
+
+**A blank V or J is answered, not refused.** A submission may leave one side out — 3,130 of VDJdb's
+192,726 curation keys do — and arda proposes that side from the junction, the locus coming from the
+side that *is* named. `proposed` says which side was never curated, which is a different fact from
+the `allele` flag (the submission named a *different allele of the same gene*). It is the column
+that lets a consumer delete its own segment proposer, so it is part of the contract.
+
+⚠ A call that is present but **unresolvable** is still refused. `TRBVnope*01` keeps its
+`FailedBadSegment` and `good = false`: naming something wrong is a defect a curator must see, naming
+nothing is a gap the junction can fill.
 
 ### Stage 2 — vdjtools, `infer_nt_batch`
 
