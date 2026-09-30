@@ -165,6 +165,22 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   organism)` (CDR3-region + anchor), **`load_full_vj_germline(organism)`** and
   **`arda_full_germline(locus, organism)`** (full-length V/J germline + stitch anchor, from arda
   scaffolds), `reconcile_olga`, `cut_segment`, `translate`, `reverse_complement`.
+- **The junction pipeline** **`annotate_junctions(cdr3_aas, v, j, species=)`**
+  (`vdjtools.model.junction`) → one frame, **one row per input row in input order**, for a bare
+  `(junction_aa, V, J, species)` record. Four stages: arda `cdr3fix.markup_batch` (confirm/replace the
+  call, repair the junction, boundaries in residues **and** nucleotides) → `infer_nt_batch` (the most
+  plausible nucleotide junction, templated flanks written from germline so only the N region is
+  inferred) → arda `map_d_junction` (D by alignment on those nucleotides, given the stage-1 interior)
+  → the nt D coordinates folded onto the residues whose codons they touch. **Use `d_best`**, the
+  alignment where it speaks and the posterior where it declines: 71.53 % correct over all rows against
+  48.30 % and 69.67 % for either route alone, on 4,000 real human TRB rearrangements with the D called
+  from sequence. 307 us/junction. `docs/junction_pipeline.md` for the whole argument; a caller wanting
+  one stage should call that stage, not this.
+- **D posterior** **`posterior_d_batch(cdr3_aas, v, j, species=)`** (`vdjtools.model.dpost`, was
+  `arda.dpost` before 4.8.0) → `DPosterior | None` per row, in input order: which D and where, from
+  the junction's LENGTH and `P(D | J)` alone, with no nucleotides. Answers every row where the
+  alignment route answers 56 %, and is the fallback inside `d_best`. Priors exist for human IGH/TRB/TRD
+  and mouse TRB; everything else is `None` rather than a guess.
 - **Scenario (argmax)** `vdjtools.model.viterbi`: **`best_scenario(model, cdr3_nt, v=, j=)`** →
   `Scenario(cdr3_nt, v_call, j_call, v_end, j_start, d_call, d_start, d_end, scenario_p, ...)` — the
   single most likely recombination for a KNOWN nt CDR3, i.e. the V/D/J boundary markup. Max-product
