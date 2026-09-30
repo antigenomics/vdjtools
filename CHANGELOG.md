@@ -42,9 +42,9 @@ human TRB nucleotide-exact 14.40 / 17.32 / **17.32 %** and D gene 72.58 / 74.08 
 arda / OLGA / the chain, and human TRA keeps **4,000 of 4,000** nucleotide junctions where OLGA
 alone declines 143. Pin a set by name for a reproducibility run.
 
-**116 µs per key on the real corpus** — VDJdb's 192,726 distinct `(species, cdr3, V, J)` keys in
-**22.3 s in one process**: 190,199 nucleotide junctions, a D gene on 124,022 of the 124,489 TRB keys,
-and coordinates on 121,336 of those. The 65,107 TRA keys have no D to find. Every stage
+**122 µs per key on the real corpus** — VDJdb's 192,726 distinct `(species, cdr3, V, J)` keys in
+**23.6 s in one process**: 192,423 nucleotide junctions, a D gene on 126,007 of the 126,231 D-bearing
+keys, and coordinates on 122,717 of those. The 66,495 TRA keys have no D to find. Every stage
 is batched (one `markup_batch`, then one native threaded `infer_nt_batch` and one
 `best_aa_scenarios_batch` per organism, locus and model set, on a model loaded once), so do **not**
 wrap the call in a pool of your own.
@@ -65,20 +65,26 @@ verified across every allele the fit did see, no answer changes.
 
 **Every species in the corpus answers now, not just the fitted ones.** A fitted model exists for
 human (seven loci) and mouse (TRA/TRB) and for nothing else, so every other organism arda ships
-germline for came back with no nucleotides, no D and no bounds — 1,457 rhesus keys in VDJdb
-answered **zero** times. `model_source="auto"` now ends in a germline **scaffold** built by
-`from_arda(locus, organism=)`: the templated flanks come from that organism's own germline and only
-the N region is a default, which is exactly the part a fitted model would have improved. Per
-species, nucleotide junctions over VDJdb's own 192,726 curation keys:
+germline for came back with no nucleotides, no D and no bounds — **1,457 rhesus keys in VDJdb
+answered zero times**, invisible inside a single corpus-wide total. `model_source="auto"` now ends
+in a germline **scaffold** built by `from_arda(locus, organism=)`: the templated flanks come from
+that organism's own germline and only the N region is a default, which is exactly the part a fitted
+model would have improved. Coverage over VDJdb's own 192,726 curation keys, per species:
 
-| species | locus | keys | before | after |
+| species | locus | keys | nucleotide junction | D gene |
 |---|---|---:|---:|---:|
-| human | TRB | 115,654 | 115,605 | **115,644** |
-| human | TRA | 58,163 | 58,072 | **58,085** |
-| mouse | TRB | 8,872 | 8,417 | **8,662** |
-| mouse | TRA | 8,119 | 8,105 | **8,119** |
-| rhesus | TRB | 1,383 | 0 | **1,379** |
-| rhesus | TRA | 74 | 0 | **73** |
+| human | TRB | 115,829 | **115,819** | 115,819 |
+| human | TRA | 58,281 | **58,203** | — |
+| mouse | TRB | 9,015 | **8,805** | 8,805 |
+| mouse | TRA | 8,140 | **8,140** | — |
+| rhesus | TRB | 1,383 | **1,379** | 1,379 |
+| rhesus | TRA | 74 | **73** | — |
+| human | TRD | 4 | **4** | 4 |
+
+**192,423 of 192,726 keys (99.84 %)**, against 124,022 before, and no species or locus at zero. TRA
+and TRD are VJ loci for the D column's purposes — there is no D to find. ⚠ Read the `keys` column as
+of this release: the 461 keys that named neither V nor J had no locus at all before and are counted
+here under the locus they resolve to, so a per-locus denominator is not comparable to an older run's.
 
 **Fixed — `infer_nt_batch` raised on a batch whose FIRST row had no D.** The native call returns its
 string columns as numpy **object** arrays and polars types one from its first element alone, so

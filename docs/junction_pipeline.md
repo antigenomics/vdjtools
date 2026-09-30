@@ -167,9 +167,9 @@ check that says stage 2b already did it.
 ## Cost, measured on the corpus it exists for
 
 VDJdb's whole curation corpus — **192,726 distinct `(species, cdr3, V, J)` keys** — annotates in
-**22.3 s in one process, 116 µs per key**. 190,199 keys get a nucleotide junction, **124,022 of the
-124,489 TRB keys get a D gene**, and 121,336 of those get coordinates to draw; the 65,107 TRA keys
-have no D to find.
+**23.6 s in one process, 122 µs per key**. 192,423 keys get a nucleotide junction, **126,007 of the
+126,231 D-bearing keys get a D gene**, and 122,717 of those get coordinates to draw; the 66,495 TRA
+keys have no D to find.
 
 That is 1.57× faster than pinning arda's set (35.1 s, 182 µs) as well as more accurate, because
 OLGA's fit answers most rows and is the cheaper one to score. On the human TRB benchmark alone the
@@ -213,9 +213,22 @@ vendoring them would buy is mouse IGH/IGK/IGL, which no bundled set covers today
 nothing else, so every other organism arda ships germline for used to come back empty — 1,457 rhesus
 keys in VDJdb answered zero times. `"auto"`'s last rung is a germline **scaffold**
 (`from_arda(locus, organism=)`): the templated flanks come from that organism's own germline and
-only the N region is a default. Per species over VDJdb's 192,726 curation keys, nucleotide junctions
-go human TRB 115,605 → **115,644**, human TRA 58,072 → **58,085**, mouse TRB 8,417 → **8,662**,
-mouse TRA 8,105 → **8,119**, rhesus TRB 0 → **1,379** and rhesus TRA 0 → **73**.
+only the N region is a default. Coverage over VDJdb's 192,726 curation keys, per species:
+
+| species | locus | keys | nucleotide junction | D gene | D coordinates |
+|---|---|---:|---:|---:|---:|
+| human | TRB | 115,829 | **115,819** | 115,819 | 113,232 |
+| human | TRA | 58,281 | **58,203** | — | — |
+| mouse | TRB | 9,015 | **8,805** | 8,805 | 8,694 |
+| mouse | TRA | 8,140 | **8,140** | — | — |
+| rhesus | TRB | 1,383 | **1,379** | 1,379 | 787 |
+| rhesus | TRA | 74 | **73** | — | — |
+| human | TRD | 4 | **4** | 4 | 4 |
+
+**192,423 of 192,726 (99.84 %)**, against 124,022 before, with no species or locus at zero. TRA and
+TRD are VJ loci here — there is no D to find. ⚠ The `keys` column is as of this release: the 461
+keys naming neither V nor J had no locus before and now count under the one they resolve to, so a
+per-locus denominator is not comparable to an older run's.
 
 ⚠ **The flooring is not what makes arda's set weaker, and it is load-bearing.** 36 of its 66 human
 TRB V alleles sit at probability 0, so `_reachable` has to floor them before anything conditions;
