@@ -124,7 +124,7 @@ sdist.exclude = [
     # Working notes: internal by design (cluster paths, private dataset names, cohort detail).
     # .gitignore is what actually keeps them out -- both backends build from the VCS file list --
     # and these are the second line, for a tree where an untracked copy is sitting on disk.
-    "/CLAUDE.md", "/SOURCES.md", "/TODO.md", "/NOTES.md", "/ROADMAP.md", "/STATUS.md",
+    "/CLAUDE.md", "/SOURCES.md", "/TODO.md", "/NOTES.md", "/ROADMAP_local.md", "/STATUS.md",
     "/ISSUES.md", "/ISSUES_ext.md",
     "/CHANGELOG_local.md",
 ]
