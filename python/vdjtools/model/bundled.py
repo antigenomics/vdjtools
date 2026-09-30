@@ -3,13 +3,17 @@
 Three model sets live under ``vdjtools/model/_bundled/``:
 
 - ``olga`` — imported from OLGA's default models (the exact-Pgen bootstrap; single-D).
-  Seven human loci, OLGA's germline namespace.
+  The seven **human** loci, OLGA's germline namespace. ⚠ OLGA itself also ships five MOUSE models
+  (``mouse_T_alpha``, ``mouse_T_beta``, ``mouse_B_heavy``, ``mouse_B_kappa``, ``mouse_B_lambda``);
+  they are simply not vendored here yet, so this set answers human only. That is a fact about this
+  bundle, NOT about OLGA -- see ``ROADMAP.md``.
 - ``learned`` — EM-inferred from real non-functional reads (out-of-frame + stop-codon, HuggingFace), tandem-D on the D-bearing
   loci (IGH/TRD/TRB). These carry a learned ``P(n_D=2)`` and broader trim/insertion distributions
   than the synthetic OLGA models. Seven human loci, OLGA's germline namespace.
 - ``arda`` — the same EM inference on the **arda** IMGT allele namespace (:func:`from_arda`
   scaffold refit by :func:`~vdjtools.model.infer.infer_native`). Nine models: the seven human
-  loci **plus mouse TRA/TRB — the only bundled set with a non-human organism**. Use this one when
+  loci **plus mouse TRA/TRB — the only bundled set carrying a non-human organism today**. Use this
+  one when
   the rest of your pipeline is arda-annotated, so generated sequences share one allele namespace
   with your query data instead of needing a name fallback.
 
@@ -42,8 +46,11 @@ def _bundled_key(source: str, locus: str, organism: str) -> str:
         return f"{organism.lower()}_{locus.upper()}"
     if organism.lower() != "human":
         raise ValueError(
-            f"the {source!r} model set is human-only (got organism={organism!r}); "
-            f"use source='arda' for mouse"
+            f"vdjtools bundles the {source!r} model set for human only (got "
+            f"organism={organism!r}); use source='arda', which carries mouse TRA and TRB. "
+            f"⚠ This is a gap in what is VENDORED, not in the upstream set: OLGA ships "
+            f"mouse_T_alpha, mouse_T_beta, mouse_B_heavy, mouse_B_kappa and mouse_B_lambda, and "
+            f"all five import cleanly through `from_olga`."
         )
     return locus.upper()
 
@@ -56,9 +63,10 @@ def load_bundled(locus: str, source: str = "olga", *, organism: str = "human",
         locus: One of ``TRA TRB TRG TRD IGH IGK IGL`` (case-insensitive).
         source: ``"olga"`` (OLGA bootstrap, exact Pgen), ``"learned"`` (EM-inferred from real
             non-functional reads; tandem-D on IGH/TRD/TRB), or ``"arda"`` (the same EM inference on
-            the **arda IMGT allele namespace**, and the only set covering mouse).
-        organism: ``"human"`` (default) or ``"mouse"``. Only the ``arda`` set ships a non-human
-            organism; asking the others for one is an error rather than a silent human model.
+            the **arda IMGT allele namespace**, and the only set VENDORED here for mouse).
+        organism: ``"human"`` (default) or ``"mouse"``. Only the ``arda`` set is VENDORED here
+            with a non-human organism; asking the others for one is an error rather than a silent
+            human model. OLGA's own five mouse models exist upstream — see the module docstring.
         collapse: If ``True`` (default), collapse each gene to a single ``*01`` allele via
             :func:`~vdjtools.model.collapse.collapse_alleles` — the working gene-level resolution,
             in which Pgen also collapses a clonotype's allele to ``*01`` (short-read aligners cannot
@@ -70,13 +78,13 @@ def load_bundled(locus: str, source: str = "olga", *, organism: str = "human",
 
     Raises:
         ValueError: If ``source`` is not one of :data:`SOURCES`, or a non-human ``organism`` is
-            asked of a human-only set.
+            asked of a set vendored here for human only.
         FileNotFoundError: If no bundled model exists for ``(source, organism, locus)``.
 
     Example:
         >>> m = load_bundled("TRB")                                  # olga, human
         >>> m_arda = load_bundled("TRB", "arda")                     # arda namespace, human
-        >>> m_mouse = load_bundled("TRB", "arda", organism="mouse")  # the only mouse models
+        >>> m_mouse = load_bundled("TRB", "arda", organism="mouse")  # the only VENDORED mouse set
     """
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}, got {source!r}")

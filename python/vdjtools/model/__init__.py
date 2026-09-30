@@ -11,6 +11,7 @@ from .bundled import list_bundled, load_bundled
 from .check import check_model
 from .collapse import collapse_alleles
 from .events import Event, EventKind
+from .junction import JUNCTION_COLUMNS, annotate_junctions
 from .io import (
     from_arda,
     from_germline,
@@ -58,6 +59,8 @@ __all__ = [
     "load_bundled",
     "list_bundled",
     "collapse_alleles",
+    "annotate_junctions",
+    "JUNCTION_COLUMNS",
     "rescale_usage",
     "load_germline",
     "cut_segment",

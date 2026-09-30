@@ -863,14 +863,18 @@ def infer_nt_batch(model: Model, cdr3_aas, v=None, j=None, *, n_best: int = 8,
     cols = _infer_nt_cols(model, clean, list(v) if v is not None else [None] * n,
                           list(j) if j is not None else [None] * n, n_best, threads)
     n_aa = pl.Series([len(a) if a else 0 for a in clean], dtype=pl.Int64)
+    # `list(...)` on the four string columns is load-bearing: the native call hands them back as
+    # numpy OBJECT arrays, and polars types an object array from its FIRST element -- so a batch
+    # whose row 0 declined (or simply has no D) while a later row names one came back `Object` and
+    # `cannot cast 'Object' type`. A Python list is typed from the whole column.
     df = pl.DataFrame({
         "ok": pl.Series(cols["ok"], dtype=pl.Boolean),
-        "cdr3_nt": pl.Series(cols["cdr3_nt"], dtype=pl.Utf8),
-        "v_call": pl.Series(cols["v_call"], dtype=pl.Utf8),
-        "j_call": pl.Series(cols["j_call"], dtype=pl.Utf8),
+        "cdr3_nt": pl.Series(list(cols["cdr3_nt"]), dtype=pl.Utf8),
+        "v_call": pl.Series(list(cols["v_call"]), dtype=pl.Utf8),
+        "j_call": pl.Series(list(cols["j_call"]), dtype=pl.Utf8),
         "v_end": pl.Series(cols["len_v"], dtype=pl.Int64),
         "j_start": 3 * n_aa - pl.Series(cols["len_j"], dtype=pl.Int64),
-        "d_call": pl.Series(cols["d_call"], dtype=pl.Utf8),
+        "d_call": pl.Series(list(cols["d_call"]), dtype=pl.Utf8),
         "d_start": pl.Series(cols["d_start"], dtype=pl.Int64),
         "d_end": pl.Series(cols["d_end"], dtype=pl.Int64),
         "pgen": pl.Series(cols["pgen"], dtype=pl.Float64),

@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "4.7.0"
+version = "4.8.0"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -48,7 +48,20 @@ dependencies = [
     # >=2.31.0: `cdr3fix.boundary_nt`, which `model.boundary` calls -- the germline boundary in
     # NUCLEOTIDES rather than rounded to whole residues. A hard floor, not a preference:
     # `germline_boundary` imports it by name and 2.30.1 does not have it.
-    "arda-mapper>=2.31.0",
+    # >=2.33.0: three things `model.dpost` and `model.junction` import by name and 2.32.0 does not
+    # have. `arda.scenarios.load_prior_table` is the reader for the D prior table -- the posterior
+    # moved HERE in 4.8.0 (arda#144) while the table and its fitter stayed there, so this is the one
+    # parser for that format and it lives beside its writer. `cdr3fix.Cdr3Markup.v_alts`/`j_alts`
+    # carry the alleles a junction cannot separate, which is what `infer_nt_batch` is given rather
+    # than one name chosen by sort order. And `annotate.dmap.map_d_junction(v_end=, j_start=)` takes
+    # the interior to search instead of re-deriving it from an inferred sequence, where an exact
+    # germline prefix match breaks at the first synonymous difference and a spurious D wins inside
+    # the V. A hard floor, not a preference: every one of them is imported by name.
+    # >=2.34.0 additionally: a blank V or J is PROPOSED from the junction rather than refused, with
+    # `Cdr3Markup.proposed` saying which side was never curated. `annotate_junctions` passes the
+    # calls straight through, so a curated corpus that leaves a side out (3,130 of VDJdb's 192,726
+    # keys) gets a nucleotide junction and a D here instead of a `FailedBadSegment` and nulls.
+    "arda-mapper>=2.36.0",
     # seqtree = the fuzzy-search / e-value engine, vdjmatch = overlap + TCRnet on top of it.
     # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
     # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or
@@ -111,8 +124,9 @@ sdist.exclude = [
     # Working notes: internal by design (cluster paths, private dataset names, cohort detail).
     # .gitignore is what actually keeps them out -- both backends build from the VCS file list --
     # and these are the second line, for a tree where an untracked copy is sitting on disk.
-    "/CLAUDE.md", "/SOURCES.md", "/TODO.md", "/NOTES.md", "/ROADMAP.md", "/STATUS.md",
+    "/CLAUDE.md", "/SOURCES.md", "/TODO.md", "/NOTES.md", "/ROADMAP_local.md", "/STATUS.md",
     "/ISSUES.md", "/ISSUES_ext.md",
+    "/CHANGELOG_local.md",
 ]
 
 [tool.scikit-build.cmake.define]
