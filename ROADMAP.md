@@ -38,8 +38,13 @@ libraries in the order that works.
   reconstruction takes the argmax per position, so there is room there.
 - **A swept D-alignment gate.** The alignment declines 43.8 % of rows and is right on 85.98 % where
   it speaks; the gate has never been tuned on an *inferred* sequence, which is noisier than a read.
-- **The same benchmark beyond human TRB** — mouse TRB first, where arda's bundled set is the only
-  fit at all, and immunoglobulin, where there is no nucleotide truth set to score against yet.
+- **The same benchmark beyond human TRB** — mouse TRB first, where the vendored `arda` fit already
+  measures better than OLGA's (53.97 % against 52.33 % on the D gene, 4,000 rearrangements), and
+  immunoglobulin, where there is no nucleotide truth set to score against yet.
+- **Vendor OLGA's five mouse models.** `mouse_T_alpha`, `mouse_T_beta`, `mouse_B_heavy`,
+  `mouse_B_kappa` and `mouse_B_lambda` all import cleanly through `from_olga` and none is bundled.
+  What that buys is mouse **IGH/IGK/IGL**, which no bundled set covers; mouse TRA/TRB are already
+  covered better by arda's own fit.
 - **A better bundled human fit.** 36 of the 66 human TRB V alleles in arda's set sit at probability
   zero, so they have to be floored before anything can condition on them; OLGA's fit is 1.77 points
   better on the D gene and 2.92 on nucleotide exactness. The chain hides this, it does not fix it.

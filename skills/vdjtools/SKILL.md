@@ -183,7 +183,11 @@ Iterating on C++: `cmake --build build/<wheel_tag>` then copy `_core.*.so` into 
   bundled fit, then arda's on the rows it left empty -- and beats either alone on every axis
   (TRB nt-exact 14.40 / 17.32 / **17.32 %**, D gene 72.58 / 74.08 / **74.35 %** for arda / OLGA /
   the chain; TRA keeps 4,000 of 4,000 nt junctions where OLGA alone declines 143). Pin a name for a
-  reproducibility run; only arda's set covers mouse.
+  reproducibility run; only arda's set is VENDORED for mouse (OLGA's own five mouse models import
+  fine through `from_olga`, they are just not bundled -- and on mouse TRB arda's fit is the better
+  one, 53.97 % against 52.33 % on 4,000 real rearrangements). The chain's LAST rung is not a bundled
+  set at all but a germline scaffold (`from_arda(locus, organism=)`), which is what makes every other
+  organism answer: rhesus went 0 -> 1,379 of 1,383 TRB keys on VDJdb's own corpus.
   `docs/junction_pipeline.md` for the whole argument; a caller wanting one stage should call that
   stage, not this. Full D-D markup on IGH/TRD is still `arda.annotate.dmap.map_d_junction`.
   ⚠ **Every accuracy number here is human TRB** — `isalgo/airr_control` has no immunoglobulin, so

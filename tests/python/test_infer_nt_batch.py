@@ -193,3 +193,24 @@ def test_a_gene_level_call_survives_the_marginal_rescore(trb):
     assert by_gene == by_allele, "the gene name resolved to something other than its *01 allele"
     batch = infer_nt_batch(trb, [aa, aa], v=[gene_v, v], j=[gene_j, j])
     assert batch.row(0) == batch.row(1)
+
+
+def test_a_first_row_with_no_d_does_not_poison_the_column(trb):
+    """A batch whose FIRST row names no D must still type ``d_call`` as a string column.
+
+    The native call returns the four string columns as numpy **object** arrays, and polars types an
+    object array from its first element alone: ``[None, "TRBD1*01"]`` came back ``Object`` and the
+    declared ``Utf8`` cast raised ``cannot cast 'Object' type``, while ``["TRBD1*01", None]`` was
+    fine. So the failure depended on **row order**, not on the data -- the same corpus in a
+    different sort order either worked or raised. It surfaced on a rhesus scaffold, where row 0 is
+    an unencodable junction, and it was never scaffold-specific.
+    """
+    import polars as pl
+
+    aa = [c[0] for c in CASES]
+    got = infer_nt_batch(trb, ["CXXX"] + aa, v=[None] + [c[1] for c in CASES],
+                         j=[None] + [c[2] for c in CASES])
+    for col in ("cdr3_nt", "v_call", "j_call", "d_call"):
+        assert got[col].dtype == pl.Utf8, f"{col} came back {got[col].dtype}"
+    assert got["cdr3_nt"][0] is None, "the unencodable row should decline, not answer"
+    assert got["d_call"][1:].null_count() < 3, "no row named a D -- the case is not exercised"

@@ -130,7 +130,7 @@ tables for human IGH/TRB/TRD and mouse TRB only. An IGH junction goes through en
 back with a gene, a posterior and coordinates.
 
 ⛔ **But every accuracy number on this page is human TRB.** `isalgo/airr_control` carries human and
-mouse TRA/TRB and no immunoglobulin at all, so there is no B-cell truth set here and **74.30 % must
+mouse TRA/TRB and no immunoglobulin at all, so there is no B-cell truth set here and **74.35 % must
 not be quoted for IGH.**
 
 ⛔ **And this pipeline has no somatic-hypermutation term anywhere in it.** Stage 2 reconstructs
@@ -199,9 +199,23 @@ set:
 | `"olga"` | 17.32 % | 74.08 % | 3,857/4,000 | 37.88 % | 141 |
 | **`"auto"` — OLGA, then arda on what it left** | **17.32 %** | **74.35 %** | **4,000/4,000** | **38.90 %** | **168** |
 
-OLGA's fit is better calibrated and cheaper to score; arda's answers everything and is the only one
-covering mouse. Neither dominates, so the default runs one and then the other on the rows the first
-left empty — which does dominate, on every column above.
+OLGA's fit is better calibrated and cheaper to score; arda's answers everything and is the only set
+**vendored here** for mouse. Neither dominates, so the default runs one and then the other on the
+rows the first left empty — which does dominate, on every column above.
+
+⚠ **OLGA itself is not human-only; this bundle is.** OLGA ships `mouse_T_alpha`, `mouse_T_beta`,
+`mouse_B_heavy`, `mouse_B_kappa` and `mouse_B_lambda`, and all five import cleanly through
+`from_olga` — they are simply not vendored yet. On mouse TRB the vendored `arda` fit wins anyway
+(D gene right on **53.97 %** of 4,000 real mouse rearrangements against OLGA's **52.33 %**), so what
+vendoring them would buy is mouse IGH/IGK/IGL, which no bundled set covers today.
+
+**And the chain does not end at a bundled set.** A fitted model exists for human and mouse and for
+nothing else, so every other organism arda ships germline for used to come back empty — 1,457 rhesus
+keys in VDJdb answered zero times. `"auto"`'s last rung is a germline **scaffold**
+(`from_arda(locus, organism=)`): the templated flanks come from that organism's own germline and
+only the N region is a default. Per species over VDJdb's 192,726 curation keys, nucleotide junctions
+go human TRB 115,605 → **115,644**, human TRA 58,072 → **58,085**, mouse TRB 8,417 → **8,662**,
+mouse TRA 8,105 → **8,119**, rhesus TRB 0 → **1,379** and rhesus TRA 0 → **73**.
 
 ⚠ **The flooring is not what makes arda's set weaker, and it is load-bearing.** 36 of its 66 human
 TRB V alleles sit at probability 0, so `_reachable` has to floor them before anything conditions;

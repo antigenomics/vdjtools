@@ -120,10 +120,19 @@ def test_load_arda_mouse_model_and_generate(locus):
     assert df["v_call"].str.starts_with(f"{locus}V").all()   # arda IMGT names, mouse germline
 
 
-def test_organism_is_not_silently_ignored_by_human_only_sets():
-    # asking olga/learned for mouse must fail loudly, not hand back the human model
+def test_organism_is_not_silently_ignored_by_a_set_vendored_for_human_only():
+    """Asking olga/learned for mouse must fail loudly, not hand back the human model -- and the
+    message must say the gap is in what is VENDORED, not in the upstream set.
+
+    ⚠ OLGA is **not** a human-only project: it ships `mouse_T_alpha`, `mouse_T_beta`,
+    `mouse_B_heavy`, `mouse_B_kappa` and `mouse_B_lambda`, and all five import cleanly through
+    `from_olga`. The old message asserted the set itself was human-only, which is false and sends a
+    reader looking for a mouse model somewhere it exists.
+    """
     for src in ("olga", "learned"):
-        with pytest.raises(ValueError, match="human-only"):
+        with pytest.raises(ValueError, match="VENDORED"):
+            load_bundled("TRB", src, organism="mouse")
+        with pytest.raises(ValueError, match="mouse_T_beta"):
             load_bundled("TRB", src, organism="mouse")
     with pytest.raises(FileNotFoundError, match="available"):
         load_bundled("IGH", "arda", organism="mouse")     # arda has no mouse IGH

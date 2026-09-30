@@ -61,7 +61,7 @@ dependencies = [
     # `Cdr3Markup.proposed` saying which side was never curated. `annotate_junctions` passes the
     # calls straight through, so a curated corpus that leaves a side out (3,130 of VDJdb's 192,726
     # keys) gets a nucleotide junction and a D here instead of a `FailedBadSegment` and nulls.
-    "arda-mapper>=2.34.0",
+    "arda-mapper>=2.36.0",
     # seqtree = the fuzzy-search / e-value engine, vdjmatch = overlap + TCRnet on top of it.
     # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
     # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or

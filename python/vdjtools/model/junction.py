@@ -90,6 +90,11 @@ _D_DTYPES = {"d_call": pl.String, "d_posterior": pl.Float64, "d_start_nt": pl.In
              "np1": pl.String, "np2": pl.String}
 
 
+#: The last rung of the ``"auto"`` chain: not a bundled set, but a model scaffold built from arda's
+#: germline for whatever organism the row names. Sentinel rather than a string so it cannot be passed
+#: as ``model_source=`` by name -- it is a fallback, not a set you choose.
+_SCAFFOLD = object()
+
 #: Tables whose zeros are floored per ROW. Both are a choice of allele, and this stage pins the V
 #: and the J, so their contribution to a row is a constant factor.
 _FLOOR_ROWWISE = ("v_choice", "j_choice")
@@ -180,7 +185,7 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
             either set alone on every axis -- TRB nucleotide-exact 14.40 / 17.32 / **17.32 %** and D
             gene 72.58 / 74.08 / **74.35 %** for arda / OLGA / the chain, and TRA keeps 4,000 of
             4,000 nucleotide junctions where OLGA alone declines 143. Name a set explicitly
-            (``"olga"``, ``"arda"``, ``"learned"``) to pin one; only arda's covers mouse.
+            (``"olga"``, ``"arda"``, ``"learned"``) to pin one; only arda's is VENDORED for mouse.
         n_best: Candidates re-scored per row in stage 2; see :func:`infer_nt_batch`, whose own
             default is 8. **4 here, measured**: stage 2 is 69 % of the pipeline's cost and this is
             the knob that moves it, and what the nucleotides are FOR is finding the D -- they only
@@ -205,6 +210,7 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
     from arda.cdr3fix import load_anchors as _anchors, markup_batch, resolve_species
 
     from .bundled import load_bundled
+    from .io import from_arda
     from .native import best_aa_scenarios_batch, gene_to_allele
     from .viterbi import infer_nt_batch
 
@@ -252,12 +258,22 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
     #   olga -> arda       17.32 %      74.35 % |    4,000/4,000        38.90 %
     #
     # OLGA's fit is better calibrated and ~1.9x faster, but it DECLINES rows outright (143 of 4,000
-    # on TRA) and has no mouse; arda's answers everything and is thinner -- 36 of its 66 human TRB V
-    # alleles sit at p = 0, which is what `_reachable` exists to floor. ⚠ The flooring is NOT the
+    # on TRA) and is vendored here for human only; arda's answers everything and is thinner -- 36 of
+    # its 66 human TRB V alleles sit at p = 0, which is what `_reachable` exists to floor. ⚠ The
+    # flooring is NOT the
     # gap: unfloored, arda's set names a D on 2,669 of 4,000 rows at 48.25 % correct, so it is
     # load-bearing. Running one set and then the other on what it left empty beats both on every
     # axis, which is why the default is the chain and not either name.
-    sources = ("olga", "arda") if model_source == "auto" else (model_source,)
+    # ⛔ And the last rung is not a bundled set at all. A FITTED model exists for human (all seven
+    # loci) and mouse (TRA/TRB) and for nothing else, so every other organism arda ships germline
+    # for -- rhesus, rat, rabbit -- used to come back with no nucleotides, no D and no bounds. On
+    # VDJdb's own corpus that was 1,457 rhesus keys answered ZERO times. `from_arda` builds a model
+    # scaffold straight off arda's germline for that organism, and the pipeline already treats the
+    # templated flanks as germline and only the N region as a guess -- so a scaffold whose germline
+    # is right and whose insertion/trim distributions are defaults answers exactly the part that is
+    # answerable. Measured on those rhesus keys: 804 of the 808 stage 1 resolves now get a
+    # nucleotide junction and a D scenario, against 0 before.
+    sources = ("olga", "arda", _SCAFFOLD) if model_source == "auto" else (model_source,)
     for (o, loc), group_idx in groups.items():
         todo = list(group_idx)
         for source in sources:
@@ -265,7 +281,8 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
                 break
             idx = todo
             try:
-                model = _reachable(load_bundled(loc, source=source, organism=o))
+                model = _reachable(from_arda(loc, organism=o) if source is _SCAFFOLD
+                                   else load_bundled(loc, source=source, organism=o))
             except (FileNotFoundError, ValueError, KeyError):
                 continue                 # this set has no model for this (organism, locus)
             # ⚠ arda's namespace is IMGT-complete and a model's is whatever it was fitted on, so a call

@@ -29,7 +29,7 @@ On 4,000 real human TRB rearrangements whose D comes from the nucleotides: the g
 reaches 47.93 % gated, 67.10 % ungated, and it is no better even where it is confident — 85.96 %
 against the model's 86.32 % on those rows. So there is no `d_best`, no `d_posterior_call`, no
 `d_entropy` and no `arda.dpost` port: a second D estimator was measured and is not needed.
-**Requires `arda-mapper>=2.34.0`.**
+**Requires `arda-mapper>=2.36.0`.**
 
 **The nucleotides are the authority.** `v_end_nt`, `j_start_nt`, `d_start_nt` and `d_end_nt` are all
 read off the inferred nucleotide junction, and every amino-acid bound is recomputed from them, so a
@@ -51,7 +51,9 @@ wrap the call in a pool of your own.
 
 **A blank V or J is handled**, not refused: arda proposes that side from the junction, and the
 `proposed` column says which side was never curated. 3,130 of VDJdb's 192,726 curation keys leave a
-side out, and they now get a nucleotide junction and a D like any other row.
+side out — 2,669 name one side, **461 name neither** — and all of them now get a nucleotide junction
+and a D like any other row. For the 461 the locus is proposed too, and it agrees with the
+`cdr3.alpha` / `cdr3.beta` column the record was filed under on **457 of 461 (99.13 %)**.
 
 **Fixed — `infer_nt_batch` raised on a per-row list of alleles**, one of the three call forms it
 documents, when the boundary columns were computed.
@@ -60,6 +62,36 @@ documents, when the boundary columns were computed.
 training cohort never showed comes out at probability zero — 36 of 66 human TRB V alleles — so
 conditioning on one produced no scenario at all. The pipeline floors those before inferring;
 verified across every allele the fit did see, no answer changes.
+
+**Every species in the corpus answers now, not just the fitted ones.** A fitted model exists for
+human (seven loci) and mouse (TRA/TRB) and for nothing else, so every other organism arda ships
+germline for came back with no nucleotides, no D and no bounds — 1,457 rhesus keys in VDJdb
+answered **zero** times. `model_source="auto"` now ends in a germline **scaffold** built by
+`from_arda(locus, organism=)`: the templated flanks come from that organism's own germline and only
+the N region is a default, which is exactly the part a fitted model would have improved. Per
+species, nucleotide junctions over VDJdb's own 192,726 curation keys:
+
+| species | locus | keys | before | after |
+|---|---|---:|---:|---:|
+| human | TRB | 115,654 | 115,605 | **115,644** |
+| human | TRA | 58,163 | 58,072 | **58,085** |
+| mouse | TRB | 8,872 | 8,417 | **8,662** |
+| mouse | TRA | 8,119 | 8,105 | **8,119** |
+| rhesus | TRB | 1,383 | 0 | **1,379** |
+| rhesus | TRA | 74 | 0 | **73** |
+
+**Fixed — `infer_nt_batch` raised on a batch whose FIRST row had no D.** The native call returns its
+string columns as numpy **object** arrays and polars types one from its first element alone, so
+`[None, "TRBD1*01"]` came back `Object` and the declared `Utf8` cast raised `cannot cast 'Object'
+type` — while `["TRBD1*01", None]` was fine. The failure therefore depended on **row order**: the
+same corpus sorted differently either worked or raised.
+
+**⚠ OLGA is not human-only — this bundle is.** `load_bundled` used to say the `olga` set covers
+human only. OLGA itself ships five mouse models (`mouse_T_alpha`, `mouse_T_beta`, `mouse_B_heavy`,
+`mouse_B_kappa`, `mouse_B_lambda`) and all five import cleanly through `from_olga`; they are simply
+not vendored here yet. On mouse TRB the vendored `arda` fit is the better one anyway — the D gene is
+right on **53.97 %** of 4,000 real mouse rearrangements against OLGA's **52.33 %** — so what
+vendoring them would buy is mouse IGH/IGK/IGL, which no bundled set covers today.
 
 **⚠ What is not measured, for B cells.** Every figure above is human TRB: the truth set this is
 scored against carries TRA and TRB and no immunoglobulin, so **none of them may be quoted for IGH**.

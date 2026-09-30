@@ -189,3 +189,35 @@ def test_a_blank_call_is_proposed_and_says_so_in_the_frame():
     # and a proposed side is a complete row, not a stub
     for r in out.head(2).iter_rows(named=True):
         assert r["good"] and r["cdr3_nt"] and r["v_end_nt"] >= 0 and r["j_start_nt"] >= 0
+
+
+def test_an_organism_with_no_fitted_model_still_answers():
+    """Rhesus has no bundled fit in any set, and used to come back with nothing at all.
+
+    A FITTED model exists for human (seven loci) and mouse (TRA/TRB); every other organism arda
+    ships germline for got no nucleotides, no D and no bounds. On VDJdb's own corpus that was 1,457
+    rhesus keys answered ZERO times. ``"auto"``'s last rung is a germline scaffold built by
+    ``from_arda(locus, organism=)`` -- the templated flanks come from that organism's own germline
+    and only the N region is a default, which is exactly the part a fit would have improved. That
+    lifts rhesus TRB to 1,379 of 1,383 keys and rhesus TRA to 73 of 74.
+    """
+    got = annotate_junctions(["CASSLAPGATNEKLFF", "CAGGQEQFF"],
+                             ["TRBV7-9*01", "TRBV9*01"], ["TRBJ1-4*01", "TRBJ2-1*01"],
+                             species="MacacaMulatta")
+    assert got.height == 2
+    assert got["cdr3_nt"].null_count() == 0, "a scaffold organism came back with no nucleotides"
+    assert got["d_call"].null_count() == 0, "a scaffold organism came back with no D"
+    assert (got["locus"] == "TRB").all()
+
+
+def test_a_junction_naming_neither_side_gets_a_locus_proposed():
+    """Both calls blank is a curation gap, not a refusal -- 522 of VDJdb's `chunks` records.
+
+    arda proposes the locus as well as the two sides (every locus competes, both ends must agree),
+    so the row reaches this pipeline like any other and comes back with nucleotides and a D.
+    """
+    got = annotate_junctions(["CASSSANYGYTF", "CAAHYGNKLVF"], ["", ""], ["", ""], species="human")
+    assert list(got["locus"]) == ["TRB", "TRA"]
+    assert got["cdr3_nt"].null_count() == 0
+    assert all("V" in p and "J" in p for p in got["proposed"]), got["proposed"].to_list()
+    assert got["d_call"][0] is not None and got["d_call"][1] is None   # TRB has a D, TRA has none
