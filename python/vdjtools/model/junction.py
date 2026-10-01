@@ -212,6 +212,7 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
     from .bundled import load_bundled
     from .io import from_arda
     from .native import best_aa_scenarios_batch, gene_to_allele
+    from .reference import translate
     from .viterbi import infer_nt_batch
 
     n = len(junction_aas)
@@ -375,11 +376,19 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
         va, ja = anchors.get(("V", v_res[i])), anchors.get(("J", j_res[i]))
         seq, L = nt[i], len(nt[i])
         ve, js = min(v_end_nt[i], L), min(j_start_nt[i], L)
+        # The junction_aa is authoritative (#186): a flank is taken from germline only where doing so
+        # leaves the translation exactly the repaired junction. The germline can reach a residue past
+        # the amino-acid boundary and would overwrite it -- the boundary is a markup coordinate, never
+        # a licence to alter the sequence.
         if va and va.germline_nt and len(va.germline_nt) >= ve:
-            seq = va.germline_nt[:ve].upper() + seq[ve:]
+            cand = va.germline_nt[:ve].upper() + seq[ve:]
+            if translate(cand) == repaired[i]:
+                seq = cand
         if ja and ja.germline_nt and len(ja.germline_nt) >= L - js:
             tail = L - js
-            seq = seq[:js] + (ja.germline_nt[len(ja.germline_nt) - tail:].upper() if tail else "")
+            cand = seq[:js] + (ja.germline_nt[len(ja.germline_nt) - tail:].upper() if tail else "")
+            if translate(cand) == repaired[i]:
+                seq = cand
         nt[i] = seq
 
     # ---- stage 4: PLACE that gene, greedily, on the nucleotides.

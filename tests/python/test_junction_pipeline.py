@@ -46,6 +46,22 @@ def test_the_nucleotide_junction_is_exactly_three_times_the_repaired_one():
         assert len(nt) == 3 * len(aa), (nt, aa)
 
 
+def test_the_nucleotides_always_translate_to_the_junction_asked_about():
+    """#186/#187: a germline flank must never overwrite a residue; aa <> nt always agree.
+
+    3,000 junctions drawn from the model: 20 of them had a residue overwritten before the fix.
+    """
+    from vdjtools.model.generate import generate
+    from vdjtools.model.reference import translate
+    g = generate(load_bundled("TRB"), 3000, productive_only=True).filter(
+        pl.col("junction_aa").str.len_chars() > 5)
+    out = annotate_junctions(g["junction_aa"].to_list(), g["v_call"].to_list(),
+                             g["j_call"].to_list()).filter(pl.col("cdr3_nt").is_not_null())
+    assert out.height > 2000
+    bad = [(n, a) for n, a in zip(out["cdr3_nt"], out["cdr3_repaired"]) if translate(n) != a]
+    assert not bad, bad[:3]
+
+
 def test_the_d_sits_inside_the_boundaries_stage_one_placed():
     """Stage 3 is given the interior, not left to re-derive it from an inferred sequence.
 

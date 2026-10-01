@@ -3,6 +3,16 @@
 What changed for you, per release. Anything not listed is internal.
 Full release notes: <https://github.com/antigenomics/vdjtools/releases>.
 
+## 4.8.1
+
+**Fixed — `annotate_junctions` no longer alters the junction it was asked about** (#186, #187).
+`cdr3_nt` is the amino-acid junction's nucleotides, always: `translate(cdr3_nt) == cdr3_repaired` on
+every row. The templated flanks were written from germline up to the nucleotide boundary, and where
+that boundary sits a residue past the amino-acid one the germline overwrote a residue. On 3,000 TRB
+junctions drawn from the bundled model, 20 (0.67 %) came back with a substituted residue; now 0 of
+3,000. A flank is taken from germline only where the translation survives; the V/J boundaries and the
+D markup stay coordinates and never edit the sequence.
+
 ## 4.8.0
 
 **New — the junction pipeline.** `model.annotate_junctions(cdr3_aas, v, j, species=)` takes a bare
