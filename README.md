@@ -1,10 +1,10 @@
 <p align="center">
+  <!-- GitHub honours <source> and gets the SVG in both colour schemes; PyPI strips <picture>/<source>
+       and cannot render SVG, so it falls through to the absolute-URL PNG in the <img>. -->
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/vdjtools_dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="assets/vdjtools_light.svg">
-    <!-- Absolute PNG fallback: PyPI strips <picture>/<source> and cannot render a relative or
-         raw-served SVG, so the logo must be an absolute-URL raster here. GitHub uses the SVG sources. -->
-    <img alt="vdjtools" src="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_dark.png" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_dark.svg">
+    <source srcset="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_light.svg">
+    <img alt="vdjtools" src="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/vdjtools_light.png" width="340">
   </picture>
 </p>
 

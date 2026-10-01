@@ -3,6 +3,10 @@
 What changed for you, per release. Anything not listed is internal.
 Full release notes: <https://github.com/antigenomics/vdjtools/releases>.
 
+## 4.8.2
+
+New logo; the README and the PyPI page link the SVG (light and dark) with an absolute PNG fallback.
+
 ## 4.8.1
 
 **Fixed — `annotate_junctions` no longer alters the junction it was asked about** (#186, #187).
