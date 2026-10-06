@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "4.8.2"
+version = "4.9.0"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +23,7 @@ classifiers = [
 # (arda-mapper, vdjmatch->seqtree) are promoted from the extras below to base deps as the
 # phases that import them land (model -> arda, overlap -> vdjmatch). Every dep traces to a use.
 dependencies = [
-    "polars>=1.0",
+    "polars>=1.0,<2",
     "numpy",
     "scipy",
     "typer>=0.12",  # the `vdjtools` CLI (Phase 8) is a core entry point
@@ -86,7 +86,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vdjtools = "vdjtools.cli:app"
+vdjtools = "vdjtools._cli:main"
 
 [project.optional-dependencies]
 model = []                             # DEPRECATED no-op alias: arda-mapper is a BASE dep since v2.4.0 (the model engine + germline reference ship with a plain `pip install vdjtools`). Kept so existing `vdjtools[model]` pins (e.g. mirpy's) keep resolving.
@@ -119,6 +119,7 @@ editable.rebuild = false
 # dev docs, the LaTeX appendix, and stray scratch files must not ship to PyPI — the wheel carries
 # just the package + compiled _core.
 sdist.exclude = [
+    "**/*.md", "!**/README.md", "!README.md",
     "/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples", "/assets",
     "/appendix", "/arda-ref.md", "/notebooks", "/scripts",
     # Working notes: internal by design (cluster paths, private dataset names, cohort detail).

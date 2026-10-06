@@ -84,3 +84,18 @@ def available_cores(default: int = 1) -> int:
     counts.append(os.cpu_count())
     usable = [c for c in counts if c]
     return max(1, min(usable)) if usable else max(1, default)
+
+
+# These runtimes read their limits during import, before a worker initializer runs.
+_KERNEL_ENV = ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
+               "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+               "RAYON_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+
+
+def kernel_threads(threads: int = 0) -> int:
+    """Resolve an explicit kernel budget; automatic kernels respect allocation and pool workers."""
+    if threads < 0:
+        raise ValueError("threads must be non-negative (0 means available cores)")
+    if threads:
+        return threads
+    return 1 if os.environ.get("VDJTOOLS_POOL_WORKER") else available_cores()

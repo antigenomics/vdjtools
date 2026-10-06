@@ -209,13 +209,14 @@ def prepare(
     cap: int | None = None,
     reconstruct: bool = False,
     naive_igm_only: bool = False,
+    threads: int = 0,
     verbose: bool = False,
 ) -> pl.DataFrame:
     """Fetch → map (arda) → unique clonotypes for one ``(group, chain, label)`` bucket."""
     fq = fetch_fastq(group, chain, label)
     reads = annotate_reads(
         fq, out_dir=out_dir, prefix=f"{group}_{chain}_{label}",
-        organism=ORGANISM[group], cap=cap, reconstruct=reconstruct, verbose=verbose,
+        organism=ORGANISM[group], cap=cap, reconstruct=reconstruct, threads=threads, verbose=verbose,
     )
     return unique_clonotypes(reads, naive_igm_only=naive_igm_only)
 
@@ -351,7 +352,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         nd_prior: Dirichlet pseudocount pushing ``P(n_D=2)`` toward 0.
         gene_prior: Dirichlet pseudocount over the germline's functional V/J alleles — see
             :data:`BUILD_DEFAULTS`.
-        threads: E-step worker threads (``0`` = auto).
+        threads: Annotation and E-step kernel threads (``0`` = auto).
         ambiguous: Substitute this base for any non-ACGT character in a junction (default ``"A"``),
             or ``None`` to drop those clonotypes. See
             :func:`~vdjtools.model.infer.sanitize_junctions`.
@@ -374,7 +375,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     base = template if template is not None else from_arda(chain, organism)
     if clones is None:
         clones = prepare(group, chain, "nonfunctional", out_dir=work_dir, cap=cap,
-                         verbose=verbose)
+                         threads=threads, verbose=verbose)
 
     uniq = _filter_for_em(clones, base, ambiguous)
     n_all = uniq.height
@@ -389,7 +390,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
 
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
                               single_d=single_d, dd_allowed=dd_allowed, nd_prior=nd_prior,
-                              gene_prior=gene_prior,
+                              gene_prior=gene_prior, threads=threads,
                               progress=print_progress(prefix=f"[{chain}] ") if verbose else None,
                               checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     # Stamp the builder that produced this model. A germline defect lives in the BUILDER, so
@@ -471,10 +472,8 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
     Args:
         chains: Chains to build. Defaults to all seven.
         groups: Organism groups to build each chain for.
-        workers: Concurrent builds. ``None`` = ``min(len(jobs), available_cores() // 2)``, leaving
-            cores for each build's own E-step threads. The count is the one this process may
-            actually use (see :func:`vdjtools.cores.available_cores`), not the machine's -- under
-            ``srun -c 8`` on a 40-core node those differ by 5x.
+        workers: Concurrent builds; ``None`` uses the available cores, capped at the job count.
+            Each build uses one kernel thread unless ``threads`` is explicitly supplied.
         out_dir: If given, each model is saved to ``out_dir/{group}_{chain}/``.
         **kw: Passed to :func:`build_model` (``iters``, ``tol``, ``cap``, ``gene_prior``, ...).
 
@@ -494,7 +493,12 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
     jobs = [(g, c) for g in groups for c in chains]
     if not jobs:
         return {}
-    n_workers = workers or max(1, min(len(jobs), available_cores(4) // 2))
+    if workers is not None and workers < 1:
+        raise ValueError("workers must be positive")
+    n_workers = min(len(jobs), workers or available_cores())
+    kw = dict(kw)
+    # One layer owns parallelism by default. Explicit kernel budgets remain the caller's choice.
+    kw.setdefault("threads", 1)
 
     def one(job):
         group, chain = job

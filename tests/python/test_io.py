@@ -162,3 +162,26 @@ def test_read_vdjtools_rejects_foreign_header(tmp_path):
     p.write_text("foo\tbar\n1\t2\n")
     with pytest.raises(ValueError):
         vio.read_vdjtools(p)
+
+
+def test_airr_projection_preserves_aliases_extras_and_gzip(tmp_path):
+    """Wide annotation payloads must not change selected clonotype fields."""
+    import gzip
+    from polars.testing import assert_frame_equal
+    from vdjtools.io.read import read_airr
+
+    narrow = ('v_call\tj_call\tjunction_aa\tduplicate_count\tv_identity\tlabel\n'
+              'TRBV1*01\tTRBJ1-1*01\tCASSF\t2\t0.9\tx\n'
+              'TRBV1*01\tTRBJ1-1*01\tCASSF\t3\t0.8\ty\n')
+    lines = narrow.splitlines()
+    wide = lines[0] + '\tunused_alignment\n' + '\n'.join(
+        line + '\t' + 'A' * 10000 for line in lines[1:]) + '\n'
+    a = tmp_path / 'narrow.tsv'
+    b = tmp_path / 'wide.tsv.gz'
+    a.write_text(narrow)
+    with gzip.open(b, 'wt') as f:
+        f.write(wide)
+    for collapse in (True, False):
+        for n_rows in (None, 1):
+            kw = dict(keep=('v_identity', 'label', 'absent'), collapse=collapse, n_rows=n_rows)
+            assert_frame_equal(read_airr(a, **kw), read_airr(b, **kw))

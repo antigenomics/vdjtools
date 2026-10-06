@@ -236,10 +236,11 @@ def _generate_native(model: Model, n: int, seed: int | None, productive_only: bo
     import numpy as np
 
     from .._core import generate_batch
+    from ..cores import kernel_threads
     from .native import pack
 
     pm, vi, ji = pack(model)
-    got = generate_batch(pm, int(n), int(seed or 0), bool(productive_only), threads)
+    got = generate_batch(pm, int(n), int(seed or 0), bool(productive_only), kernel_threads(threads))
     names_v = np.array([a for a, _i in sorted(vi.items(), key=lambda kv: kv[1])], dtype=object)
     names_j = np.array([a for a, _i in sorted(ji.items(), key=lambda kv: kv[1])], dtype=object)
     names_d = np.array(model.genomic["genes_d"]["d_allele"].to_list()

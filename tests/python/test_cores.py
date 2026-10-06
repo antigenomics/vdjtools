@@ -92,3 +92,15 @@ def test_the_pool_sizing_sites_use_it():
         and "``" not in line          # docstrings may name it to explain why it is wrong
     ]
     assert not offenders, f"use vdjtools.cores.available_cores() instead: {offenders}"
+
+
+def test_kernel_auto_budget_respects_allocation_and_pool(monkeypatch):
+    from vdjtools.cores import kernel_threads
+    monkeypatch.setattr("vdjtools.cores.available_cores", lambda: 3)
+    monkeypatch.delenv("VDJTOOLS_POOL_WORKER", raising=False)
+    assert kernel_threads(0) == 3
+    monkeypatch.setenv("VDJTOOLS_POOL_WORKER", "1")
+    assert kernel_threads(0) == 1
+    assert kernel_threads(2) == 2
+    with pytest.raises(ValueError, match="threads"):
+        kernel_threads(-1)

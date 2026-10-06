@@ -6,6 +6,7 @@ The result matches the pure-Python reference (and OLGA) exactly — the native p
 """
 from __future__ import annotations
 
+from ..cores import kernel_threads
 from .model import Model
 from .pgen import prepare
 
@@ -178,6 +179,9 @@ def pack(model: Model):
         pm.R_vj = prep.R["vj"].reshape(-1).tolist()
         pm.bias_vj = prep.bias["vj"].tolist()
 
+    # EM creates a new Model each iteration. Retaining every pack pins the entire fit history.
+    if len(_pack_cache) >= 8:
+        _pack_cache.clear()
     _pack_cache[key] = (pm, vi, ji, model)
     return pm, vi, ji
 
@@ -288,7 +292,7 @@ def pgen_aa_degenerate_batch(
         v: Optional per-motif V **alleles** (same length as ``allowed``); ``None`` marginalizes
             over all V for every motif. Individual entries may be ``None``.
         j: Optional per-motif J alleles (as ``v``).
-        threads: Worker threads; ``0`` = auto (``hardware_concurrency - 2``). Batches under 64
+        threads: Worker threads; ``0`` = auto (the available CPU allocation). Batches under 64
             motifs run single-threaded.
 
     Returns:
@@ -304,7 +308,7 @@ def pgen_aa_degenerate_batch(
         raise ValueError("v must have the same length as allowed")
     if j_idxs and len(j_idxs) != len(sets):
         raise ValueError("j must have the same length as allowed")
-    return _batch(pm, sets, v_idxs, j_idxs, threads)
+    return _batch(pm, sets, v_idxs, j_idxs, kernel_threads(threads))
 
 
 def pgen_aa_batch(
@@ -330,7 +334,7 @@ def pgen_aa_batch(
             ``None``. An unknown or gene-level name raises :class:`KeyError` (see :func:`pgen_aa`).
         j: Optional per-sequence J alleles (as ``v``).
         mismatches: ``0`` for exact Pgen, ``1`` for the Hamming-1 ball (as :func:`pgen_aa`).
-        threads: Worker threads; ``0`` = auto (``hardware_concurrency - 2``). Batches under 64
+        threads: Worker threads; ``0`` = auto (the available CPU allocation). Batches under 64
             sequences run single-threaded.
 
     Returns:
@@ -348,7 +352,7 @@ def pgen_aa_batch(
         raise ValueError("v must have the same length as cdr3_aas")
     if j_idxs and len(j_idxs) != len(seqs):
         raise ValueError("j must have the same length as cdr3_aas")
-    return _batch(pm, seqs, v_idxs, j_idxs, mismatches, threads)
+    return _batch(pm, seqs, v_idxs, j_idxs, mismatches, kernel_threads(threads))
 
 
 def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
@@ -367,7 +371,7 @@ def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
             name raises, as in :func:`pgen_nt`.
         j: Optional per-sequence J alleles (as ``v``).
         threads: **Kernel threads**, not worker processes; ``0`` = auto
-            (``hardware_concurrency - 2``). Batches under 64 sequences stay single-threaded so the
+            (the available CPU allocation). Batches under 64 sequences stay single-threaded so the
             result is bitwise-identical to a serial run.
 
     Returns:
@@ -387,7 +391,7 @@ def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
         raise ValueError("v must have the same length as cdr3_nts")
     if j_idxs and len(j_idxs) != len(seqs):
         raise ValueError("j must have the same length as cdr3_nts")
-    return _batch(pm, seqs, v_idxs, j_idxs, threads)
+    return _batch(pm, seqs, v_idxs, j_idxs, kernel_threads(threads))
 
 
 def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str | None = None,
@@ -472,7 +476,7 @@ def best_aa_scenarios_batch(
             all V for every sequence, and individual entries may be ``None``.
         j: Optional per-sequence J names (as ``v``).
         k: Scenarios per sequence.
-        threads: Worker threads; ``0`` = auto (``hardware_concurrency - 2``). Batches under 64
+        threads: Worker threads; ``0`` = auto (the available CPU allocation). Batches under 64
             sequences run single-threaded.
         resolve_genes: As :func:`best_aa_scenarios`.
 
@@ -504,7 +508,7 @@ def best_aa_scenarios_batch(
               if v is not None else [])
     j_idxs = ([_gene_idx(ji, alias.get(x, x) if x else x, "J") for x in j]
               if j is not None else [])
-    cols = _batch(pm, seqs, v_idxs, j_idxs, k, threads)
+    cols = _batch(pm, seqs, v_idxs, j_idxs, k, kernel_threads(threads))
 
     # Index -> allele name by fancy-indexing, so naming k scenarios per row stays vectorized.
     names_v = np.array([a for a, _i in sorted(vi.items(), key=lambda kv: kv[1])], dtype=object)
@@ -558,7 +562,7 @@ def infer_nt_many(model: Model, cdr3_aas: list, v: list | None = None, j: list |
         j: Optional per-row J calls (as ``v``).
         k: Distinct nucleotide candidates re-scored per row.
         threads: **Kernel threads** -- not worker processes. ``0`` = auto
-            (``hardware_concurrency - 2``); batches under 64 rows stay single-threaded so their
+            (the available CPU allocation); batches under 64 rows stay single-threaded so their
             result is bitwise-identical to a serial run.
         resolve_genes: Resolve a **gene**-level call to a representative allele, as
             :func:`best_aa_scenarios`.
@@ -586,7 +590,7 @@ def infer_nt_many(model: Model, cdr3_aas: list, v: list | None = None, j: list |
     alias = gene_to_allele(model) if resolve_genes else {}
     v_alts = [_alts(x, alias, vi, "V") for x in (v if v is not None else [None] * len(aas))]
     j_alts = [_alts(x, alias, ji, "J") for x in (j if j is not None else [None] * len(aas))]
-    cols = _batch(pm, aas, v_alts, j_alts, k, threads)
+    cols = _batch(pm, aas, v_alts, j_alts, k, kernel_threads(threads))
 
     # Index -> allele name by fancy-indexing, so naming every row stays vectorized.
     names_v = np.array([a for a, _i in sorted(vi.items(), key=lambda kv: kv[1])], dtype=object)

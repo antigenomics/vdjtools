@@ -1391,11 +1391,6 @@ def pool_target(locus: str, size: "int | str", n_samples: int,
 
 def _pool_chunk(args) -> tuple:
     """Generate one contiguous chunk of one locus's pool; write it as uncompressed Arrow IPC."""
-    import os
-
-    from .cohort import WORKER_ENV
-
-    os.environ[WORKER_ENV] = "1"
     locus, k, n, seed, source, tmp = args
     path = Path(tmp) / f"pool_{locus}_{k:03d}.arrow"
     draw_pool(locus, n, seed=seed, source=source).write_ipc(path, compression="uncompressed")
@@ -1414,7 +1409,6 @@ def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path
     Written as **uncompressed** IPC and read back memory-mapped, so N workers share one physical
     copy of a multi-gigabyte pool through the page cache instead of each pickling its own.
     """
-    single_threaded_children()
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
     tasks = []
     for i, locus in enumerate(ordered):
@@ -1448,13 +1442,16 @@ def _map_unordered(fn, tasks: list, n_jobs: int) -> list:
     from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
     from multiprocessing import get_context
 
+    from .cohort import single_threaded_workers
+
     workers = _workers(n_jobs, len(tasks))
     if workers < 2:
         return [fn(t) for t in tasks]
     try:
-        with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as ex:
+        with single_threaded_workers(), ProcessPoolExecutor(
+                max_workers=workers, mp_context=get_context("spawn")) as ex:
             return list(ex.map(fn, tasks, chunksize=1))
-    except (BrokenExecutor, RuntimeError) as e:
+    except BrokenExecutor as e:
         raise RuntimeError(
             f"could not start {workers} worker processes ({type(e).__name__}). Workers are spawned, "
             "so the calling module is re-imported: that works from an importable module and fails "
@@ -1488,11 +1485,6 @@ _W: dict = {}
 
 
 def _init_worker(paths, plan, regime, seed, cols, featurise) -> None:
-    import os
-
-    from .cohort import WORKER_ENV
-
-    os.environ[WORKER_ENV] = "1"
     _W.update(pools=read_pools(paths), plan=plan, regime=regime, seed=seed, cols=cols,
               featurise=featurise)
 
@@ -1517,6 +1509,8 @@ def _ranges(n: int, parts: int) -> list:
 def _workers(n_jobs: int, cap: int) -> int:
     from ..cores import available_cores
 
+    if n_jobs < 0:
+        raise ValueError("n_jobs must be non-negative (0 means available cores)")
     return max(1, min(n_jobs if n_jobs > 0 else available_cores(), cap))
 
 
@@ -1568,15 +1562,17 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
         plan = draw_plan(ordered, n_samples=n_samples, size=size, seed=seed,
                          depth_spread=depth_spread, cohort=cohort)
         workers = _workers(n_jobs, n_samples)
-        single_threaded_children()
         # Four spans per worker rather than one. The expensive per-worker state -- the mapped pools
         # and the germline vocabulary -- is loaded once by the initializer, not once per span, so
         # extra spans cost nothing and buy load balance plus progress that moves.
         spans = _ranges(n_samples, workers * 4 if workers > 1 else 1)
         args = (paths, plan, regime, seed, cols, featurise)
         if workers < 2:
-            _init_worker(*args)
-            results = [_feat_batch(sp) for sp in _progress(spans, n_samples, progress)]
+            try:
+                _init_worker(*args)
+                results = [_feat_batch(sp) for sp in _progress(spans, n_samples, progress)]
+            finally:
+                _W.clear()
         else:
             results = _pooled(spans, args, workers, n_samples, progress)
         for a, part in results:
@@ -1595,32 +1591,18 @@ def _progress(spans, n_samples, progress):
             progress("featurise", sp[1], n_samples)
 
 
-def single_threaded_children() -> None:
-    """Make spawned workers take ONE kernel thread each, by setting the env they inherit.
-
-    ``n_jobs`` processes each starting a kernel sized off the core count is ``cores x cores``
-    threads. Measured here: seven pool workers on a 16-core box, each with a 16-thread polars,
-    turned 15 s of receptor generation into 296 s. The variables have to be set in the parent,
-    before any child exists -- a spawned child reads them while importing polars, which is strictly
-    earlier than any initializer of ours can run. The parent's own kernel is already up, so this
-    does not throttle it.
-    """
-    import os
-
-    for var in ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
-                "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "RAYON_NUM_THREADS"):
-        os.environ.setdefault(var, "1")
-
-
 def _pooled(spans, args, workers: int, n_samples: int, progress):
     """Run the spans in a spawned pool. A pool that cannot start **raises**, it does not degrade."""
     from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
     from multiprocessing import get_context
 
+    from .cohort import single_threaded_workers
+
     out, done, step = [], 0, max(n_samples // 20, 1)
     try:
-        with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"),
-                                 initializer=_init_worker, initargs=args) as ex:
+        with single_threaded_workers(), ProcessPoolExecutor(
+                max_workers=workers, mp_context=get_context("spawn"),
+                initializer=_init_worker, initargs=args) as ex:
             for a, part in ex.map(_feat_batch, spans):
                 out.append((a, part))
                 was, done = done, done + next(b - x for x, b in spans if x == a)
@@ -1628,7 +1610,7 @@ def _pooled(spans, args, workers: int, n_samples: int, progress):
                 # spans on a 72-core box, and 288 progress lines in a log is not progress.
                 if progress and done // step > was // step:
                     progress("featurise", done, n_samples)
-    except (BrokenExecutor, RuntimeError) as e:
+    except BrokenExecutor as e:
         raise RuntimeError(
             f"could not start {workers} worker processes ({type(e).__name__}). Workers are "
             "spawned, not forked -- polars cannot be combined with fork -- and a spawned worker "

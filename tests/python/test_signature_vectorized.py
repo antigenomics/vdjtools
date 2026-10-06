@@ -127,6 +127,7 @@ def test_the_corpus_build_is_bit_identical_across_worker_counts(tmp_path):
     """
     kw = dict(loci=("TRG",), n_samples=8, size=60, seed=5, n_components=3)
     serial, _ = C.synthesize("memory", n_jobs=1, **kw)
+    assert not C._W, "serial construction retained its mapped pools"
     pooled, _ = C.synthesize("memory", n_jobs=2, **kw)
     a, b = serial.save(tmp_path / "a"), pooled.save(tmp_path / "b")
     assert a.read_bytes() == b.read_bytes(), "the corpus depends on how many workers built it"

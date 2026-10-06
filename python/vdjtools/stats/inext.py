@@ -700,7 +700,7 @@ def inext_batch(samples, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40,
         nboot: Number of bootstrap replicates per sample.
         conf: Confidence level for the intervals.
         seed: Base RNG seed; sample ``i`` is seeded ``seed + i``.
-        threads: Worker threads (0 = ``hardware_concurrency``), capped at the
+        threads: Worker threads (0 = available CPU allocation), capped at the
             number of samples.
 
     Returns:
@@ -721,8 +721,10 @@ def inext_batch(samples, q=(0, 1, 2), *, sizes=None, endpoint=None, knots=40,
     count_vecs = [[float(v) for v in x] for _, x in items]
 
     nb = int(nboot) if se else 0
+    from ..cores import kernel_threads
+
     results = _core.inext_batch(count_vecs, sizes_list, [int(v) for v in qs],
-                                nb, int(seed), int(threads))
+                                nb, int(seed), kernel_threads(threads))
 
     z = _z(conf) if se else 0.0
     sample_col, order_col, m_col, method_col = [], [], [], []

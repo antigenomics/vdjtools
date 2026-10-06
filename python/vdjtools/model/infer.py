@@ -1260,8 +1260,11 @@ def infer_native(
     progress=None,
     checkpoint=None,
     checkpoint_every: int = 1,
+    threads: int = 0,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
+
+    ``threads`` bounds E-step kernel threads; ``0`` uses the available CPU allocation.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
     ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior`` / ``gene_prior``).
@@ -1278,6 +1281,9 @@ def infer_native(
     import time as _time
 
     from .._core import estep_batch, make_counts
+    from ..cores import kernel_threads
+
+    threads = kernel_threads(threads)
     from .native import _encode, pack
 
     started = _time.monotonic()
@@ -1313,7 +1319,7 @@ def infer_native(
     for it in range(max_iter):
         pm, _, _ = pack(model)
         counts = make_counts(pm)
-        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, 0, ddflags)
+        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags)
         # Report the per-sequence MEAN, matching infer() (line ~431) -- estep_batch returns the
         # summed log-likelihood, and appending it raw made infer_native's loglik differ from
         # infer's by a factor of n (the two are documented as "same result"). Denominator is the
