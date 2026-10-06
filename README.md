@@ -133,6 +133,9 @@ support that OLGA and IGoR lack. You can also fit a model to your own non-produc
 against its germline, compare two models parameter by parameter, and render its recombination Bayes
 net — see the [model workshop](https://docs.isalgo.dev/vdjtools/model.html).
 
+In 5.0, remove the previously unused `labels` keyword from `model.analyze.compare_models`.
+Use `compare_net_dot(..., labels=("first", "second"))` to label comparison graphs.
+
 ## Signatures
 
 One repertoire in, one fixed-width named feature vector out, standardised against a published

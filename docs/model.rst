@@ -178,6 +178,10 @@ Comparing two models
    compare_usage(olga, learned, "v")            # gene usage side by side
    render_dot(compare_net_dot(olga, learned), "diff.pdf", fmt="pdf")
 
+In 5.0, ``compare_models`` accepts only ``by`` as a keyword argument. Remove the
+formerly unused ``labels`` keyword from table comparisons. Graph titles and labels
+remain available through ``compare_net_dot(..., labels=("olga", "learned"))``.
+
 Tables are aligned on the **union** of their realization keys with zero fill, so a gene one model
 knows and the other does not contributes to the distance instead of vanishing. Conditioned events
 are averaged over parent groups **weighted by the parent's marginal**, so a rarely-used V's deletion
