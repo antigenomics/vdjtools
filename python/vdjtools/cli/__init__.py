@@ -525,9 +525,8 @@ def signature(
     describe: bool = typer.Option(False, "--describe",
                                   help="Print the columns THIS invocation emits, and exit."),
     jobs: int = typer.Option(1, "--jobs", "-j",
-                             help="Worker PROCESSES over samples (0 = all cores). Processes, not "
-                                  "threads: the per-sample work is polars and numpy, not a "
-                                  "GIL-releasing kernel."),
+                             help="Worker processes over samples (default: 1, 0 = all available cores). "
+                                  "Each spawned worker uses one kernel thread."),
     on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
     """One repertoire in, one row of named features out -- rotated through a named corpus.
@@ -554,12 +553,10 @@ def signature(
     A hole is `nan`, never 0. "This locus is absent", "this sample is too shallow" and "this field
     was not in the input" are different facts, and the mask channels say which.
     """
-    import numpy as np
-
-    from vdjtools.io.batch import map_samples
+    from vdjtools.io import read
     from vdjtools.signature import corpus as CO
     from vdjtools.signature import layout as L
-    from vdjtools.signature.signature import vsig
+    from vdjtools.signature.signature import vsig_cohort
 
     if winsorize not in CO.MODES:
         _err(f"--winsorize must be one of {', '.join(CO.MODES)}; got {winsorize!r}")
@@ -601,34 +598,16 @@ def signature(
         target = None if cstar_target == "own" else (
             "min" if cstar_target == "min" else float(cstar_target))
 
-    # One shared coverage level, from this cohort, so the diversity columns are comparable across
-    # its samples without anybody choosing a constant. A cheap pass: only the count column matters.
-    if target == "min":
-        cov: dict[str, float] = {}
-        for _sid, per in map_samples(_attained, items, fmt=fmt, workers=jobs or None):
-            for loc, v in per.items():
-                if np.isfinite(v):
-                    cov[loc] = min(cov.get(loc, v), float(v))
-        target = cov or None
-
-    fn = functools.partial(vsig, corpus=art, mode=winsorize, winsor_p=winsor_p,
-                           n_components=ncomp, cstar_target=target, weight=weight,
-                           on_duplicate=on_duplicate, named=blocks, columns=want)
-    rows = [{"sample_id": sid, **res}
-            for sid, res in map_samples(fn, items, fmt=fmt, workers=jobs or None,
-                                        keep=("v_identity",))]
+    deferred = [(sid, functools.partial(read, path, fmt=fmt, keep=("v_identity",)))
+                for sid, path in items]
+    result = vsig_cohort(deferred, art, n_jobs=jobs, mode=winsorize, winsor_p=winsor_p,
+                         n_components=ncomp, cstar_target=target, weight=weight,
+                         on_duplicate=on_duplicate, named=blocks, columns=want)
     cols = [c for c in art.columns(ncomp, named=blocks) if want is None or c in set(want)]
-    typer.echo(f"{len(rows)} samples x {len(cols)} vsig columns | corpus {art.name} "
+    typer.echo(f"{result.height} samples x {len(cols)} vsig columns | corpus {art.name} "
                f"({art.meta.get('content_sha256', '?')[:12]}) | winsorize={winsorize} | "
                f"k={art.resolve_k(ncomp)}", err=True)
-    _write(pl.DataFrame(rows).select(["sample_id", *cols]), out)
-
-
-def _attained(df):
-    """Per-locus attained coverage for one already-read sample. Module level so a pool can pickle."""
-    from vdjtools.signature.signature import attained_coverage
-
-    return attained_coverage(df)
+    _write(result.select(["sample_id", *cols]), out)
 
 
 def _parse_components(spec: Optional[str]):

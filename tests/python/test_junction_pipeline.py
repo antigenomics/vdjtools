@@ -2,8 +2,7 @@
 
 What is pinned here is the **contract and the coordinate algebra**, not the accuracy: accuracy is
 measured against real nucleotide rearrangements from `isalgo/airr_control` by
-`appendix/bench_junction_pipeline.py`, and recorded in the CHANGELOG and in
-`docs/junction_pipeline.md`.
+`appendix/bench_junction_pipeline.py`.
 """
 from __future__ import annotations
 

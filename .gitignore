@@ -87,3 +87,10 @@ screpertoire_airr.tsv
 # reviewer's local conda prefix. The scripts beside them stay tracked; the prose does not.
 # (`/appendix` is already excluded from the sdist, so nothing about the wheel changes.)
 /appendix/*.md
+
+# Local prose and agent state; only README files are public Markdown.
+*.md
+!README.md
+!readme.md
+.agents/
+.codex/

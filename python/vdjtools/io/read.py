@@ -243,8 +243,10 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
         ValueError: If no CDR3 amino-acid column (``junction_aa`` or ``cdr3_aa``)
             is present.
     """
-    raw = _read_tsv(path, n_rows=n_rows)
-    lower = {c.lower(): c for c in raw.columns}
+    scan = pl.scan_csv(Path(path), separator="\t", infer_schema_length=0,
+                       quote_char=None, null_values=["", "."], n_rows=n_rows)
+    columns = scan.collect_schema().names()
+    lower = {c.lower(): c for c in columns}
     found: dict[str, str] = {}
     for canon, srcs in _AIRR_ALIASES.items():
         for s in srcs:
@@ -253,7 +255,7 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
                 break
     if JUNCTION_AA not in found:
         raise ValueError(
-            f"AIRR file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {raw.columns}"
+            f"AIRR file lacks a CDR3 aa column (cdr3_aa/junction_aa); have {columns}"
         )
     # V/J are clonotype identity. If we cannot name them we must NOT fall through: the
     # collapse key below would narrow to the junction and sum counts across clonotypes
@@ -264,11 +266,13 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
         raise ValueError(
             f"AIRR file lacks {'/'.join(missing)} "
             f"(tried {', '.join(a for c in missing for a in _AIRR_ALIASES[c])}); "
-            f"have {raw.columns}"
+            f"have {columns}"
         )
     # The TSV path reads every column as Utf8, so a kept numeric arrives as a string; cast it
     # here rather than leaving the caller to discover that its mean is a type error.
-    extra = [c for c in keep if c in raw.columns and c not in found.values()]
+    extra = [c for c in keep if c in columns and c not in found.values()]
+    # Project before parsing data: alignment/sequence columns can dwarf the clonotype fields.
+    raw = scan.select(list(dict.fromkeys([*found.values(), *extra]))).collect()
     df = raw.select([pl.col(src).alias(canon) for canon, src in found.items()]
                     + [pl.col(c).cast(pl.Float64, strict=False).alias(c)
                        if _numeric_like(raw, c) else pl.col(c) for c in extra])

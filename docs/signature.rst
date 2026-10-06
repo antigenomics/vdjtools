@@ -493,11 +493,21 @@ per locus.
 Parallelism
 -----------
 
-``--jobs``/``n_jobs`` is worker **processes**. There is exactly one concurrency setting, and its help
-text says which layer it reaches; a flag named ``--threads`` that started processes is a mistake
-this subsystem has made before. Workers are spawned, not forked — polars cannot be combined with
-``fork`` — and a pool that cannot start **raises** rather than falling back to one process, because
-a correctness-preserving fallback is what hid a 20x slowdown here once.
+``--jobs`` / ``n_jobs`` selects worker processes: 1 (the default) runs in the
+calling process, 0 requests all available cores, and a positive count is limited only
+by the number of samples. No timing or sample-depth heuristic changes that count.
+
+Spawned workers inherit one-thread limits for Polars, BLAS, OpenMP and Rayon before
+importing numerical libraries. The parent's environment is restored when the pool
+exits. Each worker loads its callable and frozen resources once, reads and reduces
+one sample at a time, and returns a feature row. Workers take the next available
+sample; output rows still follow input order. A failed pool raises.
+
+The CLI passes filenames to workers. For the Python API, use picklable zero-argument
+readers for the same bounded-memory path. Already-loaded frames remain resident in
+the parent. With ``n_jobs=1``, the caller's kernel thread settings remain in effect.
+The default cohort coverage target requires two passes through the input; an explicit
+``cstar_target`` avoids the coverage pass without changing worker allocation.
 
 .. _sig-named:
 

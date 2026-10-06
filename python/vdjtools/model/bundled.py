@@ -6,7 +6,7 @@ Three model sets live under ``vdjtools/model/_bundled/``:
   The seven **human** loci, OLGA's germline namespace. ⚠ OLGA itself also ships five MOUSE models
   (``mouse_T_alpha``, ``mouse_T_beta``, ``mouse_B_heavy``, ``mouse_B_kappa``, ``mouse_B_lambda``);
   they are simply not vendored here yet, so this set answers human only. That is a fact about this
-  bundle, NOT about OLGA -- see ``ROADMAP.md``.
+  bundle, not about OLGA.
 - ``learned`` — EM-inferred from real non-functional reads (out-of-frame + stop-codon, HuggingFace), tandem-D on the D-bearing
   loci (IGH/TRD/TRB). These carry a learned ``P(n_D=2)`` and broader trim/insertion distributions
   than the synthetic OLGA models. Seven human loci, OLGA's germline namespace.

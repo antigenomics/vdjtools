@@ -1,16 +1,14 @@
-"""Run a per-sample signature function across a cohort, in processes.
+"""Process samples independently, with one numerical-kernel thread per worker.
 
-One home for the pool, because three callers need it: ``vsig_cohort`` here, ``rsig_cohort`` and
-``signature_cohort`` in mirpy. Each emits its own half; none of them should carry its own copy of
-the process handling.
-
-``spawn``, not ``fork``: polars documents that it cannot be combined with ``fork`` (the child
-inherits held mutexes and file locks and hangs on the first one it touches), CPython 3.12 warns
-about ``fork()`` in a multi-threaded process, and 3.14 stops defaulting to it. Because ``spawn``
-pays a fresh interpreter per worker, the cohort is cut into exactly as many contiguous slices as
-there are workers -- one task each, so that cost is paid once per worker and not once per sample.
+Workers load the callable and its frozen resources once. Each task reads and reduces one sample,
+then returns only its feature row. Ordered map preserves input order while workers take the next
+sample as soon as they finish, so unequal repertoire depths do not strand idle workers.
 """
 from __future__ import annotations
+
+from contextlib import contextmanager
+
+from ..cores import _KERNEL_ENV
 
 __all__ = ["slices", "parallel_rows", "resolve_sample"]
 
@@ -59,13 +57,33 @@ def in_pool_worker() -> bool:
     return bool(os.environ.get(WORKER_ENV))
 
 
-def _chunk(args):
-    """One contiguous slice, start to finish, in one worker. ``fn`` must be picklable."""
+@contextmanager
+def single_threaded_workers():
+    """Temporarily give spawned children one thread per kernel; restore the caller's env."""
     import os
 
-    os.environ[WORKER_ENV] = "1"
-    items, fn = args
-    return [fn(it) for it in items]
+    previous = {key: os.environ.get(key) for key in (*_KERNEL_ENV, WORKER_ENV)}
+    try:
+        os.environ.update(dict.fromkeys(previous, "1"))
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+_WORKER_FN = None
+
+
+def _init_worker(fn):
+    global _WORKER_FN
+    _WORKER_FN = fn
+
+
+def _row(item):
+    return _WORKER_FN(item)
 
 
 def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
@@ -87,20 +105,27 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
 
     from ..cores import available_cores
 
+    if n_jobs < 0:
+        raise ValueError("n_jobs must be non-negative (0 means all available cores)")
     items = list(items)
     workers = min(len(items), n_jobs if n_jobs > 0 else available_cores())
     if n_jobs == 1 or workers < 2:
         return [fn(it) for it in items]
-    chunks = [(items[a:b], fn) for a, b in slices(len(items), workers) if b > a]
-    try:
-        with ProcessPoolExecutor(max_workers=len(chunks), mp_context=get_context("spawn")) as ex:
-            return [row for part in ex.map(_chunk, chunks) for row in part]
-    except (BrokenExecutor, RuntimeError) as e:
-        raise RuntimeError(
-            f"could not start worker processes for n_jobs={n_jobs} ({type(e).__name__}). Workers "
-            "are spawned, not forked -- polars cannot be combined with fork -- and a spawned "
-            "worker re-imports the module that called this. That works from an importable module "
-            "and fails from `python - <<EOF`, `python -c`, or a call at the top level of a "
-            "script. Guard the call with `if __name__ == '__main__':`, or pass n_jobs=1. It is "
-            "NOT falling back to serial: that is what hid a 20x slowdown here before."
-        ) from e
+    with single_threaded_workers():
+        try:
+            executor = ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn"),
+                                           initializer=_init_worker, initargs=(fn,))
+        except (BrokenExecutor, RuntimeError) as e:
+            raise _pool_error(n_jobs, e) from e
+        try:
+            with executor:
+                return list(executor.map(_row, items, chunksize=1))
+        except BrokenExecutor as e:
+            raise _pool_error(n_jobs, e) from e
+
+
+def _pool_error(n_jobs, error):
+    return RuntimeError(
+        f"worker processes failed for n_jobs={n_jobs} ({type(error).__name__}). "
+        "Use an importable module guarded by if __name__ == '__main__', or pass n_jobs=1. "
+        "Workers use spawn because Polars cannot safely use fork. NOT falling back to serial.")

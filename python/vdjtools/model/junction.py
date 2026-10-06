@@ -1,7 +1,7 @@
 """The junction pipeline: cdr3 fix -> V/J markup -> nucleotide guess -> D markup.
 
 One call for a bare ``(junction_aa, V, J, species)`` record, which is all a VDJdb-style database
-has. Specified by M.S. on 2026-09-30; the design note is ``docs/junction_pipeline.md``.
+has.
 
 Four stages, each of them arda's or vdjtools' existing entry point, in the only order that works --
 each answer is the next one's input:
