@@ -348,7 +348,7 @@ def _(mo):
 @app.cell
 def _(compare_models, load_bundled, mo, trb):
     learned_trb = load_bundled("TRB", "learned")
-    diff = compare_models(trb, learned_trb, labels=("olga", "learned"), by="gene")
+    diff = compare_models(trb, learned_trb, by="gene")
     mo.vstack([
         mo.md("Jensen-Shannon is the headline: symmetric, bounded by one bit, and **finite when the "
               "supports differ** — which is exactly the case here. `tv_max` reports the worst single "

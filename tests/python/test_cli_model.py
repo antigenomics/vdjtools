@@ -153,7 +153,9 @@ def test_compare_and_usage(tmp_path):
     dot = tmp_path / "diff.dot"
     _ok(_run("model", "compare", "TRG:olga", "TRG:learned", "--dot", str(dot),
              "-o", str(tmp_path / "d2.tsv")))
-    assert "digraph compare" in dot.read_text()
+    graph = dot.read_text()
+    assert "digraph compare" in graph
+    assert "TRG:olga" in graph and "TRG:learned" in graph
 
 
 def test_compare_pgen_and_summary(tmp_path, trg_seqs):

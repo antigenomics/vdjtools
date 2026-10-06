@@ -131,10 +131,10 @@ def test_model_check_uses_explicit_reference_organism(monkeypatch):
     assert seen == [("TRA", "mouse")]
 
 
-def test_unused_comparison_labels_are_deprecated():
+@pytest.mark.parametrize("labels", [("a", "b"), ("first", "second")])
+def test_removed_comparison_labels_raise(labels):
     from vdjtools.model import load_bundled
     from vdjtools.model.analyze import compare_models
     model = load_bundled("TRA")
-    with pytest.warns(DeprecationWarning, match="labels is unused"):
-        out = compare_models(model, model, labels=("first", "second"))
-    assert out["tv"].max() == 0
+    with pytest.raises(TypeError, match="unexpected keyword argument 'labels'"):
+        compare_models(model, model, labels=labels)

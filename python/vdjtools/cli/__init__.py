@@ -1361,7 +1361,7 @@ def model_compare(
     else:
         if by not in ("allele", "gene"):
             _err("--by must be allele or gene")
-        _write(compare_models(ma, mb, labels=labels, by=by), out)
+        _write(compare_models(ma, mb, by=by), out)
     if dot is not None:
         src = compare_net_dot(ma, mb, labels=labels)
         if dot_format == "dot":
