@@ -218,3 +218,7 @@ For the Python cohort API, pass picklable zero-argument readers to defer file lo
 into workers. Passing already-loaded frames keeps those frames in the parent too.
 The CLI sets kernel thread limits before imports, including at `--jobs 1`. Direct
 Python calls retain the calling process's Polars and BLAS settings at `n_jobs=1`.
+
+Model-build resource budgets follow the same rule: `build_all(..., workers=8)` runs up to eight
+builds with one kernel thread each. `build_model(..., threads=8)` and
+`infer_native(..., threads=8)` instead assign eight kernel threads to one build.

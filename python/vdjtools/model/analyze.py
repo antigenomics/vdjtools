@@ -356,7 +356,8 @@ def compare_models(a: Model, b: Model, *, labels: tuple[str, str] = ("a", "b"),
     Args:
         a: First model.
         b: Second model.
-        labels: Names for the two models (used in error messages and the DOT title).
+        labels: Deprecated; this table has no model-label fields. Use ``compare_net_dot``
+            to label a graph. Non-default values emit a deprecation warning.
         by: ``"allele"`` (default) or ``"gene"``. Use ``"gene"`` to compare models built on
             different germline vintages or sources — an OLGA-namespace model against an
             arda-namespace one only lines up at gene level.
@@ -376,6 +377,11 @@ def compare_models(a: Model, b: Model, *, labels: tuple[str, str] = ("a", "b"),
     Example:
         >>> compare_models(load_bundled("TRB", "olga"), load_bundled("TRB", "learned"), by="gene")
     """
+    if labels != ("a", "b"):
+        import warnings
+
+        warnings.warn("compare_models labels is unused and deprecated; use compare_net_dot "
+                      "for graph labels", DeprecationWarning, stacklevel=2)
     if by not in ("allele", "gene"):
         raise ValueError(f"by must be 'allele' or 'gene', got {by!r}")
     rows = []

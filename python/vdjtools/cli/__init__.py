@@ -994,7 +994,7 @@ def model_list() -> None:
 def model_check(
     spec: str = typer.Argument(..., help="Model: a directory, or LOCUS[:source[:organism]]."),
     germline: str = typer.Option("auto", help="Reference germline: auto | none | a FASTA path."),
-    organism: str = typer.Option("human", help="Organism, when --germline is auto."),
+    organism: Optional[str] = typer.Option(None, help="Reference organism; defaults to the model manifest."),
     out: Optional[Path] = _OUT,
 ) -> None:
     """Audit a model against its manifest, its germline, and a reference library.
@@ -1006,6 +1006,10 @@ def model_check(
 
     m = _model_arg(spec)
     gl = germline
+    if germline == "auto" and organism is not None:
+        from vdjtools.model.reference import load_germline
+
+        gl = load_germline(m.locus, organism)
     if germline not in ("auto", "none"):
         from vdjtools.model import read_germline_fasta
 

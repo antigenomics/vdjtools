@@ -182,11 +182,12 @@ def test_auto_is_a_chain_and_answers_at_least_as_many_rows_as_either_set():
 
 
 def test_a_pinned_set_that_does_not_exist_is_not_silently_ignored():
-    """Mouse has no OLGA fit, so `auto` must reach arda's -- and a bad name must answer nothing
-    rather than quietly falling back to whatever does exist."""
+    """A missing organism/model combination is a hole; an unknown source name is an error."""
     mouse = (["CASSLAPGATNEKLFF"], ["TRBV13-1*01"], ["TRBJ1-4*01"])
     assert annotate_junctions(*mouse, species="mouse")["cdr3_nt"][0] is not None
-    assert annotate_junctions(*mouse, species="mouse", model_source="nosuchset")["cdr3_nt"][0] is None
+    assert annotate_junctions(*mouse, species="mouse", model_source="olga")["cdr3_nt"][0] is None
+    with pytest.raises(ValueError, match="model_source"):
+        annotate_junctions(*mouse, species="mouse", model_source="nosuchset")
 
 
 def test_a_blank_call_is_proposed_and_says_so_in_the_frame():

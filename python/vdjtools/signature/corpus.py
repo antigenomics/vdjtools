@@ -1451,7 +1451,7 @@ def _map_unordered(fn, tasks: list, n_jobs: int) -> list:
         with single_threaded_workers(), ProcessPoolExecutor(
                 max_workers=workers, mp_context=get_context("spawn")) as ex:
             return list(ex.map(fn, tasks, chunksize=1))
-    except (BrokenExecutor, RuntimeError) as e:
+    except BrokenExecutor as e:
         raise RuntimeError(
             f"could not start {workers} worker processes ({type(e).__name__}). Workers are spawned, "
             "so the calling module is re-imported: that works from an importable module and fails "
@@ -1509,6 +1509,8 @@ def _ranges(n: int, parts: int) -> list:
 def _workers(n_jobs: int, cap: int) -> int:
     from ..cores import available_cores
 
+    if n_jobs < 0:
+        raise ValueError("n_jobs must be non-negative (0 means available cores)")
     return max(1, min(n_jobs if n_jobs > 0 else available_cores(), cap))
 
 
@@ -1566,8 +1568,11 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
         spans = _ranges(n_samples, workers * 4 if workers > 1 else 1)
         args = (paths, plan, regime, seed, cols, featurise)
         if workers < 2:
-            _init_worker(*args)
-            results = [_feat_batch(sp) for sp in _progress(spans, n_samples, progress)]
+            try:
+                _init_worker(*args)
+                results = [_feat_batch(sp) for sp in _progress(spans, n_samples, progress)]
+            finally:
+                _W.clear()
         else:
             results = _pooled(spans, args, workers, n_samples, progress)
         for a, part in results:
@@ -1605,7 +1610,7 @@ def _pooled(spans, args, workers: int, n_samples: int, progress):
                 # spans on a 72-core box, and 288 progress lines in a log is not progress.
                 if progress and done // step > was // step:
                     progress("featurise", done, n_samples)
-    except (BrokenExecutor, RuntimeError) as e:
+    except BrokenExecutor as e:
         raise RuntimeError(
             f"could not start {workers} worker processes ({type(e).__name__}). Workers are "
             "spawned, not forked -- polars cannot be combined with fork -- and a spawned worker "

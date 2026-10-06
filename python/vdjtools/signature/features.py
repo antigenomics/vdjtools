@@ -559,7 +559,7 @@ def qc_channel(raw: pl.DataFrame, clean: pl.DataFrame, locus: str,
     out = {"nonstd_aa_frac": float(nonstd_frac)}
     try:
         germ = load_germline(locus)
-    except Exception:                       # a locus with no bundled germline: unmeasurable
+    except ValueError:                      # no germline for this locus: unmeasurable
         return {**out, "v_fallback_frac": np.nan, "j_fallback_frac": np.nan}
     known = {seg: set(germ.filter(pl.col("segment") == seg)["gene"].to_list())
              for seg in ("V", "J")}

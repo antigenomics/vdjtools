@@ -514,3 +514,16 @@ affect; ``vdjtools model <sub> --help`` remains authoritative for defaults.
    * - ``export``
      - ``--long``
      - One long frame of every probability instead of a directory of per-event tables.
+
+Resource budgets and annotation fields
+--------------------------------------
+
+``build_model(..., threads=N)`` forwards the budget to annotation and the native E-step.
+``infer_native(..., threads=N)`` controls the E-step directly; zero uses the available CPU
+allocation. ``build_all(..., workers=N)`` parallelizes builds with one kernel thread each by
+default. An explicit ``threads`` override is honored, so account for both layers when choosing it.
+Packed-model state is bounded; successive EM iterations do not retain an unbounded model history.
+
+``annotate_junctions`` also returns the stage-one ``v_fix``, ``j_fix``, ``v_canonical`` and
+``j_canonical`` fields. Consumers can reuse the repair classifications without rerunning markup.
+The repaired amino-acid junction remains authoritative when applying nucleotide flanks.

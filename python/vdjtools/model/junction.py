@@ -67,7 +67,8 @@ __all__ = ["annotate_junctions", "JUNCTION_COLUMNS"]
 JUNCTION_COLUMNS = (
     # stage 1 -- arda cdr3fix
     "cdr3_aa", "cdr3_repaired", "v_call", "j_call", "locus", "species",
-    "v_end", "j_start", "v_end_nt", "j_start_nt", "v_flags", "j_flags", "good", "fix_needed",
+    "v_end", "j_start", "v_end_nt", "j_start_nt", "v_flags", "j_flags", "v_fix", "j_fix", "v_canonical", "j_canonical",
+    "good", "fix_needed",
     # ``proposed`` names the side the submission left BLANK and the junction supplied, which is a
     # different fact from the `allele` flag (the submission named another allele of the same gene).
     # It is the column that lets a consumer drop its own segment proposer, so it has to reach the
@@ -215,6 +216,8 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
     from .reference import translate
     from .viterbi import infer_nt_batch
 
+    if model_source not in ("auto", "olga", "arda", "learned"):
+        raise ValueError(f"unknown model_source: {model_source!r}")
     n = len(junction_aas)
     if not (len(v_calls) == len(j_calls) == n):
         raise ValueError(f"ragged input: {n} junctions, {len(v_calls)} V, {len(j_calls)} J")

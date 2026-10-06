@@ -12,6 +12,15 @@ on:
 permissions:
   contents: read
 
+# Numerical kernels stay single-threaded; tests exercise explicit native budgets separately.
+env:
+  POLARS_MAX_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  OMP_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+  RAYON_NUM_THREADS: "1"
+
 jobs:
   build-sdist:
     if: >-
@@ -104,7 +113,7 @@ jobs:
 
   publish:
     if: >-
-      ${{ github.event_name == 'workflow_dispatch' ||
+      ${{ github.event_name == 'release' &&
       startsWith(github.event.release.tag_name, 'v') }}
     name: Publish To PyPI
     needs: [test, build-sdist, build-wheels]

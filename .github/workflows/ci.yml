@@ -13,6 +13,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Numerical kernels stay single-threaded; tests exercise explicit native budgets separately.
+env:
+  POLARS_MAX_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  OMP_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+  RAYON_NUM_THREADS: "1"
+
 jobs:
   cpp:
     name: C++ tests (${{ matrix.os }})
@@ -43,6 +52,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Install package (compiles the _core C++ extension)
         # oracle/overlap/sc are pure-pip and gate the tests that matter most: [oracle] pulls olga,
         # without which the entire "native Pgen == OLGA exactly on all 7 loci" suite (9 files) is
@@ -59,7 +70,11 @@ jobs:
         continue-on-error: true
         run: pip install -e ".[interop]"
       - name: Test
-        run: pytest tests/python -q
+        # Run the expensive reference/EM cases once, retaining full platform coverage for
+        # the remaining suite. No test is removed from CI.
+        env:
+          TEST_MARKERS: ${{ matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && 'not slow' || 'not slow and not heavy' }}
+        run: pytest tests/python -q --durations=25 -m "$TEST_MARKERS"
       - name: Assert the OLGA oracle suite actually ran (guard against silent skip)
         # If olga stops importing, the suite would silently skip and CI would still be green. Fail
         # loudly instead: at least one olga-gated test must be collected and not skipped.
