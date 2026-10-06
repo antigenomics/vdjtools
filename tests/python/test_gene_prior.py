@@ -14,10 +14,7 @@ from vdjtools.model import load_bundled
 from vdjtools.model.generate import generate
 from vdjtools.model.infer import _functional_support, infer_native
 
-# Every test here runs a full infer_native EM over the 89-allele bundled TRB locus: 162.9 s
-# measured locally, and worse on a 4-vCPU runner because the C++ E-step is thread-parallel.
-# That is 42% of the whole suite, so the release gate skips them; ci.yml still runs them.
-pytestmark = pytest.mark.heavy
+# Keep the full-locus regressions heavy; test_gene_prior_mstep runs on every CI leg.
 
 
 @pytest.fixture(scope="module")
@@ -30,6 +27,17 @@ def _v_mass(model):
     return {r["v_allele"]: r["p"] for r in t.iter_rows(named=True)}
 
 
+@pytest.fixture(scope="module")
+def prior_fit(trb):
+    """One full TRB fit, read-only to consumers; each invariant checks this same result."""
+    draws = generate(trb, 400, seed=1)
+    seqs = [s.upper() for s in draws["junction_nt"].to_list()]
+    model, report = infer_native(trb, seqs, max_iter=3, tol=0.0, single_d=True, gene_prior=1.0)
+    assert report.n_iter == 3
+    return model
+
+
+@pytest.mark.heavy
 def test_gene_prior_zero_is_byte_identical_to_mle(trb):
     """The default must not perturb anything — the exact-Pgen invariant depends on it."""
     draws = generate(trb, 300, seed=0)
@@ -40,7 +48,8 @@ def test_gene_prior_zero_is_byte_identical_to_mle(trb):
         assert a.tables[ev].equals(b.tables[ev]), f"{ev} differs — gene_prior=0.0 is not the default"
 
 
-def test_gene_prior_protects_observed_alleles_but_not_unseen_ones(trb):
+@pytest.mark.heavy
+def test_gene_prior_protects_observed_alleles_but_not_unseen_ones(prior_fit):
     """The prior rescues alleles the data ATTRIBUTED reads to, and only those.
 
     This is the corrected semantics: an allele the E-step gave zero soft count (never the best
@@ -49,9 +58,7 @@ def test_gene_prior_protects_observed_alleles_but_not_unseen_ones(trb):
     The prior protects what was seen (the absorbing-state fix); it does not invent generative mass
     for what was not (rescale_usage covers the cross-protocol case).
     """
-    draws = generate(trb, 400, seed=1)
-    seqs = [s.upper() for s in draws["junction_nt"].to_list()]
-    prior, _ = infer_native(trb, seqs, max_iter=3, tol=0.0, single_d=True, gene_prior=1.0)
+    prior = prior_fit
 
     # Every allele with choice mass must have a usable (nonzero) deletion distribution -- i.e. no
     # allele is selectable with no way to sample its trimming. This is what the sampler needs and
@@ -66,19 +73,15 @@ def test_gene_prior_protects_observed_alleles_but_not_unseen_ones(trb):
     generate(prior, 100, seed=7)
 
 
-def test_gene_prior_gives_no_mass_to_nonfunctional_alleles(trb):
+@pytest.mark.heavy
+def test_gene_prior_gives_no_mass_to_nonfunctional_alleles(trb, prior_fit):
     """Pseudogenes/ORFs are deliberately excluded — the model cannot score them anyway."""
-    draws = generate(trb, 200, seed=2)
-    seqs = [s.upper() for s in draws["junction_nt"].to_list()]
-    m, _ = infer_native(trb, seqs, max_iter=2, tol=0.0, single_d=True, gene_prior=1.0)
     functional = _functional_support(trb, "v")
-    leaked = [a for a, p in _v_mass(m).items() if p > 0 and a not in functional]
+    leaked = [a for a, p in _v_mass(prior_fit).items() if p > 0 and a not in functional]
     assert not leaked, f"prior leaked mass onto non-functional alleles: {leaked[:3]}"
 
 
-def test_gene_prior_still_normalizes(trb):
-    draws = generate(trb, 200, seed=3)
-    seqs = [s.upper() for s in draws["junction_nt"].to_list()]
-    m, _ = infer_native(trb, seqs, max_iter=2, tol=0.0, single_d=True, gene_prior=1.0)
-    assert m.tables["v_choice"]["p"].sum() == pytest.approx(1.0)
-    m.validate()
+@pytest.mark.heavy
+def test_gene_prior_still_normalizes(prior_fit):
+    assert prior_fit.tables["v_choice"]["p"].sum() == pytest.approx(1.0)
+    prior_fit.validate()
