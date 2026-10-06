@@ -243,9 +243,9 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
         ValueError: If no CDR3 amino-acid column (``junction_aa`` or ``cdr3_aa``)
             is present.
     """
-    scan = pl.scan_csv(Path(path), separator="\t", infer_schema_length=0,
-                       quote_char=None, null_values=["", "."], n_rows=n_rows)
-    columns = scan.collect_schema().names()
+    options = dict(separator="\t", infer_schema_length=0,
+                   quote_char=None, null_values=["", "."])
+    columns = pl.read_csv(Path(path), n_rows=0, **options).columns
     lower = {c.lower(): c for c in columns}
     found: dict[str, str] = {}
     for canon, srcs in _AIRR_ALIASES.items():
@@ -272,7 +272,10 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     # here rather than leaving the caller to discover that its mean is a type error.
     extra = [c for c in keep if c in columns and c not in found.values()]
     # Project before parsing data: alignment/sequence columns can dwarf the clonotype fields.
-    raw = scan.select(list(dict.fromkeys([*found.values(), *extra]))).collect()
+    # Eager projected parsing avoids the asynchronous streaming CSV channel, which can stall
+    # with a single Polars thread under repeated spawned-worker reads.
+    raw = pl.read_csv(Path(path), columns=list(dict.fromkeys([*found.values(), *extra])),
+                      n_rows=n_rows, **options)
     df = raw.select([pl.col(src).alias(canon) for canon, src in found.items()]
                     + [pl.col(c).cast(pl.Float64, strict=False).alias(c)
                        if _numeric_like(raw, c) else pl.col(c) for c in extra])
