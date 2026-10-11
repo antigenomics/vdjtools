@@ -40,6 +40,8 @@ one total edit), i.e. vdjmatch ``"1,0,0,1"`` — the default here.
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import warnings
 
 import polars as pl
@@ -85,7 +87,7 @@ def _score(agg, control, params, exclude_exact, threads, evalue, seqtree, locus)
     cdr3s = agg[JUNCTION_AA].to_list()
     target = seqtree.Index.build(cdr3s, alphabet="aa")
     ev = evalue.query_evalues(target, control, cdr3s, params,
-                              threads=threads, exclude_exact=False)
+                              threads=kernel_threads(threads), exclude_exact=False)
     n_target, m_control = len(cdr3s), len(control)
     degree = ev["n_target"].to_numpy() - (1 if exclude_exact else 0)
     n_ctl = ev["n_control"].to_numpy()                  # query not in control: keep every hit

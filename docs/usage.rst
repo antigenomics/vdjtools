@@ -761,3 +761,25 @@ Every workflow above has a CLI counterpart; inputs are auto-detected and results
    vdjtools tcrnet   sample.tsv -o net.tsv                 # neighbourhood enrichment (control cohort)
 
 Run ``vdjtools <command> --help`` for options.
+
+CPU and container limits
+------------------------
+
+Import ``vdjtools`` before numerical libraries in each fresh worker. Persistent
+Polars, BLAS, OpenMP and Numba import pools default to one thread. Native batch APIs
+receive an explicit budget: ``threads=1`` is serial, ``threads=0`` uses the detected
+allocation, and positive counts must fit it. CPU affinity, SLURM per-task allocation
+and visible cgroup quotas, including parent quotas, constrain that detection.
+Kubernetes CPU requests alone are scheduling weights, not a hard allocation.
+
+Sample processes use one kernel thread each. Outer thread workers use serial inner
+sequence kernels. Excessive counts and explicitly nested parallel kernels raise.
+Import-time settings also apply to non-signature CLI commands. Existing BLAS pools
+are limited at runtime; their idle OS threads may remain. An already initialized
+multi-thread Polars pool cannot be resized, so outer thread pools require a fresh
+interpreter or ``workers=1``. Changes made temporarily for child spawn are restored,
+and concurrent spawn owners are serialized because the environment is process-global.
+
+Native worker exceptions are rethrown after joining workers. Thread creation failures
+also join workers already started and raise to Python, rather than terminating the
+interpreter while destroying a joinable thread.

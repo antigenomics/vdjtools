@@ -12,6 +12,7 @@ engine gets its own -- the two agree in distribution, not sequence by sequence.
 """
 from __future__ import annotations
 
+from vdjtools.cores import available_cores
 import numpy as np
 import pytest
 
@@ -61,7 +62,7 @@ def test_the_draw_does_not_depend_on_the_thread_count(trb):
     anywhere else -- this is the property that makes that impossible, not a nicety.
     """
     one = generate(trb, 512, seed=9, engine="native", threads=1)
-    many = generate(trb, 512, seed=9, engine="native", threads=8)
+    many = generate(trb, 512, seed=9, engine="native", threads=min(8, available_cores()))
     auto = generate(trb, 512, seed=9, engine="native", threads=0)
     assert one.equals(many)
     assert one.equals(auto)

@@ -10,6 +10,7 @@ The multi-allele case is not decoration. It is the only mode where a row pools m
 """
 from __future__ import annotations
 
+from vdjtools.cores import available_cores
 import inspect
 
 import pytest
@@ -83,7 +84,7 @@ def test_the_result_does_not_depend_on_the_thread_count(trb):
     v = [c[1] for c in cases]
     j = [c[2] for c in cases]
     one = infer_nt_batch(trb, aa, v=v, j=j, threads=1)
-    many = infer_nt_batch(trb, aa, v=v, j=j, threads=8)
+    many = infer_nt_batch(trb, aa, v=v, j=j, threads=min(8, available_cores()))
     auto = infer_nt_batch(trb, aa, v=v, j=j, threads=0)
     assert one.equals(many) and one.equals(auto)
 
@@ -153,6 +154,8 @@ def test_quadrupling_the_threads_roughly_quarters_the_wall_time(trb):
     """
     import time
 
+    if available_cores() < 4:
+        pytest.skip("four-core scaling requires a four-core allocation")
     aa = [c[0] for c in CASES] * 120
     v = [c[1] for c in CASES] * 120
     j = [c[2] for c in CASES] * 120
@@ -162,10 +165,8 @@ def test_quadrupling_the_threads_roughly_quarters_the_wall_time(trb):
     one = infer_nt_batch(trb, aa, v=v, j=j, threads=1)
     t1 = time.perf_counter() - t
     t = time.perf_counter()
-    many = infer_nt_batch(trb, aa, v=v, j=j, threads=4)
+    many = infer_nt_batch(trb, aa, v=v, j=j, threads=min(4, available_cores()))
     t4 = time.perf_counter() - t
-
-    from vdjtools.cores import available_cores
 
     assert one.equals(many), "threads changed the answer"
     assert t1 / t4 > 1.8, f"4 threads bought only {t1 / t4:.2f}x -- is the GIL still released?"

@@ -71,7 +71,9 @@ def _neighbours(seqs: "list[str]", max_mismatches: int):
     import seqtree as st
 
     params = st.SearchParams(max_subs=max_mismatches, max_ins=0, max_dels=0)
-    hits = st.pairwise_batch(seqs, seqs, params, alphabet="nt")
+    from ..cores import kernel_threads
+
+    hits = st.pairwise_batch(seqs, seqs, params, alphabet="nt", threads=kernel_threads(0))
     return [[(h.ref_id, h.n_subs) for h in row if h.ref_id != i]
             for i, row in enumerate(hits)]
 

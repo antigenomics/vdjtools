@@ -7,6 +7,7 @@ sample as soon as they finish, so unequal repertoire depths do not strand idle w
 from __future__ import annotations
 
 from contextlib import contextmanager
+from threading import RLock
 
 from ..cores import _KERNEL_ENV
 
@@ -57,21 +58,26 @@ def in_pool_worker() -> bool:
     return bool(os.environ.get(WORKER_ENV))
 
 
+_SPAWN_ENV_LOCK = RLock()
+
+
 @contextmanager
 def single_threaded_workers():
     """Temporarily give spawned children one thread per kernel; restore the caller's env."""
     import os
 
-    previous = {key: os.environ.get(key) for key in (*_KERNEL_ENV, WORKER_ENV)}
-    try:
-        os.environ.update(dict.fromkeys(previous, "1"))
-        yield
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    # ponytail: spawn environment is process-global; serialize concurrent pool owners.
+    with _SPAWN_ENV_LOCK:
+        previous = {key: os.environ.get(key) for key in (*_KERNEL_ENV, WORKER_ENV)}
+        try:
+            os.environ.update(dict.fromkeys(previous, "1"))
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 _WORKER_FN = None
@@ -103,12 +109,14 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
     from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
     from multiprocessing import get_context
 
-    from ..cores import available_cores
+    from ..cores import kernel_threads
 
-    if n_jobs < 0:
-        raise ValueError("n_jobs must be non-negative (0 means all available cores)")
+    try:
+        budget = kernel_threads(n_jobs)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"invalid n_jobs: {e}") from e
     items = list(items)
-    workers = min(len(items), n_jobs if n_jobs > 0 else available_cores())
+    workers = min(len(items), budget)
     if n_jobs == 1 or workers < 2:
         return [fn(it) for it in items]
     with single_threaded_workers():

@@ -291,7 +291,9 @@ def translate_junctions(nt, *, threads: int = 0) -> pl.Series:
     s = nt if isinstance(nt, pl.Series) else pl.Series("junction_nt", list(nt), dtype=pl.Utf8)
     from .._core import translate_junctions as _native
 
-    aa = pl.Series("aa", _native(s.fill_null("").to_list(), threads), dtype=pl.Utf8)
+    from ..cores import kernel_threads
+
+    aa = pl.Series("aa", _native(s.fill_null("").to_list(), kernel_threads(threads)), dtype=pl.Utf8)
     blank = pl.Series("aa", [None] * s.len(), dtype=pl.Utf8)
     return aa.zip_with(s.is_not_null() & (s.str.len_bytes() > 0), blank)
 

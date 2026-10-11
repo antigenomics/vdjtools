@@ -225,3 +225,12 @@ Python calls retain the calling process's Polars and BLAS settings at `n_jobs=1`
 Model-build resource budgets follow the same rule: `build_all(..., workers=8)` runs up to eight
 builds with one kernel thread each. `build_model(..., threads=8)` and
 `infer_native(..., threads=8)` instead assign eight kernel threads to one build.
+
+### CPU budgets
+
+Import `vdjtools` before numerical libraries in fresh workers. Persistent numerical
+pools use one thread; native kernels receive allocation-aware budgets (`threads=1`
+serial, `threads=0` all allocated CPUs, or a positive count within the allocation).
+CPU affinity, SLURM per-task allocations and cgroup parent quotas are respected.
+Sample workers use serial inner kernels. Excessive or nested budgets raise. Existing
+multi-thread Polars pools require a fresh interpreter for outer thread parallelism.

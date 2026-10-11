@@ -44,6 +44,9 @@ _N = 96
 @pytest.fixture(scope="module")
 def timings():
     """Both legs, timed once and shared -- running them per test doubles the cost for nothing."""
+    from vdjtools.cores import available_cores
+    if available_cores() < 4:
+        pytest.skip("four-core scaling requires a four-core allocation")
     assert _N > _NATIVE_THREAD_MIN, "below the native floor the batch stays serial by design"
     m = load_bundled("TRB", "olga")
     native.pack(m)                       # populate the pack cache before either leg is timed

@@ -13,6 +13,8 @@ annotation-expansion (``example.Rmd`` / ``vaccination.Rmd``) generalised into th
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import polars as pl
 
 from ..io.schema import J_CALL, JUNCTION_AA, V_CALL
@@ -53,7 +55,7 @@ def test_metaclonotypes(a: pl.DataFrame, b: pl.DataFrame, *, scope: str = "1,0,0
     pooled = pl.concat(
         [a.select(grp_cols), b.select(grp_cols)], how="vertical_relaxed").unique()
     meta = metaclonotypes(pooled, scope=scope, match_v=match_v, match_j=match_j,
-                          threads=threads)
+                          threads=kernel_threads(threads))
     join_on = [c for c in grp_cols if c in meta.columns]
 
     a2 = a.join(meta, on=join_on, how="inner")

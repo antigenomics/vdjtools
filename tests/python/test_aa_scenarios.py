@@ -7,6 +7,7 @@ and the per-row Python loop was most of the cost of running it over a clonotype 
 """
 from __future__ import annotations
 
+from vdjtools.cores import available_cores
 import polars as pl
 import pytest
 
@@ -93,7 +94,7 @@ def test_the_batch_result_does_not_depend_on_the_thread_count(trb):
     v = [c[1] for c in CASES] * 40
     j = [c[2] for c in CASES] * 40
     one = best_aa_scenarios_batch(trb, aa, v, j, k=4, threads=1)
-    many = best_aa_scenarios_batch(trb, aa, v, j, k=4, threads=8)
+    many = best_aa_scenarios_batch(trb, aa, v, j, k=4, threads=min(8, available_cores()))
     assert one.equals(many)
 
 

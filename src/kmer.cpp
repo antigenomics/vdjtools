@@ -1,9 +1,10 @@
+#include "thread_joiner.hpp"
 #include "vdjtools/kmer.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <stdexcept>
-#include <mutex>
+#include <exception>
 #include <thread>
 
 namespace vdjtools {
@@ -134,15 +135,14 @@ std::vector<KmerRow> kmer_rows(const std::vector<std::vector<std::string>>& junc
     std::vector<KmerRow> out(n);
     if (n == 0) return out;
 
-    unsigned nthreads = threads > 0 ? static_cast<unsigned>(threads)
-                                    : std::thread::hardware_concurrency();
+    if (threads < 0) throw std::invalid_argument("threads must be non-negative");
+    unsigned nthreads = threads > 0 ? static_cast<unsigned>(threads) : 1;
     if (nthreads == 0) nthreads = 1;
     nthreads = std::min<unsigned>(nthreads, static_cast<unsigned>(n));
 
     std::atomic<size_t> next{0};
     std::atomic<bool> failed{false};
-    std::string error;
-    std::mutex error_mutex;
+    std::exception_ptr error;
 
     auto worker = [&]() {
         for (;;) {
@@ -151,21 +151,21 @@ std::vector<KmerRow> kmer_rows(const std::vector<std::vector<std::string>>& junc
             try {
                 out[i] = kmer_row(junctions[i], v_codes[i], weights[i], pattern, alphabet,
                                   n_alphabet, n_v, flank);
-            } catch (const std::exception& e) {
-                std::lock_guard<std::mutex> lock(error_mutex);
-                if (!failed.exchange(true)) error = e.what();
+            } catch (...) {
+                if (!failed.exchange(true)) error = std::current_exception();
                 return;
             }
         }
     };
 
     std::vector<std::thread> pool;
+    ThreadJoiner joiner{pool};
     pool.reserve(nthreads);
     for (unsigned t = 0; t < nthreads; ++t) pool.emplace_back(worker);
     for (auto& t : pool) t.join();
     // Rethrow on the calling thread: a worker that died silently would leave an empty row, which
     // is indistinguishable from a sample that genuinely had no k-mers.
-    if (failed.load()) throw std::runtime_error(error);
+    if (error) std::rethrow_exception(error);
     return out;
 }
 

@@ -1,3 +1,4 @@
+#include "thread_joiner.hpp"
 #include "vdjtools/inext.hpp"
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <limits>
 #include <random>
 #include <thread>
+#include <exception>
 
 // Native iNEXT size-based engine. See include/vdjtools/inext.hpp and the Python
 // reference python/vdjtools/stats/inext.py — every function below mirrors a
@@ -361,9 +363,8 @@ std::vector<InextSample> inext_batch(const std::vector<Vec>& samples,
                                   seed + static_cast<std::uint64_t>(idx));
     };
 
-    int nthreads = (threads > 0)
-                       ? threads
-                       : static_cast<int>(std::thread::hardware_concurrency());
+    if (threads < 0) throw std::invalid_argument("threads must be non-negative");
+    int nthreads = threads > 0 ? threads : 1;
     if (nthreads < 1) nthreads = 1;
     if (nthreads > N) nthreads = N;
 
@@ -372,14 +373,19 @@ std::vector<InextSample> inext_batch(const std::vector<Vec>& samples,
         return results;
     }
     std::atomic<int> next{0};
+    std::vector<std::exception_ptr> errors(nthreads);
     std::vector<std::thread> pool;
+    ThreadJoiner joiner{pool};
     pool.reserve(nthreads);
     for (int t = 0; t < nthreads; ++t)
-        pool.emplace_back([&]() {
-            int i;
-            while ((i = next.fetch_add(1)) < N) worker(i);
+        pool.emplace_back([&, t]() {
+            try {
+                int i;
+                while ((i = next.fetch_add(1)) < N) worker(i);
+            } catch (...) { errors[t] = std::current_exception(); }
         });
     for (auto& th : pool) th.join();
+    for (const auto& error : errors) if (error) std::rethrow_exception(error);
     return results;
 }
 

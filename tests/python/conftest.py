@@ -5,6 +5,7 @@ It skips cleanly (never fails) when ``huggingface_hub`` is not installed or the 
 fails (offline / network / auth), so the default ``pytest tests/python`` stays green
 with no network and ``huggingface_hub`` never becomes a runtime dependency.
 """
+import vdjtools  # noqa: F401 - initialize numerical limits before test collection
 import pytest
 
 

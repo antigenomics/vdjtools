@@ -30,6 +30,8 @@ once — verified here against brute-force enumeration of all 19L neighbours to 
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import numpy as np
 import polars as pl
 from scipy.stats import poisson
@@ -72,7 +74,7 @@ def _ball_pgen(model, seqs: list[str], v: str, j: str, threads: int) -> np.ndarr
     for va in vs:                       # a gene-level call sums over its alleles (exact)
         for ja in js:
             total += np.asarray(pgen_aa_batch(model, seqs, [va] * len(seqs), [ja] * len(seqs),
-                                              mismatches=1, threads=threads))
+                                              mismatches=1, threads=kernel_threads(threads)))
     return total
 
 
@@ -85,7 +87,7 @@ def _degrees(unique_aa: list[str], expanded_aa: list[str], scope: str, threads: 
     """
     from vdjmatch.cluster import overlap
 
-    pairs = overlap(unique_aa, expanded_aa, scope=scope, threads=threads)
+    pairs = overlap(unique_aa, expanded_aa, scope=scope, threads=kernel_threads(threads))
     counts = (pairs.group_by("a_idx").len()
                    .rename({"len": "d"}).sort("a_idx"))
     out = np.zeros(len(unique_aa), dtype=np.int64)

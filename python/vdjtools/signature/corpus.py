@@ -1507,11 +1507,13 @@ def _ranges(n: int, parts: int) -> list:
 
 
 def _workers(n_jobs: int, cap: int) -> int:
-    from ..cores import available_cores
+    from ..cores import kernel_threads
 
-    if n_jobs < 0:
-        raise ValueError("n_jobs must be non-negative (0 means available cores)")
-    return max(1, min(n_jobs if n_jobs > 0 else available_cores(), cap))
+    try:
+        budget = kernel_threads(n_jobs)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"invalid n_jobs: {e}") from e
+    return max(1, min(budget, cap))
 
 
 def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,

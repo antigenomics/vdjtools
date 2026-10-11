@@ -28,6 +28,8 @@ the profile, not a single number — that is the whole point of a Hill profile.
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import numpy as np
 import polars as pl
 
@@ -101,7 +103,7 @@ def functional_diversity(df: pl.DataFrame, *, q=(0, 1, 2), key: "tuple[str, ...]
     #           pair and wants it too.
     sm = similarity_matrix(df, df, key=key, kernel=kernel, tau=tau, matrix=matrix,
                            max_penalty=max_penalty, gap_prior=gap_prior, gap_open=gap_open,
-                           dense=dense, threads=threads)
+                           dense=dense, threads=kernel_threads(threads))
     p = _weights(sm.freq_a, weight)
     zp = np.asarray(sm.z_aa @ p).ravel()          # ordinariness; .ravel() flattens the sparse path
     rao = 1.0 - float(p @ zp)                     # 1 - pᵀZp, no second kernel pass

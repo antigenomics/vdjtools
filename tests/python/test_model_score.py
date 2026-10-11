@@ -6,6 +6,7 @@ occupied cells, which would inflate ``k`` several-fold and quietly wreck every B
 """
 from __future__ import annotations
 
+from vdjtools.cores import available_cores
 import math
 
 import numpy as np
@@ -83,7 +84,7 @@ def test_threaded_and_serial_nt_pgen_agree(small_model):
     """The thread pool must be an optimization only — bitwise-identical, thread-count-invariant."""
     seqs = generate(small_model, 80, seed=5)["junction_nt"].to_list()
     serial = pgen_frame(small_model, seqs, use_calls=False, threads=1)["pgen"].to_numpy()
-    threaded = pgen_frame(small_model, seqs, use_calls=False, threads=4)["pgen"].to_numpy()
+    threaded = pgen_frame(small_model, seqs, use_calls=False, threads=min(4, available_cores()))["pgen"].to_numpy()
     assert np.array_equal(serial, threaded)
 
 

@@ -11,6 +11,7 @@ pair is the reference; the C++ has to reproduce it on in-frame sequences, on out
 """
 from __future__ import annotations
 
+from vdjtools.cores import available_cores
 import numpy as np
 import polars as pl
 import pytest
@@ -58,7 +59,7 @@ def test_it_takes_a_series_or_a_plain_iterable(cohort):
 def test_threads_do_not_change_the_answer(cohort):
     """Parallelism that moves a value is a bug with a speedup, not parallelism."""
     one = translate_junctions(cohort, threads=1).to_list()
-    assert one == translate_junctions(cohort, threads=8).to_list()
+    assert one == translate_junctions(cohort, threads=min(8, available_cores())).to_list()
     assert one == translate_junctions(cohort, threads=0).to_list()
 
 

@@ -84,13 +84,13 @@ PYBIND11_MODULE(_core, m) {
           py::arg("j_idxs") = std::vector<int>{}, py::arg("threads") = 0,
           py::call_guard<py::gil_scoped_release>(),
           "Batch pgen_aa_degenerate over many motifs, parallelized across queries and "
-          "bitwise-identical to the per-query calls; threads=0 -> auto.");
+          "bitwise-identical to the per-query calls; threads=0 -> serial (Python APIs resolve allocation).");
     m.def("pgen_aa_batch", &vdjtools::pgen_aa_batch, py::arg("model"), py::arg("seqs"),
           py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
           py::arg("mismatches") = 0, py::arg("threads") = 0,
           py::call_guard<py::gil_scoped_release>(),
           "Batch aa Pgen over many CDR3s, parallelized across sequences (mismatches=1 -> Hamming-1 "
-          "ball). Bitwise-identical to per-sequence pgen_aa/pgen_aa_hamming1; threads=0 -> auto.");
+          "ball). Bitwise-identical to per-sequence pgen_aa/pgen_aa_hamming1; threads=0 -> serial (Python APIs resolve allocation).");
 
     py::class_<vdjtools::AaScenario>(m, "AaScenario")
         .def_readonly("w", &vdjtools::AaScenario::w)
@@ -107,7 +107,7 @@ PYBIND11_MODULE(_core, m) {
           "Translate junction nucleotides the legacy-converter way and collapse the non-coding "
           "runs, for a whole column at once: to_unified_cdr3aa(translate(nt)). An out-of-frame "
           "junction is translated inward from both ends with the untranslatable middle collapsed "
-          "to '_'. threads=0 -> auto.");
+          "to '_'. threads=0 -> serial (Python APIs resolve allocation).");
 
     m.def("pgen_nt_batch", &vdjtools::pgen_nt_batch, py::arg("model"), py::arg("seqs"),
           py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
@@ -149,7 +149,7 @@ PYBIND11_MODULE(_core, m) {
           py::arg("j_idxs") = std::vector<int>{}, py::arg("k") = 8, py::arg("threads") = 0,
           "Batch best_aa_scenarios over many CDR3s, parallelized across sequences and identical to "
           "the per-sequence calls; returns one numpy column per scenario field, with 'row' indexing "
-          "seqs and 'rank' the position within that row's top-k. threads=0 -> auto.");
+          "seqs and 'rank' the position within that row's top-k. threads=0 -> serial (Python APIs resolve allocation).");
 
     m.def("infer_nt_batch",
           [](const PackedModel& mm, const std::vector<std::string>& aas,
@@ -198,7 +198,7 @@ PYBIND11_MODULE(_core, m) {
           "infer_nt over a whole table: scenario search, codon reconstruction and the exact "
           "marginal re-score, all native and parallelized across rows. v_alts[i]/j_alts[i] are the "
           "gene indices to search for row i (one = a pin, several = search all, [-1] or empty = "
-          "marginalize); an empty aas[i] declines that row. threads=0 -> auto.");
+          "marginalize); an empty aas[i] declines that row. threads=0 -> serial (Python APIs resolve allocation).");
 
     m.def("align_init_votes",
           [](const PackedModel& mm, const std::vector<std::string>& seqs, bool joint) {
@@ -270,7 +270,7 @@ PYBIND11_MODULE(_core, m) {
           py::arg("vmasks"), py::arg("jmasks"), py::arg("dmasks"), py::arg("counts"),
           py::arg("threads") = 0, py::arg("dd_allowed") = std::vector<int>{},
           py::call_guard<py::gil_scoped_release>(),
-          "One EM E-step: accumulate soft counts, return summed log-Pgen. threads=0 -> auto; "
+          "One EM E-step: accumulate soft counts, return summed log-Pgen. threads=0 -> serial (Python APIs resolve allocation); "
           "dd_allowed (per-read 0/1, empty=all) gates the n_D=2 tandem E-step.");
 
     // --- iNEXT size-based diversity kernel (Phase 2) ---
