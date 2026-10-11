@@ -1524,6 +1524,7 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
 
     own_tmp = tmp is None
     tmp = Path(tempfile.mkdtemp(prefix="vdjtools-corpus-")) if own_tmp else Path(tmp)
+    pools = {}
     try:
         paths = build_pools(ordered, size=size, n_samples=n_samples, seed=seed, source=source,
                             tmp=tmp, n_jobs=n_jobs, progress=progress,
@@ -1535,7 +1536,8 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
 
         # Shared pools are mapped once; contiguous spans keep task overhead small.
         spans = _ranges(n_samples, workers * 4 if workers > 1 else 1)
-        fn = partial(_feat_batch, pools=read_pools(paths), plan=plan, regime=regime,
+        pools.update(read_pools(paths))
+        fn = partial(_feat_batch, pools=pools, plan=plan, regime=regime,
                      seed=seed, cols=cols, featurise=featurise)
         if workers < 2:
             from ..cores import serial_kernels
@@ -1548,6 +1550,8 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
             for loc, block in part.items():
                 mats[loc][0][a:a + block.shape[0]] = block
     finally:
+        # Drop mapped frames even if an exception traceback still retains the callback.
+        pools.clear()
         if own_tmp:
             shutil.rmtree(tmp, ignore_errors=True)
     return mats
