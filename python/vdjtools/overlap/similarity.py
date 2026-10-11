@@ -39,6 +39,8 @@ is wrong.
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -150,7 +152,7 @@ def _gap_prior(seqtree, gap_prior, matrix):
 def _dense_penalty(seqtree, qs, rs, matrix, gap_open, gap_prior, threads) -> np.ndarray:
     """Full dense penalty matrix of ``qs`` (rows) against ``rs`` (cols)."""
     sm = seqtree.score_matrix(qs, rs, matrix=matrix, gap_open=gap_open,
-                              gap_prior=gap_prior, threads=threads)
+                              gap_prior=gap_prior, threads=kernel_threads(threads))
     return np.asarray(sm).astype(float)
 
 
@@ -396,7 +398,7 @@ def similarity_overlap(a: pl.DataFrame, b: pl.DataFrame, *,
         ValueError: On an unknown ``metric``/``weight``/``kernel``.
     """
     sm = similarity_matrix(a, b, key=key, kernel=kernel, tau=tau, matrix=matrix,
-                           max_penalty=max_penalty, dense=dense, threads=threads)
+                           max_penalty=max_penalty, dense=dense, threads=kernel_threads(threads))
     p = _weights(sm.freq_a, weight)
     q = _weights(sm.freq_b, weight)
     pTZq = _quad(p, sm.z_ab, q)

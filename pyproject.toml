@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "5.0.0"
+version = "5.0.1"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
     "polars>=1.0,<2",
     "numpy",
+    "threadpoolctl>=3",  # runtime control for already-initialized BLAS pools
     "scipy",
     "typer>=0.12",  # the `vdjtools` CLI (Phase 8) is a core entry point
     # arda = the single source of germline truth (see model/reference.py): V/D/J germline +

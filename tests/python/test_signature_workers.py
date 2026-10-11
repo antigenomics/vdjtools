@@ -3,7 +3,8 @@ import os
 
 import pytest
 
-from vdjtools.signature.cohort import _KERNEL_ENV, WORKER_ENV, parallel_rows
+from vdjtools.cores import _KERNEL_ENV, available_cores
+from vdjtools.signature.cohort import parallel_rows
 
 
 def _probe(i):
@@ -20,27 +21,27 @@ def _probe(i):
             "blas": [p['num_threads'] for p in threadpool_info()]}
 
 
+@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
 def test_workers_limit_kernels_before_import_and_restore_parent(monkeypatch):
     for key in _KERNEL_ENV:
         monkeypatch.setenv(key, "4")
-    monkeypatch.delenv(WORKER_ENV, raising=False)
     rows = parallel_rows(range(4), _probe, 2)
     assert [r['i'] for r in rows] == list(range(4))
-    assert all(r['pid'] != os.getpid() for r in rows)
+    assert all(r['pid'] == os.getpid() for r in rows)
     assert all(r['polars'] == 1 for r in rows)
-    assert all(set(r['limits'].values()) == {'1'} for r in rows)
+    assert all(set(r['limits'].values()) == {'4'} for r in rows)
     assert all(all(n == 1 for n in r['blas']) for r in rows)
     assert all(os.environ[k] == '4' for k in _KERNEL_ENV)
-    assert WORKER_ENV not in os.environ
 
 
+@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
 def test_pool_failure_restores_environment(monkeypatch):
     monkeypatch.delenv('OMP_THREAD_LIMIT', raising=False)
     monkeypatch.setenv('POLARS_MAX_THREADS', '7')
     def broken(**kwargs):
         raise RuntimeError('cannot start')
-    monkeypatch.setattr('concurrent.futures.ProcessPoolExecutor', broken)
-    with pytest.raises(RuntimeError, match='NOT falling back'):
+    monkeypatch.setattr('concurrent.futures.ThreadPoolExecutor', broken)
+    with pytest.raises(RuntimeError, match='cannot start'):
         parallel_rows([1, 2], abs, 2)
     assert os.environ['POLARS_MAX_THREADS'] == '7'
     assert 'OMP_THREAD_LIMIT' not in os.environ
@@ -78,6 +79,97 @@ def _invalid_sample(_):
     raise RuntimeError('invalid sample calculation')
 
 
+@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
 def test_sample_runtime_errors_are_not_reported_as_pool_startup_errors():
     with pytest.raises(RuntimeError, match='^invalid sample calculation$'):
         parallel_rows([1, 2], _invalid_sample, 2)
+
+
+@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
+def test_threads_share_resources_and_use_distinct_workers():
+    from threading import Barrier, get_ident
+    from vdjtools.cores import kernel_threads
+
+    barrier = Barrier(2, timeout=10)
+    resource = object()
+
+    def work(i):
+        barrier.wait()
+        return i, get_ident(), resource, kernel_threads(0)
+
+    rows = parallel_rows(range(2), work, 2)
+    assert [r[0] for r in rows] == [0, 1]
+    assert len({r[1] for r in rows}) == 2
+    assert all(r[2] is resource and r[3] == 1 for r in rows)
+    assert kernel_threads(0) >= 2
+
+
+@pytest.mark.skipif(available_cores() < 4, reason="requires four allocated cores")
+def test_independent_concurrent_pools_keep_their_own_callbacks():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    barrier = Barrier(4, timeout=10)
+    def run(label):
+        def work(i):
+            barrier.wait()
+            return label, i
+        return parallel_rows(range(2), work, 2)
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        rows = list(ex.map(run, ('a', 'b')))
+    assert rows == [[('a', 0), ('a', 1)], [('b', 0), ('b', 1)]]
+
+
+def test_one_worker_is_serial_without_starting_a_pool(monkeypatch):
+    from vdjtools.cores import kernel_threads
+    def forbidden(**kw):
+        raise AssertionError('serial mode started a pool')
+    monkeypatch.setattr('concurrent.futures.ThreadPoolExecutor', forbidden)
+    assert parallel_rows([0, 1], lambda _: kernel_threads(0), 1) == [1, 1]
+
+
+@pytest.mark.parametrize('n_jobs', [1, 2])
+@pytest.mark.parametrize('fail', [False, True])
+def test_corpus_releases_mapped_pools_before_scratch_cleanup(monkeypatch, n_jobs, fail):
+    import weakref
+    from shutil import rmtree
+
+    import polars as pl
+    from vdjtools.signature import corpus
+
+    mapped = []
+    cleaned = []
+    monkeypatch.setattr('vdjtools.cores.available_cores', lambda: 2)
+    monkeypatch.setattr(corpus, 'build_pools', lambda *a, **kw: {})
+    monkeypatch.setattr(corpus, 'draw_plan', lambda *a, **kw: {})
+    monkeypatch.setattr(corpus, 'locus_matrix', lambda *a: None)
+
+    def read(paths):
+        frame = pl.DataFrame({'x': [1]})
+        mapped.append(weakref.ref(frame))
+        return {'TRA': frame}
+
+    def feature(span, *, pools, **kw):
+        assert pools['TRA'].height == 1
+        if fail:
+            raise RuntimeError('feature failed')
+        return span[0], {}
+
+    def cleanup(path, **kw):
+        assert mapped and mapped[0]() is None
+        cleaned.append(path)
+        rmtree(path, **kw)
+
+    monkeypatch.setattr(corpus, 'read_pools', read)
+    monkeypatch.setattr(corpus, '_feat_batch', feature)
+    monkeypatch.setattr('shutil.rmtree', cleanup)
+    kwargs = {'sig': 'vsig', 'featurise': None, 'vocab': {}, 'loci': ('TRA',),
+              'n_samples': 2, 'n_jobs': n_jobs}
+    if fail:
+        with pytest.raises(RuntimeError, match='feature failed'):
+            corpus.build_matrices('uniform', **kwargs)
+    else:
+        assert corpus.build_matrices('uniform', **kwargs) == {}
+    assert len(cleaned) == 1
+    assert not cleaned[0].exists()

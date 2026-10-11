@@ -50,7 +50,7 @@ Mat inext_bootstrap(const Vec& counts, const std::vector<int>& qs, const Vec& si
 
 // Point curve + bootstrap SE for many samples, parallelized across samples.
 // Each sample carries its own sizes grid; sample ``i`` is seeded ``seed + i``.
-// ``threads <= 0`` uses hardware_concurrency(); it is capped at the sample count.
+// ``threads == 0`` is serial; Python APIs resolve the allocation; it is capped at the sample count.
 std::vector<InextSample> inext_batch(const std::vector<Vec>& samples,
                                      const std::vector<Vec>& sample_sizes,
                                      const std::vector<int>& qs,

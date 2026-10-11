@@ -17,6 +17,10 @@ feature that needs them is used.
 
 from importlib.metadata import PackageNotFoundError, version as _dist_version
 
+from .cores import configure_runtime
+
+configure_runtime()
+
 try:
     #: Read from the installed distribution, which scikit-build-core fills from `pyproject.toml`
     #: — the same file CMake parses for the native `_core.version()`. A hand-copied literal here

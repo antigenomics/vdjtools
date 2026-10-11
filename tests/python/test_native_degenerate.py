@@ -8,6 +8,7 @@ sequences a motif matches, and the all-wildcard length marginal.
 """
 from __future__ import annotations
 
+from vdjtools.cores import available_cores
 import itertools
 
 import numpy as np
@@ -169,10 +170,10 @@ def test_batch_equals_serial_and_is_thread_invariant():
     allowed = [list(s) for s in seqs]
     serial = [native.pgen_aa_degenerate(m, a, v, j) for a, v, j in zip(allowed, vs, js)]
     assert native.pgen_aa_degenerate_batch(m, allowed, vs, js, threads=1) == serial
-    assert native.pgen_aa_degenerate_batch(m, allowed, vs, js, threads=8) == serial
+    assert native.pgen_aa_degenerate_batch(m, allowed, vs, js, threads=min(8, available_cores())) == serial
     assert native.pgen_aa_degenerate_batch(m, allowed, vs, js, threads=0) == serial
     assert serial == native.pgen_aa_batch(m, seqs, vs, js)
-    assert native.pgen_aa_degenerate_batch(m, allowed, threads=8) == native.pgen_aa_batch(m, seqs)
+    assert native.pgen_aa_degenerate_batch(m, allowed, threads=min(8, available_cores())) == native.pgen_aa_batch(m, seqs)
 
 
 def test_batch_validates_args():

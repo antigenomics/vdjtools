@@ -35,6 +35,8 @@ warning in ``docs/usage.rst``.
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import numpy as np
 import polars as pl
 from scipy.stats import poisson
@@ -59,13 +61,13 @@ def _incidence_matrix(cohort, chain, key, match, cand, min_incidence, min_incide
     sub = cohort.lazy().filter(pl.col(S.V_CALL).str.slice(0, 3) == chain)
     feats = select_candidates(sub, key=key, match=match, min_incidence=min_incidence,
                               min_incidence_frac=min_incidence_frac, productive_only=productive_only,
-                              strip_allele=strip_allele, scope=scope, threads=threads)
+                              strip_allele=strip_allele, scope=scope, threads=kernel_threads(threads))
     if cand is not None:
         feats = feats.join(cand.select(list(key)).unique(), on=list(key), how="semi")
     truncated = feats.height > max_features
     feats = feats.head(max_features)                       # top by incidence (select_candidates sorts)
     feat_lf, idcols, _ = _feature_frame(sub, key, match, productive_only=productive_only,
-                                        strip_allele=strip_allele, scope=scope, threads=threads,
+                                        strip_allele=strip_allele, scope=scope, threads=kernel_threads(threads),
                                         candidates=(feats if match == "exact" else None))
     fi = feats.select(idcols).with_row_index("_fi")
     pairs = (feat_lf.select([*idcols, SAMPLE_ID]).unique().collect()

@@ -311,17 +311,20 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
         (input/metadata order, regardless of which sample finishes first).
     """
     items = list(items)
-    if workers is None:
-        # NOT the pool default (min(32, os.cpu_count() + 4)): os.cpu_count() is the machine's core
-        # count, not this process's allowance, so under `srun -c 8` on a 40-core node the default
-        # asks for 36 threads to share 8 cores. The measured ceiling here is ~4x anyway.
-        from ..cores import available_cores
+    from ..cores import kernel_threads, serial_kernels, require_serial_pools
 
-        workers = min(available_cores(), max(1, len(items)))
+    budget = kernel_threads(0 if workers is None else workers)
+    workers = min(budget, max(1, len(items)))
+    if workers > 1:
+        require_serial_pools()
 
     def work(item):
         sid, path = item
-        return sid, fn(read(path, fmt=fmt, keep=keep))
+        with serial_kernels():
+            return sid, fn(read(path, fmt=fmt, keep=keep))
+
+    if workers == 1:
+        return [work(it) for it in items]
 
     # ThreadPoolExecutor.map yields results in input order, so output order is
     # deterministic (metadata order) no matter the completion order.

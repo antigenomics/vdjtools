@@ -26,6 +26,8 @@ Example::
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads, require_serial_pools
+
 import subprocess
 import sys
 from pathlib import Path
@@ -134,7 +136,7 @@ def annotate_reads(
     # so a --help smoke test would not have caught this.)
     cmd = [
         _arda_exe(), "map", "-o", str(airr), "--r1", str(r1),
-        "--organism", organism, "--threads", str(threads),
+        "--organism", organism, "--threads", str(kernel_threads(threads)),
     ]
     if reconstruct:
         cmd.append("--reconstruct")
@@ -488,17 +490,24 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    from ..cores import available_cores
-
+    if workers is not None and workers < 1:
+        raise ValueError("workers must be positive")
+    try:
+        budget = kernel_threads(0 if workers is None else workers)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"invalid workers: {e}") from e
     jobs = [(g, c) for g in groups for c in chains]
     if not jobs:
         return {}
-    if workers is not None and workers < 1:
-        raise ValueError("workers must be positive")
-    n_workers = min(len(jobs), workers or available_cores())
+    n_workers = min(len(jobs), budget)
     kw = dict(kw)
-    # One layer owns parallelism by default. Explicit kernel budgets remain the caller's choice.
+    # Parallel builds own the CPU budget; each inner kernel is serial.
     kw.setdefault("threads", 1)
+    if n_workers > 1 and kw["threads"] != 1:
+        raise ValueError("parallel builds require threads=1 per worker")
+    kw["threads"] = kernel_threads(kw["threads"])
+    if n_workers > 1:
+        require_serial_pools()
 
     def one(job):
         group, chain = job
@@ -511,5 +520,7 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
         except Exception as e:  # noqa: BLE001 - one chain must not abort the corpus
             return key, {"error": f"{type(e).__name__}: {e}"}
 
+    if n_workers == 1:
+        return dict(map(one, jobs))
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         return dict(pool.map(one, jobs))

@@ -35,6 +35,7 @@ def test_infer_native_honours_thread_budget(monkeypatch):
 
 def test_build_all_uses_one_kernel_per_build(monkeypatch):
     from vdjtools.model import data
+    monkeypatch.setattr("vdjtools.cores.available_cores", lambda: 3)
     seen = []
     def fake(chain, **kw):
         seen.append(kw["threads"])

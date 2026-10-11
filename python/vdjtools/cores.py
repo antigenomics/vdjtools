@@ -23,33 +23,71 @@ wins, because they constrain independently and a box can carry both.
 from __future__ import annotations
 
 import os
+import operator
+import threading
+from contextlib import contextmanager
 
 __all__ = ["available_cores"]
 
 
-def _cgroup_quota() -> int | None:
-    """Cores implied by a CFS bandwidth quota, or ``None`` if there is no finite one.
+def _cgroup_paths():
+    """Visible controller directories, including ancestors that can impose tighter quotas."""
+    from pathlib import Path
 
-    cgroup v2 writes ``"<quota> <period>"`` (or ``"max <period>"``) to ``cpu.max``; v1 splits the
-    same pair across two files. ``--cpus=2.5`` is honestly 2 whole workers, so this rounds down,
-    and never below 1.
-    """
+    paths = [(Path("/sys/fs/cgroup"), True), (Path("/sys/fs/cgroup/cpu"), False),
+             (Path("/sys/fs/cgroup/cpu,cpuacct"), False)]
     try:
-        with open("/sys/fs/cgroup/cpu.max") as fh:              # cgroup v2
-            quota, period = fh.read().split()
-        if quota != "max":
-            return max(1, int(int(quota) // int(period)))
-        return None
-    except (OSError, ValueError):
-        pass
-    try:                                                         # cgroup v1
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as fh:
-            quota = int(fh.read())
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as fh:
-            period = int(fh.read())
-        return max(1, quota // period) if quota > 0 and period > 0 else None
-    except (OSError, ValueError):
-        return None
+        with open("/proc/self/cgroup") as fh:
+            memberships = [line.strip().split(":", 2) for line in fh]
+        with open("/proc/self/mountinfo") as fh:
+            mounts = [line.strip().split(" - ", 1) for line in fh]
+    except OSError:
+        return paths
+    for left, right in mounts:
+        fields, controller = left.split(), right.split()
+        v2 = controller[0] == "cgroup2"
+        if not v2 and (controller[0] != "cgroup" or "cpu" not in controller[2].split(",")):
+            continue
+        root, mount = (Path(x.replace(r"\040", " ")) for x in fields[3:5])
+        for _, ctrls, name in memberships:
+            if (v2 and ctrls) or (not v2 and "cpu" not in ctrls.split(",")):
+                continue
+            group = Path(name)
+            if group.is_relative_to(root):
+                current = mount / group.relative_to(root)
+                while current.is_relative_to(mount):
+                    paths.append((current, v2))
+                    if current == mount:
+                        break
+                    current = current.parent
+    return list(dict.fromkeys(paths))
+
+
+def _cgroup_quota() -> int | None:
+    """Smallest finite v1/v2 quota in the current cgroup and its visible ancestors.
+
+    Fractional cores round down, with one worker for allocations below one CPU.
+    CPU requests are scheduling weights, not hard allocations, and cannot set this ceiling.
+    """
+    limits = []
+    for directory, v2 in _cgroup_paths():
+        try:
+            if v2:
+                with open(directory / "cpu.max") as fh:
+                    quota, period = fh.read().split()
+                if quota == "max":
+                    continue
+            else:
+                with open(directory / "cpu.cfs_quota_us") as fh:
+                    quota = fh.read().strip()
+                with open(directory / "cpu.cfs_period_us") as fh:
+                    period = fh.read().strip()
+            quota, period = int(quota), int(period)
+            if quota > 0 and period > 0:
+                limits.append(max(1, quota // period))
+        except (OSError, ValueError):
+            continue
+    return min(limits) if limits else None
 
 
 def available_cores(default: int = 1) -> int:
@@ -80,6 +118,10 @@ def available_cores(default: int = 1) -> int:
             counts.append(len(os.sched_getaffinity(0)))
         except OSError:
             pass
+    try:
+        counts.append(int(os.environ["SLURM_CPUS_PER_TASK"]))
+    except (KeyError, ValueError):
+        pass
     counts.append(_cgroup_quota())
     counts.append(os.cpu_count())
     usable = [c for c in counts if c]
@@ -89,13 +131,63 @@ def available_cores(default: int = 1) -> int:
 # These runtimes read their limits during import, before a worker initializer runs.
 _KERNEL_ENV = ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
                "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
-               "RAYON_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+               "RAYON_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMBA_NUM_THREADS")
+
+
+_LOCAL = threading.local()
 
 
 def kernel_threads(threads: int = 0) -> int:
-    """Resolve an explicit kernel budget; automatic kernels respect allocation and pool workers."""
+    """Resolve 0/all, 1/serial, or a positive count within this process's allocation.
+
+    Outer thread-pool workers have a one-core allocation. Explicit excessive counts
+    raise rather than silently clamp. Numerical import pools remain serial; native batches
+    receive this resolved integer, never a host-wide automatic setting.
+    """
+    if isinstance(threads, bool):
+        raise TypeError("threads must be an integer, not bool")
+    threads = operator.index(threads)
+    budget = 1 if getattr(_LOCAL, "serial", False) else available_cores()
     if threads < 0:
-        raise ValueError("threads must be non-negative (0 means available cores)")
-    if threads:
-        return threads
-    return 1 if os.environ.get("VDJTOOLS_POOL_WORKER") else available_cores()
+        raise ValueError("threads must be non-negative (0 means allocated cores)")
+    if threads > budget:
+        raise ValueError(f"threads must be between 0 and {budget} (0 means allocated cores)")
+    return threads or budget
+
+
+def configure_runtime() -> None:
+    """Keep persistent numerical pools serial before imports; limit initialized BLAS too.
+
+    Polars cannot resize an initialized pool. Thread-pool callers detect that case and
+    require a fresh interpreter rather than silently oversubscribing it.
+    """
+    import sys
+
+    os.environ.update(dict.fromkeys(_KERNEL_ENV, "1"))
+    if "numpy" in sys.modules or "scipy" in sys.modules:
+        from threadpoolctl import threadpool_limits
+
+        threadpool_limits(limits=1)
+
+
+@contextmanager
+def serial_kernels():
+    """Bound native work within an outer thread worker, restoring thread-local state."""
+    previous = getattr(_LOCAL, "serial", False)
+    _LOCAL.serial = True
+    try:
+        yield
+    finally:
+        _LOCAL.serial = previous
+
+
+def require_serial_pools() -> None:
+    """Reject an immutable multi-thread Polars pool before launching outer thread workers."""
+    import polars as pl
+    from threadpoolctl import threadpool_limits
+
+    threadpool_limits(limits=1)
+    if pl.thread_pool_size() > 1:
+        raise RuntimeError("Polars was initialized with multiple threads before vdjtools; "
+                           "start a fresh process and import vdjtools before Polars, "
+                           "or use workers=1")

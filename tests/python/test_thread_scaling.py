@@ -44,6 +44,9 @@ _N = 96
 @pytest.fixture(scope="module")
 def timings():
     """Both legs, timed once and shared -- running them per test doubles the cost for nothing."""
+    from vdjtools.cores import available_cores
+    if available_cores() < 4:
+        pytest.skip("four-core scaling requires a four-core allocation")
     assert _N > _NATIVE_THREAD_MIN, "below the native floor the batch stays serial by design"
     m = load_bundled("TRB", "olga")
     native.pack(m)                       # populate the pack cache before either leg is timed
@@ -88,4 +91,5 @@ def test_the_small_input_shortcut_stays_serial(timings):
     m, seqs, *_ = timings
     short = seqs[:4]
     none = [None] * len(short)
-    assert _pgen_nt_many(m, short, none, none, 8) == _pgen_nt_many(m, short, none, none, 1)
+    from vdjtools.cores import available_cores
+    assert _pgen_nt_many(m, short, none, none, min(8, available_cores())) == _pgen_nt_many(m, short, none, none, 1)

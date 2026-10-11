@@ -237,7 +237,7 @@ Counts make_counts(const PackedModel& m);
 // summed log-Pgen (over scoreable reads). Per-read ``vmasks[i]`` / ``jmasks[i]`` / ``dmasks[i]``
 // are gene-index lists restricting enumeration (empty => all functional genes of that segment).
 // ``nthreads`` partitions the reads across worker threads (each with a private accumulator, reduced
-// in a fixed order); 0 = auto (hardware_concurrency - 2). Small batches run single-threaded so their
+// in a fixed order); 0 = serial (Python APIs resolve allocation). Small batches run single-threaded so their
 // result stays bitwise-identical. The soft counts are exact regardless of thread count (up to the
 // float summation order, which the fixed reduction keeps deterministic per ``nthreads``).
 // ``dd_allowed`` optionally gates the tandem (n_D=2) E-step per read (1 = may be tandem, 0 = single-D

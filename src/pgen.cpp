@@ -1,3 +1,4 @@
+#include "thread_joiner.hpp"
 #include "vdjtools/model.hpp"
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <cctype>
 #include <stdexcept>
 #include <thread>
+#include <exception>
 
 namespace vdjtools {
 namespace {
@@ -758,32 +760,34 @@ double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, 
 
 namespace {
 
-// out[i] = one(i) for i in [0,n), split across `nthreads` workers (<=0 → auto = hw-2). The work is
+// out[i] = one(i) for i in [0,n), split across `nthreads` workers (0 → serial; Python resolves auto). The work is
 // embarrassingly disjoint (no shared state, no reduction), so the result is bitwise-identical to
-// the serial loop regardless of thread count; `one` must not throw (an escaping exception in a
-// worker terminates the process — validate before calling).
+// the serial loop regardless of thread count; worker exceptions are joined and rethrown on the calling thread.
 template <class F>
 auto run_batch(size_t n, int nthreads, F&& one) -> std::vector<decltype(one(size_t{0}))> {
     std::vector<decltype(one(size_t{0}))> out(n);
-    int T = nthreads;
-    if (T <= 0) {
-        unsigned hw = std::thread::hardware_concurrency();
-        T = hw > 3 ? static_cast<int>(hw) - 2 : 1;
-    }
+    if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
+    int T = nthreads > 0 ? nthreads : 1;
     constexpr size_t kBatchThreadMin = 64;  // small batches stay single-threaded (bitwise-exact)
     if (n < kBatchThreadMin || T <= 1) {
         for (size_t i = 0; i < n; ++i) out[i] = one(i);
         return out;
     }
     if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
+    std::vector<std::exception_ptr> errors(T);
     std::vector<std::thread> pool;
+    ThreadJoiner joiner{pool};
     size_t chunk = (n + T - 1) / T;
     for (int t = 0; t < T; ++t) {
         size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
         if (lo >= hi) break;
-        pool.emplace_back([&, lo, hi] { for (size_t i = lo; i < hi; ++i) out[i] = one(i); });
+        pool.emplace_back([&, lo, hi, t] {
+            try { for (size_t i = lo; i < hi; ++i) out[i] = one(i); }
+            catch (...) { errors[t] = std::current_exception(); }
+        });
     }
     for (auto& th : pool) th.join();
+    for (const auto& error : errors) if (error) std::rethrow_exception(error);
     return out;
 }
 
@@ -1338,27 +1342,28 @@ double estep_batch(const PackedModel& m,
                    int nthreads,
                    const std::vector<int>& dd_allowed) {
     size_t n = seqs.size();
-    int T = nthreads;
-    if (T <= 0) {
-        unsigned hw = std::thread::hardware_concurrency();
-        T = hw > 3 ? static_cast<int>(hw) - 2 : 1;
-    }
+    if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
+    int T = nthreads > 0 ? nthreads : 1;
     if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, 0, n, counts);
     if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
 
     std::vector<Counts> acc(T);
     for (int t = 0; t < T; ++t) acc[t] = make_counts(m);
     std::vector<double> lls(T, 0.0);
+    std::vector<std::exception_ptr> errors(T);
     std::vector<std::thread> pool;
+    ThreadJoiner joiner{pool};
     size_t chunk = (n + T - 1) / T;
     for (int t = 0; t < T; ++t) {
         size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
         if (lo >= hi) break;
         pool.emplace_back([&, t, lo, hi] {
-            lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, lo, hi, acc[t]);
+            try { lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, lo, hi, acc[t]); }
+            catch (...) { errors[t] = std::current_exception(); }
         });
     }
     for (auto& th : pool) th.join();
+    for (const auto& error : errors) if (error) std::rethrow_exception(error);
     double ll = 0.0;  // reduce in fixed thread order → deterministic for a given nthreads
     for (int t = 0; t < T; ++t) { ll += lls[t]; add_scaled(counts, acc[t], 1.0); }
     return ll;

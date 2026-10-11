@@ -11,6 +11,8 @@ tested with Fisher's exact test (Emerson et al., *Nat Genet* 2017, doi:10.1038/n
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import polars as pl
 
 from ..overlap.metrics import DEFAULT_KEY
@@ -48,7 +50,7 @@ def fisher_association(
     res = association(cohort, phenotype, pheno_col=pheno_col, test="fisher", key=key,
                       match=match, min_incidence=min_incidence, alternative=alternative,
                       productive_only=productive_only, strip_allele=strip_allele,
-                      scope=scope, threads=threads)
+                      scope=scope, threads=kernel_threads(threads))
     key = tuple(key)
     lead = list(key) if match == "exact" else ["meta_id"]
     tail = [] if match == "exact" else [*key, "n_members"]
