@@ -110,7 +110,7 @@ def attained_coverage(sample, *, on_duplicate: str = "error") -> dict[str, float
 
 
 def _one(item, corpus, kw):
-    """One sample's row. Module-level so a spawned worker can unpickle it."""
+    """One sample's row. Shared by serial and parallel cohort maps."""
     sid, sample = item
     return {"sample_id": sid, **vsig(resolve_sample(sample), corpus, **kw)}
 
@@ -127,11 +127,10 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
     """One row per sample, ``sample_id`` first.
 
     Args:
-        samples: ``{sample_id: sample}`` or an iterable of pairs. A sample may be a zero-argument
-            **picklable** callable, which defers the read into the worker and keeps peak memory at
+        samples: ``{sample_id: sample}`` or an iterable of pairs. A sample may be a zero-argument callable, which defers the read into the worker and keeps peak memory at
             ``O(n_jobs)`` samples rather than the whole cohort.
         corpus: A fitted corpus.
-        n_jobs: Worker processes. ``1`` stays in-process, ``0`` uses every available core.
+        n_jobs: Worker threads. ``1`` stays in-process, ``0`` uses every available core.
         cstar_target: ``"min"`` (default) reads every sample's attained coverage first and
             standardises the whole cohort to the per-locus minimum, so the diversity columns are
             comparable across samples and the level is a property of *this* cohort rather than of

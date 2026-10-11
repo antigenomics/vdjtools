@@ -158,6 +158,11 @@ std::vector<KmerRow> kmer_rows(const std::vector<std::vector<std::string>>& junc
         }
     };
 
+    if (nthreads == 1) {
+        worker();
+        if (error) std::rethrow_exception(error);
+        return out;
+    }
     std::vector<std::thread> pool;
     ThreadJoiner joiner{pool};
     pool.reserve(nthreads);

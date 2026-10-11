@@ -16,7 +16,7 @@ def _pool_probe(i):
     return {'i': i, 'polars': pl.thread_pool_size(), 'native': kernel_threads(0)}
 
 
-def test_spawn_limits_apply_before_import_and_restore_parent_environment():
+def test_thread_workers_use_serial_kernels_without_environment_mutation():
     with patch.dict(os.environ, {'POLARS_MAX_THREADS': '16', 'OPENBLAS_NUM_THREADS': '16'}):
         rows = parallel_rows(range(4), _pool_probe, 2)
         assert [r['i'] for r in rows] == list(range(4))

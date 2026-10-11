@@ -211,16 +211,14 @@ under the repository tags `v0.0.1` … `1.2.1`.
 vdjtools signature --corpus blood --jobs 8 samples/*.tsv -o signatures.parquet
 ```
 
-`--jobs` controls worker processes. It defaults to 1; use 0 to request all available
-cores or a positive count to set the budget explicitly. Each spawned worker uses one
-thread per numerical kernel. Workers read one sample at a time, retain their fitted
-resources, and return only a feature row. Output follows input order. No sample-count
-heuristic changes an explicit worker budget.
+`--jobs` controls worker threads. It defaults to 1; use 0 to request all available
+cores or a positive count to set the budget explicitly. Each worker uses one
+thread per numerical kernel and shares fitted resources. Workers read one sample at
+a time; output follows input order. Positive counts must fit the CPU allocation.
 
-For the Python cohort API, pass picklable zero-argument readers to defer file loading
-into workers. Passing already-loaded frames keeps those frames in the parent too.
-The CLI sets kernel thread limits before imports, including at `--jobs 1`. Direct
-Python calls retain the calling process's Polars and BLAS settings at `n_jobs=1`.
+For the Python cohort API, pass zero-argument readers to defer file loading into
+workers. Closures and lambdas work; callbacks must not mutate shared resources.
+Serial mode runs without a pool. Numerical import pools are kept at one thread.
 
 Model-build resource budgets follow the same rule: `build_all(..., workers=8)` runs up to eight
 builds with one kernel thread each. `build_model(..., threads=8)` and

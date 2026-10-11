@@ -571,7 +571,7 @@ def fit(rows: list[dict[str, float]], vocab: dict[str, dict[str, list[str]]], *,
 
 
 def _row_for(item, sig, vocab, kw):
-    """One sample's raw feature dict. Module-level so a spawned worker can unpickle it."""
+    """One sample's raw feature dict. Shared by serial and parallel cohort maps."""
     from .cohort import resolve_sample
 
     frames = resolve_sample(item[1] if isinstance(item, tuple) else item)
@@ -590,14 +590,13 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
 
     The shipped corpora are one route and this is the other. ``fit`` takes feature rows, so a
     caller holding repertoires had to run the featuriser per sample and assemble the dicts
-    themselves; this does that, in processes, and hands back the same :class:`Corpus` type the
+    themselves; this does that, in threads, and hands back the same :class:`Corpus` type the
     published artifacts are. :meth:`Corpus.save` writes it, :meth:`Corpus.load` reads it back, and
     a collaborator can score against it exactly as against a shipped one.
 
     Args:
         samples: ``{sample_id: sample}``, an iterable of pairs, or an iterable of samples. A sample
-            is ``{locus: frame}``, one frame with a ``locus`` column, or a **picklable**
-            zero-argument callable returning either.
+            is ``{locus: frame}``, one frame with a ``locus`` column, or a zero-argument callable returning either.
         sig: Which half to fit. ``"rsig"`` requires ``mir.signature`` to have been imported.
         name: Recorded in the manifest, and reported in the preflight line wherever this corpus is
             used. Name it after the cohort, not after the analysis.
@@ -606,7 +605,7 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
         organism: Germline organism, when ``vocab`` is derived rather than given.
         n_components: Components per locus, as an int or a cumulative variance fraction.
         weight: Clone-size weight, forwarded to the featuriser.
-        n_jobs: Worker processes; ``0`` uses every available core.
+        n_jobs: Worker threads; ``0`` uses every available core.
         **kw: Forwarded to :func:`fit_matrices` (``mode``, ``winsor_p``, ...).
 
     Returns:
@@ -1189,7 +1188,7 @@ def draw_pool(locus: str, n: int, *, seed: int, source: str = "olga") -> pl.Data
     core of a 16-core M-series laptop: **4,200 sequences/s**, and identical at 1 and 16 polars
     threads -- the sampler is a per-sequence Python/numpy loop, so it does not thread. Pool
     generation is therefore the dominant serial cost of a synthetic build (about 15M sequences at
-    ``size=10,000`` across seven loci) and is why :func:`build_pools` fans out over processes.
+    ``size=10,000`` across seven loci) and remains GIL-limited in the bounded thread pool.
 
     NOTE an earlier docstring here claimed 20,372 seq/s on IGH. That figure is 4.8x the measured
     rate and it is what made a 77 s stage look like a 16 s one when the build was planned.
@@ -1360,7 +1359,7 @@ def draw_one(pools: dict, plan: dict, regime: str, j: int, seed: int) -> dict:
 
     Each sample gets its own generator, seeded from ``(seed, locus index, j)``, so any process can
     draw any sample in any order and get the same repertoire. That is what lets the build run across
-    processes while staying bit-identical at every ``n_jobs``: the drawing is the only part of the
+    threads while staying bit-identical at every ``n_jobs``: the drawing is the only part of the
     pipeline carrying RNG state, and here it carries none between samples.
     """
     def at(v, j):
@@ -1400,14 +1399,11 @@ def _pool_chunk(args) -> tuple:
 def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path,
                 n_jobs: int = 1, progress=None, depth_spread: "float | str | None" = None,
                 cohort: "str | None" = None) -> dict:
-    """Generate every locus's pool across processes; return ``{locus: [chunk path, ...]}``.
+    """Generate every locus's pool across bounded threads; return ``{locus: [chunk path, ...]}``.
 
-    Generation is the single most expensive stage of a synthetic build and it is embarrassingly
-    parallel -- measured on Aldan-3, seven pools at ``size=10,000`` took 4,850 s in one process,
-    which is 81 minutes of a build whose featurisation is the part anyone cares about.
-
-    Written as **uncompressed** IPC and read back memory-mapped, so N workers share one physical
-    copy of a multi-gigabyte pool through the page cache instead of each pickling its own.
+    Chunk seeds and the reference sampler are unchanged. Python sampling is GIL-limited;
+    threads bound resource use but do not promise multicore scaling for that stage.
+    Uncompressed IPC chunks are mapped once and shared by feature workers.
     """
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
     tasks = []
@@ -1439,24 +1435,9 @@ def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path
 
 def _map_unordered(fn, tasks: list, n_jobs: int) -> list:
     """``[fn(t) for t in tasks]``, load-balanced one task at a time. Raises if the pool cannot start."""
-    from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
-    from multiprocessing import get_context
+    from .cohort import parallel_rows
 
-    from .cohort import single_threaded_workers
-
-    workers = _workers(n_jobs, len(tasks))
-    if workers < 2:
-        return [fn(t) for t in tasks]
-    try:
-        with single_threaded_workers(), ProcessPoolExecutor(
-                max_workers=workers, mp_context=get_context("spawn")) as ex:
-            return list(ex.map(fn, tasks, chunksize=1))
-    except BrokenExecutor as e:
-        raise RuntimeError(
-            f"could not start {workers} worker processes ({type(e).__name__}). Workers are spawned, "
-            "so the calling module is re-imported: that works from an importable module and fails "
-            "from `python -c` or a heredoc. Guard the call with `if __name__ == '__main__':`, or "
-            "pass n_jobs=1. It is NOT falling back to one process.") from e
+    return parallel_rows(tasks, fn, n_jobs)
 
 
 def read_pools(paths: dict) -> dict:
@@ -1478,25 +1459,14 @@ def read_pools(paths: dict) -> dict:
 POOL_CHUNKS: int = 64
 
 
-#: Per-worker state, set once by the pool initializer. One copy per worker **process**, never per
-#: task: a worker that re-mapped the pools per task would pay that cost once per batch instead of
-#: once per core, which is the mistake the initializer exists to prevent.
-_W: dict = {}
-
-
-def _init_worker(paths, plan, regime, seed, cols, featurise) -> None:
-    _W.update(pools=read_pools(paths), plan=plan, regime=regime, seed=seed, cols=cols,
-              featurise=featurise)
-
-
-def _feat_batch(span) -> tuple:
-    """Draw and featurise samples ``[a, b)`` in this worker; return the filled rows per locus."""
+def _feat_batch(span, *, pools, plan, regime, seed, cols, featurise) -> tuple:
+    """Draw and featurise ``[a, b)`` using shared read-only pools."""
     a, b = span
-    out = {loc: np.full((b - a, len(cols)), np.nan) for loc, cols in _W["cols"].items()}
+    out = {loc: np.full((b - a, len(c)), np.nan) for loc, c in cols.items()}
     for j in range(a, b):
-        raw = _W["featurise"](draw_one(_W["pools"], _W["plan"], _W["regime"], j, _W["seed"]))[0]
-        for loc, cols in _W["cols"].items():
-            out[loc][j - a] = [raw.get(c, np.nan) for c in cols]
+        raw = featurise(draw_one(pools, plan, regime, j, seed))[0]
+        for loc, c in cols.items():
+            out[loc][j - a] = [raw.get(key, np.nan) for key in c]
     return a, out
 
 
@@ -1522,22 +1492,19 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
                    n_jobs: int = 1, progress=None, tmp: "Path | None" = None,
                    depth_spread: "float | str | None" = None,
                    cohort: "str | None" = None) -> dict:
-    """The corpus matrix, ``{locus: (array, columns)}``, built across ``n_jobs`` processes.
+    """The corpus matrix, ``{locus: (array, columns)}``, built across ``n_jobs`` threads.
 
     Shared by both halves of the signature: ``vsig`` and ``rsig`` differ only in ``featurise`` and
     ``sig``, and the samples they see are identical -- same pools, same per-sample seeds, same
     depths -- which is what makes the two artifacts joinable on ``sample_id``.
 
-    Parallel **across samples, never inside one**. A sample's featurisation is a pure function of
-    that sample, so a worker needs no coordination; and because every worker draws its own samples
-    from memory-mapped pools, the only thing that crosses a process boundary is one row of numbers
-    per sample. Shipping drawn repertoires instead would be ~38 GB of pickling at the shipped size.
+    Parallel across samples, with serial kernels inside each worker. Threads share
+    read-only mapped pools and vocabulary; each sample has its own draw and output row.
 
     Args:
-        featurise: A **picklable** callable mapping ``{locus: frame}`` to ``(raw, channels)`` --
-            a module-level function or a ``functools.partial`` over one, never a lambda.
-        n_jobs: Worker processes; ``0`` means every core available. ``1`` runs in-process and is
-            the default, so that a doctest or a 12-sample test does not spawn a pool.
+        featurise: Callable mapping ``{locus: frame}`` to ``(raw, channels)``.
+            It must not mutate shared resources.
+        n_jobs: Worker threads; ``0`` means allocated cores, ``1`` runs without a pool.
         tmp: Scratch directory for the pool files. A private temporary directory by default,
             removed when the build finishes.
 
@@ -1564,19 +1531,19 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
         plan = draw_plan(ordered, n_samples=n_samples, size=size, seed=seed,
                          depth_spread=depth_spread, cohort=cohort)
         workers = _workers(n_jobs, n_samples)
-        # Four spans per worker rather than one. The expensive per-worker state -- the mapped pools
-        # and the germline vocabulary -- is loaded once by the initializer, not once per span, so
-        # extra spans cost nothing and buy load balance plus progress that moves.
+        from functools import partial
+
+        # Shared pools are mapped once; contiguous spans keep task overhead small.
         spans = _ranges(n_samples, workers * 4 if workers > 1 else 1)
-        args = (paths, plan, regime, seed, cols, featurise)
+        fn = partial(_feat_batch, pools=read_pools(paths), plan=plan, regime=regime,
+                     seed=seed, cols=cols, featurise=featurise)
         if workers < 2:
-            try:
-                _init_worker(*args)
-                results = [_feat_batch(sp) for sp in _progress(spans, n_samples, progress)]
-            finally:
-                _W.clear()
+            from ..cores import serial_kernels
+
+            with serial_kernels():
+                results = [fn(sp) for sp in _progress(spans, n_samples, progress)]
         else:
-            results = _pooled(spans, args, workers, n_samples, progress)
+            results = _pooled(spans, fn, workers, n_samples, progress)
         for a, part in results:
             for loc, block in part.items():
                 mats[loc][0][a:a + block.shape[0]] = block
@@ -1593,33 +1560,25 @@ def _progress(spans, n_samples, progress):
             progress("featurise", sp[1], n_samples)
 
 
-def _pooled(spans, args, workers: int, n_samples: int, progress):
-    """Run the spans in a spawned pool. A pool that cannot start **raises**, it does not degrade."""
-    from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
-    from multiprocessing import get_context
+def _pooled(spans, fn, workers: int, n_samples: int, progress):
+    """Run contiguous spans on bounded threads, reporting completed rows."""
+    from concurrent.futures import ThreadPoolExecutor
 
-    from .cohort import single_threaded_workers
+    from ..cores import require_serial_pools, serial_kernels
+
+    require_serial_pools()
+
+    def work(span):
+        with serial_kernels():
+            return fn(span)
 
     out, done, step = [], 0, max(n_samples // 20, 1)
-    try:
-        with single_threaded_workers(), ProcessPoolExecutor(
-                max_workers=workers, mp_context=get_context("spawn"),
-                initializer=_init_worker, initargs=args) as ex:
-            for a, part in ex.map(_feat_batch, spans):
-                out.append((a, part))
-                was, done = done, done + next(b - x for x, b in spans if x == a)
-                # At most twenty lines, whatever the span count. One span per 4 workers means 288
-                # spans on a 72-core box, and 288 progress lines in a log is not progress.
-                if progress and done // step > was // step:
-                    progress("featurise", done, n_samples)
-    except BrokenExecutor as e:
-        raise RuntimeError(
-            f"could not start {workers} worker processes ({type(e).__name__}). Workers are "
-            "spawned, not forked -- polars cannot be combined with fork -- and a spawned worker "
-            "re-imports the module that called this, which works from an importable module and "
-            "fails from `python -c` or a heredoc. Guard the call with `if __name__ == "
-            "'__main__':`, or pass n_jobs=1. It is NOT falling back to one process: that is what "
-            "hid a 20x slowdown here before.") from e
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for span, result in zip(spans, ex.map(work, spans)):
+            out.append(result)
+            was, done = done, done + span[1] - span[0]
+            if progress and done // step > was // step:
+                progress("featurise", done, n_samples)
     return out
 
 
@@ -1673,7 +1632,7 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
         fit_corpus: ``False`` returns the raw samples instead of fitting, for scoring a held-out
             draw against a corpus fitted on another.
         progress: Optional ``callable(locus, done, total)``.
-        n_jobs: Worker **processes** (not kernel threads). ``0`` means every available core; ``1``,
+        n_jobs: Worker **threads** (not kernel threads). ``0`` means every available core; ``1``,
             the default, runs in-process. The result is bit-identical at every value.
         depth_spread: Multiplicative depth range each repertoire's size is drawn log-uniformly
             across, around ``size``. ``None`` is the corpus's own -- :data:`DEPTH_SPREAD` for a pure

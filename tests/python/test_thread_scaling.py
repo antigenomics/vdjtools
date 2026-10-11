@@ -91,4 +91,5 @@ def test_the_small_input_shortcut_stays_serial(timings):
     m, seqs, *_ = timings
     short = seqs[:4]
     none = [None] * len(short)
-    assert _pgen_nt_many(m, short, none, none, 8) == _pgen_nt_many(m, short, none, none, 1)
+    from vdjtools.cores import available_cores
+    assert _pgen_nt_many(m, short, none, none, min(8, available_cores())) == _pgen_nt_many(m, short, none, none, 1)

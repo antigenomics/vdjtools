@@ -140,15 +140,14 @@ _LOCAL = threading.local()
 def kernel_threads(threads: int = 0) -> int:
     """Resolve 0/all, 1/serial, or a positive count within this process's allocation.
 
-    Process and thread-pool workers have a one-core allocation. Explicit excessive counts
+    Outer thread-pool workers have a one-core allocation. Explicit excessive counts
     raise rather than silently clamp. Numerical import pools remain serial; native batches
     receive this resolved integer, never a host-wide automatic setting.
     """
     if isinstance(threads, bool):
         raise TypeError("threads must be an integer, not bool")
     threads = operator.index(threads)
-    budget = (1 if os.environ.get("VDJTOOLS_POOL_WORKER") or
-              getattr(_LOCAL, "serial", False) else available_cores())
+    budget = 1 if getattr(_LOCAL, "serial", False) else available_cores()
     if threads < 0:
         raise ValueError("threads must be non-negative (0 means allocated cores)")
     if threads > budget:

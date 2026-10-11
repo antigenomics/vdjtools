@@ -772,13 +772,12 @@ allocation, and positive counts must fit it. CPU affinity, SLURM per-task alloca
 and visible cgroup quotas, including parent quotas, constrain that detection.
 Kubernetes CPU requests alone are scheduling weights, not a hard allocation.
 
-Sample processes use one kernel thread each. Outer thread workers use serial inner
-sequence kernels. Excessive counts and explicitly nested parallel kernels raise.
+Sample and model-build workers use serial inner numerical kernels. Excessive counts and explicitly nested parallel kernels raise.
 Import-time settings also apply to non-signature CLI commands. Existing BLAS pools
 are limited at runtime; their idle OS threads may remain. An already initialized
 multi-thread Polars pool cannot be resized, so outer thread pools require a fresh
-interpreter or ``workers=1``. Changes made temporarily for child spawn are restored,
-and concurrent spawn owners are serialized because the environment is process-global.
+interpreter or ``workers=1``. Sample pools share resources in one interpreter and
+do not change the environment or spawn child processes.
 
 Native worker exceptions are rethrown after joining workers. Thread creation failures
 also join workers already started and raise to Python, rather than terminating the
