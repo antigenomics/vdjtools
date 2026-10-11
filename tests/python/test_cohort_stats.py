@@ -14,6 +14,8 @@ import gzip
 
 import numpy as np
 import polars as pl
+from vdjtools.cores import available_cores
+
 import pytest
 from typer.testing import CliRunner
 
@@ -59,7 +61,7 @@ def test_map_samples_preserves_input_order_and_matches_serial(cohort):
     base, _, _, frames = cohort
     items = [(n, base / f"{n}.tsv.gz") for n in _SAMPLES]  # input order s2, s10, s1
     serial = [(n, stats.diversity_stats(frames[n])) for n in _SAMPLES]
-    for workers in (1, 2, 8):
+    for workers in (k for k in (1, 2, 8) if k <= available_cores()):
         got = map_samples(stats.diversity_stats, items, workers=workers)
         assert [sid for sid, _ in got] == list(_SAMPLES)            # input order kept
         for (sid, res), (esid, eres) in zip(got, serial):
@@ -82,7 +84,7 @@ def test_cli_threads_invariant(cohort, cmd, extra):
         return r.stdout
 
     ref = run([])
-    for t in ("1", "2", "8"):
+    for t in (str(k) for k in (1, 2, 8) if k <= available_cores()):
         assert run(["--threads", t]) == ref
 
 

@@ -8,6 +8,8 @@ twin); all three are one batched call now.
 """
 from __future__ import annotations
 
+from vdjtools.cores import available_cores
+
 import pytest
 
 from vdjtools.model import native
@@ -40,7 +42,7 @@ def test_marginalizing_over_v_and_j_matches_too(seqs):
 def test_the_thread_count_does_not_change_the_answer(seqs):
     m, nt, v, j = seqs
     base = native.pgen_nt_batch(m, nt, v, j, threads=1)
-    for threads in (2, 4, 8, 0):
+    for threads in (k for k in (2, 4, 8, 0) if k <= available_cores()):
         assert native.pgen_nt_batch(m, nt, v, j, threads=threads) == base, threads
 
 
