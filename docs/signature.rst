@@ -450,17 +450,24 @@ Building a corpus
 The synthetic corpora use **no samples from anybody's cohort**: every receptor is drawn from the
 bundled recombination models.
 
-The build runs across worker **processes**, one contiguous block of samples each; ``--jobs/-j``
+The build runs across worker **threads**, one contiguous block of samples each; ``--jobs/-j``
 sets how many and defaults to every core the process may use (``-j 1`` stays in-process). A sample
 is a pure function of its index -- its generator is seeded from ``(seed, locus, index)`` -- so each
 worker draws its own repertoires from memory-mapped pools and returns one row of numbers, and
-**the artifact is identical at every** ``--jobs``. Measured on Aldan-3, seven loci at
-``--samples 10000 --size 10000`` on 72 cores: 157 s to generate the receptor pools (4,850 s in one
-process) and about 50 samples/s to featurise them.
+**the artifact is identical at every** ``--jobs``. The earlier process implementation, measured
+on Aldan-3 for seven loci at ``--samples 10000 --size 10000`` on 72 cores, took 157 s to generate
+the receptor pools (4,850 s in one process) and about 50 samples/s to featurise them. These are
+historical process timings, not throughput of the current thread implementation.
+
+The unchanged reference pool sampler is Python/GIL-limited. Worker threads bound resource use
+and share memory, but do not accelerate that stage; full synthetic builds can therefore take
+about an hour or longer to generate pools. More ``--jobs`` does not remove this bottleneck.
+Use ``--fetch NAME`` for an existing published corpus. Feature extraction can still scale when
+its numerical kernels release the GIL.
 
 .. note::
 
-   Two settings, two layers. ``--jobs`` is worker **processes**; ``POLARS_MAX_THREADS`` and
+   Two settings, two layers. ``--jobs`` is worker **threads**; ``POLARS_MAX_THREADS`` and
    ``OMP_NUM_THREADS`` are **kernel threads**. The builder sets its workers to one kernel thread
    each, because ``jobs x cores`` threads is how a 15 s stage was once measured at 296 s.
 
@@ -493,19 +500,17 @@ per locus.
 Parallelism
 -----------
 
-``--jobs`` / ``n_jobs`` selects worker processes: 1 (the default) runs in the
-calling process, 0 requests all available cores, and a positive count is limited only
+``--jobs`` / ``n_jobs`` selects worker threads: 1 (the default) runs in the
+calling process, 0 requests all available cores, and a positive count must fit the allocation and is capped
 by the number of samples. No timing or sample-depth heuristic changes that count.
 
-Spawned workers inherit one-thread limits for Polars, BLAS, OpenMP and Rayon before
-importing numerical libraries. The parent's environment is restored when the pool
-exits. Each worker loads its callable and frozen resources once, reads and reduces
-one sample at a time, and returns a feature row. Workers take the next available
-sample; output rows still follow input order. A failed pool raises.
+Workers share frozen resources and use one thread per numerical kernel. Each worker
+reads and reduces one sample at a time; output rows follow input order. No child
+interpreters, pickling, or process helper threads are needed. A failed pool raises.
 
-The CLI passes filenames to workers. For the Python API, use picklable zero-argument
-readers for the same bounded-memory path. Already-loaded frames remain resident in
-the parent. With ``n_jobs=1``, the caller's kernel thread settings remain in effect.
+The CLI passes filenames to workers. Python readers may be closures or lambdas.
+Already-loaded frames remain resident in the caller. Callbacks must not mutate
+shared inputs or resources. ``n_jobs=1`` runs without a worker pool.
 The default cohort coverage target requires two passes through the input; an explicit
 ``cstar_target`` avoids the coverage pass without changing worker allocation.
 
@@ -607,7 +612,7 @@ and it is the first thing anybody with a cohort asks for.
    mine = Corpus.load("my-cohort.npz")
    vsig(held_out_sample, mine, n_components=64)
 
-Samples are ``{sample_id: {locus: frame}}``, or an iterable of frames, or **picklable** zero-argument
+Samples are ``{sample_id: {locus: frame}}``, or an iterable of frames, or zero-argument
 callables that defer the read into the worker. ``mir.signature`` must be imported before
 ``sig="rsig"`` will resolve; nothing in vdjtools imports ``mir``, so the featuriser reaches the
 corpus through a registry rather than an import.

@@ -95,12 +95,13 @@ def test_the_pool_sizing_sites_use_it():
 
 
 def test_kernel_auto_budget_respects_allocation_and_pool(monkeypatch):
-    from vdjtools.cores import kernel_threads
+    from vdjtools.cores import kernel_threads, serial_kernels
     monkeypatch.setattr("vdjtools.cores.available_cores", lambda: 3)
-    monkeypatch.delenv("VDJTOOLS_POOL_WORKER", raising=False)
     assert kernel_threads(0) == 3
-    monkeypatch.setenv("VDJTOOLS_POOL_WORKER", "1")
-    assert kernel_threads(0) == 1
-    assert kernel_threads(2) == 2
-    with pytest.raises(ValueError, match="threads"):
-        kernel_threads(-1)
+    with serial_kernels():
+        assert kernel_threads(0) == 1
+        with pytest.raises(ValueError, match="between 0 and 1"):
+            kernel_threads(2)
+        with pytest.raises(ValueError, match="threads"):
+            kernel_threads(-1)
+    assert kernel_threads(0) == 3

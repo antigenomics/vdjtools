@@ -22,6 +22,8 @@ phenotype design — :func:`prepare_fuzzy_features` builds it once for reuse acr
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import math
 from dataclasses import dataclass
 
@@ -70,7 +72,7 @@ def prepare_fuzzy_features(cohort: pl.LazyFrame | pl.DataFrame, key: tuple[str, 
         ...     association(cohort, design, features=feats)
     """
     feat_lf, idcols, rep = _feature_frame(cohort, key, "fuzzy", productive_only=productive_only,
-                                         strip_allele=strip_allele, scope=scope, threads=threads,
+                                         strip_allele=strip_allele, scope=scope, threads=kernel_threads(threads),
                                          candidates=candidates)
     return FeatureFrame(feat_lf, idcols, rep)
 
@@ -103,7 +105,7 @@ def _fuzzy_feature_frame(lf: pl.LazyFrame, key: tuple[str, ...], *, scope: str, 
         return rows.lazy().select([*key, SAMPLE_ID]), list(key), None
 
     import vdjmatch.cluster as vc
-    pairs = vc.overlap(cq, universe, scope=scope, threads=threads)
+    pairs = vc.overlap(cq, universe, scope=scope, threads=kernel_threads(threads))
     qmap = pl.DataFrame({"a_idx": np.arange(len(cq), dtype=np.int64), "_cand": cq})
     umap = pl.DataFrame({"b_idx": np.arange(len(universe), dtype=np.int64), aa: universe})
     nb = (pairs.join(qmap, on="a_idx", how="inner").join(umap, on="b_idx", how="inner")
@@ -165,12 +167,12 @@ def _feature_frame(cohort: pl.LazyFrame | pl.DataFrame, key: tuple[str, ...], ma
     if match == "exact":
         return lf.select([*key, SAMPLE_ID]), list(key), None
     if match == "fuzzy":
-        return _fuzzy_feature_frame(lf, key, scope=scope, threads=threads,
+        return _fuzzy_feature_frame(lf, key, scope=scope, threads=kernel_threads(threads),
                                     candidates=candidates)
 
     uniq_keys = lf.select(list(key)).unique().collect()
     mm = metaclonotypes(uniq_keys, scope=scope, match_v=(S.V_CALL in key),
-                        match_j=(S.J_CALL in key), threads=threads)
+                        match_j=(S.J_CALL in key), threads=kernel_threads(threads))
     kc = lf.group_by(list(key)).agg(pl.col(S.COUNT).sum().alias("_kc")).collect()
     on = [c for c in key if c in mm.columns]
     rep = (mm.join(kc, on=on, how="left").with_columns(pl.col("_kc").fill_null(0))
@@ -192,7 +194,7 @@ def select_candidates(cohort: pl.LazyFrame | pl.DataFrame, *, key: tuple[str, ..
     ``incidence``, sorted by descending incidence.
     """
     feat_lf, idcols, rep = _feature_frame(cohort, key, match, productive_only=productive_only,
-                                          strip_allele=strip_allele, scope=scope, threads=threads)
+                                          strip_allele=strip_allele, scope=scope, threads=kernel_threads(threads))
     thr = min_incidence
     if min_incidence_frac is not None:
         n = feat_lf.select(pl.col(SAMPLE_ID).n_unique()).collect().item()
@@ -353,7 +355,7 @@ def association(
     else:
         feat_lf, idcols, rep = _feature_frame(cohort, key, match, productive_only=productive_only,
                                               strip_allele=strip_allele, scope=scope,
-                                              threads=threads, candidates=candidates)
+                                              threads=kernel_threads(threads), candidates=candidates)
     design = _normalize_design(phenotype, pheno_col, level_col, stratum_col)
     # Restrict the design to subjects we actually OBSERVED. n_pos/n_neg below are the arms of the
     # 2x2 (c = n_pos - a is "condition-positive subjects without the feature"), so a labelled

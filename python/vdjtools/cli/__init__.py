@@ -686,8 +686,9 @@ def corpus(
                                              "~/.cache/vdjtools/signature). `all` pre-warms every "
                                              "corpus -- the install-time step, since an artifact is "
                                              "otherwise fetched on first use."),
-    jobs: int = typer.Option(0, "--jobs", "-j", help="Worker PROCESSES across samples (not kernel "
-                                                     "threads): 0 = every core, 1 = in-process. "
+    jobs: int = typer.Option(0, "--jobs", "-j", help="Worker threads across samples; inner kernels use one thread: "
+                                                     "0 = allocated cores, 1 = no pool. "
+                                                     "Reference pool sampling is GIL-limited. "
                                                      "The artifact is identical at any value."),
 ) -> None:
     """Build a synthetic corpus and fit its rotation, bounds and scaling.

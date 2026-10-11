@@ -15,6 +15,8 @@ passes.
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import polars as pl
 
 from ..io.schema import JUNCTION_AA, J_CALL, V_CALL
@@ -84,7 +86,7 @@ def metaclonotypes(clonotypes: pl.DataFrame, *, scope: str = "1,0,0,1",
         if len(cdr3s) < 2:
             continue
         gids = sub["_gid"].to_list()
-        pairs = cluster.overlap(cdr3s, scope=scope, threads=threads)
+        pairs = cluster.overlap(cdr3s, scope=scope, threads=kernel_threads(threads))
         for a, b in zip(pairs["a_idx"].to_list(), pairs["b_idx"].to_list()):
             union(gids[a], gids[b])
 

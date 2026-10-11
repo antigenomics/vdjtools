@@ -1,4 +1,5 @@
 """Native batch aa-Pgen: exact vs per-sequence + thread-count invariant (Phase 13 item 5)."""
+from vdjtools.cores import available_cores
 import pytest
 
 from vdjtools.model import load_bundled, native
@@ -18,14 +19,14 @@ def test_batch_equals_serial_and_is_thread_invariant(data, mm):
     serial = [native.pgen_aa(m, s, v, j, mismatches=mm) for s, v, j in zip(seqs, vs, js)]
     # bitwise-identical to per-sequence, and independent of thread count.
     assert native.pgen_aa_batch(m, seqs, vs, js, mismatches=mm, threads=1) == serial
-    assert native.pgen_aa_batch(m, seqs, vs, js, mismatches=mm, threads=8) == serial
+    assert native.pgen_aa_batch(m, seqs, vs, js, mismatches=mm, threads=min(8, available_cores())) == serial
     assert native.pgen_aa_batch(m, seqs, vs, js, mismatches=mm, threads=0) == serial
 
 
 def test_batch_gene_agnostic(data):
     m, seqs, _, _ = data
     serial = [native.pgen_aa(m, s) for s in seqs]
-    assert native.pgen_aa_batch(m, seqs, mismatches=0, threads=8) == serial
+    assert native.pgen_aa_batch(m, seqs, mismatches=0, threads=min(8, available_cores())) == serial
 
 
 def test_batch_validates_args(data):

@@ -16,6 +16,8 @@ the default ``"1,0,0,1"`` is a single substitution.
 """
 from __future__ import annotations
 
+from vdjtools.cores import kernel_threads
+
 import numpy as np
 import polars as pl
 
@@ -52,7 +54,7 @@ def fuzzy_overlap(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,1",
     a_agg = _aggregate(a, [JUNCTION_AA], index=True)
     b_agg = _aggregate(b, [JUNCTION_AA], index=True)
     pairs = cluster.overlap(a_agg[JUNCTION_AA].to_list(), b_agg[JUNCTION_AA].to_list(),
-                            scope=scope, threads=threads)
+                            scope=scope, threads=kernel_threads(threads))
 
     out_schema = ["a_cdr3", "b_cdr3", "n_subs", "score",
                   "count_a", "freq_a", "count_b", "freq_b"]
@@ -98,7 +100,7 @@ def fuzzy_overlap_metrics(a: pl.DataFrame, b: pl.DataFrame, scope: str = "1,0,0,
     """
     n_a = a.select(pl.col(JUNCTION_AA).n_unique()).item()
     n_b = b.select(pl.col(JUNCTION_AA).n_unique()).item()
-    pairs = fuzzy_overlap(a, b, scope=scope, threads=threads)
+    pairs = fuzzy_overlap(a, b, scope=scope, threads=kernel_threads(threads))
 
     if pairs.height == 0:
         return {"pairs": 0, "frac_a_matched": 0.0, "frac_b_matched": 0.0, "fuzzy_F": 0.0}
