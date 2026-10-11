@@ -127,3 +127,49 @@ def test_one_worker_is_serial_without_starting_a_pool(monkeypatch):
         raise AssertionError('serial mode started a pool')
     monkeypatch.setattr('concurrent.futures.ThreadPoolExecutor', forbidden)
     assert parallel_rows([0, 1], lambda _: kernel_threads(0), 1) == [1, 1]
+
+
+@pytest.mark.parametrize('n_jobs', [1, 2])
+@pytest.mark.parametrize('fail', [False, True])
+def test_corpus_releases_mapped_pools_before_scratch_cleanup(monkeypatch, n_jobs, fail):
+    import weakref
+    from shutil import rmtree
+
+    import polars as pl
+    from vdjtools.signature import corpus
+
+    mapped = []
+    cleaned = []
+    monkeypatch.setattr('vdjtools.cores.available_cores', lambda: 2)
+    monkeypatch.setattr(corpus, 'build_pools', lambda *a, **kw: {})
+    monkeypatch.setattr(corpus, 'draw_plan', lambda *a, **kw: {})
+    monkeypatch.setattr(corpus, 'locus_matrix', lambda *a: None)
+
+    def read(paths):
+        frame = pl.DataFrame({'x': [1]})
+        mapped.append(weakref.ref(frame))
+        return {'TRA': frame}
+
+    def feature(span, *, pools, **kw):
+        assert pools['TRA'].height == 1
+        if fail:
+            raise RuntimeError('feature failed')
+        return span[0], {}
+
+    def cleanup(path, **kw):
+        assert mapped and mapped[0]() is None
+        cleaned.append(path)
+        rmtree(path, **kw)
+
+    monkeypatch.setattr(corpus, 'read_pools', read)
+    monkeypatch.setattr(corpus, '_feat_batch', feature)
+    monkeypatch.setattr('shutil.rmtree', cleanup)
+    kwargs = {'sig': 'vsig', 'featurise': None, 'vocab': {}, 'loci': ('TRA',),
+              'n_samples': 2, 'n_jobs': n_jobs}
+    if fail:
+        with pytest.raises(RuntimeError, match='feature failed'):
+            corpus.build_matrices('uniform', **kwargs)
+    else:
+        assert corpus.build_matrices('uniform', **kwargs) == {}
+    assert len(cleaned) == 1
+    assert not cleaned[0].exists()
