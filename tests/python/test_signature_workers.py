@@ -104,7 +104,7 @@ def test_threads_share_resources_and_use_distinct_workers():
     assert kernel_threads(0) >= 2
 
 
-@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
+@pytest.mark.skipif(available_cores() < 4, reason="requires four allocated cores")
 def test_independent_concurrent_pools_keep_their_own_callbacks():
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
