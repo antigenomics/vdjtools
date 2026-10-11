@@ -454,9 +454,16 @@ The build runs across worker **threads**, one contiguous block of samples each; 
 sets how many and defaults to every core the process may use (``-j 1`` stays in-process). A sample
 is a pure function of its index -- its generator is seeded from ``(seed, locus, index)`` -- so each
 worker draws its own repertoires from memory-mapped pools and returns one row of numbers, and
-**the artifact is identical at every** ``--jobs``. Measured on Aldan-3, seven loci at
-``--samples 10000 --size 10000`` on 72 cores: 157 s to generate the receptor pools (4,850 s in one
-process) and about 50 samples/s to featurise them.
+**the artifact is identical at every** ``--jobs``. The earlier process implementation, measured
+on Aldan-3 for seven loci at ``--samples 10000 --size 10000`` on 72 cores, took 157 s to generate
+the receptor pools (4,850 s in one process) and about 50 samples/s to featurise them. These are
+historical process timings, not throughput of the current thread implementation.
+
+The unchanged reference pool sampler is Python/GIL-limited. Worker threads bound resource use
+and share memory, but do not accelerate that stage; full synthetic builds can therefore take
+about an hour or longer to generate pools. More ``--jobs`` does not remove this bottleneck.
+Use ``--fetch NAME`` for an existing published corpus. Feature extraction can still scale when
+its numerical kernels release the GIL.
 
 .. note::
 
