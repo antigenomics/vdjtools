@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "5.0.1"
+version = "5.0.2"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -147,6 +147,7 @@ ignore = ["E702", "E741", "E731"]
 testpaths = ["tests/python"]
 addopts = "-ra -m 'not slow'"
 markers = [
+    "benchmark: explicitly enabled resource/throughput checks",
     "slow: heavier oracle / reference-arithmetic checks (e.g. vs OLGA's own slow Pgen); run with -m slow",
     # `slow` is deselected by addopts and so never runs in CI at all -- it is not the long tail of the
     # default suite, it is outside it. `heavy` is different: these tests DO run by default and DO run

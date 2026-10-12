@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import gzip
 import os
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import polars as pl
@@ -310,27 +309,10 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
         A list of ``(sample_id, fn(frame))`` in the **same order as** ``items``
         (input/metadata order, regardless of which sample finishes first).
     """
-    items = list(items)
-    from ..cores import kernel_threads, serial_kernels, require_serial_pools
-
-    budget = kernel_threads(0 if workers is None else workers)
-    workers = min(budget, max(1, len(items)))
-    if workers > 1:
-        require_serial_pools()
+    from ..signature.cohort import parallel_rows
 
     def work(item):
         sid, path = item
-        with serial_kernels():
-            return sid, fn(read(path, fmt=fmt, keep=keep))
+        return sid, fn(read(path, fmt=fmt, keep=keep))
 
-    if workers == 1:
-        return [work(it) for it in items]
-
-    # ThreadPoolExecutor.map yields results in input order, so output order is
-    # deterministic (metadata order) no matter the completion order.
-    #
-    # No try/except around the pool, deliberately. A pool that cannot start must raise: a
-    # correctness-preserving fallback to a serial loop makes a dead pool indistinguishable from a
-    # slow one, which is precisely how a 20x regression went unnoticed elsewhere in this stack.
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        return list(ex.map(work, items))
+    return parallel_rows(items, work, 0 if workers is None else workers)

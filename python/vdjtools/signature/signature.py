@@ -121,6 +121,24 @@ def _cov(item, on_duplicate):
                                                   on_duplicate=on_duplicate)}
 
 
+def _coverage_target(items, n_jobs, cstar_target, kw):
+    if cstar_target == "min":
+        cov = parallel_rows(items, functools.partial(_cov, on_duplicate=kw.get("on_duplicate",
+                                                                              "error")), n_jobs)
+        per_locus: dict[str, float] = {}
+        for row in cov:
+            for loc, v in row.items():
+                if loc != "sample_id" and np.isfinite(v):
+                    per_locus[loc] = min(per_locus.get(loc, v), float(v))
+        cstar_target = per_locus or None
+        if cstar_target is None:
+            warnings.warn("no sample attained a measurable coverage at any locus, so no shared "
+                          "level could be established; the diversity columns will be holes.",
+                          stacklevel=2)
+
+    return cstar_target
+
+
 def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
                 cstar_target: "float | dict[str, float] | str | None" = "min",
                 columns: "list[str] | None" = None, **kw) -> pl.DataFrame:
@@ -145,19 +163,7 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
         A frame whose columns are ``sample_id`` then the corpus's signature columns.
     """
     items = list(samples.items() if isinstance(samples, dict) else samples)
-    if cstar_target == "min":
-        cov = parallel_rows(items, functools.partial(_cov, on_duplicate=kw.get("on_duplicate",
-                                                                              "error")), n_jobs)
-        per_locus: dict[str, float] = {}
-        for row in cov:
-            for loc, v in row.items():
-                if loc != "sample_id" and np.isfinite(v):
-                    per_locus[loc] = min(per_locus.get(loc, v), float(v))
-        cstar_target = per_locus or None
-        if cstar_target is None:
-            warnings.warn("no sample attained a measurable coverage at any locus, so no shared "
-                          "level could be established; the diversity columns will be holes.",
-                          stacklevel=2)
+    cstar_target = _coverage_target(items, n_jobs, cstar_target, kw)
 
     rows = parallel_rows(items, functools.partial(_one, corpus=corpus,
                                                  kw={**kw, "cstar_target": cstar_target,
@@ -201,3 +207,38 @@ def _demo() -> None:
 
 if __name__ == "__main__":
     _demo()
+
+
+def raw_features_cohort(samples, *, vocab=None, organism="human", n_jobs=1,
+                        cstar_target="min", weight="log2p1", on_duplicate="error"):
+    """Unrotated vsig features and channels, without a fitted corpus.
+
+    Raw means before corpus scaling/PCA: declared log/CLR/logit transforms still
+    apply. Use explicit shared coverage when comparing independently read cohorts.
+    Only numeric output rows survive each worker; no per-cohort dict-of-floats copy.
+    """
+    import hashlib
+    import json
+    from ..cores import require_memory
+
+    items = list(samples.items() if isinstance(samples, dict) else samples)
+    ids = [sid for sid,_ in items]
+    if not items or len(set(ids)) != len(ids):
+        raise ValueError('sample ids must be nonempty and unique')
+    vocab = vocab if vocab is not None else {loc:F.gene_vocab(loc,organism) for loc in L.LOCI}
+    target = _coverage_target(items,n_jobs,cstar_target,{'on_duplicate':on_duplicate})
+    columns = [c for loc in (*vocab,L.NO_LOCUS) for c in L.raw_columns('vsig',loc,vocab.get(loc))]
+    columns += L.channel_columns('vsig')
+    require_memory(16*len(items)*len(columns),'raw feature table')
+    values = np.full((len(items),len(columns)),np.nan)
+    def one(indexed):
+        i,(_,sample) = indexed
+        raw,channels = F.raw_and_channels(_locus_frames(resolve_sample(sample)),vocab,
+                                          cstar_target=target,weight=weight,on_duplicate=on_duplicate)
+        raw.update(channels)
+        values[i] = [raw.get(c,np.nan) for c in columns]
+    parallel_rows(enumerate(items),one,n_jobs)
+    identity = hashlib.sha256(json.dumps({'columns':columns,'vocab':vocab,'weight':weight,
+                                          'coverage':target},sort_keys=True).encode()).hexdigest()
+    return pl.DataFrame({'sample_id':ids,'embedding_space':['vsig:'+identity]*len(ids)}).hstack(
+        pl.from_numpy(values,schema=columns))

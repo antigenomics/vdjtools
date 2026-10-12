@@ -399,6 +399,8 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
     n, p = x.shape
     if n < 2 or p == 0:
         return None
+    from ..cores import require_memory
+    require_memory(6 * x.nbytes + 16 * min(n, p)**2, "corpus PCA fit")
     supports = [L.support_of(c) for c in columns]
     n_obs = np.isfinite(x).sum(axis=0).astype(np.int64)
 
@@ -418,12 +420,13 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
         # bit-reproducible across BLAS builds, which would make the artifact unverifiable.
         from sklearn.decomposition import PCA
         from sklearn.preprocessing import RobustScaler
-        z = RobustScaler().fit_transform(z)
+        z = RobustScaler(copy=False).fit_transform(z)
         pca = PCA(n_components=min(n - 1, p), svd_solver="full").fit(z)
         ev_all = pca.explained_variance_
         comps = pca.components_.T                       # (p, min(n-1, p))
     else:
         u, s, vt = np.linalg.svd(z - z.mean(0), full_matrices=False)
+        del u
         ev_all = (s ** 2) / max(n - 1, 1)
         comps = vt.T
 
@@ -1566,7 +1569,7 @@ def _progress(spans, n_samples, progress):
 
 def _pooled(spans, fn, workers: int, n_samples: int, progress):
     """Run contiguous spans on bounded threads, reporting completed rows."""
-    from concurrent.futures import ThreadPoolExecutor
+    from .cohort import parallel_rows
 
     from ..cores import require_serial_pools, serial_kernels
 
@@ -1577,12 +1580,11 @@ def _pooled(spans, fn, workers: int, n_samples: int, progress):
             return fn(span)
 
     out, done, step = [], 0, max(n_samples // 20, 1)
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        for span, result in zip(spans, ex.map(work, spans)):
-            out.append(result)
-            was, done = done, done + span[1] - span[0]
-            if progress and done // step > was // step:
-                progress("featurise", done, n_samples)
+    for span, result in zip(spans, parallel_rows(spans, work, workers)):
+        out.append(result)
+        was, done = done, done + span[1] - span[0]
+        if progress and done // step > was // step:
+            progress("featurise", done, n_samples)
     return out
 
 
@@ -1803,3 +1805,111 @@ def _demo() -> None:
 
 if __name__ == "__main__":
     _demo()
+
+
+def fit_pca(matrix, n_components, *, seed=0, copy=True):
+    """Fit the established StandardScaler/PCA pipeline on sample feature rows."""
+    from sklearn.decomposition import PCA
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    return make_pipeline(StandardScaler(copy=copy),
+                         PCA(n_components, random_state=seed, copy=copy)).fit(matrix)
+
+
+def _space(table: pl.DataFrame) -> str:
+    if 'embedding_space' not in table.columns or table['embedding_space'].null_count():
+        raise ValueError('embedding space identity is missing')
+    ids = table['embedding_space'].unique().to_list()
+    if len(ids) != 1:
+        raise ValueError('table mixes incompatible embedding spaces')
+    return ids[0]
+
+
+@dataclass
+class TablePCA:
+    """A fitted sample-table scaler and PCA, with column and prototype-space checks.
+
+    Only the explicit fitted rotation is saved, never sample-derived intermediates.
+    Missing coordinates use training medians (zero for wholly unobserved columns);
+    unselected presence channels retain missing-locus information in the output.
+    """
+    columns: list[str]
+    space: str
+    fill: np.ndarray
+    mean: np.ndarray
+    scale: np.ndarray
+    center: np.ndarray
+    components: np.ndarray
+
+    @classmethod
+    def fit(cls, table: pl.DataFrame, *, n_components: int = 256, seed: int = 0,
+            columns: list[str] | None = None):
+        """Fit selected sample features; unselected channels and metadata pass through.
+
+        RFF columns (phi:) are the default. For vsig/rsig tables supply explicit
+        columns and an embedding_space column naming their actual feature basis.
+        This standard scaler/PCA does not replace corpus winsorization."""
+        space = _space(table)
+        cols = list(columns) if columns is not None else [c for c in table.columns if c.startswith('phi:')]
+        if len(set(cols)) != len(cols) or any(c not in table.columns for c in cols):
+            raise ValueError('feature columns must be present and unique')
+        if not cols or table.height < 2 or n_components < 1:
+            raise ValueError('PCA needs feature columns, at least two sample rows and a positive dimension')
+        from vdjtools.cores import require_memory
+        require_memory(32 * table.height * len(cols) + 16 * len(cols)**2, 'sample feature PCA fit')
+        X = table.select(cols).to_numpy(order='c').copy()
+        X[~np.isfinite(X)] = np.nan
+        fill = np.zeros(len(cols))
+        observed = np.isfinite(X).any(axis=0)
+        fill[observed] = np.nanmedian(X[:, observed], axis=0)
+        missing = np.isnan(X)
+        np.copyto(X, fill, where=missing)
+        del missing
+        reducer = fit_pca(X, min(n_components, *X.shape), seed=seed, copy=False)
+        scaler, pca = reducer.steps[0][1], reducer.steps[1][1]
+        return cls(cols, space, fill, scaler.mean_, scaler.scale_, pca.mean_, pca.components_)
+
+    def transform(self, table: pl.DataFrame) -> pl.DataFrame:
+        """Apply this exact rotation; preserve sample IDs and metadata in input order."""
+        if _space(table) != self.space:
+            raise ValueError('embedding space differs from the fitted rotation')
+        if not set(self.columns).issubset(table.columns):
+            raise ValueError('embedding columns differ from the fitted rotation')
+        from vdjtools.cores import require_memory
+        require_memory(24 * table.height * len(self.columns)
+                       + 8 * table.height * self.components.shape[0], 'sample feature PCA transform')
+        X = table.select(self.columns).to_numpy(order='c')
+        X = np.where(np.isfinite(X), X, self.fill)
+        X -= self.mean
+        X /= self.scale
+        X -= self.center
+        scores = X @ self.components.T
+        metadata = table.select([c for c in table.columns if c not in self.columns])
+        return metadata.hstack(pl.from_numpy(scores, schema=[f'pc{i}' for i in range(scores.shape[1])]))
+
+    def save(self, path) -> None:
+        """Write an explicit NumPy artifact (no pickle or executable model payload)."""
+        with open(path, 'wb') as f:
+            np.savez_compressed(f, columns=np.array(self.columns), space=np.array(self.space),
+                                fill=self.fill, mean=self.mean, scale=self.scale,
+                                center=self.center, components=self.components)
+
+    @classmethod
+    def load(cls, path):
+        """Load and validate a fitted rotation without executing arbitrary pickle data."""
+        with np.load(path, allow_pickle=False) as z:
+            if z['columns'].ndim != 1 or z['space'].ndim != 0:
+                raise ValueError('invalid PCA artifact metadata')
+            result = cls(z['columns'].tolist(), str(z['space']),
+                         *(z[key].copy() for key in ('fill','mean','scale','center','components')))
+        n = len(result.columns)
+        if (not n or not result.space or len(set(result.columns)) != n
+                or result.components.ndim != 2 or result.components.shape[0] < 1
+                or result.components.shape[1] != n
+                or any(a.shape != (n,) for a in (result.fill,result.mean,result.scale,result.center))
+                or not all(np.isfinite(a).all() for a in
+                           (result.fill,result.mean,result.scale,result.center,result.components))
+                or (result.scale <= 0).any()):
+            raise ValueError('invalid PCA artifact dimensions or numerical values')
+        return result

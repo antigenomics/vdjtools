@@ -653,3 +653,11 @@ The ``vdjtools`` command-line application.
    the primary documentation for those two commands. Read it with ``vdjtools signature --help`` /
    ``vdjtools corpus --help``, or see :doc:`cli` and :doc:`signature`.
 
+
+Kept AIRR identifier columns
+----------------------------
+
+``io.read(..., keep=("sequence_id", "clonotype_id"))`` preserves identifier strings,
+including leading zeros. When AIRR rows collapse into a clonotype, identifiers take
+the first non-null representative value; numeric measurements such as ``v_identity``
+continue to use their established mean aggregation.

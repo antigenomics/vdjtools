@@ -38,9 +38,9 @@ def test_workers_limit_kernels_before_import_and_restore_parent(monkeypatch):
 def test_pool_failure_restores_environment(monkeypatch):
     monkeypatch.delenv('OMP_THREAD_LIMIT', raising=False)
     monkeypatch.setenv('POLARS_MAX_THREADS', '7')
-    def broken(**kwargs):
+    def broken(*args, **kwargs):
         raise RuntimeError('cannot start')
-    monkeypatch.setattr('concurrent.futures.ThreadPoolExecutor', broken)
+    monkeypatch.setattr('multiprocessing.pool.ThreadPool', broken)
     with pytest.raises(RuntimeError, match='cannot start'):
         parallel_rows([1, 2], abs, 2)
     assert os.environ['POLARS_MAX_THREADS'] == '7'
@@ -106,7 +106,7 @@ def test_threads_share_resources_and_use_distinct_workers():
 
 @pytest.mark.skipif(available_cores() < 4, reason="requires four allocated cores")
 def test_independent_concurrent_pools_keep_their_own_callbacks():
-    from concurrent.futures import ThreadPoolExecutor
+    from multiprocessing.pool import ThreadPool
     from threading import Barrier
 
     barrier = Barrier(4, timeout=10)
@@ -116,16 +116,16 @@ def test_independent_concurrent_pools_keep_their_own_callbacks():
             return label, i
         return parallel_rows(range(2), work, 2)
 
-    with ThreadPoolExecutor(max_workers=2) as ex:
+    with ThreadPool(2) as ex:
         rows = list(ex.map(run, ('a', 'b')))
     assert rows == [[('a', 0), ('a', 1)], [('b', 0), ('b', 1)]]
 
 
 def test_one_worker_is_serial_without_starting_a_pool(monkeypatch):
     from vdjtools.cores import kernel_threads
-    def forbidden(**kw):
+    def forbidden(*args, **kw):
         raise AssertionError('serial mode started a pool')
-    monkeypatch.setattr('concurrent.futures.ThreadPoolExecutor', forbidden)
+    monkeypatch.setattr('multiprocessing.pool.ThreadPool', forbidden)
     assert parallel_rows([0, 1], lambda _: kernel_threads(0), 1) == [1, 1]
 
 
@@ -173,3 +173,46 @@ def test_corpus_releases_mapped_pools_before_scratch_cleanup(monkeypatch, n_jobs
         assert corpus.build_matrices('uniform', **kwargs) == {}
     assert len(cleaned) == 1
     assert not cleaned[0].exists()
+
+
+def test_fixed_pool_submits_only_worker_count_tasks(monkeypatch):
+    import multiprocessing.pool
+    from vdjtools.signature.cohort import parallel_rows
+    seen = []
+    original = multiprocessing.pool.ThreadPool.map
+
+    def checked(self, fn, iterable, chunksize=None):
+        work = list(iterable)
+        seen.append(len(work))
+        assert len(work) == 2
+        return original(self, fn, work, chunksize)
+
+    monkeypatch.setattr(multiprocessing.pool.ThreadPool, 'map', checked)
+    assert parallel_rows(range(1000), lambda x: x * x, 2) == [x * x for x in range(1000)]
+    assert seen == [2]
+
+
+def test_batch_map_delegates_to_shared_bounded_workers(monkeypatch):
+    from vdjtools.io import batch
+    from vdjtools.signature import cohort
+    calls = []
+    original = cohort.parallel_rows
+    def checked(items, fn, n_jobs):
+        calls.append(n_jobs)
+        return original(items, fn, n_jobs)
+    monkeypatch.setattr(cohort, 'parallel_rows', checked)
+    monkeypatch.setattr(batch, 'read', lambda path, **kwargs: int(path))
+    assert batch.map_samples(lambda x: x + 1, [('a','2'),('b','3')], workers=2) == [('a',3),('b',4)]
+    assert calls == [2]
+
+
+@pytest.mark.parametrize('error',[SystemExit,KeyboardInterrupt])
+def test_worker_base_exceptions_propagate_instead_of_killing_a_pool_thread(error):
+    from vdjtools.signature.cohort import parallel_rows
+    from vdjtools.cores import available_cores
+    if available_cores() < 2:
+        pytest.skip('needs two allocated cores')
+    def fail(_):
+        raise error('worker stopped')
+    with pytest.raises(error,match='worker stopped'):
+        parallel_rows(range(10),fail,2)

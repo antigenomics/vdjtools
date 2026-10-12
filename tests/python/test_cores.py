@@ -105,3 +105,14 @@ def test_kernel_auto_budget_respects_allocation_and_pool(monkeypatch):
         with pytest.raises(ValueError, match="threads"):
             kernel_threads(-1)
     assert kernel_threads(0) == 3
+
+
+def test_memory_guard_uses_remaining_cgroup_bytes(tmp_path, monkeypatch):
+    import vdjtools.cores as cores
+    (tmp_path/'memory.max').write_text(str(16 * 1024**3))
+    (tmp_path/'memory.current').write_text(str(12 * 1024**3))
+    monkeypatch.setattr(cores, '_cgroup_paths', lambda *a: [(tmp_path, True)])
+    assert cores.available_memory() <= 4 * 1024**3
+    cores.require_memory(1024**2, 'small operation')
+    with pytest.raises(MemoryError, match='additional workspace'):
+        cores.require_memory(5 * 1024**3, 'PCA fit')

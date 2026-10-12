@@ -39,12 +39,12 @@ from .layout import (
     signature_columns,
     support_of,
 )
-from .signature import vsig, vsig_cohort
+from .signature import raw_features_cohort, vsig, vsig_cohort
 from .transform import arcsine, clr, log1p, log10, logit
 
 __all__ = [
     "DEFAULT_COMPONENTS", "MODES", "WINSOR_PS", "Corpus", "fit", "raw_and_channels", "synthesize",
-    "vsig", "vsig_cohort",
+    "vsig", "vsig_cohort", "raw_features_cohort",
     "AMINO_ACIDS", "LOCI", "NO_LOCUS", "PAIRS", "PC_BLOCK", "SPECTRATYPE_LENGTHS", "SUPPORTS",
     "TRANSFORMS", "WEIGHTS", "Channel", "RawGroup", "arcsine", "channel_columns", "channels",
     "clr", "feats", "gene_vocab", "log10", "log1p", "logit", "parse", "pc_columns",
