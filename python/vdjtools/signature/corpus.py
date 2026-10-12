@@ -1841,6 +1841,7 @@ class TablePCA:
     scale: np.ndarray
     center: np.ndarray
     components: np.ndarray
+    explained_variance_ratio: np.ndarray | None = None
 
     @classmethod
     def fit(cls, table: pl.DataFrame, *, n_components: int = 256, seed: int = 0,
@@ -1868,7 +1869,8 @@ class TablePCA:
         del missing
         reducer = fit_pca(X, min(n_components, *X.shape), seed=seed, copy=False)
         scaler, pca = reducer.steps[0][1], reducer.steps[1][1]
-        return cls(cols, space, fill, scaler.mean_, scaler.scale_, pca.mean_, pca.components_)
+        return cls(cols, space, fill, scaler.mean_, scaler.scale_, pca.mean_, pca.components_,
+                   np.nan_to_num(pca.explained_variance_ratio_, nan=0.0))
 
     def transform(self, table: pl.DataFrame) -> pl.DataFrame:
         """Apply this exact rotation; preserve sample IDs and metadata in input order."""
@@ -1890,10 +1892,12 @@ class TablePCA:
 
     def save(self, path) -> None:
         """Write an explicit NumPy artifact (no pickle or executable model payload)."""
+        variance = ({'explained_variance_ratio': self.explained_variance_ratio}
+                    if self.explained_variance_ratio is not None else {})
         with open(path, 'wb') as f:
             np.savez_compressed(f, columns=np.array(self.columns), space=np.array(self.space),
                                 fill=self.fill, mean=self.mean, scale=self.scale,
-                                center=self.center, components=self.components)
+                                center=self.center, components=self.components, **variance)
 
     @classmethod
     def load(cls, path):
@@ -1902,7 +1906,9 @@ class TablePCA:
             if z['columns'].ndim != 1 or z['space'].ndim != 0:
                 raise ValueError('invalid PCA artifact metadata')
             result = cls(z['columns'].tolist(), str(z['space']),
-                         *(z[key].copy() for key in ('fill','mean','scale','center','components')))
+                         *(z[key].copy() for key in ('fill','mean','scale','center','components')),
+                         z['explained_variance_ratio'].copy()
+                         if 'explained_variance_ratio' in z else None)
         n = len(result.columns)
         if (not n or not result.space or len(set(result.columns)) != n
                 or result.components.ndim != 2 or result.components.shape[0] < 1
@@ -1912,4 +1918,9 @@ class TablePCA:
                            (result.fill,result.mean,result.scale,result.center,result.components))
                 or (result.scale <= 0).any()):
             raise ValueError('invalid PCA artifact dimensions or numerical values')
+        ratios = result.explained_variance_ratio
+        if ratios is not None and (ratios.shape != (result.components.shape[0],)
+                or not np.isfinite(ratios).all() or (ratios < 0).any()
+                or ratios.sum() > 1 + 1e-12):
+            raise ValueError('invalid PCA explained variance ratios')
         return result

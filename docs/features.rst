@@ -103,6 +103,11 @@ The `mirpy reference recipe
 <https://docs.isalgo.dev/mirpy/embeddings.html#reference-rotation-bundles>`_
 freshly generates each reference table, fits with the existing ``TablePCA``,
 checks save/load equivalence, and exports rotations and coordinate parameters.
+Reference rotations store up to 1024 PCs and their
+``explained_variance_ratio`` arrays. The bundle reports cumulative fractions at
+256, 512 and 1024 PCs, along with the actual number stored. Fractions refer to
+imputed, standardized coordinates; they do not measure variance of the unscaled
+features. Older rotations without variance statistics remain loadable.
 Input membership and fit diagnostics remain private. ``bundle.json`` records
 parameters and file checksums; it contains no sample identities or raw input paths.
 
