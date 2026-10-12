@@ -1,8 +1,8 @@
 User guide
 ==========
 
-Worked, copy-paste-runnable examples for every analysis module. All functions take and
-return `polars <https://pola.rs>`_ ``DataFrame`` s on the canonical clonotype schema
+Worked, copy-paste-runnable examples for every analysis module. Repertoire analytics use
+`polars <https://pola.rs>`_ frames on the canonical clonotype schema
 (AIRR **junction** column names; see :mod:`vdjtools.io.schema`), so results chain together
 and drop straight into plotting or ``.write_csv``.
 
@@ -15,6 +15,7 @@ sample straight from a bundled model — every later example reuses ``demo_sampl
 
 .. code-block:: python
 
+   import vdjtools                       # establish runtime limits first
    import numpy as np
    import polars as pl
    from vdjtools import io as vio

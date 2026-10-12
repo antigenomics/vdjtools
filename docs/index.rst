@@ -72,8 +72,8 @@ Install
 That is the whole installation. Wheels are prebuilt for CPython 3.10-3.13 on Linux, macOS
 (Apple Silicon) and Windows, with the native C++ extension included; a source install compiles it.
 
-Everything the documentation describes works from that one command -- there are no extras to opt
-into for core functionality. The three engines vdjtools delegates to are base dependencies, imported
+Core repertoire analytics and the model engine work from that one command.
+Single-cell bridges and interactive examples use the extras below. The three engines vdjtools delegates to are base dependencies, imported
 lazily so that ``import vdjtools`` stays light:
 
 .. list-table::
@@ -89,12 +89,13 @@ lazily so that ``import vdjtools`` stays light:
    * - `vdjmatch <https://github.com/antigenomics/vdjmatch>`_
      - sample overlap, TCRnet, metaclonotypes
 
-Two optional extras exist because each has a working alternative:
+Extras for optional workflows:
 
 .. code-block:: bash
 
    pip install "vdjtools[overlap]"   # scikit-learn, for cluster_samples(method="mds")
    pip install "vdjtools[sc]"        # single-cell bridges: anndata, awkward, mudata, pyyaml
+   pip install "vdjtools[examples]"  # interactive marimo notebooks
 
 MMseqs2 is needed only for arda's alignment and annotation path, never for germline lookup, Pgen,
 generation or the analytics.

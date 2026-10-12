@@ -38,6 +38,7 @@ recombination models that ship in the wheel. Generated receptor sequences, with 
 
 .. code-block:: python
 
+   import vdjtools                       # establish runtime limits first
    import numpy as np
    import polars as pl
    from vdjtools import io as vio
