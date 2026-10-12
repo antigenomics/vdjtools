@@ -105,3 +105,15 @@ freshly generates each reference table, fits with the existing ``TablePCA``,
 checks save/load equivalence, and exports rotations and coordinate parameters.
 Input membership and fit diagnostics remain private. ``bundle.json`` records
 parameters and file checksums; it contains no sample identities or raw input paths.
+
+Extract a reference bundle separately from the library installation and verify
+its recorded hashes before use. Choose the blood/tissue RNA-seq, synthetic or
+deep TRA/TRB reference appropriate to your analysis; keep the chosen rotation
+checksum with your results. The deep reference selects TRA/TRB measurements and
+cross-locus channels rather than fitting the other loci. Unselected measurements
+and channels pass through the projection.
+
+The first command keeps the unprojected feature table. Applying a rotation does
+not recompute those measurements or turn them into a corpus signature. Target
+and control tables must use the same vocabulary, weighting and coverage target.
+A shared vocabulary alone does not make PCs from different rotations comparable.
