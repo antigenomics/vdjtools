@@ -745,7 +745,7 @@ Every workflow above has a CLI counterpart; inputs are auto-detected and results
 
    # data: convert any format to the canonical table, and preprocess
    vdjtools convert mixcr.txt.gz -o clones.parquet    # → canonical Parquet (or .tsv)
-   vdjtools filter clones.parquet --coding --min-freq 1e-4 -o coding.tsv
+   vdjtools filter clones.parquet --productive --min-freq 1e-4 -o coding.tsv
    vdjtools downsample clones.parquet 100000 -o ds.tsv
    vdjtools pool s1.tsv s2.tsv --join --min-samples 2 -o joint.tsv
 
@@ -761,6 +761,8 @@ Every workflow above has a CLI counterpart; inputs are auto-detected and results
    vdjtools tcrnet   sample.tsv -o net.tsv                 # neighbourhood enrichment (control cohort)
 
 Run ``vdjtools <command> --help`` for options.
+
+.. _cpu-container-limits:
 
 CPU and container limits
 ------------------------

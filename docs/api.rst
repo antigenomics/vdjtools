@@ -2,10 +2,18 @@ API reference
 =============
 
 Every public subpackage is documented below: the native model engine (``vdjtools.model``),
+raw features/table PCA and corpus signatures (``vdjtools.signature``),
 IO/schema (``vdjtools.io``), statistics (``vdjtools.stats``), CDR3 features
 (``vdjtools.features``), overlap/TCRnet (``vdjtools.overlap``), preprocessing
 (``vdjtools.preprocess``), biomarker association (``vdjtools.biomarker``), repertoire dynamics (``vdjtools.dynamics``), single-cell interop
 (``vdjtools.sc``), and the command-line interface (``vdjtools.cli``).
+
+Raw features and corpus signatures
+----------------------------------
+
+:doc:`features` covers unrotated feature tables and optional ``TablePCA``.
+:doc:`signature` owns the complete ``vdjtools.signature`` API, including
+``corpus``, ``layout`` and feature extraction; each symbol is documented once there.
 
 vdjtools
 --------

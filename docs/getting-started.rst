@@ -6,7 +6,7 @@ measure it, compare two samples, and reduce a sample to one feature vector. Ever
 offline with no data to download.
 
 If you are looking for a specific task rather than an introduction, the :doc:`guides <usage>` are
-organised one task per page, and :doc:`cli` lists every command.
+organised by task, and :doc:`cli` lists every command.
 
 Install
 -------
@@ -34,8 +34,7 @@ Normally you would load your own data with one call, and vdjtools would detect t
    sample = vio.read("clones.tsv")     # MiXcr, immunoSEQ, AIRR, Parquet, native -- detected
 
 So that this page runs with nothing downloaded, draw a synthetic repertoire from one of the
-recombination models that ship in the wheel. Real receptor sequences, with a realistic
-clone-size distribution:
+recombination models that ship in the wheel. Generated receptor sequences, with a rank-based clone-size distribution:
 
 .. code-block:: python
 
@@ -179,6 +178,9 @@ non-productive reads -- see :doc:`model`.
 
 Step 6 -- one vector per repertoire
 ------------------------------------
+
+For unrotated diversity, isotype and usage features with optional PCA, use
+:doc:`features`. For a fixed, published reference system, use a signature.
 
 When the question is a *model* rather than a statistic -- classify these donors, cluster these
 samples -- you need each repertoire as a fixed-width row of numbers, on a scale a classifier can

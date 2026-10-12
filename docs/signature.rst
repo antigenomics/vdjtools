@@ -37,6 +37,10 @@ If you want the underlying measurements back rather than the rotated axes, ask f
 ``--named`` emits the raw groups the rotation is fitted on under their own names. See
 :ref:`sig-named`.
 
+For unrotated statistical features and your own sample PCA, see :doc:`features`.
+``--named`` adds selected named blocks beside corpus PCs; it is not a complete
+raw-feature export.
+
 Quickstart
 ----------
 

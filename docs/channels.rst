@@ -86,68 +86,13 @@ So the split is by *role*, not by cost:
        makes a diversity hole readable, and the one to check before reading any component of a
        shallow locus.
 
-``div`` and ``disp`` -- embedding diversity, on the geometry half
-------------------------------------------------------------------
+``div`` and ``disp`` -- embedding diversity
+-------------------------------------------
 
-Rao quadratic entropy is the metric-space analogue of Simpson diversity, and it sees something no
-Hill number can: that two clonotypes are one substitution apart. To a counting index they are two
-species, as distinct from each other as from anything else.
-
-Until 4.3 Rao was the only such read-out the geometry half gave up; everything else it knew was
-inside a rotated component, and a component has no name a domain reader can use. These are the rest
-of the analogues, and all of them come out of the same chunked pass that already computes ``Phi``.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 70
-
-   * - channel
-     - what it is
-   * - ``rsig:div:<L>:rao``
-     - Rao's ``Q`` over the whole embedding. Simpson, with distance.
-   * - ``rsig:div:<L>:q_v`` / ``q_j`` / ``q_c``
-     - The same restricted to the V, J and junction strides of ``Phi``. The strides are literal
-       column offsets, so "how much of this diversity is V-driven" is answerable with no
-       attribution model. The three sum to ``rao``.
-   * - ``rsig:div:<L>:q_frac_v`` / ``q_frac_j`` / ``q_frac_c``
-     - Each stride's share of the total dispersion, in clr coordinates -- a composition of *where*
-       the diversity sits. No clonotype-counting index has an analogue.
-   * - ``rsig:div:<L>:evenness``
-     - ``Q(w) / Q(uniform)``: the effect of the clone-size weighting with the composition held
-       fixed. Bounded, and much less depth-fragile than richness.
-   * - ``rsig:div:<L>:eff_dim``
-     - ``exp(H(lambda))`` over the weighted covariance spectrum -- **richness**, as the number of
-       independent directions of receptor space the repertoire occupies. A thousand clones inside
-       one convergent cluster occupy few; a thousand unrelated clones occupy many; a clonotype
-       count cannot tell those apart.
-   * - ``rsig:div:<L>:eff_dim_pr``
-     - ``(sum lambda)^2 / sum lambda^2``, the order-2 version, dominated by the leading directions.
-   * - ``rsig:div:<L>:q_top`` / ``q_singleton``
-     - Rao **inside** a clone-size compartment, weights renormalised within it -- the diversity
-       *of* the expanded compartment, rather than its share, which ``band`` already carries.
-   * - ``rsig:div:<L>:q_ratio_top``
-     - ``q_top / q_singleton``, the two compared directly.
-   * - ``rsig:disp:<L>:top_singleton`` / ``cos_top_singleton``
-     - The distance and the cosine between the expanded and singleton **centroids**. A displacement
-       is a quantity no index has: where a compartment sits, rather than how large it is.
-   * - ``rsig:disp:IGH:IgG_IgM`` / ``IgA_IgM`` and their cosines
-     - The same between isotype compartments -- class-switch geometry.
-   * - ``rsig:disp:<L>:norm``
-     - ``||Phi||``.
-
-.. warning::
-
-   Every one of these is **within one locus**. Each locus has its own panel of ``K`` prototype
-   receptors, so ``Phi(TRA)`` and ``Phi(TRB)`` are vectors in different spaces and a distance
-   between them is arithmetic without a meaning. Cross-locus comparison belongs in ``vsig:pair``,
-   which is a ratio of scalars.
-
-   A locus below ``min_clonotypes`` holes this entire family and sets ``mask:<L>:estimable = 0``.
-   It is not zeroed: Rao of a one-clonotype locus is arithmetically ``0.0`` and is not a diversity
-   measurement, it is the presence mask in different units -- and read as a measurement it sat
-   about 29 robust deviations below the 1st percentile of the real values. The geometry itself
-   (``phiv``/``phij``/``phic``) is still computed there, because ``Phi`` is perfectly measurable
-   from three clonotypes even when its dispersion is not.
+These rsig channels describe within-locus sequence diversity and compartment
+positions. Their definitions and shallow-locus rules live in `mirpy's channel
+reference <https://docs.isalgo.dev/mirpy/channels.html>`_. They pass through a
+signature rotation; they are not the RFF mean columns used by sample PCA.
 
 ``qc`` -- diagnostics
 ---------------------

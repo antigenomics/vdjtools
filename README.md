@@ -27,20 +27,10 @@
   <a href="https://docs.isalgo.dev/vdjtools/glossary.html">Glossary</a>
 </b></p>
 
-Analysis of T- and B-cell receptor repertoire sequencing: read any format, measure diversity and
-overlap, correct batch effects, score generation probability against a native V(D)J model, and
-reduce a whole repertoire to one comparable feature vector.
-
-vdjtools reads the output of every common repertoire pipeline into one canonical
-[AIRR](https://docs.airr-community.org/) table backed by [polars](https://pola.rs), and every
-analysis takes and returns that same table — so results chain together instead of needing a
-converter between each step.
-
-A clean-room Python + C++ rewrite of the Groovy/Java
-[vdjtools](https://doi.org/10.1371/journal.pcbi.1004503), built on
-[arda](https://github.com/antigenomics/arda) (germline reference and annotation),
-[seqtree](https://github.com/antigenomics/seqtree) (fuzzy search and e-values) and
-[vdjmatch](https://github.com/antigenomics/vdjmatch) (overlap and TCRnet).
+Read receptor tables, measure diversity and overlap, fit recombination models,
+and export statistical feature tables or published corpus signatures. vdjtools is
+a Python/C++ rewrite of the original Groovy/Java tool, using AIRR column names and
+Polars frames. arda, seqtree and vdjmatch supply the shared native/reference engines.
 
 ## Install
 
@@ -48,150 +38,81 @@ A clean-room Python + C++ rewrite of the Groovy/Java
 pip install vdjtools
 ```
 
-That is the whole installation — every capability below works from it, with no extras to opt into.
-Wheels are prebuilt for CPython 3.10–3.13 on Linux, macOS (Apple Silicon) and Windows and include
-the native C++ extension; a source install compiles it. The three engines above are base
-dependencies, imported lazily so `import vdjtools` stays light.
-
-Two optional extras exist because each has a working alternative:
-
-```bash
-pip install "vdjtools[overlap]"   # scikit-learn, for cluster_samples(method="mds")
-pip install "vdjtools[sc]"        # single-cell bridges: anndata, awkward, mudata, pyyaml
-```
+Prebuilt CPython wheels include the native extension. A source install needs a C++
+toolchain. Optional extras include `[overlap]` for sample MDS, `[sc]` for single-cell
+bridges and `[examples]` for marimo notebooks. See [getting started](https://docs.isalgo.dev/vdjtools/getting-started.html).
 
 ## Quickstart
 
 ```python
-from vdjtools import io as vio, stats, overlap
+from vdjtools import io, stats   # import before numerical libraries
 
-sample = vio.read("clones.tsv")          # MiXcr, immunoSEQ, AIRR, Parquet, native — detected
-stats.diversity_stats(sample)            # richness, Chao1, Shannon, inverse Simpson, d50
-stats.segment_usage(sample, "v")         # V-gene usage
-
-cohort = vio.read_samples(vio.read_metadata("metadata.txt"), base_dir="samples/")
-overlap.overlap_matrix(cohort)           # pairwise repertoire overlap
+sample = io.read("clones.tsv")
+diversity = stats.diversity_stats(sample)
+v_usage = stats.segment_usage(sample, "v")
 ```
-
-The same thing with no Python:
 
 ```bash
-vdjtools diversity     sampleA.tsv sampleB.tsv -o diversity.tsv
-vdjtools segment-usage *.tsv --segment v -o usage.tsv
-vdjtools overlap       *.tsv -o overlap.tsv
+vdjtools diversity samples/*.tsv -o diversity.tsv
+vdjtools features samples/*.tsv --coverage 0.8 --threads 1 -o features.tsv
+vdjtools signature --corpus blood samples/*.tsv -o vsig.tsv
 ```
 
-Every command writes to `-o` — TSV, or Parquet when the path ends in `.parquet` / `.pq` — or to
-stdout, so commands pipe. Analysis commands also take a metadata table (`-m` plus `--base-dir`) and
-parallelise over samples with `-t/--threads`.
+`features` exports unrotated measurements and channels without a corpus.
+Declared log/CLR/logit transforms remain; “raw” means before corpus scaling,
+winsorization and PCA. `signature` applies the published vsig corpus transform.
+These are different outputs. mirpy's rsig geometry half joins vsig on `sample_id`;
+mirpy's sample RFF vectors are a separate representation.
 
-**[Getting started](https://docs.isalgo.dev/vdjtools/getting-started.html)** walks through this in
-about ten minutes, with no data to download.
-
-## Where to start
-
-| You want to | Go to |
-|---|---|
-| Get a first result from a file you already have | [Getting started](https://docs.isalgo.dev/vdjtools/getting-started.html) |
-| Clean, filter, downsample or batch-correct a cohort | [Pre-processing](https://docs.isalgo.dev/vdjtools/preprocessing.html) |
-| Measure diversity, overlap, gene usage, spectratype | [Guides](https://docs.isalgo.dev/vdjtools/usage.html) |
-| Score Pgen, or fit a model to your own reads | [Model workshop](https://docs.isalgo.dev/vdjtools/model.html) |
-| Reduce each sample to one feature vector for a classifier | [Signatures](https://docs.isalgo.dev/vdjtools/signature.html) |
-| Work with 10x data, or hand off to scirpy / dandelion | [Single cell](https://docs.isalgo.dev/vdjtools/singlecell.html) |
-| Look up a command or a function | [Commands](https://docs.isalgo.dev/vdjtools/cli.html) · [API](https://docs.isalgo.dev/vdjtools/api.html) |
-| Check what a term means | [Glossary](https://docs.isalgo.dev/vdjtools/glossary.html) |
-
-## What is in the box
-
-| Module | What it does |
-|---|---|
-| `vdjtools.io` | Readers for native vdjtools, AIRR Rearrangement TSV and Parquet; format-detecting converters for MiXcr, MiGec, Adaptive immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4 and arda; metadata-driven batches and hive-partitioned cohorts |
-| `vdjtools.stats` | Diversity (richness, Chao1, Efron-Thisted, Shannon, Simpson, d50), coverage-based Hill-number rarefaction with bootstrap intervals, spectratype, V/D/J/C usage |
-| `vdjtools.model` | Native V(D)J recombination model: Pgen over nucleotides and amino acids, the Hamming-1 ball, sequence generation, EM inference, tandem-D support, and a 13-command model workshop |
-| `vdjtools.overlap` | Exact and similarity-aware repertoire overlap, TCRnet and ALICE neighbourhood enrichment, sample clustering |
-| `vdjtools.preprocess` | Format conversion, the three filtering axes, frequency handling, downsampling, error correction, V/J-usage batch correction, pooling and joining |
-| `vdjtools.features` | Junction physicochemical profiles and k-mer summaries |
-| `vdjtools.biomarker` | Incidence association against binary, per-HLA-allele or stratified conditions; co-occurrence pairing; metaclonotypes |
-| `vdjtools.dynamics` | Longitudinal clonotype tracking: paired within-donor expansion testing, the VDJtrack recapture model, an edgeR NB-exact caller |
-| `vdjtools.signature` | One fixed, named, already-standardised feature vector per repertoire, rotated through a published corpus |
-| `vdjtools.sc` | Single-cell ingestion, chain pairing and QC, paired Pgen, round-trip interop with scirpy, dandelion and scRepertoire |
-
-## Recombination models, built in
-
-Models for all **seven human loci** ship in the wheel — no OLGA install and nothing to download:
-
-```python
-from vdjtools.model import load_bundled, native
-
-model = load_bundled("TRB", source="olga")            # or source="learned"
-native.pgen_aa(model, "CASSLAPGATNEKLFF")             # 3.595e-08
-native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # and its whole Hamming-1 ball
-```
-
-Pgen agrees with OLGA to 1e-15 on every locus while being several times faster, and adds tandem-D
-support that OLGA and IGoR lack. You can also fit a model to your own non-productive reads, audit it
-against its germline, compare two models parameter by parameter, and render its recombination Bayes
-net — see the [model workshop](https://docs.isalgo.dev/vdjtools/model.html).
-
-In 5.0, remove the previously unused `labels` keyword from `model.analyze.compare_models`.
-Use `compare_net_dot(..., labels=("first", "second"))` to label comparison graphs.
-
-## Signatures
-
-One repertoire in, one fixed-width named feature vector out, standardised against a published
-reference corpus so your matrix and a collaborator's are in the same coordinate system without
-either of you fitting a scaler:
+Fit your own sample PCA on selected measurements, compatible control rows, or reuse
+a saved rotation:
 
 ```bash
-vdjtools signature --corpus blood samples/*.tsv.gz -o vsig.tsv
-mir       signature --corpus blood samples/*.tsv.gz -o rsig.tsv   # the geometry half, from mirpy
+vdjtools pca features.tsv --columns feature_columns.txt --fit rotation.npz --components 32 -o pcs.tsv
+vdjtools pca new_features.tsv --rotation rotation.npz -o new_pcs.tsv
 ```
 
-Nine corpora are published, all at 256 components per locus. `blood` (11,117 real samples, 947 study
-groups), `tissue` (21,131 / 1,934) and `deep-tcr` (3,936 amplicon samples, TRA+TRB) are fitted on
-real repertoires; the synthetic ones need no cohort at all and rebuild byte for byte anywhere.
-Artifacts are fetched and digest-verified on first use rather than bundled.
+The [raw feature/PCA guide](https://docs.isalgo.dev/vdjtools/features.html) explains
+feature selection, coverage, imputation, feature-space identities and saved rotations.
 
-`--corpus` is required: a signature is comparable to another one only if both were rotated through
-the same corpus, and nothing about the numbers would say otherwise.
-[Signatures](https://docs.isalgo.dev/vdjtools/signature.html) ·
-[How they were fitted](https://docs.isalgo.dev/vdjtools/signature-methods.html) ·
-[Channels](https://docs.isalgo.dev/vdjtools/channels.html)
+## Find the right page
 
-## Performance
+| Task | Guide |
+|---|---|
+| Load, measure and compare your first samples | [Getting started](https://docs.isalgo.dev/vdjtools/getting-started.html) |
+| Filter, correct, downsample or pool | [Pre-processing](https://docs.isalgo.dev/vdjtools/preprocessing.html) |
+| Diversity, overlap, gene usage, biomarkers and dynamics | [User guide](https://docs.isalgo.dev/vdjtools/usage.html) |
+| Unrotated features and optional sample PCA | [Raw features](https://docs.isalgo.dev/vdjtools/features.html) |
+| Published vsig/rsig corpus coordinates | [Signatures](https://docs.isalgo.dev/vdjtools/signature.html) · [Methods](https://docs.isalgo.dev/vdjtools/signature-methods.html) · [Channels](https://docs.isalgo.dev/vdjtools/channels.html) |
+| Pgen, generation and model fitting | [Model workshop](https://docs.isalgo.dev/vdjtools/model.html) |
+| Single-cell data and interoperability | [Single cell](https://docs.isalgo.dev/vdjtools/singlecell.html) |
+| Functions, flags, examples and terms | [API](https://docs.isalgo.dev/vdjtools/api.html) · [Commands](https://docs.isalgo.dev/vdjtools/cli.html) · [Examples](https://docs.isalgo.dev/vdjtools/notebooks.html) · [Glossary](https://docs.isalgo.dev/vdjtools/glossary.html) |
 
-The Pgen, generation, EM and diversity hot paths are a native C++ core reached through pybind11;
-everything else is polars. Single thread, Apple M3, bundled human TRB model:
+Recorded [performance measurements](https://docs.isalgo.dev/vdjtools/index.html#performance)
+and [model validation](https://docs.isalgo.dev/vdjtools/model.html) describe the
+native Pgen, generation and inference engines.
 
-| Operation | Throughput | vs OLGA |
-|---|--:|--:|
-| Nucleotide Pgen, single-D VDJ | 0.5 ms/seq | **9×** |
-| Amino-acid Pgen | 0.6–0.9 ms/seq | **8.6×** |
-| Amino-acid Pgen over the Hamming-1 ball | 15 ms/seq | **8.7×** |
-| Sequence generation, raw draws | 32,100 seq/s | — |
-| Sequence generation, `productive_only=True` | 8,960 seq/s | — |
+## Resource budgets
 
-The productive filter costs 3.6× on TRB and 5.1× on IGH (19,900 raw draws/s against 3,930
-productive), because out-of-frame and stop-codon draws are discarded and redrawn. Batched Pgen
-parallelises over sequences (11× on 16 cores, and identical to the serial result); the EM E-step parallelises
-over reads (6.7× on 8 threads). Memory: 63 MB resident for `import vdjtools` plus one model, 123 MB
-with all seven loaded.
-
-Reproduce the in-repo half with `RUN_BENCHMARK=1 pytest tests/python -k benchmark`.
+Import `vdjtools` before numerical libraries in a fresh interpreter. Native batch
+APIs use allocation-aware CPU budgets; sample workers use serial inner kernels.
+Signature `--jobs` and analysis `--threads` select bounded workers, with `0` for the
+detected allocation. Excessive or nested budgets raise. The final feature table
+and PCA workspace still grow with sample count and feature width. See
+[CPU/container limits](https://docs.isalgo.dev/vdjtools/usage.html#cpu-container-limits).
 
 ## Development
 
-Uses [uv](https://docs.astral.sh/uv/) — one repo-local `.venv`, no conda:
-
 ```bash
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev,test]"       # builds the _core C++ extension
-pytest tests/python -q
+bash setup.sh --dev-parents --tests
+source .venv/bin/activate
+uv pip install -e ".[docs]"
+pytest tests/python -q -m "not slow and not heavy and not benchmark"
+env -C docs make html
 ```
 
-`bash setup.sh --dev-parents --tests` does the same and editable-installs sibling checkouts of
-seqtree, arda and vdjmatch if present. You need a C++ toolchain (Xcode Command Line Tools on macOS,
-`build-essential` on Linux). MMseqs2 is needed only for arda's annotation path.
+Uses a repo-local uv environment and a C++ toolchain. See the API reference for
+public functions and the model workshop for native model workflows.
 
 ## Citing
 
@@ -204,31 +125,3 @@ The VDJtrack recapture model in `vdjtools.dynamics` is Pavlova, Zvyagin and Shug
 GPL-3.0-or-later. The legacy Groovy/Java v1.x tool lives on the
 [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch, with its releases
 under the repository tags `v0.0.1` … `1.2.1`.
-
-### Running signatures across samples
-
-```bash
-vdjtools signature --corpus blood --jobs 8 samples/*.tsv -o signatures.parquet
-```
-
-`--jobs` controls worker threads. It defaults to 1; use 0 to request all available
-cores or a positive count to set the budget explicitly. Each worker uses one
-thread per numerical kernel and shares fitted resources. Workers read one sample at
-a time; output follows input order. Positive counts must fit the CPU allocation.
-
-For the Python cohort API, pass zero-argument readers to defer file loading into
-workers. Closures and lambdas work; callbacks must not mutate shared resources.
-Serial mode runs without a pool. Numerical import pools are kept at one thread.
-
-Model-build resource budgets follow the same rule: `build_all(..., workers=8)` runs up to eight
-builds with one kernel thread each. `build_model(..., threads=8)` and
-`infer_native(..., threads=8)` instead assign eight kernel threads to one build.
-
-### CPU budgets
-
-Import `vdjtools` before numerical libraries in fresh workers. Persistent numerical
-pools use one thread; native kernels receive allocation-aware budgets (`threads=1`
-serial, `threads=0` all allocated CPUs, or a positive count within the allocation).
-CPU affinity, SLURM per-task allocations and cgroup parent quotas are respected.
-Sample workers use serial inner kernels. Excessive or nested budgets raise. Existing
-multi-thread Polars pools require a fresh interpreter for outer thread parallelism.
