@@ -87,7 +87,7 @@ def _load_model(model: Optional[str], source: str, model_path: Optional[Path]):
 def _write(df: pl.DataFrame, out: Optional[Path]) -> None:
     """Write a result frame. ``.parquet`` / ``.pq`` → Parquet; anything else (or stdout) → TSV."""
     if out is None:
-        sys.stdout.write(df.write_csv(separator="\t"))
+        df.write_csv(sys.stdout, separator="\t")
         return
     if out.suffix.lower() in (".parquet", ".pq"):
         df.write_parquet(out)
@@ -474,6 +474,62 @@ def diversity(
     rows = [_tag(res, sid) for sid, res in
             map_samples(fn, items, fmt=fmt, workers=threads or None)]
     _write(pl.concat(rows, how="vertical_relaxed"), out)
+
+
+@app.command(name="features")
+def raw_features(
+    samples: Optional[list[Path]] = _SAMPLES,
+    threads: int = _THREADS,
+    organism: str = typer.Option("human"),
+    coverage: str = typer.Option("min", help="min, own, or a shared coverage fraction"),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """Raw vsig feature families and channels, with no corpus, winsorization or PCA."""
+    from vdjtools.io import read
+    from vdjtools.signature.signature import raw_features_cohort
+
+    items = _sample_items(samples,None,None,'sample_id','{sample}.tsv')
+    deferred = [(sid,functools.partial(read,path,keep=("v_identity",))) for sid,path in items]
+    target = None if coverage == 'own' else 'min' if coverage == 'min' else float(coverage)
+    _write(raw_features_cohort(deferred,organism=organism,n_jobs=threads,
+                              cstar_target=target),out)
+
+
+@app.command(name="pca")
+def project_features(
+    table: Path = typer.Argument(..., help="One row per sample: TSV or Parquet."),
+    fit: Optional[Path] = typer.Option(None, help="Fit and save a standard PCA rotation."),
+    rotation: Optional[Path] = typer.Option(None, help="Apply a saved rotation."),
+    cohort: Optional[Path] = typer.Option(None, help="Fit on this reference feature table."),
+    columns: Optional[Path] = typer.Option(None, help="Feature column names, one per line; other channels pass through."),
+    space: Optional[str] = typer.Option(None, help="Explicit shared feature-basis identity when absent from tables."),
+    components: int = typer.Option(256, min=1),
+    seed: int = typer.Option(0),
+    out: Optional[Path] = _OUT,
+) -> None:
+    """Fit/apply sample PCA for vsig, rsig or RFF tables, preserving IDs and channels."""
+    from vdjtools.signature.corpus import TablePCA
+
+    if (fit is None) == (rotation is None) or (cohort is not None and rotation is not None):
+        _err('choose --fit or --rotation; --cohort applies only to --fit')
+    def load(path):
+        frame = (pl.read_parquet(path) if path.suffix in ('.parquet','.pq') else
+                 pl.read_csv(path, separator='\t', infer_schema_length=None,
+                             schema_overrides={'sample_id': pl.String}))
+        if 'embedding_space' not in frame.columns:
+            if space is None:
+                _err('supply --space with the actual shared feature-basis identity')
+            frame = frame.with_columns(pl.lit(space).alias('embedding_space'))
+        return frame
+    data = load(table)
+    cols = columns.read_text().splitlines() if columns else None
+    reducer = (TablePCA.load(rotation) if rotation else
+               TablePCA.fit(load(cohort) if cohort else data, columns=cols,
+                            n_components=components,seed=seed))
+    result = reducer.transform(data)
+    if fit:
+        reducer.save(fit)
+    _write(result,out)
 
 
 @app.command()

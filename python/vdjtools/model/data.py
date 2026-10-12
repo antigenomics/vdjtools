@@ -488,7 +488,7 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
         >>> results = build_all(["TRB", "TRA"], workers=2, out_dir="models")
         >>> pl.DataFrame([r["stats"] for r in results.values() if "stats" in r])
     """
-    from concurrent.futures import ThreadPoolExecutor
+    from ..signature.cohort import parallel_rows
 
     if workers is not None and workers < 1:
         raise ValueError("workers must be positive")
@@ -522,5 +522,4 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
 
     if n_workers == 1:
         return dict(map(one, jobs))
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        return dict(pool.map(one, jobs))
+    return dict(parallel_rows(jobs, one, n_workers))

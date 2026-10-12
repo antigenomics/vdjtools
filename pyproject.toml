@@ -147,6 +147,7 @@ ignore = ["E702", "E741", "E731"]
 testpaths = ["tests/python"]
 addopts = "-ra -m 'not slow'"
 markers = [
+    "benchmark: explicitly enabled resource/throughput checks",
     "slow: heavier oracle / reference-arithmetic checks (e.g. vs OLGA's own slow Pgen); run with -m slow",
     # `slow` is deselected by addopts and so never runs in CI at all -- it is not the long tail of the
     # default suite, it is outside it. `heavy` is different: these tests DO run by default and DO run

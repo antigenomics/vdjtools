@@ -1,0 +1,105 @@
+"""One projection implementation for statistical, geometry and RFF feature tables."""
+import numpy as np
+import polars as pl
+import pytest
+from vdjtools.signature.corpus import TablePCA
+
+
+@pytest.mark.parametrize('prefix',['vsig','rsig','phi'])
+def test_feature_table_pca_roundtrip_and_channel_passthrough(tmp_path,prefix):
+    cols = [f'{prefix}:feature:{i}' for i in range(4)]
+    table = pl.from_numpy(np.random.default_rng(4).normal(size=(12,4)),schema=cols)
+    table = table.with_columns(pl.Series('sample_id',[f'{i:03}' for i in range(12)]),
+                               pl.lit(prefix+':fixed').alias('embedding_space'),
+                               pl.Series('channel',list(range(12))))
+    reducer = TablePCA.fit(table,columns=cols,n_components=2)
+    reducer.save(tmp_path/'rotation.npz')
+    expected = reducer.transform(table)
+    got = TablePCA.load(tmp_path/'rotation.npz').transform(table)
+    assert got.equals(expected)
+    assert got['sample_id'].to_list() == table['sample_id'].to_list()
+    assert got['channel'].to_list() == table['channel'].to_list()
+    with pytest.raises(ValueError,match='space'):
+        reducer.transform(table.with_columns(pl.lit('other').alias('embedding_space')))
+    with pytest.raises(ValueError,match='columns'):
+        reducer.transform(table.drop(cols[0]))
+
+
+def test_raw_features_need_no_corpus_and_match_existing_featuriser():
+    from vdjtools.signature.features import gene_vocab, raw_and_channels
+    from vdjtools.signature.signature import raw_features_cohort
+    df = pl.DataFrame({'v_call':['TRBV10-3*01','TRBV20-1*01'],
+                       'j_call':['TRBJ2-7*01','TRBJ1-2*01'],
+                       'junction_aa':['CASSIRSSYEQYF','CSARVSGYYGYTF'],
+                       'duplicate_count':[12,4]})
+    vocab = {'TRB':gene_vocab('TRB')}
+    expected,channels = raw_and_channels({'TRB':df},vocab,cstar_target=None)
+    expected.update(channels)
+    got = raw_features_cohort([('001',lambda:{'TRB':df})],vocab=vocab,cstar_target=None,n_jobs=1)
+    assert got['sample_id'].to_list() == ['001']
+    assert not any(':pc:' in c for c in got.columns)
+    for col,value in expected.items():
+        assert col in got.columns
+        np.testing.assert_equal(got[col][0],value)
+
+
+@pytest.mark.parametrize('workers',[1,2])
+def test_raw_feature_workers_release_input_frames(workers):
+    import weakref
+    from threading import Lock
+    from vdjtools.cores import available_cores, kernel_threads
+    from vdjtools.signature.signature import raw_features_cohort
+    from vdjtools.signature.features import gene_vocab
+    if workers > available_cores():
+        pytest.skip('needs two allocated cores')
+    state = {'live':0,'peak':0}
+    lock = Lock()
+    def release():
+        with lock:
+            state['live'] -= 1
+    def read():
+        assert kernel_threads(0) == 1
+        df = pl.DataFrame({'v_call':['TRBV10-3*01','TRBV20-1*01'],
+                           'j_call':['TRBJ2-7*01','TRBJ1-2*01'],
+                           'junction_aa':['CASSIRSSYEQYF','CSARVSGYYGYTF'],
+                           'duplicate_count':[12,4]})
+        with lock:
+            state['live'] += 1
+            state['peak'] = max(state['peak'],state['live'])
+        weakref.finalize(df,release)
+        return {'TRB':df}
+    out = raw_features_cohort([(str(i),read) for i in range(16)],
+                              vocab={'TRB':gene_vocab('TRB')},n_jobs=workers,cstar_target=None)
+    assert out.height == 16
+    assert state['live'] == 0 and state['peak'] <= workers
+
+
+@pytest.mark.benchmark
+@pytest.mark.skipif(not __import__('os').getenv('RUN_BENCHMARK'),reason='set RUN_BENCHMARK=1')
+def test_large_raw_feature_cohort_memory():
+    import os
+    import resource
+    import sys
+    import time
+    from threadpoolctl import threadpool_info
+    from vdjtools.cores import kernel_threads
+    from vdjtools.signature.signature import raw_features_cohort
+    from vdjtools.signature.features import gene_vocab
+    count = int(os.getenv('VDJ_BENCH_SAMPLES','10000'))
+    workers = int(os.getenv('VDJ_BENCH_WORKERS','1'))
+    def read():
+        assert kernel_threads(0) == 1
+        assert all(p['num_threads'] == 1 for p in threadpool_info())
+        return {'TRB':pl.DataFrame({'v_call':['TRBV10-3*01','TRBV20-1*01'],
+                                   'j_call':['TRBJ2-7*01','TRBJ1-2*01'],
+                                   'junction_aa':['CASSIRSSYEQYF','CSARVSGYYGYTF'],
+                                   'duplicate_count':[12,4]})}
+    start = time.perf_counter()
+    out = raw_features_cohort([(str(i),read) for i in range(count)],
+                              vocab={'TRB':gene_vocab('TRB')},n_jobs=workers,cstar_target=None)
+    assert out.height == count
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    gib = rss/(1024**3 if sys.platform == 'darwin' else 1024**2)
+    print(f'Raw feature cohort: samples={count}, columns={out.width}, workers={workers}, '
+          f'wall_s={time.perf_counter()-start:.3f}, peak_RSS_GiB={gib:.3f}',flush=True)
+    assert gib < 16

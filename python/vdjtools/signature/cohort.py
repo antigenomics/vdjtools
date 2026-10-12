@@ -42,7 +42,8 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
     use one thread per worker. Callbacks must not mutate shared inputs or resources.
     Worker startup and callback failures propagate; there is no serial fallback.
     """
-    from concurrent.futures import ThreadPoolExecutor
+    from multiprocessing.pool import ThreadPool
+    from threading import Lock
 
     from ..cores import kernel_threads, require_serial_pools, serial_kernels
 
@@ -56,9 +57,35 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
         with serial_kernels():
             return fn(item)
 
+    require_serial_pools()
     if workers < 2:
         return [row(it) for it in items]
-    require_serial_pools()
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        return list(executor.map(row, items))
+    # Exactly one task per worker, never one queued object per sample.
+    pending = iter(enumerate(items))
+    lock = Lock()
+    results = [None] * len(items)
+    failed = False
+
+    def consume(_):
+        nonlocal failed
+        # OpenMP limits are thread-local; newly created pool threads need their own limit.
+        require_serial_pools()
+        while True:
+            with lock:
+                if failed:
+                    return
+                item = next(pending, None)
+            if item is None:
+                return
+            i, value = item
+            try:
+                results[i] = row(value)
+            except BaseException:
+                with lock:
+                    failed = True
+                raise
+
+    with ThreadPool(workers) as pool:
+        pool.map(consume, range(workers), chunksize=1)
+    return results

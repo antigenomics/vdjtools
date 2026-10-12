@@ -30,11 +30,11 @@ from contextlib import contextmanager
 __all__ = ["available_cores"]
 
 
-def _cgroup_paths():
+def _cgroup_paths(controller_name="cpu"):
     """Visible controller directories, including ancestors that can impose tighter quotas."""
     from pathlib import Path
 
-    paths = [(Path("/sys/fs/cgroup"), True), (Path("/sys/fs/cgroup/cpu"), False),
+    paths = [(Path("/sys/fs/cgroup"), True), (Path("/sys/fs/cgroup") / controller_name, False),
              (Path("/sys/fs/cgroup/cpu,cpuacct"), False)]
     try:
         with open("/proc/self/cgroup") as fh:
@@ -46,11 +46,11 @@ def _cgroup_paths():
     for left, right in mounts:
         fields, controller = left.split(), right.split()
         v2 = controller[0] == "cgroup2"
-        if not v2 and (controller[0] != "cgroup" or "cpu" not in controller[2].split(",")):
+        if not v2 and (controller[0] != "cgroup" or controller_name not in controller[2].split(",")):
             continue
         root, mount = (Path(x.replace(r"\040", " ")) for x in fields[3:5])
         for _, ctrls, name in memberships:
-            if (v2 and ctrls) or (not v2 and "cpu" not in ctrls.split(",")):
+            if (v2 and ctrls) or (not v2 and controller_name not in ctrls.split(",")):
                 continue
             group = Path(name)
             if group.is_relative_to(root):
@@ -88,6 +88,42 @@ def _cgroup_quota() -> int | None:
         except (OSError, ValueError):
             continue
     return min(limits) if limits else None
+
+
+def available_memory() -> int | None:
+    """Remaining bytes under the tightest visible memory cgroup and host limit."""
+    from pathlib import Path
+
+    limits = []
+    for directory, v2 in _cgroup_paths("memory"):
+        limit_name, used_name = (("memory.max", "memory.current") if v2 else
+                                 ("memory.limit_in_bytes", "memory.usage_in_bytes"))
+        try:
+            limit = int((directory / limit_name).read_text().strip())
+            used = int((directory / used_name).read_text().strip())
+            if 0 < limit < 2**60:
+                limits.append(max(0, limit - used))
+        except (OSError, ValueError):
+            continue
+    try:
+        values = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
+        limits.append(int(values['MemAvailable'].split()[0]) * 1024)
+    except (OSError, ValueError, KeyError):
+        pass
+    return min(limits) if limits else None
+
+
+def require_memory(nbytes: int, operation: str) -> None:
+    """Reject a known large allocation before OOM, reserving 20% of remaining memory.
+
+    This guards calculated numerical workspaces, not arbitrary caller-owned objects.
+    Unknown host limits leave the estimate to the caller; they do not prove safety.
+    """
+    remaining = available_memory()
+    if remaining is not None and nbytes > remaining * 0.8:
+        raise MemoryError(f"{operation} needs approximately {nbytes / 1024**3:.2f} GiB "
+                          f"of additional workspace; {remaining / 1024**3:.2f} GiB remains. "
+                          "Use fewer workers, a saved fitted basis, or a larger memory allocation.")
 
 
 def available_cores(default: int = 1) -> int:

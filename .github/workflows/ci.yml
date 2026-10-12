@@ -75,6 +75,14 @@ jobs:
         env:
           TEST_MARKERS: ${{ matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && 'not slow' || 'not slow and not heavy' }}
         run: pytest tests/python -q --durations=25 -m "$TEST_MARKERS"
+      - name: Bounded cohort resource regression
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        timeout-minutes: 5
+        env:
+          RUN_BENCHMARK: "1"
+          VDJ_BENCH_SAMPLES: "1000"
+          VDJ_BENCH_WORKERS: "2"
+        run: pytest tests/python/test_projection.py -q -s -m benchmark
       - name: Assert the OLGA oracle suite actually ran (guard against silent skip)
         # If olga stops importing, the suite would silently skip and CI would still be green. Fail
         # loudly instead: at least one olga-gated test must be collected and not skipped.
