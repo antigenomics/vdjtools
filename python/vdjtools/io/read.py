@@ -132,6 +132,8 @@ def read_vdjtools(path: str | os.PathLike, n_rows: int | None = None, *,
 
 def _numeric_like(df: pl.DataFrame, col: str) -> bool:
     """Is this column numeric, or an all-Utf8 TSV column whose values parse as numbers?"""
+    if col.endswith("_id"):
+        return False  # identifiers retain leading zeros and take representative values
     if df.schema[col].is_numeric():
         return True
     s = df[col].drop_nulls().head(100)

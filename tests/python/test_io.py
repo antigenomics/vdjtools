@@ -185,3 +185,19 @@ def test_airr_projection_preserves_aliases_extras_and_gzip(tmp_path):
         for n_rows in (None, 1):
             kw = dict(keep=('v_identity', 'label', 'absent'), collapse=collapse, n_rows=n_rows)
             assert_frame_equal(read_airr(a, **kw), read_airr(b, **kw))
+
+
+def test_airr_identifier_strings_are_not_numeric_measurements(tmp_path):
+    path = tmp_path / 'ids.tsv'
+    path.write_text('v_call\tj_call\tjunction_aa\tduplicate_count\tsequence_id\tclonotype_id\tv_identity\n'
+                    'TRBV20-1*01\tTRBJ1-2*01\tCSARVSGYYGYTF\t2\t001\t003\t0.9\n'
+                    'TRBV20-1*01\tTRBJ1-2*01\tCSARVSGYYGYTF\t3\t002\t004\t0.8\n')
+    from vdjtools.io.read import read_airr
+    for collapse in (False, True):
+        got = read_airr(path, collapse=collapse,
+                        keep=('sequence_id', 'clonotype_id', 'v_identity'))
+        assert got['sequence_id'].to_list() == (['001'] if collapse else ['001','002'])
+        assert got['clonotype_id'].to_list() == (['003'] if collapse else ['003','004'])
+        assert got.schema['v_identity'].is_numeric()
+        if collapse:
+            assert abs(got['v_identity'][0] - 0.85) < 1e-12
