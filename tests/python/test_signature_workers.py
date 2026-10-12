@@ -204,3 +204,15 @@ def test_batch_map_delegates_to_shared_bounded_workers(monkeypatch):
     monkeypatch.setattr(batch, 'read', lambda path, **kwargs: int(path))
     assert batch.map_samples(lambda x: x + 1, [('a','2'),('b','3')], workers=2) == [('a',3),('b',4)]
     assert calls == [2]
+
+
+@pytest.mark.parametrize('error',[SystemExit,KeyboardInterrupt])
+def test_worker_base_exceptions_propagate_instead_of_killing_a_pool_thread(error):
+    from vdjtools.signature.cohort import parallel_rows
+    from vdjtools.cores import available_cores
+    if available_cores() < 2:
+        pytest.skip('needs two allocated cores')
+    def fail(_):
+        raise error('worker stopped')
+    with pytest.raises(error,match='worker stopped'):
+        parallel_rows(range(10),fail,2)

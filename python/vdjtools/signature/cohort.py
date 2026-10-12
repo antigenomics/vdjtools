@@ -65,7 +65,7 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
     pending = iter(enumerate(items))
     lock = Lock()
     results = [None] * len(items)
-    failed = False
+    failed = None
 
     def consume(_):
         nonlocal failed
@@ -73,7 +73,7 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
         require_serial_pools()
         while True:
             with lock:
-                if failed:
+                if failed is not None:
                     return
                 item = next(pending, None)
             if item is None:
@@ -81,11 +81,13 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
             i, value = item
             try:
                 results[i] = row(value)
-            except BaseException:
+            except BaseException as exc:
                 with lock:
-                    failed = True
-                raise
+                    failed = exc
+                return
 
     with ThreadPool(workers) as pool:
         pool.map(consume, range(workers), chunksize=1)
+    if failed is not None:
+        raise failed
     return results
