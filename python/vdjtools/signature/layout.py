@@ -209,6 +209,90 @@ def _aa_pairs() -> tuple[str, ...]:
     return tuple(a + b for a in AMINO_ACIDS for b in AMINO_ACIDS)
 
 
+# The opt-in statistical bases are explicit artifacts, never global registry mutations.
+IMGT11 = ("AILV", "CM", "ST", "HKR", "DE", "NQ", "F", "W", "Y", "P", "G")
+MOTIF_SHAPES = ("XXX", "XX_X", "X_XX")
+COMPOSITION_BLOCKS = ("vj", "length", "vjl", "isotype", *("motif_" + s for s in MOTIF_SHAPES))
+
+
+def feature_definition(configuration="legacy", *, motifs="none", v_context="none",
+                       motif_map=None, v_maps=None) -> dict:
+    """Versioned, frozen definition of a repertoire feature basis.
+
+    ``basic`` uses V–J usage and marginal junction length; ``joint`` uses their
+    joint distribution. Isotype stays separate. Cluster maps are build-time
+    inputs; a saved definition carries them to every future application.
+    """
+    import hashlib
+    import itertools
+    import json
+
+    if configuration not in ("legacy", "basic", "joint"):
+        raise ValueError("feature set must be legacy, basic or joint")
+    if motifs not in ("none", "imgt11", "blosum62") or v_context not in ("none", "gene", "cluster"):
+        raise ValueError("unknown motif representation or V context")
+    if configuration == "legacy" and (motifs != "none" or v_context != "none"):
+        raise ValueError("legacy cannot add motif variants")
+    if motifs == "none" and v_context != "none":
+        raise ValueError("V context requires motifs")
+    if motifs != "blosum62" and motif_map is not None:
+        raise ValueError("a motif map applies only to BLOSUM62")
+    if v_context != "cluster" and v_maps is not None:
+        raise ValueError("V maps apply only to clustered context")
+    if motifs == "blosum62":
+        triples = {"".join(t) for t in itertools.product(AMINO_ACIDS, repeat=3)}
+        if not motif_map or motif_map.get("version") != 1 or set(motif_map.get("mapping", {})) != triples:
+            raise ValueError("BLOSUM62 definition requires a version-1 map of all 8000 triples")
+        if any(not isinstance(v, str) or not v or any(c in v for c in ":|")
+               for v in motif_map["mapping"].values()):
+            raise ValueError("invalid motif cluster label")
+    if v_context == "cluster":
+        if not v_maps or any(loc not in LOCI or m.get("version") != 1 or not m.get("mapping")
+                             for loc, m in v_maps.items()):
+            raise ValueError("clustered V context requires version-1 per-locus maps")
+        if any(not isinstance(v, str) or not v or any(c in v for c in ":|")
+               for m in v_maps.values() for v in m["mapping"].values()):
+            raise ValueError("invalid V cluster label")
+    out = {"version": 1, "configuration": configuration, "motifs": motifs,
+           "v_context": v_context, "shapes": list(MOTIF_SHAPES), "classes": list(IMGT11),
+           "amino_acids": AMINO_ACIDS, "flank": 1, "region": "imgt_cdr3",
+           "length_convention": "junction_aa", "length_bins": list(SPECTRATYPE_LENGTHS),
+           "scaling": "sqrt_block_variance_v1", "motif_map": motif_map, "v_maps": v_maps}
+    # Round trip detaches caller-owned dictionaries and pins the serializable contract.
+    out = json.loads(json.dumps(out, sort_keys=True, allow_nan=False))
+    out["identity"] = hashlib.sha256(json.dumps(out, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return out
+
+
+def validate_feature_definition(definition) -> None:
+    """Reject altered or unsupported saved definitions, including map tampering."""
+    if definition is None:
+        return
+    expected = feature_definition(definition.get("configuration"), motifs=definition.get("motifs"),
+                                  v_context=definition.get("v_context"),
+                                  motif_map=definition.get("motif_map"), v_maps=definition.get("v_maps"))
+    if definition != expected:
+        raise ValueError("feature definition or identity differs from its versioned contract")
+
+
+def _configured(definition):
+    return definition is not None and definition.get("configuration") != "legacy"
+
+
+def _feature_groups(sig, definition):
+    if not _configured(definition):
+        return raw_groups(sig)
+    if sig != "vsig":
+        raise ValueError("configurable statistical features require vsig")
+    groups = [g for g in raw_groups(sig) if g.name == "div"]
+    names = ("vj", "length") if definition["configuration"] == "basic" else ("vjl",)
+    groups += [RawGroup(sig, n, dynamic=("none", "unit"), named=True) for n in names]
+    groups += [RawGroup(sig, "isotype", dynamic=("none", "unit"), loci=("IGH",), named=True)]
+    if definition["motifs"] != "none":
+        groups += [RawGroup(sig, "motif_" + shape, dynamic=("none", "unit")) for shape in MOTIF_SHAPES]
+    return groups
+
+
 # --------------------------------------------------------------------- the vsig declaration
 
 _RAW: list[RawGroup] = [
@@ -299,7 +383,8 @@ def channels(sig: "str | None" = None) -> list[Channel]:
     return [c for c in _CHANNELS if sig is None or c.sig == sig]
 
 
-def raw_columns(sig: str, locus: str, vocab: "dict[str, list[str]] | None" = None) -> list[str]:
+def raw_columns(sig: str, locus: str, vocab: "dict[str, list[str]] | None" = None, *,
+                feature_definition=None) -> list[str]:
     """Every raw feature name for one ``(sig, locus)``, in rotation-input order.
 
     This is the column order of one row of the corpus matrix ``M_L``, so it is also the row order
@@ -313,7 +398,7 @@ def raw_columns(sig: str, locus: str, vocab: "dict[str, list[str]] | None" = Non
             locus. Required unless no dynamic group applies.
     """
     out: list[str] = []
-    for g in raw_groups(sig):
+    for g in _feature_groups(sig, feature_definition):
         if locus not in g.emitted_loci:
             continue
         names = None
@@ -325,9 +410,20 @@ def raw_columns(sig: str, locus: str, vocab: "dict[str, list[str]] | None" = Non
     return out
 
 
-def channel_columns(sig: str) -> list[str]:
+def channel_columns(sig: str, *, feature_definition=None) -> list[str]:
     """Every pass-through channel column for one ``sig``, in emitted order."""
-    return [c for ch in channels(sig) for loc in ch.emitted_loci for c in ch.columns(loc)]
+    out = [c for ch in channels(sig) for loc in ch.emitted_loci for c in ch.columns(loc)]
+    if _configured(feature_definition):
+        out += [f"vsig:depth:{loc}:{name}" for loc in LOCI for name in ("reads", "richness")]
+        out += [f"vsig:pair:-:{name}" for name in ("log_TRA_TRB", "log_TRG_TRB", "log_TRD_TRB", "log_IGK_IGL", "log_IGH_TRB")]
+        out += [f"vsig:qc:{loc}:{name}" for loc in LOCI for name in ("length_below_frac", "length_above_frac")]
+        blocks = [g.name for g in _feature_groups(sig, feature_definition)]
+        out += [f"vsig:observed:{loc}:{g}" for g in blocks for loc in LOCI
+                if g != "isotype" or loc == "IGH"]
+        if feature_definition["motifs"] != "none":
+            out += [f"vsig:motif_qc:{loc}:{shape}_{name}" for loc in LOCI for shape in MOTIF_SHAPES
+                    for name in ("eligible_frac", "unknown_v_frac")]
+    return out
 
 
 def named_groups(sig: "str | None" = None) -> list[RawGroup]:
@@ -335,7 +431,7 @@ def named_groups(sig: "str | None" = None) -> list[RawGroup]:
     return [g for g in raw_groups(sig) if g.named]
 
 
-def resolve_named(sig: str, named: "bool | Sequence[str]") -> tuple[str, ...]:
+def resolve_named(sig: str, named: "bool | Sequence[str]", *, feature_definition=None) -> tuple[str, ...]:
     """Normalise a ``named=`` argument to a tuple of group names.
 
     ``True`` means every group declared :attr:`~RawGroup.named`; ``False`` and ``()`` mean none. A
@@ -344,11 +440,11 @@ def resolve_named(sig: str, named: "bool | Sequence[str]") -> tuple[str, ...]:
     tell that from a corpus that could not compute them.
     """
     if named is True:
-        return tuple(g.name for g in named_groups(sig))
+        return tuple(g.name for g in _feature_groups(sig, feature_definition) if g.named)
     if named is False or not named:
         return ()
     want = tuple(named)
-    known = {g.name for g in raw_groups(sig)}
+    known = {g.name for g in _feature_groups(sig, feature_definition)}
     unknown = [n for n in want if n not in known]
     if unknown:
         raise ValueError(f"unknown raw group(s) for {sig}: {unknown}; "
@@ -357,7 +453,8 @@ def resolve_named(sig: str, named: "bool | Sequence[str]") -> tuple[str, ...]:
 
 
 def named_columns(sig: str, named: "bool | Sequence[str]" = True,
-                  vocab: "dict[str, dict[str, list[str]]] | None" = None) -> list[str]:
+                  vocab: "dict[str, dict[str, list[str]]] | None" = None, *,
+                  feature_definition=None) -> list[str]:
     """Raw column names carried through in natural units, in layout order.
 
     Args:
@@ -369,9 +466,9 @@ def named_columns(sig: str, named: "bool | Sequence[str]" = True,
             never had a chance of being anything else. :data:`NO_LOCUS` is always kept, because
             the cross-locus group is computed whatever the corpus models.
     """
-    want = resolve_named(sig, named)
+    want = resolve_named(sig, named, feature_definition=feature_definition)
     out: list[str] = []
-    for g in raw_groups(sig):
+    for g in _feature_groups(sig, feature_definition):
         if g.name not in want:
             continue
         for loc in g.emitted_loci:
@@ -438,9 +535,9 @@ def pc_columns(sig: str, k: dict[str, int]) -> list[str]:
             for i in range(1, k[loc] + 1)]
 
 
-def signature_columns(sig: str, k: dict[str, int]) -> list[str]:
+def signature_columns(sig: str, k: dict[str, int], *, feature_definition=None) -> list[str]:
     """The emitted signature for one half: rotated columns then channels, in that order."""
-    return [*pc_columns(sig, k), *channel_columns(sig)]
+    return [*pc_columns(sig, k), *channel_columns(sig, feature_definition=feature_definition)]
 
 
 def parse(column: str) -> tuple[str, str, str, str]:
@@ -459,7 +556,8 @@ def parse(column: str) -> tuple[str, str, str, str]:
     return parts[0], parts[1], parts[2], parts[3]
 
 
-def support_of(column: str, vocab: "dict[str, dict[str, list[str]]] | None" = None) -> str:
+def support_of(column: str, vocab: "dict[str, dict[str, list[str]]] | None" = None, *,
+               feature_definition=None) -> str:
     """The declared support of a raw feature or channel column.
 
     Args:
@@ -473,7 +571,7 @@ def support_of(column: str, vocab: "dict[str, dict[str, list[str]]] | None" = No
     sig, block, _locus, feature = parse(column)
     if block == PC_BLOCK:
         return "real"
-    for g in raw_groups(sig):
+    for g in _feature_groups(sig, feature_definition):
         if g.name != block:
             continue
         if g.dynamic:

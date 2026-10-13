@@ -208,7 +208,7 @@ def _codes(series: pl.Series, mapping: dict, default: int) -> np.ndarray:
 # ------------------------------------------------------------------------ germline vocabulary
 
 
-def gene_vocab(locus: str, organism: str = "human") -> dict[str, list[str]]:
+def gene_vocab(locus: str, organism: str = "human", *, feature_definition=None) -> dict[str, list[str]]:
     """Column names for the three germline-width raw groups at one locus.
 
     arda's germline is the single source of truth for V/J vocabulary across this ecosystem, so the
@@ -225,8 +225,40 @@ def gene_vocab(locus: str, organism: str = "human") -> dict[str, list[str]]:
     germ = load_germline(locus, organism=organism)
     v = sorted(set(germ.filter(pl.col("segment") == "V")["gene"].to_list()))
     j = sorted(set(germ.filter(pl.col("segment") == "J")["gene"].to_list()))
-    return {"vus": v, "jus": j,
-            "spec": [f"{g}_{n}" for g in v for n in SPECTRATYPE_LENGTHS]}
+    out = {"vus": v, "jus": j,
+           "spec": [f"{g}_{n}" for g in v for n in SPECTRATYPE_LENGTHS]}
+    from . import layout as L
+    if not L._configured(feature_definition):
+        return out
+    L.validate_feature_definition(feature_definition)
+    import itertools
+    if feature_definition["configuration"] == "basic":
+        out["vj"] = [f"{a}|{b}" for a in v for b in j] + ["_unknown"]
+        out["length"] = [str(n) for n in SPECTRATYPE_LENGTHS]
+    else:
+        out["vjl"] = [f"{a}|{b}|{n}" for a in v for b in j for n in SPECTRATYPE_LENGTHS] + ["_unknown"]
+    if locus == "IGH":
+        out["isotype"] = [*ISOTYPES, "_uncalled"]
+    if feature_definition["motifs"] != "none":
+        if feature_definition["motifs"] == "imgt11":
+            tokens = ["".join(t) for t in itertools.product("0123456789a", repeat=3)]
+        else:
+            tokens = sorted(set(feature_definition["motif_map"]["mapping"].values()))
+        context = feature_definition["v_context"]
+        if context == "none":
+            contexts = [""]
+        elif context == "gene":
+            contexts = [*v, "_unknown"]
+        else:
+            mapping = (feature_definition.get("v_maps") or {}).get(locus, {}).get("mapping", {})
+            missing = set(v) - set(mapping)
+            if missing:
+                raise ValueError(f"V cluster map lacks {len(missing)} genes for {locus}")
+            contexts = sorted(set(mapping.values())) + ["_unknown"]
+        names = [f"{c}|{t}" if c else t for c in contexts for t in tokens]
+        for shape in L.MOTIF_SHAPES:
+            out["motif_" + shape] = list(names)
+    return out
 
 
 # ---------------------------------------------------------------------------- raw feature groups
