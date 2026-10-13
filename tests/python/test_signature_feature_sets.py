@@ -317,3 +317,19 @@ def test_wide_table_pca_memory_guard_uses_sample_rank(monkeypatch):
     rotation=TablePCA.fit(table,n_components=2)
     assert requests[0] == 32*3*100+16*3**2
     assert rotation.components.shape == (2,100)
+
+
+def test_bounded_compositions_skip_unused_quantiles_and_robust_scaling(monkeypatch):
+    import numpy as np
+    from vdjtools.signature import corpus as C
+    d=L.feature_definition('basic')
+    vocab={'TRB':{'vj':['V|J','_unknown'],'length':['6','7']}}
+    cols=L.raw_columns('vsig','TRB',vocab['TRB'],feature_definition=d)
+    x=np.zeros((8,len(cols)));x[:,:6]=np.arange(8)[:,None];x[:,6]=np.linspace(0,1,8);x[:,7]=1-x[:,6]
+    original=np.nanquantile
+    def quantile(data,*a,**kw):
+        assert data.shape[1] <= 6, 'untrimmed compositions need no fitted quantiles'
+        return original(data,*a,**kw)
+    monkeypatch.setattr(np,'nanquantile',quantile)
+    art=C.fit_matrices({'TRB':(x,cols)},vocab,sig='vsig',name='wide',feature_definition=d,n_components=2)
+    assert art.fits['TRB'].rotation.shape==(len(cols),2)

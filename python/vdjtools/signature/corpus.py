@@ -89,13 +89,18 @@ def bounds_for(x: np.ndarray, supports: list[str], p: float) -> tuple[np.ndarray
     if not 0.0 < p < 0.5:
         raise ValueError(f"winsor p must be in (0, 0.5); got {p}")
     sides = np.array([L.SUPPORTS[s] for s in supports])          # (p_L, 2) bottom, top
+    trimmed = sides.any(axis=1)
+    lo, hi = np.full(len(supports), -np.inf), np.full(len(supports), np.inf)
+    if not trimmed.any():
+        return lo, hi
     with np.errstate(invalid="ignore"), warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)     # all-nan column: see robust_loc_scale
-        finite = np.where(np.isfinite(x), x, np.nan)
+        selected = x[:, trimmed]
+        finite = np.where(np.isfinite(selected), selected, np.nan)
         qlo = np.nanquantile(finite, p, axis=0)
         qhi = np.nanquantile(finite, 1.0 - p, axis=0)
-    lo = np.where(sides[:, 0], qlo, -np.inf)
-    hi = np.where(sides[:, 1], qhi, np.inf)
+    lo[trimmed] = np.where(sides[trimmed, 0], qlo, -np.inf)
+    hi[trimmed] = np.where(sides[trimmed, 1], qhi, np.inf)
     # An all-nan column yields nan quantiles, which would clamp everything to nan. A column the
     # corpus never observed has no bound to offer, so it offers none.
     lo = np.where(np.isfinite(lo), lo, -np.inf)
@@ -453,8 +458,10 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
         work, _ = clamp(x, *bounds[winsor_p])
 
     transformed = _composition_coordinates(work, columns) if configured else work
-    loc, scale = robust_loc_scale(transformed)
     if configured:
+        composition = np.array([L.parse(c)[1] in L.COMPOSITION_BLOCKS for c in columns])
+        loc, scale = np.zeros(p), np.zeros(p)
+        loc[~composition], scale[~composition] = robust_loc_scale(transformed[:, ~composition])
         for group in L.COMPOSITION_BLOCKS:
             mask = np.array([L.parse(c)[1] == group for c in columns])
             if not mask.any():
@@ -469,6 +476,8 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
             variances = np.nanvar(block, axis=0)
             loc[mask] = np.nan_to_num(means)
             scale[mask] = np.sqrt(np.nansum(variances))
+    else:
+        loc, scale = robust_loc_scale(transformed)
     if not (scale > MIN_SPREAD).any():
         return None
     z = _standardize(transformed, loc, scale)
