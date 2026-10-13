@@ -25,7 +25,7 @@ So the split is by *role*, not by cost:
    * - a **measurement** of the repertoire
      - raw feature: transformed, winsorized against the corpus, rotated, scaled
    * - a statement about **the row itself**
-     - channel: emitted as-is, in ``[0, 1]`` or a raw count
+     - channel: emitted as-is, in its declared units and range
 
 .. _channels-mask:
 
@@ -57,9 +57,9 @@ So the split is by *role*, not by cost:
      - Whether the locus had any productive clonotype at all.
    * - ``vsig:mask:<locus>:estimable``
      - 7
-     - Whether the coverage target was reachable without extrapolating. ``present=1`` with
-       ``estimable=0`` means the sample is too shallow, which is a different fact from an absent
-       locus and used to render as the same ``nan``.
+     - Whether diversity was estimable at the coverage target without extrapolating.
+       ``present=1`` with ``estimable=0`` can mean insufficient data, an unreachable target,
+       or a locus outside the corpus vocabulary; it is distinct from an absent locus.
    * - ``vsig:mask:IGH:c_call`` / ``:shm``
      - IGH
      - Whether the input carried a constant-gene call, and a usable ``v_identity``. Both are
@@ -91,7 +91,7 @@ So the split is by *role*, not by cost:
 
 These rsig channels describe within-locus sequence diversity and compartment
 positions. Their definitions and shallow-locus rules live in `mirpy's channel
-reference <https://docs.isalgo.dev/mirpy/channels.html>`_. They pass through a
+reference <https://docs.isalgo.dev/mirpy/channels.html>`_. They bypass the
 signature rotation; they are not the RFF mean columns used by sample PCA.
 
 ``qc`` -- diagnostics
@@ -114,7 +114,8 @@ These describe the **row**, not the donor. Read them before trusting a row; do n
        plausible, systematically wrong result. This is the only column that says so.
    * - ``vsig:qc:<locus>:nonstd_aa_frac``
      - 7
-     - Weight fraction dropped as non-productive or unparseable. ``nan`` under
+     - Read-count fraction dropped by sequence sanitisation. Unparseable characters raise
+       by default; ``sanitise(strict=False)`` drops them. ``nan`` under
        ``prefiltered=True``, because a caller who already filtered would otherwise get a confident
        floor of zero.
    * - ``vsig:qc:-:n_loci_present``
@@ -145,7 +146,7 @@ Reading a row
 
    # mask -- a FEATURE. Which loci this donor resolved is biology, not bookkeeping.
    row["vsig:mask:TRD:present"]
-   row["vsig:mask:TRB:estimable"]        # is vsig:pc:TRB:* resting on a real diversity estimate?
+   row["vsig:mask:TRB:estimable"]        # are the TRB diversity inputs estimable?
 
 What can I get, and in what units
 ----------------------------------
@@ -169,7 +170,8 @@ emitted for, and a ``kind``:
    * - kind
      - meaning
    * - ``rotated``
-     - A rotation input. You do not get this column; you get ``<sig>:pc:<locus>:PCnn``.
+     - A rotation input. A signature emits ``<sig>:pc:<locus>:PCnn``;
+       ``vdjtools features`` emits the unrotated input column.
    * - ``named``
      - A rotation input that is **also** reportable on its own, via ``named=`` -- see
        :ref:`sig-named`. Same number, carrying its declared transform.

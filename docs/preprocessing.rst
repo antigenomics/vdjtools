@@ -117,7 +117,7 @@ Keep them apart:
      - does this sequence encode a chain?
      - AIRR ``productive``
    * - the **germline gene**
-     - is the V/D/J/C gene it uses real?
+     - is the V/D/J/C gene it uses functional?
      - IMGT functionality: **F** / **ORF** / **P**
 
 `AIRR Rearrangement <https://docs.airr-community.org/en/latest/datarep/rearrangements.html>`_
@@ -190,9 +190,8 @@ Length
    df = filter_length(df, keep="outside")              # inspect what a bound would discard
 
 Both bounds are **inclusive**: the defaults keep a 5-mer and keep a 60-mer. They are a data-sanity
-bound, not a biological claim — below 5 aa a junction cannot span the Cys104..Phe118 anchors with
-any diversity between them, and above 60 aa it is beyond what the germline can produce. Real
-junctions sit far inside both.
+bound, not a hard limit on what recombination can produce. Most observed junctions
+sit inside both; inspect excluded rows before applying the filter.
 
 .. warning::
 

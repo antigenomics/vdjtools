@@ -59,7 +59,7 @@ vdjtools signature --corpus blood samples/*.tsv -o vsig.tsv
 ```
 
 `features` exports unrotated measurements and channels without a corpus.
-Declared log/CLR/logit transforms remain; “raw” means before corpus scaling,
+Declared log/CLR/logit/arcsine transforms remain; “raw” means before corpus scaling,
 winsorization and PCA. `signature` applies the published vsig corpus transform.
 These are different outputs. mirpy's rsig geometry half joins vsig on `sample_id`;
 mirpy's sample RFF vectors are a separate representation.
@@ -118,7 +118,8 @@ public functions and the model workshop for native model workflows.
 
 For the v2 rewrite, cite this repository. For the original tool, cite
 [Shugay et al., *PLoS Computational Biology* 2015](https://doi.org/10.1371/journal.pcbi.1004503).
-The VDJtrack recapture model in `vdjtools.dynamics` is Pavlova, Zvyagin and Shugay (2024).
+The VDJtrack recapture model in `vdjtools.dynamics` is
+[Pavlova, Zvyagin and Shugay (2024)](https://doi.org/10.3389/fimmu.2024.1321603).
 
 ## License
 

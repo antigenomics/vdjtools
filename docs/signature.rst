@@ -18,8 +18,8 @@ repertoires --- fixes the last two:
 In plain terms, reading left to right:
 
 #. **Raw features** are the ordinary measurements of one repertoire --- how diverse, how clonal,
-   which V and J genes, what junction lengths, which isotypes. They come from this sample and
-   nothing else.
+   which V and J genes, what junction lengths, which isotypes. They use this sample
+   and a declared feature vocabulary; no corpus scaling or rotation is applied yet.
 #. :term:`Winsorization` clips each measurement to a range measured on the corpus, so that one
    pathological sample cannot dominate everything downstream. Clipping edits a real number, so how
    much of the row was clipped is always reported --- see ``winsor_frac`` below.
@@ -127,8 +127,9 @@ A corpus is required
 --------------------
 
 There is no default. A signature is comparable to another one **only** if both were rotated
-through the same corpus, so the artifact has to be named, and the emitted row records which one it
-was. Two matrices whose column names match but whose corpora differ are not comparable, and nothing
+through the same corpus, so the artifact has to be named. Keep its identity and checksum
+with the emitted matrix: the signature columns do not encode them. Two matrices whose column names
+match but whose corpora differ are not comparable, and nothing
 about the numbers says so — which is why the choice is not allowed to be implicit.
 
 All nine corpora are published. Four are **synthetic** -- every receptor drawn from the bundled
@@ -390,8 +391,8 @@ silently moves every component. Per-locus blocking is what keeps a hole a hole.
      - what
    * - ``div``
      - 6
-     - Coverage-standardised Hill numbers ``0D_c``/``1D_c``/``2D_c``, ``clonality``, ``0D_chao``,
-       ``d50``
+     - Coverage-standardised Hill numbers ``0D_c``/``1D_c``/``2D_c`` and clonality;
+       observed-count Chao richness ``0D_chao`` and the ``d50`` fraction ``k/Sobs``
    * - ``depth``
      - 3
      - ``reads``, ``richness``, ``S_unseen`` (Chao's estimate of what was never drawn)
@@ -421,7 +422,7 @@ silently moves every component. Per-locus blocking is what keeps a hole a hole.
      - IGH only: isotype composition in clr, and mean V identity
    * - ``pair``
      - 5
-     - Cross-locus: five log read-count ratios, depth divided out
+     - Cross-locus: five log10 ratios of ``reads + 1``
 
 Widths per locus run from 685 (TRD) to 3,744 (IGH), 13,483 raw features in total.
 
@@ -563,8 +564,8 @@ byte-identical to a run without the argument. The reportable blocks are:
      - what it holds
    * - ``vsig``
      - ``div``
-     - Coverage-standardised Hill numbers ``1D_c``/``0D_c``/``2D_c``, ``0D_chao``, clonality,
-       ``d50``
+     - Coverage-standardised Hill numbers ``1D_c``/``0D_c``/``2D_c`` and clonality;
+       observed-count Chao richness ``0D_chao`` and the ``d50`` fraction ``k/Sobs``
    * - ``vsig``
      - ``depth``
      - ``reads``, ``richness``, ``S_unseen``

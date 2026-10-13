@@ -3,7 +3,7 @@ API reference
 
 Every public subpackage is documented below: the native model engine (``vdjtools.model``),
 raw features/table PCA and corpus signatures (``vdjtools.signature``),
-IO/schema (``vdjtools.io``), statistics (``vdjtools.stats``), CDR3 features
+IO/schema (``vdjtools.io``), statistics (``vdjtools.stats``), junction features
 (``vdjtools.features``), overlap/TCRnet (``vdjtools.overlap``), preprocessing
 (``vdjtools.preprocess``), biomarker association (``vdjtools.biomarker``), repertoire dynamics (``vdjtools.dynamics``), single-cell interop
 (``vdjtools.sc``), and the command-line interface (``vdjtools.cli``).
@@ -250,7 +250,7 @@ iNEXT-style Hill-number rarefaction and extrapolation.
 ``vdjtools.stats.spectratype``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-CDR3 length spectratype (nt / aa, weighted / unweighted).
+Junction-length spectratype (nt / aa, weighted / unweighted).
 
 .. automodule:: vdjtools.stats.spectratype
    :members:
@@ -260,17 +260,17 @@ CDR3 length spectratype (nt / aa, weighted / unweighted).
 ``vdjtools.stats.usage``
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-V / J / VJ segment-usage vectors and matrices.
+V / D / J / C / VJ segment-usage vectors and matrices.
 
 .. automodule:: vdjtools.stats.usage
    :members:
    :undoc-members:
    :show-inheritance:
 
-CDR3 features (``vdjtools.features``)
--------------------------------------
+Junction features (``vdjtools.features``)
+-----------------------------------------
 
-Per-clonotype and sample-level CDR3 sequence features: amino-acid physicochemical region profiles and k-mer summaries. These are the primitives; the signature's own feature groups are in :doc:`signature`.
+Per-clonotype and sample-level junction sequence features: amino-acid physicochemical region profiles and k-mer summaries. These are the primitives; the signature's own feature groups are in :doc:`signature`.
 
 .. note::
 
@@ -286,7 +286,7 @@ Per-clonotype and sample-level CDR3 sequence features: amino-acid physicochemica
 ``vdjtools.features.physchem``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Physicochemical CDR3 region profiles (Kidera factors, charge, hydropathy, ...).
+Physicochemical junction-region profiles (Kidera factors, charge, hydropathy, ...).
 
 .. automodule:: vdjtools.features.physchem
    :members:
@@ -456,7 +456,7 @@ VJ-usage batch-effect correction.
 Repertoire dynamics (``vdjtools.dynamics``)
 -------------------------------------------
 
-Longitudinal **within-donor** clonotype testing across timepoints. Three complementary tools: a per-clonotype paired test (Ayestaran 2024) with per-pair effective sample size, deterministic downscale, two-tailed Fisher, and a five-way classification (emergent / expanded / persistent / contracted / vanishing); the same test on 1-Hamming / 1-Levenshtein CDR3 metaclonotype groups; and the VDJtrack size-bucket recapture model with an edgeR NB-exact caller (Pavlova, Zvyagin & Shugay 2024). The sibling of ``vdjtools.biomarker`` — that tests incidence across *subjects*, this tests frequency across *timepoints*.
+Longitudinal **within-donor** clonotype testing across timepoints. Three complementary tools: a per-clonotype paired test (`Ayestaran Basagoitia, PhD thesis, 2024 <https://doi.org/10.17863/CAM.118268>`_) with per-pair effective sample size, deterministic downscale, two-tailed Fisher, and a five-way classification (emergent / expanded / persistent / contracted / vanishing); the same test on 1-Hamming / 1-Levenshtein CDR3 metaclonotype groups; and the VDJtrack size-bucket recapture model with an edgeR NB-exact caller (Pavlova, Zvyagin & Shugay 2024). The sibling of ``vdjtools.biomarker`` — that tests incidence across *subjects*, this tests frequency across *timepoints*.
 
 ``vdjtools.dynamics.paired``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

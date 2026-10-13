@@ -3,7 +3,8 @@ User guide
 
 Worked, copy-paste-runnable examples for every analysis module. Repertoire analytics use
 `polars <https://pola.rs>`_ frames on the canonical clonotype schema
-(AIRR **junction** column names; see :mod:`vdjtools.io.schema`), so results chain together
+(AIRR-aligned **junction** columns; ``junction_nt`` maps to AIRR ``junction``;
+see :mod:`vdjtools.io.schema`), so results chain together
 and drop straight into plotting or ``.write_csv``.
 
 A sample to play with
@@ -106,7 +107,7 @@ Efron–Thisted, Shannon, normalized Shannon, inverse Simpson, d50):
    # iNEXT-style Hill-number rarefaction + extrapolation with bootstrap CIs
    stats.inext(sample, q=(0, 1, 2))         # order_q, m, method, sample_coverage, qD, qD_lo, qD_hi
 
-   # V / J / VJ segment usage, and the CDR3-length spectratype
+   # V / D / J / C / VJ segment usage, and the junction-length spectratype
    stats.segment_usage(sample, "v")         # locus, v_call, weight
    stats.spectratype(sample, kind="aa")     # length spectrum, reads-weighted
 
@@ -114,12 +115,12 @@ Pass ``weight="unique"`` to any usage/spectratype call to weight by clonotype in
 reads; ``inext_batch`` / ``rarefaction_batch`` run a whole cohort on the native parallel
 kernel.
 
-CDR3 features
--------------
+Junction features
+-----------------
 
-:mod:`vdjtools.features` summarises CDR3 sequence content. ``physchem_profile`` gives the
+:mod:`vdjtools.features` summarises junction sequence content. ``physchem_profile`` gives the
 mean amino-acid physicochemical properties (Kidera factors, charge, hydropathy, …) per group
-and CDR3 region; ``kmer_profile`` counts k-mers:
+and junction region; ``kmer_profile`` counts k-mers:
 
 .. code-block:: python
 
@@ -193,8 +194,8 @@ Overlap and TCRnet
 ------------------
 
 :mod:`vdjtools.overlap` compares samples. Exact-match overlap is pure polars; fuzzy /
-similarity-aware overlap and TCRnet delegate to the vdjmatch + seqtree engine
-(``pip install "vdjtools[overlap]"``):
+similarity-aware overlap and TCRnet delegate to the base vdjmatch + seqtree dependencies.
+The ``[overlap]`` extra supplies scikit-learn for sample MDS:
 
 .. code-block:: python
 
@@ -259,7 +260,7 @@ back onto each sample's clonotype table:
 (``resample=False`` for deterministic expected counts). The batch mean/σ use the plain log-normal
 statistics by default (paper-faithful); pass ``winsor_q=0.025`` only for the noisy
 usage-as-features regime (many shallow / RNA-seq repertoires, e.g. as UMAP features). Validated on
-the paper's own FMBA covid TCRβ cohort (deep repertoires, ~3.3M reads/sample): V-usage variance
+the paper's TCRβ repertoire example (deep repertoires, ~3.3M reads/sample): V-usage variance
 explained by batch drops from η²≈0.11 to ≈0.002 while the grand-mean usage and per-sample read
 depth are preserved.
 
@@ -385,7 +386,7 @@ stays the whole cohort, because a candidate's neighbours are usually not candida
    1,200-donor cohort), so an exact hypergeometric is the wrong tool — use a smooth test
    (conditional binomial / G-test), not factorials. **The null matters more than the test**: it
    must be the *subject* ratio ``n_pos/(n_pos+n_neg)``, not the *row* ratio
-   ``N_pos/(N_pos+N_neg)``. Where sequencing depth differs between arms — in our FMBA cohort the
+   ``N_pos/(N_pos+N_neg)``. Where sequencing depth differs between arms — in the recorded cohort the
    controls carry 1.4–1.5× more rearrangements per donor — the two nulls differ by ~15–20%, and
    any clonotype whose row count does not scale with depth (a public one carried about once per
    donor regardless) picks up a spurious enrichment of exactly that size. At large counts a 1.4×
@@ -419,7 +420,7 @@ chains — in-silico α-β pairing (Howie 2015, Vlasova 2026) and same-chain co-
    stratification:
 
    - **Repertoire depth** inflates the lift by ``≈ 1+CV²(N)`` for rare clonotypes,
-     independently of HLA, exposure or pairing (measured on the FMBA covid19 cohort:
+     independently of HLA, exposure or pairing (measured on the reference cohort:
      CV(N)=0.899 → θ_depth=1.81; a ≥1000-clonotype floor drops it to 1.50 *and* removes
      ~73% of the significant pairs). Filter near-empty samples before reading θ.
    - **Shared exposure**: two co-specific but unpaired clones stay associated within every
@@ -428,7 +429,7 @@ chains — in-silico α-β pairing (Howie 2015, Vlasova 2026) and same-chain co-
    Shared restriction by an allele of carrier frequency *f* cannot induce a lift above
    ``(1+CV²(N))/f`` (2.04 for HLA-A*02:01 before the depth term), so a θ far above that
    ceiling is not explicable by *that allele* — though it remains explicable by depth,
-   ancestry, batch or exposure. De Witt et al. (*eLife* 2018) found shared HLA carriage
+   ancestry, batch or exposure. DeWitt et al. (*eLife* 2018) found shared HLA carriage
    explained the **majority** of strongly co-occurring TCRβ pairs, and restricted all
    downstream clustering to within-allele subsets. Read ``cooccurrence()`` output as
    co-occurrence and nothing more; physical pairing is established by within-subject
@@ -539,8 +540,8 @@ marginal ``P(L, V, J)``.
    codons at that position and returns ``0.0`` — a silent zero, not a degenerate query. Pass
    ``list(seq)`` to ``pgen_aa_degenerate`` when the sequence carries ``X``.
 
-Reconstructing nucleotides and V/D/J markup from an amino-acid CDR3
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Reconstructing nucleotides and V/D/J markup from an amino-acid junction
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 A VDJdb record carries ``(V, J, CDR3aa)`` and no nucleotides, so the boundary markup a repertoire
 analysis wants is simply absent. :func:`~vdjtools.model.viterbi.infer_nt` reconstructs it under the
@@ -553,8 +554,8 @@ it.
    from vdjtools.model import infer_nt
 
    sc = infer_nt(model, "CASSLGQAYEQYF", v="TRBV5-1*01", j="TRBJ2-3*01")
-   sc.cdr3_nt                       # the reconstructed nucleotide CDR3
-   sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, CDR3-nt space
+   sc.cdr3_nt                       # the reconstructed nucleotide junction (historical field name)
+   sc.v_end, sc.d_call, sc.d_start, sc.d_end, sc.j_start   # 0-based, half-open, junction-nt space
    sc.pgen, sc.margin               # exact Pgen of the result, and its lead over the runner-up
 
 ``v=``/``j=`` accept one allele, several (a list, or the comma-separated string an ambiguous AIRR
@@ -599,7 +600,7 @@ and needs no DP and no model — only the germline and the genetic code.
    from vdjtools.model import germline_boundary
 
    b = germline_boundary(model, chains["cdr3"], v=chains["v_call"], j=chains["j_call"])
-   b["v_end"], b["j_start"]         # 0-based, half-open, CDR3-nt space; null where no germline
+   b["v_end"], b["j_start"]         # 0-based, half-open, junction-nt space; null where no germline
 
 An exonuclease does not stop on a codon boundary, so the last residue a germline touches is usually
 part germline and part N region, and an amino-acid alignment can only round that to a whole residue.

@@ -3,8 +3,9 @@ Raw features and sample PCA
 
 ``vdjtools features`` exports the unrotated statistical feature table and its
 channels, without a fitted corpus. It includes diversity, isotype and segment/kmer
-usage through the existing signature feature contract. Declared log, CLR and logit
-transforms remain; raw here means before corpus scaling and PCA.
+usage through the existing signature feature contract. Declared log, CLR, logit
+and arcsine transforms remain; raw here means before corpus scaling, winsorization
+and PCA.
 
 .. code-block:: bash
 
@@ -115,7 +116,7 @@ Extract a reference bundle separately from the library installation and verify
 its recorded hashes before use. Choose the blood/tissue RNA-seq, synthetic or
 deep TRA/TRB reference appropriate to your analysis; keep the chosen rotation
 checksum with your results. The deep reference selects TRA/TRB measurements and
-cross-locus channels rather than fitting the other loci. Unselected measurements
+cross-locus read-count ratios rather than fitting the other loci. Unselected measurements
 and channels pass through the projection.
 
 The first command keeps the unprojected feature table. Applying a rotation does

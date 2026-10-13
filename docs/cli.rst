@@ -66,9 +66,10 @@ The three filtering axes are deliberately separate flags, because they are separ
    * - ``--productive``
      - Does the **rearrangement** encode a chain? In frame, no stop codon.
    * - ``--functional-genes``
-     - Is the **germline gene** real? IMGT F, ORF or P; ``--keep-orf`` admits ORF.
+     - Is the **germline gene** functional? IMGT F, ORF or P; ``--keep-orf`` admits ORF.
    * - ``--min-len`` / ``--max-len``
-     - Is ``junction_aa`` within an inclusive length bound? Defaults sanity-bound 5 to 60.
+     - Is ``junction_aa`` within an inclusive length bound? The filter runs only when
+       a bound is supplied; an omitted opposite bound uses 5 or 60.
 
 A productive rearrangement can use a pseudogene V, so filtering one axis says nothing about the
 other. ``--recompute-frequencies`` is on by default, renormalising ``frequency`` over the survivors;
@@ -136,9 +137,9 @@ All four take sample files or ``-m``, and accept ``-t`` and ``--cohort``.
        clonotype key; the default refuses, because a table with no ``junction_nt`` cannot say
        whether two such rows are one clonotype or two.
    * - ``spectratype``
-     - Junction-length distribution. ``--kind aa|nt``, ``--weight reads|clones``.
+     - Junction-length distribution. ``--kind aa|nt``, ``--weight reads|unique|freq``.
    * - ``segment-usage``
-     - V, D, J, C or VJ usage. ``--segment v`` by default, ``--weight reads|clones``.
+     - V, D, J or C usage. ``--segment v`` by default, ``--weight reads|unique|freq``.
    * - ``overlap``
      - Exact-match pairwise overlap (D, F, F2, R) for every sample pair.
 
@@ -204,8 +205,8 @@ make two matrices look comparable when they are not. Key options:
        ``synthetic-blood``, ``synthetic-tissue``, ``naive``, ``memory``, or a path. A published name
        is downloaded and cached on first use.
    * - ``--components``
-     - An integer count (``128``) or a variance fraction (``0.95``). Truncating a wider rotation
-       downward is exact; asking for more than was fitted refuses.
+     - An integer count (``128``) or a variance fraction (``0.95``). Counts are capped at
+       each locus's stored width; an unattainable variance fraction raises. Truncation is exact.
    * - ``--winsorize``
      - ``features`` (clamp, then rotate), ``pcs`` (rotate, then clamp) or ``none``. Whatever is
        clamped is reported in ``vsig:qc:-:winsor_frac``.
@@ -267,7 +268,7 @@ only productive draws (on by default, at roughly 3.6 times the cost per kept seq
 ``model`` -- the workshop
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Thirteen subcommands for building, fitting, auditing and comparing models. Full walkthrough in
+Subcommands for building, fitting, auditing and comparing models. Full walkthrough in
 :doc:`model`.
 
 .. list-table::

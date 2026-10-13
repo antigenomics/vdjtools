@@ -65,8 +65,8 @@ rather than only wording.
       published; see :doc:`signature`.
 
    coverage
-      The fraction of the underlying receptor population that the observed sample represents,
-      estimated from the abundance spectrum. The basis for coverage-standardised diversity, and the
+      The fraction of the population's abundance belonging to clonotypes observed in the sample,
+      estimated from the abundance spectrum. It is not the fraction of all clonotypes detected. The basis for coverage-standardised diversity, and the
       reason :term:`rarefaction` beats fixed-depth downsampling. See :term:`C-star`.
 
    d50
@@ -74,7 +74,8 @@ rather than only wording.
       descending count, take the smallest number ``k`` whose cumulative read fraction reaches 50
       percent, and report ``1 - k/Sobs`` -- the fraction of clonotypes **not** needed. Higher means
       more dominated by few clones. A value of 0.98 means 2 percent of clonotypes carry half the
-      reads.
+      reads. The signature's ``vsig:div:<locus>:d50`` uses the opposite fraction,
+      ``k/Sobs``, with its declared logit transform.
 
    downsampling
       Randomly reducing a sample to a fixed number of reads or clonotypes so that depth-sensitive
@@ -103,8 +104,9 @@ rather than only wording.
 
    germline
       The unrearranged V, D, J and C segment sequences a receptor is assembled from. vdjtools
-      resolves all germline through arda, which is the single source of truth: mixing germline
-      sources within one model produces wrong answers that look plausible.
+      uses arda for its native germline reference; the bundled ``olga`` and ``learned`` sets
+      retain OLGA's germline namespace. Mixing germline sources within one model produces
+      wrong answers that look plausible.
 
    Hill number
       A one-parameter family of diversity measures indexed by order ``q``, all in units of an
@@ -124,7 +126,8 @@ rather than only wording.
 
    junction
       The nucleotide or amino-acid sequence spanning the V-D-J join **including** the Cys104 and
-      Phe118 :term:`anchor` residues -- AIRR's ``junction_nt`` and ``junction_aa``. Two residues
+      Phe/Trp118 :term:`anchor` residues -- AIRR's ``junction`` and ``junction_aa``
+      (vdjtools names the nucleotide field ``junction_nt``). Two residues
       longer than the :term:`CDR3`. vdjtools uses junction columns throughout; confirm which
       convention any external dataset uses before matching against it. Note that
       :func:`~vdjtools.model.native.pgen_aa` and :func:`~vdjtools.model.infer.infer_nt` name their
@@ -204,7 +207,8 @@ rather than only wording.
       every narrower request.
 
    signature
-      One fixed-width, named, already-standardised feature vector per repertoire. Split across two
+      One fixed-width, named feature vector per repertoire, with standardised PCs and
+      pass-through channels. Split across two
       packages: ``vsig`` is the statistics half (vdjtools) and ``rsig`` the geometry half
       (`mirpy <https://github.com/antigenomics/mirpy>`_); they join on ``sample_id``. See
       :doc:`signature`.
@@ -246,8 +250,8 @@ rather than only wording.
    channel
       A signature column carried in its **own units**, never rotated and never winsorized: the
       coverage a sample attained, whether a locus was present, how much of the row was clamped.
-      Channels answer "can I trust this row", and mixing a number whose job is to qualify a
-      measurement into the measurement itself would destroy both. Distinct from a
+      Channels retain coverage, missingness, repertoire measurements and QC in interpretable
+      units. Mixing these into a rotation would lose their individual meaning. Distinct from a
       :term:`principal component` and from a :term:`named block`. See :doc:`channels`.
 
    clonality
@@ -284,10 +288,9 @@ rather than only wording.
       the classes are shares of one whole.
 
    n_eff
-      Effective sample size: how many independent observations a weighted sample is worth, computed
-      from the clone-size weights. A repertoire of 10,000 reads dominated by one clone is worth far
-      fewer than 10,000 independent draws, and every estimator's precision scales with ``n_eff``
-      rather than with the raw read count.
+      Effective size of weighted clonotype observations. For normalized clone weights
+      ``w_i``, Kish's effective size is ``1/Σw_i²``. Concentrating weight on a few clones
+      reduces this value; it describes weighting and does not establish biological independence.
 
    named block
       A raw feature group emitted under its own name, beside the rotated components --- the
@@ -311,7 +314,7 @@ rather than only wording.
       have the same :term:`richness` and very different Rao entropy.
 
    robust z-score
-      The units a :term:`signature` column is on: the value minus the :term:`corpus`'s median for
+      The units a :term:`signature`'s PC column is on: the value minus the :term:`corpus`'s median for
       that column, divided by its :term:`MAD`. Median and MAD rather than mean and standard
       deviation, so that a handful of extreme corpus samples cannot set the scale. A value of 2
       means "two robust deviations above the corpus's typical sample".
