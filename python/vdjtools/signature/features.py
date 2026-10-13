@@ -753,7 +753,8 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
                 for shape in L.MOTIF_SHAPES:
                     part = profile.filter(pl.col("shape") == shape)
                     g = "motif_" + shape
-                    vals = dict.fromkeys(vocab[locus][g], 0.0 if part.height else np.nan)
+                    vals = ({} if _raw_array is not None else
+                            dict.fromkeys(vocab[locus][g], 0.0 if part.height else np.nan))
                     for ctx, token, frequency in part.select("context", "motif", "frequency").iter_rows():
                         key = f"{ctx}|{token}" if ctx else token
                         vals[key] = float(frequency)
@@ -768,7 +769,14 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
                     raw.update({f"vsig:{g}:{locus}:{k}": float(v) for k, v in vals.items()})
                 elif g in _raw_array[locus]:
                     row, names = _raw_array[locus][g]
-                    row[:] = np.fromiter(map(vals.__getitem__, names), dtype=float, count=len(names))
+                    if g.startswith("motif_"):
+                        row.fill(0.0 if vals else np.nan)
+                        indices = np.fromiter((names.get(k, -1) for k in vals), dtype=np.intp, count=len(vals))
+                        values = np.fromiter(vals.values(), dtype=float, count=len(vals))
+                        valid = indices >= 0
+                        row[indices[valid]] = values[valid]
+                    else:
+                        row[:] = np.fromiter(map(vals.__getitem__, names), dtype=float, count=len(names))
                 chan[f"vsig:observed:{locus}:{g}"] = float(any(np.isfinite(v) for v in vals.values()))
             continue
 

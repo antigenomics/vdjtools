@@ -408,6 +408,9 @@ def test_configured_array_map_matches_dense_extractor(monkeypatch):
         assert kwargs.get('_raw_array') is not None, 'configured map still builds dense row dicts'
         raw, channels = original(*args, **kwargs)
         assert raw == {}
+        _, dense_channels = original(*args, **{k: v for k, v in kwargs.items() if k != '_raw_array'})
+        assert channels.keys() == dense_channels.keys()
+        np.testing.assert_array_equal(list(channels.values()), list(dense_channels.values()))
         return raw, channels
     monkeypatch.setitem(C._FEATURISERS, 'vsig', array_only)
     monkeypatch.setattr(C, 'fit_matrices', lambda mats, *args, **kwargs: mats)
@@ -430,7 +433,8 @@ def test_configured_array_map_matches_dense_extractor(monkeypatch):
                     tokens = [''.join(t) for t in itertools.product('0123456789a', repeat=3)] if motifs == 'imgt11' else ['m000']
                     contexts = [''] if context == 'none' else ['V', '_unknown'] if context == 'gene' else ['v000', '_unknown']
                     for shape in L.MOTIF_SHAPES:
-                        v['motif_' + shape] = [f'{ctx}|{token}' if ctx else token for ctx in contexts for token in tokens]
+                        v['motif_' + shape] = list(reversed(
+                            [f'{ctx}|{token}' if ctx else token for ctx in contexts for token in tokens]))
                 # Extra vocabulary groups must not become extra rotation columns.
                 v.setdefault('vj', ['V|J', '_unknown'])
                 v.setdefault('length', [str(n) for n in L.SPECTRATYPE_LENGTHS])

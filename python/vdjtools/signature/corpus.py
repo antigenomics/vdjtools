@@ -797,7 +797,8 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
                 if loc not in group.emitted_loci:
                     continue
                 names = vocab[loc][group.name] if group.dynamic else tuple(group.features)
-                blocks[loc][group.name] = (slice(offset, offset + len(names)), names)
+                blocks[loc][group.name] = (slice(offset, offset + len(names)),
+                                           {name: j for j, name in enumerate(names)})
                 offset += len(names)
             assert offset == len(cols)
         def fill(indexed):
