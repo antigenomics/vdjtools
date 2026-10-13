@@ -611,29 +611,37 @@ def fit_matrices(mats: dict[str, tuple[np.ndarray, list[str]]],
                  vocab: dict[str, dict[str, list[str]]], *, sig: str, name: str,
                  mode: str = "features", n_components: "int | float" = DEFAULT_COMPONENTS,
                  winsor_p: float = 0.01, meta: "dict | None" = None, feature_definition=None,
-                 solver="full", seed=0, max_components=128) -> Corpus:
+                 solver="full", seed=0, max_components=128, threads: int = 1) -> Corpus:
     """Fit a corpus from per-locus matrices -- the memory-bounded path.
 
     Each locus is fitted only on the rows that observed it, so a corpus where half the samples have
     no TRD does not learn TRD from imputed values.
+    ``threads`` budgets BLAS for fitting only: 1 is serial, 0 uses allocated cores.
     """
     L.validate_feature_definition(feature_definition)
     fits: dict[str, LocusFit] = {}
     trimmed: dict[str, float] = {}
-    for locus, (x, cols) in mats.items():
-        keep = np.isfinite(x).any(axis=1)
-        if keep.sum() < 2:
-            continue
-        f = fit_locus(x[keep], cols, mode=mode, n_components=n_components, winsor_p=winsor_p,
-                      feature_definition=feature_definition, solver=solver, seed=seed, max_components=max_components)
-        if f is None:
-            continue
-        fits[locus] = f
-        _, moved = clamp(x[keep], *f.bounds[winsor_p])
-        obs = np.isfinite(x[keep]).sum()
-        trimmed[locus] = float(moved.sum() / obs) if obs else 0.0
+    from ..cores import numerical_kernels
+    if solver == "randomized":
+        # Load the solver's BLAS pools before applying their runtime limits.
+        from sklearn.utils import extmath  # noqa: F401
+
+    with numerical_kernels(threads) as threads:
+        for locus, (x, cols) in mats.items():
+            keep = np.isfinite(x).any(axis=1)
+            if keep.sum() < 2:
+                continue
+            f = fit_locus(x[keep], cols, mode=mode, n_components=n_components, winsor_p=winsor_p,
+                          feature_definition=feature_definition, solver=solver, seed=seed, max_components=max_components)
+            if f is None:
+                continue
+            fits[locus] = f
+            _, moved = clamp(x[keep], *f.bounds[winsor_p])
+            obs = np.isfinite(x[keep]).sum()
+            trimmed[locus] = float(moved.sum() / obs) if obs else 0.0
     definition_meta = ({"feature_definition": feature_definition, "solver": solver, "solver_seed": seed,
-                        "max_components": max_components, "spectrum_complete": solver == "full"}
+                        "max_components": max_components, "spectrum_complete": solver == "full",
+                        "fit_threads": threads}
                        if L._configured(feature_definition) else {})
     corpus = Corpus(sig=sig, name=name, vocab=vocab, fits=fits,
                     meta={**(meta or {}), **definition_meta, "mode": mode, "winsor_p": winsor_p,
@@ -708,7 +716,7 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
                vocab: "dict[str, dict[str, list[str]]] | None" = None,
                loci: "tuple[str, ...] | None" = None, organism: str = "human",
                n_components: "int | float" = 128, weight: str = "log2p1",
-               n_jobs: int = 0, feature_definition=None, cstar_target="min", **kw) -> Corpus:
+               n_jobs: int = 0, feature_definition=None, cstar_target="min", threads: int = 1, **kw) -> Corpus:
     """Fit a corpus on **your own** cohort of clonotype frames.
 
     The shipped corpora are one route and this is the other. ``fit`` takes feature rows, so a
@@ -729,6 +737,7 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
         n_components: Components per locus, as an int or a cumulative variance fraction.
         weight: Clone-size weight, forwarded to the featuriser.
         n_jobs: Worker threads; ``0`` uses every available core.
+        threads: BLAS threads after all workers join; 1 is serial, 0 uses allocated cores.
         **kw: Forwarded to :func:`fit_matrices` (``mode``, ``winsor_p``, ...).
 
     Returns:
@@ -747,6 +756,10 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
        Both routes are legitimate and they answer different questions. Fit here when you want a
        basis for *this* cohort; use a shipped corpus when the number has to travel.
     """
+    from ..cores import kernel_threads
+
+    threads = kernel_threads(threads)
+    kw["threads"] = threads
     items = list(samples.items() if isinstance(samples, dict) else samples)
     if items and not isinstance(items[0], tuple):
         items = [(i, s) for i, s in enumerate(items)]
@@ -2031,12 +2044,16 @@ class TablePCA:
 
     @classmethod
     def fit(cls, table: pl.DataFrame, *, n_components: int = 256, seed: int = 0,
-            columns: list[str] | None = None):
+            columns: list[str] | None = None, threads: int = 1):
         """Fit selected sample features; unselected channels and metadata pass through.
 
         RFF columns (phi:) are the default. For vsig/rsig tables supply explicit
         columns and an embedding_space column naming their actual feature basis.
-        This standard scaler/PCA does not replace corpus winsorization."""
+        This standard scaler/PCA does not replace corpus winsorization.
+        ``threads`` budgets BLAS during fitting (1 serial, 0 allocated cores)."""
+        from ..cores import kernel_threads, numerical_kernels
+
+        threads = kernel_threads(threads)
         space = _space(table)
         cols = list(columns) if columns is not None else [c for c in table.columns if c.startswith('phi:')]
         if len(set(cols)) != len(cols) or any(c not in table.columns for c in cols):
@@ -2054,7 +2071,11 @@ class TablePCA:
         missing = np.isnan(X)
         np.copyto(X, fill, where=missing)
         del missing
-        reducer = fit_pca(X, min(n_components, *X.shape), seed=seed, copy=False)
+        # Import the lazy solver before limiting its newly loaded BLAS pools.
+        from sklearn import decomposition  # noqa: F401
+
+        with numerical_kernels(threads):
+            reducer = fit_pca(X, min(n_components, *X.shape), seed=seed, copy=False)
         scaler, pca = reducer.steps[0][1], reducer.steps[1][1]
         return cls(cols, space, fill, scaler.mean_, scaler.scale_, pca.mean_, pca.components_,
                    np.nan_to_num(pca.explained_variance_ratio_, nan=0.0))

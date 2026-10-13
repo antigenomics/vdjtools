@@ -217,6 +217,20 @@ def serial_kernels():
         _LOCAL.serial = previous
 
 
+@contextmanager
+def numerical_kernels(threads: int = 1):
+    """Temporarily budget BLAS after outer workers have joined; restore caller limits.
+
+    ``0`` selects the allocation, ``1`` is serial. This process-wide context must
+    not overlap an outer worker pool; native worker calls remain serial.
+    """
+    from threadpoolctl import threadpool_limits
+
+    budget = kernel_threads(threads)
+    with threadpool_limits(limits=budget, user_api="blas"):
+        yield budget
+
+
 def require_serial_pools() -> None:
     """Reject an immutable multi-thread Polars pool before launching outer thread workers."""
     import polars as pl

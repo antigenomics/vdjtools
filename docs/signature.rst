@@ -516,6 +516,12 @@ interpreters, pickling, or process helper threads are needed. A failed pool rais
 The CLI passes filenames to workers. Python readers may be closures or lambdas.
 Already-loaded frames remain resident in the caller. Callbacks must not mutate
 shared inputs or resources. ``n_jobs=1`` runs without a worker pool.
+
+For fitting, ``fit_cohort(..., n_jobs=16, threads=16)`` finishes and joins the
+feature workers before PCA uses up to 16 BLAS threads. ``threads=1`` preserves
+serial fitting; ``threads=0`` uses the scheduler/container allocation. Excessive
+counts raise. ``fit_matrices`` and ``TablePCA.fit`` accept the same fitting-only
+``threads`` budget and restore the caller's BLAS limits afterwards.
 The default cohort coverage target requires two passes through the input; an explicit
 ``cstar_target`` avoids the coverage pass without changing worker allocation.
 
