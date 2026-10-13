@@ -102,9 +102,16 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
     from arda.paths import vdj_dir
     from arda.refbuild.imgt import read_fasta
 
+    # Locus membership belongs to the raw rows: older arda loaders retain only
+    # one Anchor.locus when TRA and TRD share an allele.
+    anchor_path = vdj_dir(organism) / "cdr3_anchors.tsv"
+    members = set()
+    if anchor_path.exists():
+        members = set(pl.read_csv(anchor_path, separator="\t", infer_schema_length=0)
+                      .filter(pl.col("locus") == locus).select("segment", "allele").iter_rows())
     rows = []
     for (segment, allele), an in load_anchors(organism).items():
-        if an.locus != locus:
+        if (segment, allele) not in members:
             continue
         rows.append(
             {

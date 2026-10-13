@@ -23,6 +23,10 @@ still moving, so it was disabled; log-lik is monotone now that the fixes keep th
 stable). EM_ITERS is a generous safety cap, not the target.
 
 Reproduce (needs arda/mmseqs2 + HF access):  python appendix/build_bundled_models.py
+
+For arda-native models set BUNDLE_SOURCE=arda and BUILD_GROUPS=human,mouse.
+LOCI selects affected loci. RAW_FASTQ_DIR points to a local raw-input mirror with
+<group>/<locus>.nonfunctional.fq.gz; those reads are freshly annotated, without a cap.
 """
 import os
 import time
@@ -39,7 +43,8 @@ from vdjtools.model import data, from_olga
 # they are a real oracle for those two loci, which pip alone cannot be.
 _REPO_OLGA = Path(__file__).resolve().parent.parent / "tests" / "python" / "fixtures" / "olga" / "default_models"
 OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(_REPO_OLGA)))
-DEST = Path("python/vdjtools/model/_bundled/learned")
+SOURCE = os.environ.get("BUNDLE_SOURCE", "learned")
+DEST = Path("python/vdjtools/model/_bundled") / SOURCE
 # NB the previous default pointed into ANOTHER SESSION's scratchpad and the build silently
 # reused a truncated arda cache from it -- that is how the shipped TRB model came to be
 # trained on 870 clonotypes when 32,562 were available. arda.annotate_reads does its own
@@ -50,6 +55,7 @@ LOCI = {"TRA": "human_T_alpha", "TRB": "human_T_beta", "TRG": "human_T_gamma", "
 ITERS = int(os.environ.get("EM_ITERS", "15"))          # generous safety cap
 EM_TOL = float(os.environ.get("EM_TOL", "1e-4"))       # stop at relative log-lik improvement < this
 WORKERS = int(os.environ.get("EM_WORKERS", "0")) or None
+THREADS = int(os.environ.get("EM_THREADS", "0"))
 
 
 def seed_model(locus: str, name: str):
@@ -62,7 +68,7 @@ def seed_model(locus: str, name: str):
     return from_olga(OLGA / name, locus=locus, derive_orf=True)
 
 
-def training_clones(locus: str):
+def training_clones(locus: str, group: str = "human"):
     """The clonotypes EM trains on, from the pre-annotated cache when one is staged.
 
     EM_DATA_DIR: read pre-annotated slim parquet (v/j/d/junction/...) instead of fetching from
@@ -70,14 +76,30 @@ def training_clones(locus: str):
     mmseqs2 and no outbound HTTPS, so annotation happens once on a workstation and the columns EM
     needs are staged as compact parquet (~20 MB for all 7 loci vs 1.6 GB of raw arda TSV).
     """
+    raw_dir = os.environ.get("RAW_FASTQ_DIR")
     data_dir = os.environ.get("EM_DATA_DIR")
+    if raw_dir and data_dir:
+        raise ValueError("select raw FASTQ inputs or pre-annotated inputs, not both")
+    if raw_dir:
+        reads = data.annotate_reads(
+            Path(raw_dir) / group / f"{locus}.nonfunctional.fq.gz",
+            out_dir=WORK / group / locus, prefix=f"{group}_{locus}",
+            organism=data.ORGANISM[group], threads=THREADS, verbose=True)
+        return data.unique_clonotypes(reads)
     if not data_dir:
         return None
     return data.unique_clonotypes(
-        pl.read_parquet(Path(data_dir) / f"human_{locus}_nonfunctional.parquet"))
+        pl.read_parquet(Path(data_dir) / f"{group}_{locus}_nonfunctional.parquet"))
 
 
 def main():
+    if SOURCE not in ("learned", "arda"):
+        raise ValueError("BUNDLE_SOURCE must be learned or arda")
+    groups = os.environ.get("BUILD_GROUPS", "human").split(",")
+    if SOURCE == "learned" and groups != ["human"]:
+        raise ValueError("the learned bundle uses human OLGA templates")
+    if any(group not in ("human", "mouse") for group in groups):
+        raise ValueError("BUILD_GROUPS must select human and/or mouse")
     DEST.mkdir(parents=True, exist_ok=True)
     want = os.environ.get("LOCI")
     loci = {k: LOCI[k] for k in want.split(",")} if want else LOCI
@@ -90,24 +112,25 @@ def main():
 
     started = time.perf_counter()
     rows = []
-    for locus, name in loci.items():
-        print(f"[{locus}] building learned model ...", flush=True)
-        try:
+    for group in groups:
+        for locus, name in loci.items():
+            key = f"{group}_{locus}" if SOURCE == "arda" else locus
+            print(f"[{key}] building {SOURCE} model ...", flush=True)
             model, rep, stats = data.build_model(
-                locus, template=seed_model(locus, name), clones=training_clones(locus),
+                locus, group=group,
+                template=seed_model(locus, name) if SOURCE == "learned" else None,
+                clones=training_clones(locus, group), threads=THREADS, verbose=True,
                 work_dir=WORK, iters=ITERS, tol=EM_TOL, single_d=single_d,
                 nd_prior=nd_prior, gene_prior=gene_prior)
-            model.save(DEST / locus)
+            model.save(DEST / key)
             rows.append(stats)
             print(f"  [{locus}] {stats['n_used']}/{stats['n_clonotypes']} clonotypes, "
                   f"{stats['iters']} iters, {stats['seconds']:.0f}s, P(n_D=2)={stats['p_nd2']}, "
                   f"TRAINING LL {stats['loglik_first']:.0f}->{stats['loglik_last']:.0f}", flush=True)
-        except Exception as e:  # noqa: BLE001 — report and continue
-            print(f"  [{locus}] FAILED {type(e).__name__}: {e}", flush=True)
 
     if rows:
         print(f"\n{pl.DataFrame(rows)}")
-    print(f"\ntotal {time.perf_counter() - started:.0f}s for {len(rows)}/{len(loci)} loci")
+    print(f"\ntotal {time.perf_counter() - started:.0f}s for {len(rows)}/{len(loci) * len(groups)} models")
 
 
 if __name__ == "__main__":

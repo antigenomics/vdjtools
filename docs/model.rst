@@ -21,6 +21,10 @@ Custom germline libraries
 :func:`~vdjtools.model.io.from_germline` builds a model scaffold from **any** V(D)J library — your
 own FASTA, a population-specific reference, or arda's. ``from_arda`` is a thin wrapper over it.
 
+``load_germline`` preserves every locus membership declared by arda's anchor table.
+Shared ``TRAV…/DV…`` alleles therefore occur in both TRA and TRD libraries; an
+allele's single compatibility ``Anchor.locus`` label does not restrict membership.
+
 .. code-block:: python
 
    from vdjtools.model import read_germline_fasta, validate_germline
