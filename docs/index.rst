@@ -27,8 +27,14 @@ chain together instead of needing a converter between each step.
       :link: usage
       :link-type: doc
 
-      One page per task: loading data, pre-processing, diversity, overlap, dynamics, biomarkers,
+      Guides by task: loading data, pre-processing, diversity, overlap, dynamics, biomarkers,
       single cell, and the recombination model workshop.
+
+   .. grid-item-card:: Raw features and PCA
+      :link: features
+      :link-type: doc
+
+      Export diversity, isotype and usage features, then fit or reuse a sample rotation.
 
    .. grid-item-card:: Command reference
       :link: cli
@@ -66,8 +72,8 @@ Install
 That is the whole installation. Wheels are prebuilt for CPython 3.10-3.13 on Linux, macOS
 (Apple Silicon) and Windows, with the native C++ extension included; a source install compiles it.
 
-Everything the documentation describes works from that one command -- there are no extras to opt
-into for core functionality. The three engines vdjtools delegates to are base dependencies, imported
+Core repertoire analytics and the model engine work from that one command.
+Single-cell bridges and interactive examples use the extras below. The three engines vdjtools delegates to are base dependencies, imported
 lazily so that ``import vdjtools`` stays light:
 
 .. list-table::
@@ -83,12 +89,13 @@ lazily so that ``import vdjtools`` stays light:
    * - `vdjmatch <https://github.com/antigenomics/vdjmatch>`_
      - sample overlap, TCRnet, metaclonotypes
 
-Two optional extras exist because each has a working alternative:
+Extras for optional workflows:
 
 .. code-block:: bash
 
    pip install "vdjtools[overlap]"   # scikit-learn, for cluster_samples(method="mds")
    pip install "vdjtools[sc]"        # single-cell bridges: anndata, awkward, mudata, pyyaml
+   pip install "vdjtools[examples]"  # interactive marimo notebooks
 
 MMseqs2 is needed only for arda's alignment and annotation path, never for germline lookup, Pgen,
 generation or the analytics.
@@ -139,6 +146,8 @@ Choose your path
      - :doc:`usage`
    * - Score generation probability, or fit a model to your own reads
      - :doc:`model`
+   * - Export raw statistical features and fit or reuse PCA
+     - :doc:`features`
    * - Reduce each sample to one fixed feature vector for a classifier
      - :doc:`signature`
    * - Work with 10x or single-cell data, or hand off to scirpy or dandelion
@@ -147,57 +156,6 @@ Choose your path
      - :doc:`cli` | :doc:`api`
    * - Understand a term used in these pages
      - :doc:`glossary`
-
-What is in the box
-------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 56 24
-
-   * - Module
-     - What it does
-     - Guide
-   * - :mod:`vdjtools.io`
-     - Readers for native vdjtools, AIRR Rearrangement TSV and Parquet; format-detecting converters
-       for MiXcr, MiGec, Adaptive immunoSEQ, IMGT/HighV-QUEST, Vidjil, RTCR, TRUST4 and arda;
-       metadata-driven batches and hive-partitioned cohorts
-     - :doc:`preprocessing`
-   * - :mod:`vdjtools.stats`
-     - Diversity (observed richness, Chao1, Efron-Thisted, Shannon, Simpson, d50), coverage-based
-       Hill-number rarefaction with bootstrap intervals, spectratype, V/D/J/C usage
-     - :doc:`usage`
-   * - :mod:`vdjtools.model`
-     - Native V(D)J recombination model: Pgen over nucleotides and amino acids, the Hamming-1 ball,
-       sequence generation, EM inference, tandem-D support, and a full model workshop
-     - :doc:`model`
-   * - :mod:`vdjtools.overlap`
-     - Exact and similarity-aware repertoire overlap, TCRnet neighbourhood enrichment, sample
-       clustering
-     - :doc:`usage`
-   * - :mod:`vdjtools.preprocess`
-     - Format conversion, the three filtering axes, frequency handling, downsampling, error
-       correction, V/J-usage batch correction, pooling and joining
-     - :doc:`preprocessing`
-   * - :mod:`vdjtools.features`
-     - Junction physicochemical profiles and k-mer summaries
-     - :doc:`usage`
-   * - :mod:`vdjtools.biomarker`
-     - Incidence-based association against binary, per-HLA-allele or stratified conditions;
-       co-occurrence pairing; metaclonotypes
-     - :doc:`usage`
-   * - :mod:`vdjtools.dynamics`
-     - Longitudinal clonotype tracking between timepoints: the paired within-donor expansion test,
-       the VDJtrack recapture model, an edgeR NB-exact caller
-     - :doc:`usage`
-   * - :mod:`vdjtools.signature`
-     - One fixed, named, already-standardised feature vector per repertoire, rotated through a
-       published corpus
-     - :doc:`signature`
-   * - :mod:`vdjtools.sc`
-     - Single-cell ingestion, chain pairing and QC, paired Pgen, and round-trip interoperability
-       with scirpy, dandelion and scRepertoire
-     - :doc:`singlecell`
 
 Performance
 -----------
@@ -266,6 +224,7 @@ under the repository tags ``v0.0.1`` through ``1.2.1``.
 
    usage
    preprocessing
+   features
    signature
    model
    singlecell

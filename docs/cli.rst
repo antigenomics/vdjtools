@@ -24,7 +24,7 @@ sniffer when you need it to.
 ``--file-template`` control how a metadata row becomes a filename.
 
 **Parallelism.** ``-t/--threads`` on analysis commands parallelises over samples; ``0`` means all
-cores. ``--cohort`` instead streams one pass over a pre-ingested Parquet store, which is what to use
+allocated cores. ``--cohort`` instead streams one pass over a pre-ingested Parquet store, which is what to use
 when the cohort does not fit in memory. On ``signature``, the flag is ``-j/--jobs`` and it means
 bounded worker **threads**, with serial inner numerical kernels. Python-heavy
 parts remain GIL limited. Only one coarse task is queued per worker.
@@ -351,32 +351,17 @@ Single cell
 ``--locus-pair`` defaults to ``TRA_TRB``; set it for BCR. Details and the interop matrix are in
 :doc:`singlecell`.
 
-Raw feature tables and reusable PCA
------------------------------------
-
-``vdjtools features`` exports the unrotated statistical feature table and its
-channels, without a fitted corpus. It includes diversity, isotype and segment/kmer
-usage through the existing signature feature contract. Declared log, CLR and logit
-transforms remain; raw here means before corpus scaling and PCA.
+Raw feature tables and sample PCA
+---------------------------------
 
 .. code-block:: bash
 
-   vdjtools features samples/*.tsv --threads 2 --coverage own -o features.tsv
+   vdjtools features samples/*.tsv --threads 2 --coverage 0.8 -o features.tsv
    vdjtools pca features.tsv --columns feature_columns.txt --fit rotation.npz --components 32 -o pcs.tsv
-   vdjtools pca new_features.tsv --columns feature_columns.txt --rotation rotation.npz -o new_pcs.tsv
+   vdjtools pca new_features.tsv --rotation rotation.npz -o new_pcs.tsv
 
-``--coverage min`` (default) uses the cohort's common attainable coverage; ``own``
-uses each sample's observed coverage. Use an explicit shared coverage level when
-comparing independently generated tables. ``--columns`` lists the feature columns
-to fit, one per line; exclude IDs and pass-through channels. ``--cohort TABLE``
-fits the rotation using a compatible reference table. The ``embedding_space``
-column must identify the same feature basis in both tables; ``--space ID`` can
-supply that identity for an external table lacking it. Incompatible identities
-or missing fitted columns raise. IDs and unselected channels pass through unchanged.
-
-The shared implementation is ``vdjtools.signature.corpus.TablePCA``. Its saved
-NumPy artifact stores imputation values, scaling, centering, feature order and PCA
-components. This optional StandardScaler/PCA workflow is distinct from the existing
-robust, winsorized ``Corpus`` rotation used by ``vsig`` and mirpy ``rsig``. Existing
-rsig is not RFF. Corpus refits and distributed rotations for raw statistical
-features and sample RFF are planned separately. Raw outputs remain available.
+``features`` exports unrotated statistical measurements and channels without a
+corpus. ``pca`` requires either ``--fit FILE`` or ``--rotation FILE``; ``--cohort
+TABLE`` changes the fitting rows and ``--columns FILE`` selects measurements.
+See :doc:`features` for transforms, coverage, column selection, missing values,
+feature-space identities and saved rotations.

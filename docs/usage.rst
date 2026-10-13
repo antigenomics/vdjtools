@@ -1,8 +1,8 @@
 User guide
 ==========
 
-Worked, copy-paste-runnable examples for every analysis module. All functions take and
-return `polars <https://pola.rs>`_ ``DataFrame`` s on the canonical clonotype schema
+Worked, copy-paste-runnable examples for every analysis module. Repertoire analytics use
+`polars <https://pola.rs>`_ frames on the canonical clonotype schema
 (AIRR **junction** column names; see :mod:`vdjtools.io.schema`), so results chain together
 and drop straight into plotting or ``.write_csv``.
 
@@ -15,6 +15,7 @@ sample straight from a bundled model — every later example reuses ``demo_sampl
 
 .. code-block:: python
 
+   import vdjtools                       # establish runtime limits first
    import numpy as np
    import polars as pl
    from vdjtools import io as vio
@@ -745,7 +746,7 @@ Every workflow above has a CLI counterpart; inputs are auto-detected and results
 
    # data: convert any format to the canonical table, and preprocess
    vdjtools convert mixcr.txt.gz -o clones.parquet    # → canonical Parquet (or .tsv)
-   vdjtools filter clones.parquet --coding --min-freq 1e-4 -o coding.tsv
+   vdjtools filter clones.parquet --productive --min-freq 1e-4 -o coding.tsv
    vdjtools downsample clones.parquet 100000 -o ds.tsv
    vdjtools pool s1.tsv s2.tsv --join --min-samples 2 -o joint.tsv
 
@@ -761,6 +762,8 @@ Every workflow above has a CLI counterpart; inputs are auto-detected and results
    vdjtools tcrnet   sample.tsv -o net.tsv                 # neighbourhood enrichment (control cohort)
 
 Run ``vdjtools <command> --help`` for options.
+
+.. _cpu-container-limits:
 
 CPU and container limits
 ------------------------
