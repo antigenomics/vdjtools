@@ -766,7 +766,7 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
             for g, vals in groups.items():
                 if _raw_array is None:
                     raw.update({f"vsig:{g}:{locus}:{k}": float(v) for k, v in vals.items()})
-                else:
+                elif g in _raw_array[locus]:
                     row, names = _raw_array[locus][g]
                     row[:] = np.fromiter(map(vals.__getitem__, names), dtype=float, count=len(names))
                 chan[f"vsig:observed:{locus}:{g}"] = float(any(np.isfinite(v) for v in vals.values()))

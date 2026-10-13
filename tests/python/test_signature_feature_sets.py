@@ -431,6 +431,11 @@ def test_configured_array_map_matches_dense_extractor(monkeypatch):
                     contexts = [''] if context == 'none' else ['V', '_unknown'] if context == 'gene' else ['v000', '_unknown']
                     for shape in L.MOTIF_SHAPES:
                         v['motif_' + shape] = [f'{ctx}|{token}' if ctx else token for ctx in contexts for token in tokens]
+                # Extra vocabulary groups must not become extra rotation columns.
+                v.setdefault('vj', ['V|J', '_unknown'])
+                v.setdefault('length', [str(n) for n in L.SPECTRATYPE_LENGTHS])
+                v.setdefault('vjl', [f'V|J|{n}' for n in L.SPECTRATYPE_LENGTHS] + ['_unknown'])
+                v.setdefault('isotype', [*F.ISOTYPES, '_uncalled'])
                 vocab[loc] = v
             dense = [original(frames, vocab, feature_definition=d, cstar_target=.5)[0] for frames in samples.values()]
             got = C.fit_cohort(samples, vocab=vocab, feature_definition=d, cstar_target=.5, n_jobs=2)
