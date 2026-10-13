@@ -171,6 +171,7 @@ _KERNEL_ENV = ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
 
 
 _LOCAL = threading.local()
+_SPAWN_ENV_LOCK = threading.RLock()
 
 
 def kernel_threads(threads: int = 0) -> int:
@@ -204,6 +205,23 @@ def configure_runtime() -> None:
         from threadpoolctl import threadpool_limits
 
         threadpool_limits(limits=1)
+
+
+@contextmanager
+def single_threaded_children():
+    """Set import-time limits before spawning workers and restore the parent environment."""
+    # ponytail: serialize generation pools; their import limits share the process environment.
+    with _SPAWN_ENV_LOCK:
+        previous = {key: os.environ.get(key) for key in _KERNEL_ENV}
+        os.environ.update(dict.fromkeys(_KERNEL_ENV, "1"))
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 @contextmanager

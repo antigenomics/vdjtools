@@ -775,9 +775,8 @@ def corpus(
     v_context: str = typer.Option("none", "--v-context", help="none | gene | cluster"),
     motif_definition: Optional[Path] = typer.Option(None, "--motif-definition", help="Frozen cluster maps"),
     solver: str = typer.Option("full", help="full | randomized; explicit for new wide bases"),
-    jobs: int = typer.Option(0, "--jobs", "-j", help="Worker threads across samples; inner kernels use one thread: "
+    jobs: int = typer.Option(0, "--jobs", "-j", help="Pool-generation processes, then sample-map threads; serial inner kernels: "
                                                      "0 = allocated cores, 1 = no pool. "
-                                                     "Reference pool sampling is GIL-limited. "
                                                      "The artifact is identical at any value."),
 ) -> None:
     """Build a synthetic corpus and fit its rotation, bounds and scaling.

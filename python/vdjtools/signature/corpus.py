@@ -1373,7 +1373,7 @@ def draw_pool(locus: str, n: int, *, seed: int, source: str = "olga") -> pl.Data
     core of a 16-core M-series laptop: **4,200 sequences/s**, and identical at 1 and 16 polars
     threads -- the sampler is a per-sequence Python/numpy loop, so it does not thread. Pool
     generation is therefore the dominant serial cost of a synthetic build (about 15M sequences at
-    ``size=10,000`` across seven loci) and remains GIL-limited in the bounded thread pool.
+    ``size=10,000`` across seven loci); spawned pool workers parallelize the fixed chunks.
 
     NOTE an earlier docstring here claimed 20,372 seq/s on IGH. That figure is 4.8x the measured
     rate and it is what made a 77 s stage look like a 16 s one when the build was planned.
@@ -1577,17 +1577,20 @@ def _pool_chunk(args) -> tuple:
     """Generate one contiguous chunk of one locus's pool; write it as uncompressed Arrow IPC."""
     locus, k, n, seed, source, tmp = args
     path = Path(tmp) / f"pool_{locus}_{k:03d}.arrow"
-    draw_pool(locus, n, seed=seed, source=source).write_ipc(path, compression="uncompressed")
+    from ..cores import serial_kernels
+
+    with serial_kernels():
+        draw_pool(locus, n, seed=seed, source=source).write_ipc(path, compression="uncompressed")
     return locus, k, path
 
 
 def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path,
                 n_jobs: int = 1, progress=None, depth_spread: "float | str | None" = None,
                 cohort: "str | None" = None) -> dict:
-    """Generate every locus's pool across bounded threads; return ``{locus: [chunk path, ...]}``.
+    """Generate every locus's pool across spawned processes; return ``{locus: [chunk path, ...]}``.
 
     Chunk seeds and the reference sampler are unchanged. Python sampling is GIL-limited;
-    threads bound resource use but do not promise multicore scaling for that stage.
+    Each process uses serial numerical kernels and the same fixed chunk seeds.
     Uncompressed IPC chunks are mapped once and shared by feature workers.
     """
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
@@ -1620,9 +1623,16 @@ def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path
 
 def _map_unordered(fn, tasks: list, n_jobs: int) -> list:
     """``[fn(t) for t in tasks]``, load-balanced one task at a time. Raises if the pool cannot start."""
-    from .cohort import parallel_rows
+    from multiprocessing import get_context
+    from ..cores import single_threaded_children
 
-    return parallel_rows(tasks, fn, n_jobs)
+    workers = _workers(n_jobs, len(tasks))
+    if workers == 1:
+        from .cohort import parallel_rows
+
+        return parallel_rows(tasks, fn, 1)
+    with single_threaded_children(), get_context("spawn").Pool(workers) as pool:
+        return list(pool.imap_unordered(fn, tasks, chunksize=1))
 
 
 def read_pools(paths: dict) -> dict:
@@ -1821,7 +1831,8 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
         fit_corpus: ``False`` returns the raw samples instead of fitting, for scoring a held-out
             draw against a corpus fitted on another.
         progress: Optional ``callable(locus, done, total)``.
-        n_jobs: Worker **threads** (not kernel threads). ``0`` means every available core; ``1``,
+        n_jobs: Pool-generation processes, then sample-map threads (not kernel threads).
+            ``0`` means every available core; ``1``,
             the default, runs in-process. The result is bit-identical at every value.
         depth_spread: Multiplicative depth range each repertoire's size is drawn log-uniformly
             across, around ``size``. ``None`` is the corpus's own -- :data:`DEPTH_SPREAD` for a pure

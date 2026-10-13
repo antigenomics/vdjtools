@@ -21,6 +21,40 @@ def _probe(i):
             "blas": [p['num_threads'] for p in threadpool_info()]}
 
 
+def _generation_probe(i):
+    import time
+    time.sleep(.1)
+    return _probe(i)
+
+
+@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
+def test_generation_uses_processes_with_serial_import_pools(monkeypatch):
+    from vdjtools.signature.corpus import _map_unordered
+    for key in _KERNEL_ENV:
+        monkeypatch.setenv(key, "4")
+    rows = _map_unordered(_generation_probe, list(range(8)), 2)
+    assert sorted(r['i'] for r in rows) == list(range(8))
+    assert len({r['pid'] for r in rows}) == 2
+    assert all(r['pid'] != os.getpid() and r['polars'] == 1 for r in rows)
+    assert all(set(r['limits'].values()) == {'1'} for r in rows)
+    assert all(all(n == 1 for n in r['blas']) for r in rows)
+    assert all(os.environ[k] == '4' for k in _KERNEL_ENV)
+
+
+@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
+def test_generation_pool_startup_failure_restores_parent(monkeypatch):
+    from vdjtools.signature.corpus import _map_unordered
+    monkeypatch.setenv('POLARS_MAX_THREADS', '7')
+    monkeypatch.delenv('OMP_THREAD_LIMIT', raising=False)
+    def broken(_):
+        raise RuntimeError('cannot start generation pool')
+    monkeypatch.setattr('multiprocessing.get_context', broken)
+    with pytest.raises(RuntimeError, match='cannot start generation pool'):
+        _map_unordered(abs, [1, 2], 2)
+    assert os.environ['POLARS_MAX_THREADS'] == '7'
+    assert 'OMP_THREAD_LIMIT' not in os.environ
+
+
 @pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
 def test_workers_limit_kernels_before_import_and_restore_parent(monkeypatch):
     for key in _KERNEL_ENV:
