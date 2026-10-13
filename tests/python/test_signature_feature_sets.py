@@ -230,4 +230,90 @@ def test_cli_feature_selection_and_description(tmp_path):
     out = tmp_path / 'describe.tsv'
     result = runner.invoke(app,['signature','--corpus',str(path),'--describe','--named','all','--out',str(out)])
     assert result.exit_code == 0, (result.stdout, result.exception)
-    assert pl.read_csv(out,separator='\t')['column'].to_list() == art.columns(named=True)
+    result = runner.invoke(app,['signature',str(source),'--corpus',str(path),'--named','all',
+                               '--out',str(tmp_path / 'projected.tsv')])
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    projected = pl.read_csv(tmp_path / 'projected.tsv', separator='\t')
+    assert 'rotation_space' in projected.columns
+    assert pl.read_csv(out,separator='\t')['column'].to_list() == projected.columns[1:]
+
+
+def test_configured_partial_holes_use_identical_fit_and_apply_center(tmp_path):
+    import numpy as np
+    from vdjtools.signature import corpus as C
+    definition = L.feature_definition('basic')
+    vocab = {'TRB': {'vj': ['V|J', '_unknown'], 'length': ['6', '7']}}
+    columns = L.raw_columns('vsig', 'TRB', vocab['TRB'], feature_definition=definition)
+    x = np.zeros((9, len(columns)))
+    x[:, 0] = [0, 1, 2, 3, 4, 5, 20, np.nan, np.nan]
+    x[:, 1] = np.arange(9)
+    art = C.fit_matrices({'TRB': (x, columns)}, vocab, sig='vsig', name='holes',
+                         feature_definition=definition, n_components=2)
+    def scores(corpus):
+        return np.array([[C.apply(dict(zip(columns, row)), {}, corpus)[f'vsig:pc:TRB:PC{i+1:02d}']
+                          for i in range(2)] for row in x])
+    projected = scores(art)
+    assert np.allclose(np.median(projected, axis=0), 0, atol=1e-10)
+    assert np.allclose(np.median(np.abs(projected), axis=0) * C.MAD_TO_SD, 1, atol=1e-10)
+    assert np.allclose(projected, scores(C.Corpus.load(art.save(tmp_path/'holes'))), atol=1e-4)
+
+
+def test_configured_synthetic_corpus_freezes_coverage():
+    from vdjtools.signature import corpus as C
+    from vdjtools.signature.signature import vsig, vsig_cohort
+    d = L.feature_definition('basic')
+    art, mats = C.synthesize('naive', loci=('TRG',), n_samples=8, size=40, seed=12,
+                             n_components=2, feature_definition=d)
+    assert set(art.meta['cstar_target']) == {'TRG'}
+    assert art.meta['weight'] == 'log2p1'
+    sample = C.synthesize('naive', loci=('TRG',), n_samples=1, size=40, seed=17, fit_corpus=False)[0]
+    single = vsig(sample, art)
+    batch = vsig_cohort({'sample': sample}, art)
+    assert single['vsig:pc:TRG:PC01'] == batch['vsig:pc:TRG:PC01'][0]
+
+
+def test_configured_coverage_own_is_refused_instead_of_silently_using_corpus():
+    import numpy as np
+    from vdjtools.signature import corpus as C
+    from vdjtools.signature.signature import vsig_cohort
+    d = L.feature_definition('basic')
+    vocab = {'TRB': {'vj': ['V|J', '_unknown'], 'length': ['6']}}
+    columns = L.raw_columns('vsig', 'TRB', vocab['TRB'], feature_definition=d)
+    x = np.zeros((4, len(columns))); x[:, 0] = np.arange(4)
+    art = C.fit_matrices({'TRB':(x, columns)}, vocab, sig='vsig', name='tiny', feature_definition=d,
+                         meta={'cstar_target':{'TRB':.5}}, n_components=1)
+    with pytest.raises(ValueError, match='shared coverage target'):
+        vsig_cohort({'sample':{}}, art, cstar_target=None)
+
+
+def test_cli_saved_vocabulary_matches_reference_feature_identity(tmp_path):
+    import json
+    import polars as pl
+    from typer.testing import CliRunner
+    from vdjtools.cli import app
+    from vdjtools.signature import features as F
+    from vdjtools.signature.signature import raw_features_cohort
+    d = L.feature_definition('basic', motifs='imgt11')
+    vocab = {'TRB': F.gene_vocab('TRB', feature_definition=d)}
+    frame = pl.DataFrame({'junction_aa':['CADGKF','CKKGRF'], 'v_call':['TRBV1','TRBV2'],
+                          'j_call':['TRBJ1-1']*2,'duplicate_count':[2,3]})
+    source = tmp_path/'sample.tsv'; frame.write_csv(source,separator='\t')
+    vocabulary = tmp_path/'vocabulary.json'; vocabulary.write_text(json.dumps(vocab))
+    target = tmp_path/'raw.tsv'
+    result = CliRunner().invoke(app,['features',str(source),'--feature-set','basic','--motifs','imgt11',
+                                     '--coverage','.5','--feature-vocabulary',str(vocabulary),'--out',str(target)])
+    assert result.exit_code == 0, (result.stdout,result.exception)
+    expected = raw_features_cohort({'sample':{'TRB':frame}},vocab=vocab,feature_definition=d,cstar_target=.5)
+    assert pl.read_csv(target,separator='\t')['embedding_space'][0] == expected['embedding_space'][0]
+
+
+def test_wide_table_pca_memory_guard_uses_sample_rank(monkeypatch):
+    import polars as pl
+    from vdjtools.signature.corpus import TablePCA
+    requests=[]
+    monkeypatch.setattr('vdjtools.cores.require_memory',lambda size,reason:requests.append(size))
+    table=pl.DataFrame({'embedding_space':['test']*3,
+                       **{f'phi:{i}':[0.,float(i),1.] for i in range(100)}})
+    rotation=TablePCA.fit(table,n_components=2)
+    assert requests[0] == 32*3*100+16*3**2
+    assert rotation.components.shape == (2,100)

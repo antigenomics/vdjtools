@@ -688,3 +688,54 @@ API
 
 .. automodule:: vdjtools.signature.transform
    :members:
+
+Fitting configurable bases
+--------------------------
+
+The ``basic`` and ``joint`` configurations and their extended motifs are described
+in :doc:`features`. Each configuration needs its own per-locus corpus rotation;
+a base rotation is not a subset of an extended rotation. Legacy artifacts and
+legacy scaling remain unchanged.
+
+New composition blocks enter PCA as square-root frequencies. Columns are centered
+by their corpus means, and a single scale per block is fitted as the square root
+of the sum of population column variances. Rare variable bins survive even when
+their median absolute deviation is zero. Constant blocks contribute zero. Diversity
+retains its established transforms and robust scaling; new bounded compositions
+are not winsorized. Missing blocks are projected at the fitted center and carry
+observation masks. A wholly absent locus has missing PCs.
+
+.. code-block:: python
+
+   from vdjtools.signature import feature_definition, vsig_cohort
+   from vdjtools.signature.corpus import fit_cohort, Corpus
+
+   definition = feature_definition("basic", motifs="imgt11")
+   fitted = fit_cohort(readers, name="reference", loci=("TRA", "TRB"),
+                       feature_definition=definition, cstar_target=0.8,
+                       n_components=32, n_jobs=1)
+   fitted.save("reference.npz")
+   loaded = Corpus.load("reference.npz")
+   projected = vsig_cohort(new_readers, loaded, n_jobs=1)
+
+``readers`` and ``new_readers`` are repeatable ``(sample_id, reader)`` pairs;
+each zero-argument reader returns a locus-to-frame dictionary. The artifact stores
+the feature definition, maps, vocabulary, clone weights, coverage target, fitted
+scales, bounds, rotation and variance. Application defaults to its measurement
+policy; incompatible clone weights raise. An explicit shared coverage or cohort
+minimum may override it; ``own`` is refused for configured signatures. Match the
+target across tables being compared. ``rotation_space`` identifies the fitted rotation in new
+projected tables. ``signature --describe`` includes this identity column.
+
+.. code-block:: bash
+
+   vdjtools corpus --corpus memory --feature-set joint --motifs imgt11 \
+       --solver randomized --components 128 -o joint-reference.npz
+   vdjtools signature --corpus joint-reference.npz samples/*.tsv -o projected.tsv
+
+The randomized solver is an explicit option for wide new bases. It records the
+full input variance and a truncated spectrum; an unreachable variance fraction or
+an application request beyond the stored component count raises. Full SVD remains
+the default. The new block-aware fit supports ``features`` mode, not ``pcs`` mode.
+Neither projection nor a corpus load fits scales, recomputes raw-source features
+for reference samples, or reconstructs cluster maps.

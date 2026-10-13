@@ -123,3 +123,72 @@ The first command keeps the unprojected feature table. Applying a rotation does
 not recompute those measurements or turn them into a corpus signature. Target
 and control tables must use the same vocabulary, weighting and coverage target.
 A shared vocabulary alone does not make PCs from different rotations comparable.
+
+Configurable statistical bases
+------------------------------
+
+``--feature-set legacy`` preserves the existing feature vector. Two opt-in
+configurations choose smaller, explicit block lists:
+
+* ``basic``: diversity, joint V–J usage, marginal amino-acid junction-length
+  spectratype, and separate IGH isotype composition.
+* ``joint``: diversity, joint V–J–junction-length usage, and separate IGH isotype
+  composition. V–J and marginal length are already contained in the joint table.
+
+Coverage, estimability, QC, depth and cross-locus read-ratio channels pass through
+without entering PCA. Length bins measure ``junction_aa``, including anchors,
+with the existing 6–31 endpoint bins; overflow fractions are reported. Unknown or
+unresolved V/J calls close an explicit residual category. Isotype includes an
+uncalled category; a present IGH repertoire with no C calls is distinct from an
+absent IGH repertoire.
+
+Extended variants use ``--motifs imgt11`` or ``--motifs blosum62``. Each includes
+three separate shapes: contiguous ``XXX`` and the gapped shapes ``XX_X`` and
+``X_XX``. A gapped motif contains **three residues in four positions**. The new
+motifs remove the conserved C and F/W junction anchors to obtain the IMGT CDR3
+interior. A window must contain standard amino acids at every position, including
+the omitted one. Invalid anchors and short sequences contribute no eligible
+windows. Each clonotype distributes its weight across its valid windows before
+aggregation; longer CDR3s do not receive extra weight from their window count.
+Eligibility and unknown-context fractions accompany the measurements.
+
+IMGT11 uses the classes ``AILV``, ``CM``, ``ST``, ``HKR``, ``DE``, ``NQ``, ``F``,
+``W``, ``Y``, ``P``, ``G`` in that order, encoded ``0`` through ``9`` and ``a``.
+It produces 1,331 bins per shape, or 3,993 before V context. BLOSUM62 uses a frozen
+map of all 8,000 full-alphabet triples, built with one seqtree penalty batch and
+average linkage. Its declared cluster count is a build parameter; the initial
+100-cluster recipe produces 300 bins across the three shapes. It is not an
+assertion of an optimal biological resolution.
+
+``--v-context none|gene|cluster`` chooses no context, gene-level V context or a
+frozen per-locus V cluster. Context and motif form a joint composition. V genes
+and motifs are clustered independently; no distance matrix over their Cartesian
+product is constructed. Missing distances for functional V genes fail the build.
+Declared nonfunctional genes without a usable distance enter the unclustered
+residual and are reported. For ``M`` motif bins per shape, ``nV`` V genes and
+``cV`` V clusters, widths are ``3M``, ``3M(nV+1)`` or ``3M(cV+1)``, respectively.
+
+.. code-block:: bash
+
+   vdjtools features samples/*.tsv --feature-set basic --motifs imgt11 -o raw.tsv
+   vdjtools features samples/*.tsv --feature-set joint --motifs imgt11 \
+       --v-context gene -o joint-motifs.tsv
+
+A BLOSUM62 variant or clustered V context requires ``--motif-definition`` with
+the frozen builder output. Build reference parameters on a scheduled compute node:
+
+.. code-block:: bash
+
+   python appendix/build_motif_vocab.py --out motif-definition.json \
+       --clusters 100 --threads 8 --v-distances /path/to/full-v-matrices
+   vdjtools features samples/*.tsv --feature-set basic --motifs blosum62 \
+       --v-context cluster --motif-definition motif-definition.json -o raw.tsv
+
+The matrix directory contains ``human_TRB.npz`` and the corresponding files for
+the requested loci. The builder records source hashes, representatives, cluster
+counts and unclustered genes. Applications use the saved maps and never recluster.
+
+The two configurations each support seven definitions: base plus the two motif
+representations with three V-context choices. Every definition has a distinct
+identity. Availability of fitted published variants is determined by the corpus
+registry; an implemented feature definition does not imply a published rotation.

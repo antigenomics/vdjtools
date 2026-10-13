@@ -157,7 +157,8 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
             ``O(n_jobs)`` samples rather than the whole cohort.
         corpus: A fitted corpus.
         n_jobs: Worker threads. ``1`` stays in-process, ``0`` uses every available core.
-        cstar_target: ``"min"`` (default) reads every sample's attained coverage first and
+        cstar_target: ``"corpus"`` (default) uses the frozen coverage target for configured
+            bases and preserves ``"min"`` for legacy corpora. ``"min"`` reads every sample's attained coverage first and
             standardises the whole cohort to the per-locus minimum, so the diversity columns are
             comparable across samples and the level is a property of *this* cohort rather than of
             somebody's corpus. That is a cheap extra pass over the count column -- but it does
@@ -173,6 +174,8 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
     items = list(samples.items() if isinstance(samples, dict) else samples)
     if cstar_target == "corpus":
         cstar_target = corpus.meta.get("cstar_target") if L._configured(corpus.meta.get("feature_definition")) else "min"
+    elif cstar_target is None and L._configured(corpus.meta.get("feature_definition")):
+        raise ValueError("configured signatures require a shared coverage target; use corpus, min, or an explicit target")
     cstar_target = _coverage_target(items, n_jobs, cstar_target, kw)
 
     rows = parallel_rows(items, functools.partial(_one, corpus=corpus,

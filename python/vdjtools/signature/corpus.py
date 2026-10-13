@@ -169,6 +169,7 @@ class LocusFit:
     n_obs: np.ndarray                        # (p,) rows that observed each column
     n_rows: int                              # rows this locus was fitted on
     total_variance: float | None = None       # new truncated spectra use the full trace
+    pca_offset: np.ndarray | None = None      # arithmetic center after missing-value imputation
 
     @property
     def k(self) -> int:
@@ -271,6 +272,8 @@ class Corpus:
             arrays[f"{loc}/n_obs"] = f.n_obs
             if f.total_variance is not None:
                 arrays[f"{loc}/total_variance"] = np.array(f.total_variance)
+            if f.pca_offset is not None:
+                arrays[f"{loc}/pca_offset"] = f.pca_offset
             for p, (lo, hi) in f.bounds.items():
                 arrays[f"{loc}/bound_lo_{p}"] = lo
                 arrays[f"{loc}/bound_hi_{p}"] = hi
@@ -325,7 +328,8 @@ class Corpus:
                 pc_bounds={p: (z[f"{loc}/pcbound_lo_{p}"], z[f"{loc}/pcbound_hi_{p}"])
                            for p in meta["winsor_ps"] if f"{loc}/pcbound_lo_{p}" in z.files},
                 n_obs=z[f"{loc}/n_obs"], n_rows=int(meta["n_rows"][loc]),
-                total_variance=float(z[f"{loc}/total_variance"]) if f"{loc}/total_variance" in z.files else None)
+                total_variance=float(z[f"{loc}/total_variance"]) if f"{loc}/total_variance" in z.files else None,
+                pca_offset=z[f"{loc}/pca_offset"] if f"{loc}/pca_offset" in z.files else None)
         out = cls(sig=sig, name=name, vocab=vocab, fits=fits, meta=meta)
         if verify:
             out.verify()
@@ -380,6 +384,8 @@ def _fit_identity(corpus: Corpus) -> str:
         digest.update(loc.encode())
         for arr in (f.loc, f.scale, f.rotation.astype(np.float32), f.pc_loc, f.pc_scale):
             digest.update(np.ascontiguousarray(arr).tobytes())
+        if f.pca_offset is not None:
+            digest.update(np.ascontiguousarray(f.pca_offset).tobytes())
     return digest.hexdigest()
 
 
@@ -466,10 +472,11 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
     if not (scale > MIN_SPREAD).any():
         return None
     z = _standardize(transformed, loc, scale)
+    offset = None
     if configured:
-        # Store the arithmetic center actually used by PCA, including diversity.
+        # Impute at the measured center before subtracting the PCA arithmetic center.
+        # Folding this offset into loc would re-impute holes at the wrong center on apply.
         offset = z.mean(0)
-        loc += offset * scale
         z -= offset
     total_variance = float(np.sum(np.var(z, axis=0, ddof=1))) if configured else None
 
@@ -519,7 +526,8 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
                                pc_supports, q) for q in WINSOR_PS}
     return LocusFit(columns=list(columns), supports=supports, loc=loc, scale=scale,
                     rotation=comps, eigenvalues=ev_all, pc_loc=pc_loc, pc_scale=pc_scale,
-                    bounds=bounds, pc_bounds=pc_bounds, n_obs=n_obs, n_rows=int(n), total_variance=total_variance)
+                    bounds=bounds, pc_bounds=pc_bounds, n_obs=n_obs, n_rows=int(n), total_variance=total_variance,
+                    pca_offset=offset)
 
 
 def _composition_coordinates(x: np.ndarray, columns: list[str]) -> np.ndarray:
@@ -835,6 +843,8 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
         present = np.isfinite(x).any()
         work = _composition_coordinates(x, f.columns) if L._configured(definition) else x
         z = _standardize(work, f.loc, f.scale)
+        if f.pca_offset is not None:
+            z -= f.pca_offset
         # Rotate through the WHOLE rotation, then slice. `z @ rotation[:, :k]` is the same
         # arithmetic in a different GEMM shape, and OpenBLAS accumulates it in a different
         # order: the truncated and untruncated TRB PC01 differed at 2e-15 on Linux while
@@ -1802,7 +1812,38 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
                                        depth_spread=depth_spread, cohort=cohort)
         return [draw(j) for j in range(n_samples)]
 
-    mats = build_matrices(regime, sig="vsig", featurise=partial(FE.raw_and_channels, vocab=vocab, feature_definition=feature_definition),
+    target_meta = {}
+    if L._configured(feature_definition):
+        import tempfile
+        from .cohort import parallel_rows
+        from .signature import _coverage_target
+        from ..cores import require_memory
+        scratch = Path(tempfile.mkdtemp(prefix="vdjtools-configured-"))
+        pools = None
+        try:
+            _, draw = sample_stream(regime, loci=loci, n_samples=n_samples, size=size,
+                                   seed=seed, source=source, progress=progress, n_jobs=n_jobs,
+                                   depth_spread=depth_spread, cohort=cohort, tmp=scratch)
+            pools = draw.args[0]
+            items = [(i, partial(draw, i)) for i in range(n_samples)]
+            target = _coverage_target(items, n_jobs, "min", {})
+            target_meta = {"cstar_target": target, "weight": "log2p1", "organism": "human"}
+            cols = {loc: L.raw_columns("vsig", loc, vocab[loc], feature_definition=feature_definition)
+                    for loc in loci}
+            require_memory(8 * n_samples * sum(map(len, cols.values())), "configured synthetic matrices")
+            mats = {loc: (np.full((n_samples, len(c)), np.nan), c) for loc, c in cols.items()}
+            def fill(i):
+                raw, _ = FE.raw_and_channels(draw(i), vocab, feature_definition=feature_definition,
+                                             cstar_target=target)
+                for buf, columns in mats.values():
+                    fill_row(buf, columns, i, raw)
+            parallel_rows(range(n_samples), fill, n_jobs)
+        finally:
+            if pools is not None:
+                pools.clear()
+            shutil.rmtree(scratch)
+    else:
+        mats = build_matrices(regime, sig="vsig", featurise=partial(FE.raw_and_channels, vocab=vocab, feature_definition=feature_definition),
                           vocab=vocab, loci=loci, n_samples=n_samples, size=size, seed=seed,
                           source=source, n_jobs=n_jobs, progress=progress,
                           depth_spread=depth_spread, cohort=cohort, feature_definition=feature_definition)
@@ -1814,7 +1855,7 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
                           meta=corpus_meta(regime, cohort, loci, n_samples=n_samples,
                                            size=size, seed=seed, source=source,
                                            depth_spread=depth_spread,
-                                           vdjtools_version=__version__))
+                                           vdjtools_version=__version__, **target_meta))
     return corpus, mats
 
 
@@ -1989,7 +2030,8 @@ class TablePCA:
         if not cols or table.height < 2 or n_components < 1:
             raise ValueError('PCA needs feature columns, at least two sample rows and a positive dimension')
         from vdjtools.cores import require_memory
-        require_memory(32 * table.height * len(cols) + 16 * len(cols)**2, 'sample feature PCA fit')
+        require_memory(32 * table.height * len(cols) + 16 * min(table.height, len(cols))**2,
+                       'sample feature PCA fit')
         X = table.select(cols).to_numpy(order='c').copy()
         X[~np.isfinite(X)] = np.nan
         fill = np.zeros(len(cols))

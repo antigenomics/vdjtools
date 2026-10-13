@@ -126,3 +126,13 @@ The VDJtrack recapture model in `vdjtools.dynamics` is
 GPL-3.0-or-later. The legacy Groovy/Java v1.x tool lives on the
 [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch, with its releases
 under the repository tags `v0.0.1` … `1.2.1`.
+
+### Configurable statistical features
+
+Opt-in `basic` uses diversity, V–J usage, junction-length spectratype and separate
+isotype composition; `joint` uses diversity, V–J–length usage and separate isotype.
+Their extended variants add IMGT11 or frozen BLOSUM62 motifs (`XXX`, `XX_X`, `X_XX`),
+with optional gene or clustered V context. Existing feature/signature defaults stay
+legacy. See [features](https://docs.isalgo.dev/vdjtools/features.html) and
+[corpus fitting](https://docs.isalgo.dev/vdjtools/signature.html) for fit/save/apply
+and the distinction between an available definition and a published rotation.

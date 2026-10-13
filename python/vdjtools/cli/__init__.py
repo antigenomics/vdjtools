@@ -498,6 +498,7 @@ def raw_features(
     motifs: str = typer.Option("none", help="none | imgt11 | blosum62; three distinct motif shapes"),
     v_context: str = typer.Option("none", "--v-context", help="none | gene | cluster joint motif context"),
     motif_definition: Optional[Path] = typer.Option(None, "--motif-definition", help="Frozen motif/V maps from the library builder"),
+    feature_vocabulary: Optional[Path] = typer.Option(None, "--feature-vocabulary", help="Saved raw-feature vocabulary from a reference bundle"),
     out: Optional[Path] = _OUT,
 ) -> None:
     """Raw vsig feature families and channels, with no corpus, winsorization or PCA."""
@@ -508,8 +509,15 @@ def raw_features(
     items = _sample_items(samples,None,None,'sample_id','{sample}.tsv')
     deferred = [(sid,functools.partial(read,path,keep=("v_identity",))) for sid,path in items]
     target = None if coverage == 'own' else 'min' if coverage == 'min' else float(coverage)
+    import json
+    vocab = json.loads(feature_vocabulary.read_text()) if feature_vocabulary else None
+    if vocab is not None and (not isinstance(vocab, dict) or any(
+            not isinstance(groups, dict) or any(not isinstance(names, list) or
+            any(not isinstance(name, str) for name in names) for names in groups.values())
+            for groups in vocab.values())):
+        _err("feature vocabulary must map loci to groups of string names")
     _write(raw_features_cohort(deferred,organism=organism,n_jobs=threads,
-                              cstar_target=target,feature_definition=definition),out)
+                              cstar_target=target,feature_definition=definition,vocab=vocab),out)
 
 
 @app.command(name="pca")
@@ -581,7 +589,7 @@ def signature(
                                                     "cohort's own per-locus minimum attained "
                                                     "coverage, or 'own' for each sample's own "
                                                     "(one pass, not comparable across samples)."),
-    weight: str = typer.Option("log2p1", help="Clone-size weight g: log2p1 | duplicate_count | "
+    weight: Optional[str] = typer.Option(None, help="Artifact clone-size weight (legacy default log2p1): log2p1 | duplicate_count | "
                                               "distinct | log1p | anscombe."),
     columns: Optional[Path] = typer.Option(None, "--columns",
                                            help="File of column names (one per line) to restrict "
@@ -662,6 +670,9 @@ def signature(
                          "kind": kind,
                          "transform": spec.get((block, feature), {}).get("transform", "none"),
                          "support": L.support_of(c, feature_definition=art.meta.get("feature_definition"))})
+        if L._configured(art.meta.get("feature_definition")):
+            rows.append({"column": "rotation_space", "block": "identity", "locus": "-",
+                         "feature": "fit_identity", "kind": "identity", "transform": "none", "support": "identity"})
         _write(pl.DataFrame(rows), out)
         return
 
@@ -680,7 +691,7 @@ def signature(
     typer.echo(f"{result.height} samples x {len(cols)} vsig columns | corpus {art.name} "
                f"({art.meta.get('content_sha256', '?')[:12]}) | winsorize={winsorize} | "
                f"k={art.resolve_k(ncomp)}", err=True)
-    _write(result.select(["sample_id", *cols]), out)
+    _write(result.select(["sample_id", *cols, *(["rotation_space"] if "rotation_space" in result.columns else [])]), out)
 
 
 def _parse_components(spec: Optional[str]):
