@@ -658,7 +658,8 @@ def qc_channel(raw: pl.DataFrame, clean: pl.DataFrame, locus: str,
 def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str, list[str]]], *,
                      cstar_target: "float | dict[str, float] | None" = None,
                      weight: str = "log2p1", prefiltered: bool = False,
-                     on_duplicate: str = "error", feature_definition=None) -> tuple[dict[str, float], dict[str, float]]:
+                     on_duplicate: str = "error", feature_definition=None,
+                     _raw_array=None) -> tuple[dict[str, float], dict[str, float]]:
     """Every raw feature and every channel for one sample.
 
     Args:
@@ -710,7 +711,7 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
             if locus == "IGH":
                 chan["vsig:mask:IGH:c_call"] = 0.0
                 chan["vsig:mask:IGH:shm"] = 0.0
-            if modelled:
+            if modelled and _raw_array is None:
                 for c in L.raw_columns("vsig", locus, vocab.get(locus), feature_definition=feature_definition):
                     raw[c] = np.nan
             continue
@@ -763,7 +764,11 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
                 chan["vsig:mask:IGH:c_call"] = float(C_CALL in clean.columns and clean[C_CALL].is_not_null().any())
                 chan["vsig:mask:IGH:shm"] = float(np.isfinite(shm_group(wf)["mean_v_identity"]))
             for g, vals in groups.items():
-                raw.update({f"vsig:{g}:{locus}:{k}": float(v) for k, v in vals.items()})
+                if _raw_array is None:
+                    raw.update({f"vsig:{g}:{locus}:{k}": float(v) for k, v in vals.items()})
+                else:
+                    row, names = _raw_array[locus][g]
+                    row[:] = np.fromiter(map(vals.__getitem__, names), dtype=float, count=len(names))
                 chan[f"vsig:observed:{locus}:{g}"] = float(any(np.isfinite(v) for v in vals.values()))
             continue
 

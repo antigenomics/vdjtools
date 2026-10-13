@@ -789,11 +789,23 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
         columns = {loc: L.raw_columns(sig, loc, vocab[loc], feature_definition=feature_definition) for loc in vocab}
         require_memory(8 * len(items) * sum(map(len, columns.values())), "configured corpus matrices")
         mats = {loc: (np.full((len(items), len(cols)), np.nan), cols) for loc, cols in columns.items()}
+        blocks = {}
+        for loc, (buf, cols) in mats.items():
+            offset = 0
+            blocks[loc] = {}
+            for group in L._feature_groups(sig, feature_definition):
+                if loc not in group.emitted_loci:
+                    continue
+                names = vocab[loc][group.name] if group.dynamic else tuple(group.features)
+                blocks[loc][group.name] = (slice(offset, offset + len(names)), names)
+                offset += len(names)
+            assert offset == len(cols)
         def fill(indexed):
             i, item = indexed
-            raw = _row_for(item, sig, vocab, feature_kw)
-            for buf, cols in mats.values():
-                fill_row(buf, cols, i, raw)
+            output = {loc: {group: (mats[loc][0][i, span], names)
+                            for group, (span, names) in groups.items()}
+                      for loc, groups in blocks.items()}
+            _row_for(item, sig, vocab, {**feature_kw, "_raw_array": output})
         parallel_rows(enumerate(items), fill, n_jobs)
         return fit_matrices(mats, vocab, sig=sig, name=name, n_components=n_components,
                             feature_definition=feature_definition, **kw)

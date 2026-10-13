@@ -517,6 +517,9 @@ The CLI passes filenames to workers. Python readers may be closures or lambdas.
 Already-loaded frames remain resident in the caller. Callbacks must not mutate
 shared inputs or resources. ``n_jobs=1`` runs without a worker pool.
 
+Configured cohort fitting writes ordered raw groups into preallocated NumPy rows;
+the standalone raw-feature API continues to return its full column dictionary.
+
 For fitting, ``fit_cohort(..., n_jobs=16, threads=16)`` finishes and joins the
 feature workers before PCA uses up to 16 BLAS threads. ``threads=1`` preserves
 serial fitting; ``threads=0`` uses the scheduler/container allocation. Excessive

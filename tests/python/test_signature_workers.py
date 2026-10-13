@@ -143,7 +143,7 @@ def test_corpus_releases_mapped_pools_before_scratch_cleanup(monkeypatch, n_jobs
     monkeypatch.setattr('vdjtools.cores.available_cores', lambda: 2)
     monkeypatch.setattr(corpus, 'build_pools', lambda *a, **kw: {})
     monkeypatch.setattr(corpus, 'draw_plan', lambda *a, **kw: {})
-    monkeypatch.setattr(corpus, 'locus_matrix', lambda *a: None)
+    monkeypatch.setattr(corpus, 'locus_matrix', lambda *a, **kw: None)
 
     def read(paths):
         frame = pl.DataFrame({'x': [1]})

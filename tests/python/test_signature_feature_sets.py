@@ -386,3 +386,54 @@ def test_raw_support_lookup_does_not_construct_channel_columns(monkeypatch):
     monkeypatch.setattr(L, 'channel_columns', lambda *a, **kw: pytest.fail('raw lookup rebuilt channels'))
     assert L.support_of('vsig:motif_XXX:TRA:aaa', feature_definition=definition) == 'unit'
     assert L.support_of('vsig:div:TRA:1D_c', feature_definition=definition) == 'nonneg'
+
+
+def test_configured_array_map_matches_dense_extractor(monkeypatch):
+    """All definitions keep zeros, holes and ordering without column-name row dicts."""
+    import numpy as np
+    import polars as pl
+    from vdjtools.signature import corpus as C, features as F
+
+    motif_map = {'version': 1, 'mapping': {
+        ''.join(t): 'm000' for t in itertools.product(L.AMINO_ACIDS, repeat=3)}}
+    v_maps = {loc: {'version': 1, 'mapping': {'V': 'v000'}} for loc in ('TRB', 'IGH')}
+    good = pl.DataFrame({'junction_aa': ['CADGKF', 'CAGGQF', 'CKKGRF'],
+                         'v_call': ['V*01', 'V*01', None], 'j_call': ['J*01'] * 3,
+                         'duplicate_count': [1, 2, 4]})
+    short = good.with_columns(pl.Series('junction_aa', ['CAF', 'CKF', 'CGF']))
+    samples = {'both': {'TRB': good, 'IGH': good}, 'absent': {},
+               'short': {'TRB': short}, 'filtered': {'IGH': good.with_columns(pl.lit(False).alias('productive'))}}
+    original = F.raw_and_channels
+    def array_only(*args, **kwargs):
+        assert kwargs.get('_raw_array') is not None, 'configured map still builds dense row dicts'
+        raw, channels = original(*args, **kwargs)
+        assert raw == {}
+        return raw, channels
+    monkeypatch.setitem(C._FEATURISERS, 'vsig', array_only)
+    monkeypatch.setattr(C, 'fit_matrices', lambda mats, *args, **kwargs: mats)
+    for configuration in ('basic', 'joint'):
+        variants = [('none', 'none'), *itertools.product(('imgt11', 'blosum62'), ('none', 'gene', 'cluster'))]
+        for motifs, context in variants:
+            d = L.feature_definition(configuration, motifs=motifs, v_context=context,
+                                     motif_map=motif_map if motifs == 'blosum62' else None,
+                                     v_maps=v_maps if context == 'cluster' else None)
+            vocab = {}
+            for loc in ('TRB', 'IGH'):
+                v = {'vus': ['V'], 'jus': ['J']}
+                if configuration == 'basic':
+                    v.update(vj=['V|J', '_unknown'], length=[str(n) for n in L.SPECTRATYPE_LENGTHS])
+                else:
+                    v['vjl'] = [f'V|J|{n}' for n in L.SPECTRATYPE_LENGTHS] + ['_unknown']
+                if loc == 'IGH':
+                    v['isotype'] = [*F.ISOTYPES, '_uncalled']
+                if motifs != 'none':
+                    tokens = [''.join(t) for t in itertools.product('0123456789a', repeat=3)] if motifs == 'imgt11' else ['m000']
+                    contexts = [''] if context == 'none' else ['V', '_unknown'] if context == 'gene' else ['v000', '_unknown']
+                    for shape in L.MOTIF_SHAPES:
+                        v['motif_' + shape] = [f'{ctx}|{token}' if ctx else token for ctx in contexts for token in tokens]
+                vocab[loc] = v
+            dense = [original(frames, vocab, feature_definition=d, cstar_target=.5)[0] for frames in samples.values()]
+            got = C.fit_cohort(samples, vocab=vocab, feature_definition=d, cstar_target=.5, n_jobs=2)
+            for loc, (matrix, columns) in got.items():
+                expected = np.array([[row.get(c, np.nan) for c in columns] for row in dense])
+                np.testing.assert_array_equal(matrix, expected, err_msg=f'{configuration}/{motifs}/{context}/{loc}')
