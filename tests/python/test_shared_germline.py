@@ -9,7 +9,7 @@ from arda.paths import vdj_dir
 from vdjtools.model import from_arda, load_bundled, load_germline
 
 
-@pytest.mark.parametrize('organism', ['human', 'mouse'])
+@pytest.mark.parametrize('organism', ['human', 'mouse', 'rat', 'rabbit', 'rhesus_monkey'])
 @pytest.mark.parametrize('legacy_anchors', [False, True])
 def test_shared_germline_membership(organism, legacy_anchors, monkeypatch):
     if legacy_anchors:
@@ -20,7 +20,7 @@ def test_shared_germline_membership(organism, legacy_anchors, monkeypatch):
     load_germline.cache_clear()
     with (vdj_dir(organism) / 'cdr3_anchors.tsv').open() as fh:
         rows = list(csv.DictReader(fh, delimiter='\t'))
-    for locus in ('TRA', 'TRD'):
+    for locus in sorted({row['locus'] for row in rows}):
         expected = {(row['segment'], row['allele']) for row in rows if row['locus'] == locus}
         germline = load_germline(locus, organism)
         actual = set(germline.filter(pl.col('segment') != 'D').select('segment', 'allele').iter_rows())
