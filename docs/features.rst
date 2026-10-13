@@ -180,7 +180,20 @@ residual and are reported. For ``M`` motif bins per shape, ``nV`` V genes and
        --v-context gene -o joint-motifs.tsv
 
 A BLOSUM62 variant or clustered V context requires ``--motif-definition`` with
-the frozen builder output. Build reference parameters on a scheduled compute node:
+the frozen builder output. The package includes the version-1 human reference
+maps used for the configured corpus fits: 100 motif clusters, up to 16 V clusters
+per locus, and explicitly recorded unclustered genes. Copy them to a local file:
+
+.. code-block:: python
+
+   from importlib.resources import files
+   from pathlib import Path
+
+   Path("motif-definition.json").write_bytes(
+       files("vdjtools").joinpath("resources/signature/motif_definition_v1.json").read_bytes()
+   )
+
+To build different reference parameters, run the builder on a scheduled compute node:
 
 .. code-block:: bash
 

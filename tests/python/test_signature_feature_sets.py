@@ -333,3 +333,24 @@ def test_bounded_compositions_skip_unused_quantiles_and_robust_scaling(monkeypat
     monkeypatch.setattr(np,'nanquantile',quantile)
     art=C.fit_matrices({'TRB':(x,cols)},vocab,sig='vsig',name='wide',feature_definition=d,n_components=2)
     assert art.fits['TRB'].rotation.shape==(len(cols),2)
+
+
+def test_frozen_reference_maps_cover_all_triples_and_human_loci():
+    import json
+    from importlib.resources import files
+    from vdjtools.signature.features import gene_vocab
+
+    maps = json.loads(files('vdjtools').joinpath(
+        'resources/signature/motif_definition_v1.json').read_text())
+    motif = maps['motif_map']
+    assert set(motif['mapping']) == {''.join(t) for t in itertools.product(L.AMINO_ACIDS, repeat=3)}
+    assert len(set(motif['mapping'].values())) == motif['n_clusters'] == 100
+    assert set(maps['v_maps']) == set(L.LOCI)
+    definition = L.feature_definition('joint', motifs='blosum62', v_context='cluster', **maps)
+    for locus, mapping in maps['v_maps'].items():
+        assert mapping['organism'] == 'human' and mapping['locus'] == locus
+        assert len(mapping['source_sha256']) == 64
+        assert len(set(mapping['mapping'].values()) - {'_unknown'}) == mapping['n_clusters']
+        assert set(mapping['unclustered_genes']) == {
+            gene for gene, cluster in mapping['mapping'].items() if cluster == '_unknown'}
+        gene_vocab(locus, feature_definition=definition)
