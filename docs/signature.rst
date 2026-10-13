@@ -727,7 +727,8 @@ observation masks. A wholly absent locus has missing PCs.
 ``readers`` and ``new_readers`` are repeatable ``(sample_id, reader)`` pairs;
 each zero-argument reader returns a locus-to-frame dictionary. The artifact stores
 the feature definition, maps, vocabulary, clone weights, coverage target, fitted
-scales, bounds, rotation and variance. Application defaults to its measurement
+scales, bounds, rotation and variance. PC scaling is fitted using the same
+float32-rounded rotation restored from disk. Application defaults to its measurement
 policy; incompatible clone weights raise. An explicit shared coverage or cohort
 minimum may override it; ``own`` is refused for configured signatures. Match the
 target across tables being compared. ``rotation_space`` identifies the fitted rotation in new

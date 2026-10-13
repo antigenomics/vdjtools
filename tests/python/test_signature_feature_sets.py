@@ -354,3 +354,35 @@ def test_frozen_reference_maps_cover_all_triples_and_human_loci():
         assert set(mapping['unclustered_genes']) == {
             gene for gene, cluster in mapping['mapping'].items() if cluster == '_unknown'}
         gene_vocab(locus, feature_definition=definition)
+
+
+def test_configured_pc_scaling_uses_the_persisted_rotation_precision(tmp_path):
+    import numpy as np
+    from vdjtools.signature import corpus as C
+    definition = L.feature_definition('joint')
+    vocab = {'TRB': {'vjl': ['V|J|6', '_unknown']}}
+    cols = L.raw_columns('vsig', 'TRB', vocab['TRB'], feature_definition=definition)
+    x = np.zeros((12, len(cols)))
+    x[:, :6] = np.random.default_rng(71).uniform(.2, 2, size=(12, 6))
+    x[:, 6] = np.linspace(0, 1, 12)
+    x[:, 7] = 1 - x[:, 6]
+    model = C.fit_matrices({'TRB': (x, cols)}, vocab, sig='vsig', name='precision',
+                           feature_definition=definition, n_components=3)
+    fit = model.fits['TRB']
+    assert fit.rotation.dtype == np.float64
+    restored = C.Corpus.load(model.save(tmp_path / 'precision'))
+    np.testing.assert_array_equal(fit.rotation, restored.fits['TRB'].rotation)
+    before = np.array([list(C.apply(dict(zip(cols, row)), {}, model).values()) for row in x])
+    after = np.array([list(C.apply(dict(zip(cols, row)), {}, restored).values()) for row in x])
+    np.testing.assert_allclose(before, after, rtol=0, atol=1e-12)
+    legacy = C.fit_locus(x[:, :6], cols[:6], n_components=3)
+    assert legacy.rotation.dtype == np.float64
+
+
+def test_raw_support_lookup_does_not_construct_channel_columns(monkeypatch):
+    definition = L.feature_definition('joint', motifs='imgt11')
+    assert L.support_of('vsig:depth:TRA:reads', feature_definition=definition) == 'nonneg'
+    assert L.support_of('vsig:observed:TRA:vjl', feature_definition=definition) == 'unit'
+    monkeypatch.setattr(L, 'channel_columns', lambda *a, **kw: pytest.fail('raw lookup rebuilt channels'))
+    assert L.support_of('vsig:motif_XXX:TRA:aaa', feature_definition=definition) == 'unit'
+    assert L.support_of('vsig:div:TRA:1D_c', feature_definition=definition) == 'nonneg'

@@ -571,11 +571,6 @@ def support_of(column: str, vocab: "dict[str, dict[str, list[str]]] | None" = No
     sig, block, _locus, feature = parse(column)
     if block == PC_BLOCK:
         return "real"
-    if _configured(feature_definition):
-        if column in channel_columns(sig, feature_definition=feature_definition):
-            if block == "pair":
-                return "real"
-            return "nonneg" if block == "depth" else "unit"
     for g in _feature_groups(sig, feature_definition):
         if g.name != block:
             continue
@@ -583,6 +578,11 @@ def support_of(column: str, vocab: "dict[str, dict[str, list[str]]] | None" = No
             return g.dynamic[1]
         if feature in g.features:
             return g.features[feature][1]
+    if _configured(feature_definition):
+        if column in channel_columns(sig, feature_definition=feature_definition):
+            if block == "pair":
+                return "real"
+            return "nonneg" if block == "depth" else "unit"
     for c in channels(sig):
         if c.name == block and feature in c.features:
             return c.features[feature]

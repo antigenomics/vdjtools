@@ -533,6 +533,9 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
     if k is None:
         return None
     comps = _fix_signs(comps[:, :k])
+    if configured:
+        # Fit PC scaling against the same float32-rounded basis that loading restores.
+        comps = comps.astype(np.float32).astype(np.float64)
     scores = z @ comps
     pc_loc, pc_scale = robust_loc_scale(scores)
     pc_supports = ["real"] * k
