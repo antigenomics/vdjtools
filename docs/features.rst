@@ -152,6 +152,11 @@ windows. Each clonotype distributes its weight across its valid windows before
 aggregation; longer CDR3s do not receive extra weight from their window count.
 Eligibility and unknown-context fractions accompany the measurements.
 
+For a configured mirpy reference bundle, extract with its saved vocabulary using
+``--feature-vocabulary feature-vocabulary.json`` and the same definition and
+coverage target. This preserves the raw feature-space identity for references
+that model selected loci.
+
 IMGT11 uses the classes ``AILV``, ``CM``, ``ST``, ``HKR``, ``DE``, ``NQ``, ``F``,
 ``W``, ``Y``, ``P``, ``G`` in that order, encoded ``0`` through ``9`` and ``a``.
 It produces 1,331 bins per shape, or 3,993 before V context. BLOSUM62 uses a frozen
