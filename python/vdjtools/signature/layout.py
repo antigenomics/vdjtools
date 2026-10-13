@@ -483,7 +483,7 @@ def named_columns(sig: str, named: "bool | Sequence[str]" = True,
     return out
 
 
-def channel_table(sig: "str | None" = None) -> "list[dict[str, str]]":
+def channel_table(sig: "str | None" = None, *, feature_definition=None) -> "list[dict[str, str]]":
     """Every feature this half can emit, with what it is and what units it is in.
 
     One row per ``(block, feature)`` with a ``kind`` saying how it reaches the output:
@@ -504,7 +504,7 @@ def channel_table(sig: "str | None" = None) -> "list[dict[str, str]]":
         :mod:`~vdjtools.signature.layout` stays free of polars.
     """
     rows: list[dict[str, str]] = []
-    for g in raw_groups(sig):
+    for g in _feature_groups(sig, feature_definition):
         kind = "named" if g.named else "rotated"
         if g.dynamic:
             rows.append({"sig": g.sig, "block": g.name, "feature": "<germline>", "kind": kind,
@@ -571,6 +571,11 @@ def support_of(column: str, vocab: "dict[str, dict[str, list[str]]] | None" = No
     sig, block, _locus, feature = parse(column)
     if block == PC_BLOCK:
         return "real"
+    if _configured(feature_definition):
+        if column in channel_columns(sig, feature_definition=feature_definition):
+            if block == "pair":
+                return "real"
+            return "nonneg" if block == "depth" else "unit"
     for g in _feature_groups(sig, feature_definition):
         if g.name != block:
             continue

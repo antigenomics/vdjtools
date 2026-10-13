@@ -30,6 +30,8 @@ from .layout import (
     channel_columns,
     channels,
     feats,
+    feature_definition,
+    validate_feature_definition,
     parse,
     pc_columns,
     raw_columns,
@@ -47,7 +49,7 @@ __all__ = [
     "vsig", "vsig_cohort", "raw_features_cohort",
     "AMINO_ACIDS", "LOCI", "NO_LOCUS", "PAIRS", "PC_BLOCK", "SPECTRATYPE_LENGTHS", "SUPPORTS",
     "TRANSFORMS", "WEIGHTS", "Channel", "RawGroup", "arcsine", "channel_columns", "channels",
-    "clr", "feats", "gene_vocab", "log10", "log1p", "logit", "parse", "pc_columns",
+    "clr", "feats", "feature_definition", "validate_feature_definition", "gene_vocab", "log10", "log1p", "logit", "parse", "pc_columns",
     "raw_columns", "raw_groups", "register_channel", "register_raw", "sanitise",
     "signature_columns", "support_of", "work_frame",
 ]

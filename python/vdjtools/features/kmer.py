@@ -162,3 +162,79 @@ def kmer_cohort(cohort: pl.DataFrame | pl.LazyFrame, k: int = 4, flank: int = 4,
     v = pl.col(V_CALL) if keep_allele else strip_allele(pl.col(V_CALL))
     df = df.with_columns(v.alias(V_CALL))
     return _explode_kmers(df, k, flank).select(SAMPLE_ID, V_CALL, "kmer").unique()
+
+
+def motif_profile(df: pl.DataFrame, *, shapes=("XXX", "XX_X", "X_XX"), alphabet="imgt11",
+                  motif_map=None, v_context="none", v_map=None, flank=1,
+                  weight="log2p1") -> pl.DataFrame:
+    """Normalized three-residue motif compositions, with optional joint V context.
+
+    Each eligible clonotype contributes its weight once per shape, divided across
+    its valid windows. ``XX_X`` and ``X_XX`` select three residues within four
+    positions. All window positions must be standard amino acids. Junction anchors
+    must be C…F/W; ``flank=1`` removes them to obtain the IMGT CDR3 interior.
+    The returned eligibility and unknown-context fractions qualify each shape.
+    """
+    import numpy as np
+    from ..signature.features import WEIGHTS
+    from ..signature.layout import AMINO_ACIDS, IMGT11, MOTIF_SHAPES
+    from ..io.schema import strip_allele_values
+
+    if not shapes or len(set(shapes)) != len(shapes) or any(s not in MOTIF_SHAPES for s in shapes):
+        raise ValueError("shapes must be distinct members of XXX, XX_X, X_XX")
+    if alphabet not in ("imgt11", "blosum62", "aa20") or v_context not in ("none", "gene", "cluster"):
+        raise ValueError("unknown motif alphabet or V context")
+    if flank < 0:
+        raise ValueError("flank must be nonnegative")
+    if alphabet == "blosum62" and not motif_map:
+        raise ValueError("BLOSUM62 motifs require a frozen mapping")
+    if v_context == "cluster" and not v_map:
+        raise ValueError("clustered context requires a frozen V mapping")
+    schema = {'shape': pl.String, 'context': pl.String, 'motif': pl.String,
+              'frequency': pl.Float64, 'eligible_frac': pl.Float64, 'unknown_v_frac': pl.Float64}
+    if df.is_empty():
+        return pl.DataFrame(schema=schema)
+    if weight in WEIGHTS:
+        w = np.asarray(WEIGHTS[weight](df['duplicate_count'].to_numpy()), dtype=float)
+        base = df.with_columns(pl.Series('_mw', w))
+    else:
+        base = df.with_columns(weight_expr(weight).alias('_mw'))
+    if not np.isfinite(base['_mw'].to_numpy()).all() or (base['_mw'] < 0).any():
+        raise ValueError("motif weights must be finite and nonnegative")
+    total = float(base['_mw'].sum())
+    if total <= 0:
+        return pl.DataFrame(schema=schema)
+    context = pl.Series('_context', [''] * df.height)
+    if v_context != 'none':
+        calls = strip_allele_values(df[V_CALL]) if V_CALL in df.columns else pl.Series([None] * df.height, dtype=pl.String)
+        context = (calls.replace_strict(v_map, default='_unknown') if v_map is not None
+                   else calls.fill_null('_unknown').replace_strict(
+                       {c: c for c in calls.unique().drop_nulls() if ',' not in c}, default='_unknown'))
+        context = context.rename('_context')
+    base = base.with_row_index('_clone').with_columns(context)
+    base = base.filter(pl.col(JUNCTION_AA).str.contains(r'^C.*[FW]$'))
+    out = []
+    for shape in shapes:
+        windows = _explode_kmers(base, len(shape), flank).filter(
+            pl.col('kmer').str.contains(r'^[ACDEFGHIKLMNPQRSTVWY]+$'))
+        if windows.is_empty():
+            continue
+        eligible = windows.unique('_clone').select(pl.col('_mw').sum()).item()
+        unknown = windows.filter(pl.col('_context') == '_unknown').unique('_clone').select(pl.col('_mw').sum()).item()
+        token = (pl.col('kmer') if shape == 'XXX' else
+                 pl.col('kmer').str.slice(0, 2) + pl.col('kmer').str.slice(3, 1) if shape == 'XX_X' else
+                 pl.col('kmer').str.slice(0, 1) + pl.col('kmer').str.slice(2, 2))
+        windows = windows.with_columns(token.alias('motif'))
+        if alphabet == 'imgt11':
+            codes = {aa: code for code, group in zip('0123456789a', IMGT11) for aa in group}
+            windows = windows.with_columns(pl.col('motif').str.replace_many(list(codes), list(codes.values())))
+        elif alphabet == 'blosum62':
+            mapping = motif_map.get('mapping', motif_map)
+            windows = windows.with_columns(pl.col('motif').replace_strict(mapping))
+        windows = windows.with_columns((pl.col('_mw') / pl.len().over('_clone')).alias('_token_weight'))
+        grouped = windows.group_by('_context', 'motif').agg(
+            (pl.col('_token_weight').sum() / eligible).alias('frequency'))
+        out.append(grouped.rename({'_context': 'context'}).with_columns(
+            pl.lit(shape).alias('shape'), pl.lit(float(eligible / total)).alias('eligible_frac'),
+            pl.lit(float(unknown / eligible) if eligible else 0.0).alias('unknown_v_frac')).select(list(schema)))
+    return pl.concat(out).sort('shape', 'context', 'motif') if out else pl.DataFrame(schema=schema)
