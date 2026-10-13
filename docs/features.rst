@@ -25,8 +25,8 @@ The shared implementation is ``vdjtools.signature.corpus.TablePCA``. Its saved
 NumPy artifact stores imputation values, scaling, centering, feature order and PCA
 components. This optional StandardScaler/PCA workflow is distinct from the existing
 robust, winsorized ``Corpus`` rotation used by ``vsig`` and mirpy ``rsig``. Existing
-rsig is not RFF. Corpus refits and distributed rotations for raw statistical
-features and sample RFF are planned separately. Raw outputs remain available.
+rsig is not RFF. Raw feature rotations and mirpy sample RFF rotations are separate outputs.
+Raw outputs remain available independently of either rotation.
 
 Choosing feature columns
 ------------------------
@@ -84,3 +84,41 @@ grows with sample count and selected feature width. Table PCA needs a dense fitt
 matrix and its numerical workspace; known large allocations check available
 container memory before allocation. These checks cannot bound an arbitrarily deep
 input frame. See :ref:`cpu-container-limits` for CPU allocation and import order.
+
+Reference rotation bundles
+--------------------------
+
+A reference bundle's ``features-pca.npz`` projects the unrotated statistical
+measurements, using its saved feature order and the same shared coverage target.
+The fitting recipe uses human gene vocabularies and ``log2p1`` weighting; its
+default coverage is ``0.8``. The RFF rotation in that bundle is a different file
+and requires the bundled mirpy bases. Neither file is a vsig/rsig corpus.
+
+.. code-block:: bash
+
+   vdjtools features samples/*.tsv --coverage 0.8 --threads 2 -o features.tsv
+   vdjtools pca features.tsv --rotation reference/features-pca.npz -o pcs.tsv
+
+The `mirpy reference recipe
+<https://docs.isalgo.dev/mirpy/embeddings.html#reference-rotation-bundles>`_
+freshly generates each reference table, fits with the existing ``TablePCA``,
+checks save/load equivalence, and exports rotations and coordinate parameters.
+Reference rotations store up to 1024 PCs and their
+``explained_variance_ratio`` arrays. The bundle reports cumulative fractions at
+256, 512 and 1024 PCs, along with the actual number stored. Fractions refer to
+imputed, standardized coordinates; they do not measure variance of the unscaled
+features. Older rotations without variance statistics remain loadable.
+Input membership and fit diagnostics remain private. ``bundle.json`` records
+parameters and file checksums; it contains no sample identities or raw input paths.
+
+Extract a reference bundle separately from the library installation and verify
+its recorded hashes before use. Choose the blood/tissue RNA-seq, synthetic or
+deep TRA/TRB reference appropriate to your analysis; keep the chosen rotation
+checksum with your results. The deep reference selects TRA/TRB measurements and
+cross-locus channels rather than fitting the other loci. Unselected measurements
+and channels pass through the projection.
+
+The first command keeps the unprojected feature table. Applying a rotation does
+not recompute those measurements or turn them into a corpus signature. Target
+and control tables must use the same vocabulary, weighting and coverage target.
+A shared vocabulary alone does not make PCs from different rotations comparable.

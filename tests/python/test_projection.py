@@ -103,3 +103,25 @@ def test_large_raw_feature_cohort_memory():
     print(f'Raw feature cohort: samples={count}, columns={out.width}, workers={workers}, '
           f'wall_s={time.perf_counter()-start:.3f}, peak_RSS_GiB={gib:.3f}',flush=True)
     assert gib < 16
+
+
+def test_table_pca_saves_variance_and_loads_legacy(tmp_path):
+    from vdjtools.signature.corpus import fit_pca
+    cols = [f'phi:{i}' for i in range(6)]
+    values = np.random.default_rng(17).normal(size=(20,6))
+    table = pl.from_numpy(values,schema=cols).with_columns(pl.lit('test').alias('embedding_space'))
+    expected = fit_pca(values.copy(),4).steps[1][1].explained_variance_ratio_
+    rotation = TablePCA.fit(table,n_components=4)
+    np.testing.assert_array_equal(rotation.explained_variance_ratio,expected)
+    path = tmp_path/'rotation.npz'
+    rotation.save(path)
+    restored = TablePCA.load(path)
+    np.testing.assert_array_equal(restored.explained_variance_ratio,expected)
+    with np.load(path,allow_pickle=False) as z:
+        legacy = {key:z[key] for key in z.files if key != 'explained_variance_ratio'}
+    np.savez(tmp_path/'legacy.npz',**legacy)
+    assert TablePCA.load(tmp_path/'legacy.npz').explained_variance_ratio is None
+    legacy['explained_variance_ratio'] = np.array([0.5,-0.1,0.4,0.2])
+    np.savez(tmp_path/'invalid.npz',**legacy)
+    with pytest.raises(ValueError,match='variance'):
+        TablePCA.load(tmp_path/'invalid.npz')
