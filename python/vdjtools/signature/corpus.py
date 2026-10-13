@@ -62,7 +62,8 @@ MIN_SPREAD = 1e-12
 #: Default components per locus. A count rather than a variance fraction, because the artifact
 #: stores the rotation only up to the count it was fitted at and a fraction on a wide sparse group
 #: resolves to enough components to make the artifact hundreds of megabytes. The full eigenvalue
-#: spectrum is stored either way, so the variance a given count reaches is always readable.
+#: spectrum is stored by full SVD. Configured randomized fits store the truncated spectrum and
+#: full input variance, so the variance reached by a retained count remains readable.
 DEFAULT_COMPONENTS: int = 128
 
 #: Modes for :func:`apply`. ``features`` clamps raw features to the corpus bounds before rotating;
@@ -431,6 +432,10 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
         n_components: Count, or a variance fraction in ``(0, 1)``.
         winsor_p: The percentile whose bounds are used when ``mode="features"``. All of
             :data:`WINSOR_PS` are stored regardless.
+        feature_definition: Frozen basic/joint definition, or ``None`` for legacy scaling.
+        solver: ``"full"`` (default), or explicit ``"randomized"`` for configured features.
+        seed: Randomized SVD seed; recorded by the corpus builder.
+        max_components: Stored rank cap for randomized fits requesting a variance fraction.
 
     Returns:
         The fit, or ``None`` when the locus cannot support one (fewer rows than 2, or no column

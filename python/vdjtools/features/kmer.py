@@ -1,4 +1,4 @@
-"""CDR3 amino-acid k-mer profiles and joint V + k-mer + C feature summaries.
+"""Junction amino-acid k-mer profiles and joint V + k-mer + C feature summaries.
 
 K-mers are overlapping sliding windows over ``junction_aa``. Each k-mer occurrence
 carries its clonotype's weight (reads, unique, or frequency); weights are summed.
@@ -33,7 +33,7 @@ from ..io.schema import (
 def _explode_kmers(df: pl.DataFrame, k: int, flank: int = 0) -> pl.DataFrame:
     """Explode each clonotype's ``junction_aa`` into overlapping k-mers (column ``kmer``).
 
-    Rows whose CDR3 is shorter than ``k`` (or, with ``flank``, whose core is) contribute no
+    Rows whose junction is shorter than ``k`` (or, with ``flank``, whose core is) contribute no
     k-mers. ``flank`` drops that many residues from each end before windowing.
     """
     if k < 1:
@@ -51,7 +51,7 @@ def _explode_kmers(df: pl.DataFrame, k: int, flank: int = 0) -> pl.DataFrame:
                 flank, pl.max_horizontal(pl.col("_len") - 2 * flank, pl.lit(0))))
     df = df.with_columns(core.alias("_core"))
     df = df.with_columns(pl.col("_core").str.len_chars().alias("_clen"))
-    df = df.filter(pl.col("_clen") >= k)  # too-short core (or CDR3) yields no k-mers
+    df = df.filter(pl.col("_clen") >= k)  # too-short core (or junction) yields no k-mers
     df = df.with_columns(pl.int_ranges(0, pl.col("_clen") - k + 1).alias("_pos"))
     df = df.explode("_pos", empty_as_null=True)
     df = df.with_columns(pl.col("_core").str.slice(pl.col("_pos"), k).alias("kmer"))
@@ -60,7 +60,7 @@ def _explode_kmers(df: pl.DataFrame, k: int, flank: int = 0) -> pl.DataFrame:
 
 def kmer_profile(df, k: int = 3, weight: str = "reads",
                  by_locus: bool = True, flank: int = 0, by=()):
-    """CDR3 amino-acid k-mer spectrum.
+    """Junction amino-acid k-mer spectrum.
 
     Args:
         df: A clonotype frame (eager ``pl.DataFrame`` or lazy ``pl.LazyFrame`` — e.g. a
