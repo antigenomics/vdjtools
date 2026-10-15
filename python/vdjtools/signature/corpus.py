@@ -810,6 +810,8 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
             and kw.get("bounded", True)):
         from .bounded import feature_matrices
         mats = feature_matrices(items, vocab, feature_definition, feature_kw, n_jobs)
+        # These matrices are owned here: discard old row-index buffers before fitting.
+        mats = {loc: (x.take_rows(x.observed()), cols) for loc, (x, cols) in mats.items()}
         return fit_matrices(mats, vocab, sig=sig, name=name, n_components=n_components,
                             feature_definition=feature_definition, **kw)
     if L._configured(feature_definition):

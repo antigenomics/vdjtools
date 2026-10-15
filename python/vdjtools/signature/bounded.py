@@ -5,6 +5,8 @@ matrix or standardized sample-by-feature array is written to disk. Fitted parame
 use the existing Corpus/TablePCA formats.
 """
 from dataclasses import dataclass
+from ctypes import CDLL
+import sys
 
 import numpy as np
 from scipy import sparse, linalg
@@ -404,7 +406,14 @@ def feature_matrices(items, vocab, definition, feature_kw, n_jobs):
         C._row_for(item, 'vsig', vocab, {**feature_kw, '_raw_array': output})
 
     parallel_rows(enumerate(items), fill, n_jobs)
-    return {loc: (builder.finish(), columns[loc]) for loc, builder in builders.items()}
+    matrices = {loc: (builder.finish(), columns[loc]) for loc, builder in builders.items()}
+    # glibc retains freed per-sample buffers in worker arenas after assembly.
+    # Return those pages before fitting; other allocators still use the same RAM guard.
+    if sys.platform == 'linux':
+        trim = getattr(CDLL(None), 'malloc_trim', None)
+        if trim is not None:
+            trim(0)
+    return matrices
 
 
 def trimmed_fraction(x, lo, hi):

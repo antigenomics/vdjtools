@@ -308,3 +308,53 @@ def test_missing_row_remap_bounds_numpy_index_cast(monkeypatch):
     monkeypatch.setattr(np, 'take', bounded_take)
     raw.take_rows(raw.observed())
     assert sizes and max(sizes) <= 4
+
+
+@pytest.mark.parametrize('has_trim', [False, True])
+def test_sparse_assembly_releases_freed_pages_at_phase_boundary(monkeypatch, has_trim):
+    from types import SimpleNamespace
+    from vdjtools.signature import bounded as B, cohort
+    from vdjtools.signature.features import gene_vocab
+    events = []
+    finish, parallel = B.MatrixBuilder.finish, cohort.parallel_rows
+    def joined(*a, **kw):
+        result = parallel(*a, **kw)
+        events.append('joined')
+        return result
+    def assembled(self):
+        result = finish(self)
+        events.append('assembled')
+        return result
+    def trim(pad):
+        assert pad == 0 and events[-1] == 'assembled'
+        events.append('released')
+    monkeypatch.setattr(cohort, 'parallel_rows', joined)
+    monkeypatch.setattr(B.MatrixBuilder, 'finish', assembled)
+    monkeypatch.setattr(B, 'sys', SimpleNamespace(platform='linux'), raising=False)
+    monkeypatch.setattr(B, 'CDLL', lambda path: SimpleNamespace(**({'malloc_trim': trim} if has_trim else {})), raising=False)
+    definition = L.feature_definition('basic')
+    vocab = {'TRB': gene_vocab('TRB', feature_definition=definition)}
+    result = B.feature_matrices([], vocab, definition, {}, 1)
+    assert result['TRB'][0].shape[0] == 0
+    assert events == ['joined', 'assembled'] + (['released'] if has_trim else [])
+
+
+def test_cohort_releases_original_sparse_indices_before_fitting(monkeypatch):
+    import weakref
+    from vdjtools.signature import bounded as B
+    original_indices = []
+    x, columns = matrix_fixture(8)
+    def features(*a, **kw):
+        raw = B.BlockMatrix.from_dense(x, columns)
+        original_indices.extend(weakref.ref(b.values.indices) for b in raw.blocks)
+        return {'TRB': (raw, columns)}
+    def fit(mats, *a, **kw):
+        selected = mats['TRB'][0]
+        assert selected.shape[0] == 7
+        assert all(ref() is None for ref in original_indices)
+        np.testing.assert_array_equal(np.column_stack([v for _, _, v in selected.chunks()]), x[1:])
+        return 'fitted'
+    monkeypatch.setattr(B, 'feature_matrices', features)
+    monkeypatch.setattr(C, 'fit_matrices', fit)
+    assert C.fit_cohort([('sample', {})], vocab={'TRB': {}}, feature_definition=L.feature_definition('basic'),
+                        cstar_target=.5, solver='randomized') == 'fitted'
