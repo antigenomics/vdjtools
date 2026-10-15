@@ -60,8 +60,28 @@ class BlockMatrix:
         if keep.all():
             return self
         from ..cores import require_memory
-        require_memory(self.nbytes, 'sparse observed-row selection')
-        return BlockMatrix([Block(b.name, b.values[keep].tocsc(), b.present[keep]) for b in self.blocks])
+        if (self.observed() & ~keep).any():
+            require_memory(self.nbytes, 'sparse observed-row selection')
+            return BlockMatrix([Block(b.name, b.values[keep].tocsc(), b.present[keep]) for b in self.blocks])
+        # Absent rows contain no entries: only row indices change, not values/column pointers.
+        require_memory(sum(b.values.indices.nbytes for b in self.blocks) + 16*len(keep),
+                       'sparse observed-row indices')
+        mapping = np.cumsum(keep, dtype=np.int64) - 1
+        mapping[~keep] = -1
+        blocks = []
+        for b in self.blocks:
+            indices = np.empty_like(b.values.indices)
+            local = mapping.astype(indices.dtype, copy=False)
+            # np.take casts source indices to intp even when an output is supplied.
+            for start in range(0, len(indices), max(1, CHUNK_BYTES // 16)):
+                stop = start + max(1, CHUNK_BYTES // 16)
+                np.take(local, b.values.indices[start:stop], out=indices[start:stop], mode='clip')
+            if indices.min(initial=0) < 0:
+                raise ValueError('unobserved sparse rows contain stored entries')
+            values = sparse.csc_matrix((b.values.data, indices, b.values.indptr),
+                                       shape=(int(keep.sum()), b.values.shape[1]), copy=False)
+            blocks.append(Block(b.name, values, b.present[keep]))
+        return BlockMatrix(blocks)
 
     def chunks(self):
         offset = 0

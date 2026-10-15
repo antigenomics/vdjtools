@@ -274,3 +274,37 @@ def test_tall_covariance_uses_bounded_column_products(monkeypatch):
     expected = C.fit_pca(x, 3, seed=23).steps[1][1]
     np.testing.assert_allclose(got[4], expected.components_, atol=1e-5, rtol=0)
     assert len(widths) == 20
+
+
+def test_remove_unobserved_rows_shares_sparse_values_without_mutation():
+    from vdjtools.signature import bounded as B
+    x, columns = matrix_fixture()
+    x[[9, 19]] = np.nan
+    raw = B.BlockMatrix.from_dense(x, columns)
+    observed = raw.observed()
+    selected = raw.take_rows(observed)
+    np.testing.assert_array_equal(np.column_stack([v for _, _, v in selected.chunks()]), x[observed])
+    for before, after in zip(raw.blocks, selected.blocks):
+        if before.values.nnz:
+            assert np.shares_memory(before.values.data, after.values.data)
+        np.testing.assert_array_equal(before.values.toarray()[observed], after.values.toarray())
+    np.testing.assert_array_equal(np.column_stack([v for _, _, v in raw.chunks()]), x)
+    # Selecting observed rows must still remove their actual entries correctly.
+    keep = np.arange(len(x)) % 2 == 0
+    subset = raw.take_rows(keep)
+    np.testing.assert_array_equal(np.column_stack([v for _, _, v in subset.chunks()]), x[keep])
+
+
+def test_missing_row_remap_bounds_numpy_index_cast(monkeypatch):
+    from vdjtools.signature import bounded as B
+    x, columns = matrix_fixture()
+    raw = B.BlockMatrix.from_dense(x, columns)
+    take = np.take
+    sizes = []
+    def bounded_take(a, indices, **kw):
+        sizes.append(indices.size)
+        return take(a, indices, **kw)
+    monkeypatch.setattr(B, 'CHUNK_BYTES', 64)
+    monkeypatch.setattr(np, 'take', bounded_take)
+    raw.take_rows(raw.observed())
+    assert sizes and max(sizes) <= 4
