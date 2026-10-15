@@ -201,6 +201,9 @@ def configure_runtime() -> None:
     import sys
 
     os.environ.update(dict.fromkeys(_KERNEL_ENV, "1"))
+    # NumPy and SciPy may load distinct BLAS pools; idle pools must sleep at handoff.
+    # OpenBLAS clamps its timeout exponent to at least 4 (zero means its long default).
+    os.environ.update(OPENBLAS_THREAD_TIMEOUT="4", OMP_WAIT_POLICY="PASSIVE")
     if "numpy" in sys.modules or "scipy" in sys.modules:
         from threadpoolctl import threadpool_limits
 

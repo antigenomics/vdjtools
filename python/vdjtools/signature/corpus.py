@@ -417,7 +417,7 @@ def _k_for_variance(ev: np.ndarray, frac: float, cap: int, total=None) -> "int |
 def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
               n_components: "int | float" = DEFAULT_COMPONENTS,
               winsor_p: float = 0.01, feature_definition=None, solver="full", seed=0,
-              max_components=128) -> "LocusFit | None":
+              max_components=128, bounded=True) -> "LocusFit | None":
     """Fit bounds, centre, scale, rotation and PC scaling for one locus, in one pass.
 
     Args:
@@ -452,6 +452,11 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
     n, p = x.shape
     if n < 2 or p == 0:
         return None
+    if configured and solver == "randomized" and bounded:
+        from .bounded import fit_locus as fit_bounded
+        return fit_bounded(x, columns, feature_definition=feature_definition,
+                           n_components=n_components, seed=seed, max_components=max_components,
+                           winsor_p=winsor_p)
     from ..cores import require_memory
     require_memory(6 * x.nbytes + 16 * min(n, p)**2, "corpus PCA fit")
     supports = [L.support_of(c, feature_definition=feature_definition) for c in columns]
@@ -518,6 +523,15 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
         ev_all = (singular ** 2) / max(n - 1, 1)
         comps = vt.T
 
+    return _finish_locus(columns, supports, loc, scale, n_obs, bounds, z, ev_all, comps, n, p,
+                         feature_definition=feature_definition, n_components=n_components,
+                         total_variance=total_variance, offset=offset)
+
+
+def _finish_locus(columns, supports, loc, scale, n_obs, bounds, z, ev_all, comps, n, p, *,
+                  feature_definition, n_components, total_variance, offset):
+    """Shared rank, rounded basis and score scaling for dense and bounded fits."""
+    configured = L._configured(feature_definition)
     if configured and ev_all.size:
         rank = int(np.sum(ev_all > np.finfo(float).eps * max(n, p) * ev_all[0]))
         ev_all, comps = ev_all[:rank], comps[:, :rank]
@@ -614,7 +628,7 @@ def fit_matrices(mats: dict[str, tuple[np.ndarray, list[str]]],
                  vocab: dict[str, dict[str, list[str]]], *, sig: str, name: str,
                  mode: str = "features", n_components: "int | float" = DEFAULT_COMPONENTS,
                  winsor_p: float = 0.01, meta: "dict | None" = None, feature_definition=None,
-                 solver="full", seed=0, max_components=128, threads: int = 1) -> Corpus:
+                 solver="full", seed=0, max_components=128, threads: int = 1, bounded=True) -> Corpus:
     """Fit a corpus from per-locus matrices -- the memory-bounded path.
 
     Each locus is fitted only on the rows that observed it, so a corpus where half the samples have
@@ -625,23 +639,31 @@ def fit_matrices(mats: dict[str, tuple[np.ndarray, list[str]]],
     fits: dict[str, LocusFit] = {}
     trimmed: dict[str, float] = {}
     from ..cores import numerical_kernels
+    from .bounded import BlockMatrix, trimmed_fraction
     if solver == "randomized":
         # Load the solver's BLAS pools before applying their runtime limits.
         from sklearn.utils import extmath  # noqa: F401
 
     with numerical_kernels(threads) as threads:
         for locus, (x, cols) in mats.items():
-            keep = np.isfinite(x).any(axis=1)
+            sparse_input = isinstance(x, BlockMatrix)
+            keep = x.observed() if sparse_input else np.isfinite(x).any(axis=1)
             if keep.sum() < 2:
                 continue
-            f = fit_locus(x[keep], cols, mode=mode, n_components=n_components, winsor_p=winsor_p,
-                          feature_definition=feature_definition, solver=solver, seed=seed, max_components=max_components)
+            observed = x.take_rows(keep) if sparse_input else x[keep]
+            f = fit_locus(observed, cols, mode=mode, n_components=n_components, winsor_p=winsor_p,
+                          feature_definition=feature_definition, solver=solver, seed=seed,
+                          max_components=max_components, bounded=bounded)
             if f is None:
                 continue
             fits[locus] = f
-            _, moved = clamp(x[keep], *f.bounds[winsor_p])
-            obs = np.isfinite(x[keep]).sum()
-            trimmed[locus] = float(moved.sum() / obs) if obs else 0.0
+            if sparse_input:
+                trimmed[locus] = trimmed_fraction(observed, *f.bounds[winsor_p])
+            else:
+                _, moved = clamp(observed, *f.bounds[winsor_p])
+                obs = np.isfinite(observed).sum()
+                trimmed[locus] = float(moved.sum() / obs) if obs else 0.0
+            del observed
     definition_meta = ({"feature_definition": feature_definition, "solver": solver, "solver_seed": seed,
                         "max_components": max_components, "spectrum_complete": solver == "full",
                         "fit_threads": threads}
@@ -784,6 +806,12 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
         meta = dict(kw.pop("meta", {}) or {})
         meta.update(weight=weight, cstar_target=target, organism=organism)
         kw["meta"] = meta
+    if (L._configured(feature_definition) and kw.get("solver", "full") == "randomized"
+            and kw.get("bounded", True)):
+        from .bounded import feature_matrices
+        mats = feature_matrices(items, vocab, feature_definition, feature_kw, n_jobs)
+        return fit_matrices(mats, vocab, sig=sig, name=name, n_components=n_components,
+                            feature_definition=feature_definition, **kw)
     if L._configured(feature_definition):
         from ..cores import require_memory
         columns = {loc: L.raw_columns(sig, loc, vocab[loc], feature_definition=feature_definition) for loc in vocab}
@@ -2083,7 +2111,7 @@ class TablePCA:
         threads = kernel_threads(threads)
         space = _space(table)
         cols = list(columns) if columns is not None else [c for c in table.columns if c.startswith('phi:')]
-        if len(set(cols)) != len(cols) or any(c not in table.columns for c in cols):
+        if len(set(cols)) != len(cols) or not set(cols).issubset(table.columns):
             raise ValueError('feature columns must be present and unique')
         if not cols or table.height < 2 or n_components < 1:
             raise ValueError('PCA needs feature columns, at least two sample rows and a positive dimension')
@@ -2107,11 +2135,50 @@ class TablePCA:
         return cls(cols, space, fill, scaler.mean_, scaler.scale_, pca.mean_, pca.components_,
                    np.nan_to_num(pca.explained_variance_ratio_, nan=0.0))
 
+    @classmethod
+    def fit_features(cls, samples, *, vocab, feature_definition, n_components=256,
+                     seed=0, n_jobs=1, threads=1, cstar_target="min", weight="log2p1",
+                     on_duplicate="error"):
+        """Fit configured raw sample features without materializing a dense cohort table.
+
+        Preserves TablePCA's median imputation and StandardScaler semantics; this
+        is distinct from the composition-aware corpus transform. Sparse raw rows
+        and byte-bounded chunks are transient; only model parameters are saved.
+        Sample workers join before the bounded numerical phase starts.
+        """
+        from .bounded import BlockMatrix, feature_matrices, table_pca
+        from .signature import _coverage_target, _raw_feature_identity
+        from ..cores import kernel_threads, numerical_kernels
+        L.validate_feature_definition(feature_definition)
+        if not L._configured(feature_definition):
+            raise ValueError("sparse raw-feature PCA requires a configured definition")
+        items = list(samples.items() if isinstance(samples, dict) else samples)
+        ids = [sid for sid, _ in items]
+        if len(items) < 2 or len(set(ids)) != len(ids) or n_components < 1:
+            raise ValueError("PCA needs at least two unique samples and a positive dimension")
+        threads = kernel_threads(threads)
+        target = _coverage_target(items, n_jobs, cstar_target, {'on_duplicate': on_duplicate})
+        kw = dict(feature_definition=feature_definition, cstar_target=target,
+                  weight=weight, on_duplicate=on_duplicate)
+        mats = feature_matrices(items, vocab, feature_definition, kw, n_jobs)
+        columns = [c for _, cols in mats.values() for c in cols]
+        if not columns:
+            raise ValueError("PCA needs feature columns")
+        identity_columns = columns + L.channel_columns('vsig', feature_definition=feature_definition)
+        space = 'vsig:' + _raw_feature_identity(identity_columns, vocab, weight, target, feature_definition)
+        raw = BlockMatrix([b for matrix, _ in mats.values() for b in matrix.blocks])
+        # Import before the numerical context so newly loaded native pools are capped.
+        from sklearn import preprocessing  # noqa: F401
+        with numerical_kernels(threads):
+            parameters = table_pca(raw, n_components, seed=seed)
+        return cls(columns, space, *parameters)
+
     def transform(self, table: pl.DataFrame) -> pl.DataFrame:
         """Apply this exact rotation; preserve sample IDs and metadata in input order."""
         if _space(table) != self.space:
             raise ValueError('embedding space differs from the fitted rotation')
-        if not set(self.columns).issubset(table.columns):
+        selected = set(self.columns)
+        if not selected.issubset(table.columns):
             raise ValueError('embedding columns differ from the fitted rotation')
         from vdjtools.cores import require_memory
         require_memory(24 * table.height * len(self.columns)
@@ -2122,7 +2189,7 @@ class TablePCA:
         X /= self.scale
         X -= self.center
         scores = X @ self.components.T
-        metadata = table.select([c for c in table.columns if c not in self.columns])
+        metadata = table.select([c for c in table.columns if c not in selected])
         return metadata.hstack(pl.from_numpy(scores, schema=[f'pc{i}' for i in range(scores.shape[1])]))
 
     def save(self, path) -> None:

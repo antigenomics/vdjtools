@@ -233,8 +233,6 @@ def raw_features_cohort(samples, *, vocab=None, organism="human", n_jobs=1,
     apply. Use explicit shared coverage when comparing independently read cohorts.
     Only numeric output rows survive each worker; no per-cohort dict-of-floats copy.
     """
-    import hashlib
-    import json
     from ..cores import require_memory
 
     items = list(samples.items() if isinstance(samples, dict) else samples)
@@ -256,7 +254,15 @@ def raw_features_cohort(samples, *, vocab=None, organism="human", n_jobs=1,
         raw.update(channels)
         values[i] = [raw.get(c,np.nan) for c in columns]
     parallel_rows(enumerate(items),one,n_jobs)
-    identity = hashlib.sha256(json.dumps({'columns':columns,'vocab':vocab,'weight':weight,
-                                          'coverage':target, **({'definition':feature_definition} if L._configured(feature_definition) else {})},sort_keys=True).encode()).hexdigest()
+    identity = _raw_feature_identity(columns, vocab, weight, target, feature_definition)
     return pl.DataFrame({'sample_id':ids,'embedding_space':['vsig:'+identity]*len(ids)}).hstack(
         pl.from_numpy(values,schema=columns))
+
+
+def _raw_feature_identity(columns, vocab, weight, target, definition):
+    """One identity for dense raw tables and sparse fitted reference tables."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps({'columns': columns, 'vocab': vocab, 'weight': weight,
+        'coverage': target, **({'definition': definition} if L._configured(definition) else {})},
+        sort_keys=True).encode()).hexdigest()

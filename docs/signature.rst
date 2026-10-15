@@ -745,7 +745,21 @@ projected tables. ``signature --describe`` includes this identity column.
        --solver randomized --components 128 -o joint-reference.npz
    vdjtools signature --corpus joint-reference.npz samples/*.tsv -o projected.tsv
 
-The randomized solver is an explicit option for wide new bases. It records the
+The randomized solver is an explicit option for wide new bases. Configured fits
+assemble sparse float64 rows and use a centered operator instead of allocating a
+dense sample-by-feature matrix. Winsorization includes implicit zeros and excludes
+missing observations; missing blocks retain their existing imputation semantics.
+Dense statistic chunks target 8 MiB each, with a minimum of one column. RAM scales
+with observed entries and the sample/feature-by-component workspaces, so component
+count still matters. Sample-map workers finish before BLAS uses the numerical
+thread budget; selecting the allocation for both phases does not nest them.
+
+The seeded solver retains four power iterations, ten oversampling vectors and the
+existing component sign rule. Floating reduction order can reverse a component
+whose largest opposite loadings tie; dense comparisons must align that sign (or
+compare a degenerate subspace). Existing saved rotations are applied unchanged.
+Legacy fits and full SVD retain their previous paths. No feature intermediates are
+written to disk. The solver records the
 full input variance and a truncated spectrum; an unreachable variance fraction or
 an application request beyond the stored component count raises. Full SVD remains
 the default. The new block-aware fit supports ``features`` mode, not ``pcs`` mode.

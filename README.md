@@ -98,7 +98,9 @@ Import `vdjtools` before numerical libraries in a fresh interpreter. Native batc
 APIs use allocation-aware CPU budgets; sample workers use serial inner kernels.
 Signature `--jobs` and analysis `--threads` select bounded workers, with `0` for the
 detected allocation. Excessive or nested budgets raise. The final feature table
-and PCA workspace still grow with sample count and feature width. See
+still grows with sample count and feature width. Configured randomized corpus fits
+and `TablePCA.fit_features` use sparse rows and bounded statistic chunks; their
+remaining workspace grows with nonzero entries and the requested component count. See
 [CPU/container limits](https://docs.isalgo.dev/vdjtools/usage.html#cpu-container-limits).
 
 ## Development

@@ -332,7 +332,7 @@ def test_the_old_modules_are_gone():
         assert not (root / mod).exists(), f"{mod} is still in the tree"
     assert not (root.parent / "features" / "kmer_space.py").exists()
     assert sorted(p.name for p in root.glob("*.py")) == [
-        "__init__.py", "cohort.py", "corpus.py", "features.py", "layout.py", "signature.py",
+        "__init__.py", "bounded.py", "cohort.py", "corpus.py", "features.py", "layout.py", "signature.py",
         "transform.py"], "the subsystem grew a module that is not in the plan"
 
 

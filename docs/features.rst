@@ -79,12 +79,33 @@ for the robust corpus transform and `mirpy's embedding guide
 Resource limits
 ---------------
 
-Readers run in bounded sample workers with serial inner kernels. Raw feature rows
-are preallocated; input frames are released after each row. The final table still
-grows with sample count and selected feature width. Table PCA needs a dense fitting
-matrix and its numerical workspace; known large allocations check available
-container memory before allocation. These checks cannot bound an arbitrarily deep
-input frame. See :ref:`cpu-container-limits` for CPU allocation and import order.
+Readers run in bounded sample workers with serial inner kernels; input frames are
+released after each row. Extracting a table still materializes its rows and columns,
+and ``TablePCA.fit(table)`` retains its existing dense fitting path.
+
+For configured statistical definitions, ``TablePCA.fit_features`` accepts sample
+readers directly. It assembles float64 sparse rows, retaining implicit zeros and
+separate missing-block masks, then fits median imputation and StandardScaler
+coordinates through a centered sparse operator. This preserves the raw-table PCA
+contract; it does not use the composition scaling of a signature corpus.
+Solver selection follows the installed PCA auto policy: four or seven power
+iterations for truncated fits, a complete range for small or near-full fits, and
+byte-bounded covariance products for tall inputs with at most 1,000 features.
+Workspace checks use that actual range width. Component signs follow the installed
+scikit-learn version, including its older full-SVD convention.
+
+.. code-block:: python
+
+   rotation = TablePCA.fit_features(
+       readers, vocab=vocabulary, feature_definition=definition,
+       n_components=128, n_jobs=8, threads=8, cstar_target=0.8)
+
+Sample workers join before the numerical phase starts. Transient dense statistic
+chunks target 8 MiB each (at least one column). RAM also grows with nonzero entries
+and the unavoidable sample/feature-by-component arrays. Large allocations check
+available container memory; these checks cannot bound an arbitrarily deep input
+frame. No feature matrices are cached on disk. See :ref:`cpu-container-limits` for
+CPU allocation and import order.
 
 Reference rotation bundles
 --------------------------
@@ -102,7 +123,7 @@ and requires the bundled mirpy bases. Neither file is a vsig/rsig corpus.
 
 The `mirpy reference recipe
 <https://docs.isalgo.dev/mirpy/embeddings.html#reference-rotation-bundles>`_
-freshly generates each reference table, fits with the existing ``TablePCA``,
+freshly reads the reference samples, fits with the shared ``TablePCA``,
 checks save/load equivalence, and exports rotations and coordinate parameters.
 Reference rotations store up to 1024 PCs and their
 ``explained_variance_ratio`` arrays. The bundle reports cumulative fractions at

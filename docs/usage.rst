@@ -770,7 +770,10 @@ CPU and container limits
 ------------------------
 
 Import ``vdjtools`` before numerical libraries in each fresh worker. Persistent
-Polars, BLAS, OpenMP and Numba import pools default to one thread. Native batch APIs
+Polars, BLAS, OpenMP and Numba import pools default to one thread. Idle OpenBLAS pools
+use the minimum wait exponent (4), and OpenMP uses passive waiting, so alternating
+NumPy/SciPy pools release CPUs at handoff. These policies require import before
+native initialization. Native batch APIs
 receive an explicit budget: ``threads=1`` is serial, ``threads=0`` uses the detected
 allocation, and positive counts must fit it. CPU affinity, SLURM per-task allocation
 and visible cgroup quotas, including parent quotas, constrain that detection.

@@ -1,6 +1,6 @@
 """Repertoire signatures: raw features, a corpus-fitted rotation, and the emitted vector.
 
-Four modules, one per stage:
+The public stages:
 
 * :mod:`~vdjtools.signature.layout` -- the column contract. Which raw features exist, what each
   one's support is, which columns pass through as channels. Computes nothing, imports nothing heavy.
@@ -11,7 +11,9 @@ Four modules, one per stage:
 * :mod:`~vdjtools.signature.corpus` -- the only module that needs a corpus: build one, winsorize it,
   fit the rotation and the per-PC scaling, write and read the artifact.
 
-:func:`vsig` and :func:`vsig_cohort` in :mod:`~vdjtools.signature.signature` put the four together.
+The internal ``bounded`` module supplies sparse fitting workspaces to ``corpus``.
+
+:func:`vsig` and :func:`vsig_cohort` in :mod:`~vdjtools.signature.signature` put these stages together.
 The geometry half (``rsig``) lives in ``mir.signature`` and registers its groups into this same
 layout registry; nothing here imports ``mir``.
 """
