@@ -147,7 +147,30 @@ double d2(const Sample& s, double m) {
 
 // Rarefied (interpolated) Hill number of order q at integer size m. (``_rtd``)
 double rtd(const Sample& s, int m, int q) {
-    if (q == 0) return rtd_moment(s, m, 0);
+    if (q == 0) {
+        for (double c : s.c)
+            if (c != std::floor(c)) return rtd_moment(s, m, 0);
+        if (m == 0 || m == 1) return static_cast<double>(m);
+        if (m == s.n) return static_cast<double>(s.S);
+        if (m == s.n - 1) return s.S - s.f1 / s.n;
+        // P(taxon observed) = 1 - C(n-c,m)/C(n,m), summed over the abundance spectrum.
+        const double log_cnm = logbinom(s.n, m);
+        double total = 0.0;
+        for (std::size_t i = 0; i < s.c.size(); ++i) {
+            const double c = s.c[i];
+            if (s.n - c < m) { total += s.f[i]; continue; }
+            double log_p0 = 0.0;
+            const double shorter = std::min(c, static_cast<double>(m));
+            if (shorter <= 32) {
+                // Symmetric finite product avoids lgamma cancellation for small c or m.
+                const double longer = std::max(c, static_cast<double>(m));
+                for (int k = 0; k < shorter; ++k)
+                    log_p0 += std::log1p(-longer / (s.n - k));
+            } else log_p0 = logbinom(s.n - c, m) - log_cnm;
+            total += s.f[i] * -std::expm1(std::min(0.0, log_p0));
+        }
+        return total;
+    }
     if (q == 1) return std::exp(rtd_moment(s, m, 1));
     if (q == 2) return d2(s, static_cast<double>(m));
     return std::pow(rtd_moment(s, m, q), 1.0 / (1 - q));
