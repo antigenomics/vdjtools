@@ -25,7 +25,7 @@ References:
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
 import numpy as np
 import polars as pl
@@ -324,8 +324,11 @@ def _invert_coverage(x: np.ndarray, cvrg: float) -> float:
 # --------------------------------------------------------------------------- #
 # bootstrap (EstiBootComm.Ind)
 # --------------------------------------------------------------------------- #
-def _bootstrap_probs(x: np.ndarray) -> np.ndarray:
-    """Augmented-assemblage detection probabilities (``iNEXT`` ``EstiBootComm.Ind``)."""
+_BOOTSTRAP_MAX_UNSEEN = 4096
+
+
+def _bootstrap_population(x: np.ndarray) -> tuple[np.ndarray, int]:
+    """Detection probabilities, with large unseen populations in the last cell."""
     n = x.sum()
     f1 = float(np.count_nonzero(x == 1))
     f2 = float(np.count_nonzero(x == 2))
@@ -339,22 +342,59 @@ def _bootstrap_probs(x: np.ndarray) -> np.ndarray:
     w = 0.0 if (f0 == 0 or b == 0) else a / b
     p_obs = x / n * (1 - w * (1 - x / n) ** n)
     k = int(np.ceil(f0))
+    if k > _BOOTSTRAP_MAX_UNSEEN:
+        return np.append(p_obs, a), k
     if k > 0:
-        return np.concatenate([p_obs, np.full(k, a / k)])
-    return p_obs
+        return np.concatenate([p_obs, np.full(k, a / k)]), 0
+    return p_obs, 0
+
+
+def _bootstrap_probs(x: np.ndarray) -> np.ndarray:
+    """Expanded augmented-assemblage probabilities (small-input oracle only)."""
+    p, k = _bootstrap_population(x)
+    return np.concatenate([p[:-1], np.full(k, p[-1] / k)]) if k else p
+
+
+def bootstrap_abundances(counts, nboot: int = 50, seed: int = 0) -> Iterator[np.ndarray]:
+    """Yield positive integer abundance vectors from the iNEXT bootstrap law.
+
+    Args:
+        counts: Positive integer count vector or clonotype DataFrame, as for :func:`inext`.
+        nboot: Non-negative integer number of replicates.
+        seed: NumPy generator seed.
+
+    Returns:
+        Iterator of positive ``int64`` arrays, each summing to the input sample size.
+        Taxon identities are discarded; use these for abundance-based statistics.
+        Large unseen populations use one aggregate multinomial category followed by
+        uniform virtual taxon IDs, exactly preserving the augmented-assemblage law.
+        Working memory is proportional to observed taxa plus sample size, regardless
+        of estimated unseen richness. Small populations retain the seeded draws.
+    """
+    x = _as_counts(counts)
+    if not np.all(np.isfinite(x) & (x == np.floor(x))):
+        raise ValueError("bootstrap counts must be finite integers")
+    if nboot < 0 or nboot != int(nboot):
+        raise ValueError("nboot must be a non-negative integer")
+    n = int(x.sum())
+    p, k = _bootstrap_population(x)
+    p = p / p.sum()
+    rng = np.random.default_rng(seed)
+    for _ in range(int(nboot)):
+        draw = rng.multinomial(n, p)
+        if k:
+            unseen = rng.integers(k, size=int(draw[-1]), dtype=np.int64)
+            _, frequencies = np.unique(unseen, return_counts=True)
+            yield np.concatenate([draw[:-1][draw[:-1] > 0], frequencies])
+        else:
+            yield draw[draw > 0]
 
 
 def _bootstrap_se(x: np.ndarray, ms, qs, nboot: int, seed: int) -> np.ndarray:
     """Bootstrap standard errors of ``qD(m)`` — shape ``(len(qs), len(ms))``."""
-    p = _bootstrap_probs(x)
-    p = p / p.sum()
-    n = int(x.sum())
-    rng = np.random.default_rng(seed)
-    reps = rng.multinomial(n, p, size=nboot)
     vals = np.empty((nboot, len(qs), len(ms)))
-    for r in range(nboot):
-        xb = reps[r].astype(np.float64)
-        xb = xb[xb > 0]
+    for r, draw in enumerate(bootstrap_abundances(x, nboot, seed)):
+        xb = draw.astype(np.float64)
         # ponytail: xb's spectrum (_spectrum/np.unique + counts f1,f2,n) is loop-invariant across the
         # q×m cells but _diversity_at→_rtd/_asymptotic recompute it per cell (O(nboot·|q|·|m|) np.unique
         # of only nboot distinct spectra). Exact hoist = compute (cs,fs,n,f1,f2) once per rep and thread
@@ -537,22 +577,19 @@ def asymptotic_diversity(data, q=(0, 1, 2), *, se=True, nboot=50, conf=0.95,
     z = _z(conf)
     reps = None
     if se:
-        p = _bootstrap_probs(x)
-        p = p / p.sum()
-        rng = np.random.default_rng(seed)
-        reps = rng.multinomial(int(x.sum()), p, size=nboot)
+        reps = np.array([
+            [_asymptotic(xb.astype(np.float64), qq) for qq in qs]
+            for xb in bootstrap_abundances(x, nboot, seed)]).reshape(nboot, len(qs))
     schema = {
         "order_q": pl.Int64, "observed": pl.Float64, "estimator": pl.Float64,
         "se": pl.Float64, "lo": pl.Float64, "hi": pl.Float64,
     }
     rows = []
-    for qq in qs:
+    for i, qq in enumerate(qs):
         obs = _plugin(x, qq)
         est = _asymptotic(x, qq)
         if se:
-            vals = np.array([
-                _asymptotic(xb[xb > 0], qq)
-                for xb in reps.astype(np.float64)])
+            vals = reps[:, i]
             s = float(vals.std(ddof=1))
             lo, hi = max(0.0, est - z * s), est + z * s
         else:

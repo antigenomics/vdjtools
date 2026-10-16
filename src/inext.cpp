@@ -228,7 +228,7 @@ void fill_curve(const Sample& s, const std::vector<int>& qs, const Vec& sizes,
 }
 
 // Augmented-assemblage detection probabilities (unnormalized). (``_bootstrap_probs``)
-Vec bootstrap_probs(const Sample& s) {
+Vec bootstrap_probs(const Sample& s, std::uint64_t& unseen) {
     const double n = s.n, f1 = s.f1, f2 = s.f2;
     double f0 = (f2 == 0) ? (n - 1) / n * f1 * (f1 - 1) / 2.0
                           : (n - 1) / n * f1 * f1 / 2.0 / f2;
@@ -237,11 +237,13 @@ Vec bootstrap_probs(const Sample& s) {
     double b = 0.0;
     for (double xi : s.x) b += xi / n * std::pow(1 - xi / n, n);
     double w = (f0 == 0 || b == 0) ? 0.0 : a / b;
-    int k = static_cast<int>(std::ceil(f0));
+    const auto k = static_cast<std::uint64_t>(std::ceil(f0));
+    unseen = k > 4096 ? k : 0;
     Vec p;
-    p.reserve(s.x.size() + (k > 0 ? k : 0));
+    p.reserve(s.x.size() + (unseen ? 1 : k));
     for (double xi : s.x) p.push_back(xi / n * (1 - w * std::pow(1 - xi / n, n)));
-    for (int i = 0; i < k; ++i) p.push_back(a / k);
+    if (unseen) p.push_back(a);
+    else for (std::uint64_t i = 0; i < k; ++i) p.push_back(a / k);
     return p;
 }
 
@@ -268,7 +270,8 @@ void multinomial(std::mt19937_64& rng, int n, const Vec& p, std::vector<int>& ou
 Mat bootstrap_se(const Sample& s, const std::vector<int>& qs, const Vec& sizes,
                  int nboot, std::uint64_t seed) {
     const std::size_t nq = qs.size(), nm = sizes.size();
-    Vec p = bootstrap_probs(s);
+    std::uint64_t unseen = 0;
+    Vec p = bootstrap_probs(s, unseen);
     double psum = 0.0;
     for (double v : p) psum += v;
     for (double& v : p) v /= psum;
@@ -281,13 +284,28 @@ Mat bootstrap_se(const Sample& s, const std::vector<int>& qs, const Vec& sizes,
     std::mt19937_64 rng(seed);
     std::vector<int> reps;
     Vec xb;
+    std::vector<std::uint64_t> ids;
     Mat qD;
     Vec cov;  // discarded
     for (int r = 0; r < nboot; ++r) {
         multinomial(rng, n, p, reps);
         xb.clear();
-        for (int v : reps)
-            if (v > 0) xb.push_back(static_cast<double>(v));
+        const auto observed_end = reps.size() - (unseen ? 1 : 0);
+        for (std::size_t i = 0; i < observed_end; ++i)
+            if (reps[i] > 0) xb.push_back(static_cast<double>(reps[i]));
+        if (unseen) {
+            // Conditional on unseen mass, each individual chooses a uniform virtual taxon.
+            ids.resize(reps.back());
+            std::uniform_int_distribution<std::uint64_t> taxon(0, unseen - 1);
+            for (auto& id : ids) id = taxon(rng);
+            std::sort(ids.begin(), ids.end());
+            for (std::size_t i = 0; i < ids.size();) {
+                std::size_t j = i + 1;
+                while (j < ids.size() && ids[j] == ids[i]) ++j;
+                xb.push_back(static_cast<double>(j - i));
+                i = j;
+            }
+        }
         Sample sb = make_sample(xb);
         qD.assign(nq, Vec(nm));
         for (std::size_t i = 0; i < nq; ++i)

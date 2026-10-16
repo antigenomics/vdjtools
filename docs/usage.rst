@@ -115,6 +115,12 @@ Pass ``weight="unique"`` to any usage/spectratype call to weight by clonotype in
 reads; ``inext_batch`` / ``rarefaction_batch`` run a whole cohort on the native parallel
 kernel.
 
+``stats.bootstrap_abundances(counts, nboot=50, seed=0)`` yields positive integer
+abundance vectors for custom abundance-based bootstrap statistics. It uses the
+same iNEXT augmented-assemblage law as the diversity intervals and preserves
+sample size without materializing large unseen populations. Taxon identities are
+not retained.
+
 Junction features
 -----------------
 

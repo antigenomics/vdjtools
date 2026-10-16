@@ -14,6 +14,7 @@ from .diversity import (
 from .functional import functional_diversity
 from .inext import (
     asymptotic_diversity,
+    bootstrap_abundances,
     coverage,
     estimate_d,
     inext,
@@ -48,6 +49,7 @@ __all__ = [
     "rarefaction_batch",
     "inext_coverage",
     "asymptotic_diversity",
+    "bootstrap_abundances",
     "coverage",
     "sample_coverage",
     "estimate_d",
