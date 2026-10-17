@@ -565,7 +565,8 @@ def signature(
     corpus: str = typer.Option(..., "--corpus",
                                help="Corpus to rotate through: a published name (blood, tissue, "
                                     "deep-tcr, blood-uncapped, tissue-uncapped, synthetic-blood, "
-                                    "synthetic-tissue, naive, memory) or a path to an artifact. "
+                                    "synthetic-tissue, naive, memory), a configured name, or a path. "
+                                    "List the complete catalog with vdjtools corpus --list. "
                                     "A published name is fetched on first use and cached. "
                                     "REQUIRED -- a silently chosen rotation makes two matrices "
                                     "look comparable when they are not."),
@@ -731,6 +732,7 @@ def _bundled_names() -> list[str]:
 
 @app.command()
 def corpus(
+    list_: bool = typer.Option(False, "--list", help="List all published corpus names and exit."),
     name: str = typer.Option("naive", "--corpus",
                              help="naive (every clone size 1) | memory (Zipf rank-abundance clone "
                                   "sizes) | synthetic-blood | synthetic-tissue (the naive/memory "
@@ -812,6 +814,9 @@ def corpus(
 
     from vdjtools.signature.corpus import synthesize
 
+    if list_:
+        typer.echo("\n".join(_bundled_names()))
+        return
     if fetch is not None:
         from vdjtools.signature.corpus import (bundled_names, corpora_index, corpus_cache_dir,
                                                fetch_artifact)

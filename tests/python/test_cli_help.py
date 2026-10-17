@@ -28,10 +28,12 @@ def test_the_signature_help_prints_column_names_verbatim_not_as_emoji():
     assert "\U0001f637" not in out
 
 
-def test_the_corpus_flag_help_names_every_published_corpus():
+def test_the_corpus_flag_help_points_to_the_complete_catalog():
     out = " ".join(_help("signature").split())
-    missing = [n for n in bundled_names() if n not in out]
-    assert not missing, f"--corpus help does not name published corpora: {sorted(missing)}"
+    assert "vdjtools corpus --list" in out
+    result = runner.invoke(app, ["corpus", "--list"])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == bundled_names()
 
 
 def _documented_commands() -> set[str]:

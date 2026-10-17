@@ -202,6 +202,7 @@ PCs per fitted locus. The wheel carries only **corpora.json**, naming every file
 count and SHA-256. Parameters are GitHub release assets, fetched on first use into
 ``$VDJTOOLS_CORPUS_DIR`` (default ``~/.cache/vdjtools/signature``) and verified against that digest.
 Fetch the named corpus you need; fetching all configured models is a multi-gigabyte download.
+List the complete catalog without downloading anything with ``vdjtools corpus --list``.
 
 The resolution order is **a local path, then the wheel, then the cache, then the release**. A local
 path always wins, so a caller who fitted their own corpus and passes its path is never served a

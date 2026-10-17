@@ -234,6 +234,7 @@ make two matrices look comparable when they are not. Key options:
 
 .. code-block:: bash
 
+   vdjtools corpus --list
    vdjtools corpus --fetch all                              # pre-warm the cache
    vdjtools corpus --corpus synthetic-blood -o sb.npz       # build one yourself
    vdjtools corpus --smoke -o /tmp/smoke.npz                # minutes, not hours
