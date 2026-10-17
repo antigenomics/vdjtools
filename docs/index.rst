@@ -9,8 +9,8 @@ vdjtools
 
 vdjtools is a Python library and a command-line tool. It reads the output of every common
 repertoire pipeline into one canonical `AIRR <https://docs.airr-community.org/>`_ table backed by
-`polars <https://pola.rs>`_, and every analysis takes and returns that same table -- so results
-chain together instead of needing a converter between each step.
+`polars <https://pola.rs>`_. Repertoire analyses consume that schema and return Polars
+result tables, so results feed into the next step without a format converter.
 
 .. grid:: 1 2 2 2
    :gutter: 3
@@ -127,7 +127,7 @@ Your first result
          vdjtools overlap       *.tsv -o overlap.tsv
 
 Every command writes to ``-o`` -- TSV, or Parquet when the path ends in ``.parquet`` or ``.pq`` --
-or to stdout, so commands pipe. :doc:`getting-started` walks through this with real data.
+or to stdout, so commands pipe. :doc:`getting-started` walks through this with a synthetic repertoire.
 
 Choose your path
 ----------------
@@ -160,8 +160,8 @@ Choose your path
 Performance
 -----------
 
-The Pgen, generation, EM and diversity hot paths are a native C++ core reached through pybind11;
-everything else is polars. Amino-acid Pgen agrees with OLGA to 1e-15 on all seven human loci.
+Native Pgen, generation, EM and batched rarefaction kernels are reached through pybind11;
+the surrounding analytics use Python, NumPy and Polars. Amino-acid Pgen agrees with OLGA to 1e-15 on all seven human loci.
 
 Single thread, Apple M3, bundled human TRB model:
 

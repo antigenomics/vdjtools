@@ -147,7 +147,30 @@ double d2(const Sample& s, double m) {
 
 // Rarefied (interpolated) Hill number of order q at integer size m. (``_rtd``)
 double rtd(const Sample& s, int m, int q) {
-    if (q == 0) return rtd_moment(s, m, 0);
+    if (q == 0) {
+        for (double c : s.c)
+            if (c != std::floor(c)) return rtd_moment(s, m, 0);
+        if (m == 0 || m == 1) return static_cast<double>(m);
+        if (m == s.n) return static_cast<double>(s.S);
+        if (m == s.n - 1) return s.S - s.f1 / s.n;
+        // P(taxon observed) = 1 - C(n-c,m)/C(n,m), summed over the abundance spectrum.
+        const double log_cnm = logbinom(s.n, m);
+        double total = 0.0;
+        for (std::size_t i = 0; i < s.c.size(); ++i) {
+            const double c = s.c[i];
+            if (s.n - c < m) { total += s.f[i]; continue; }
+            double log_p0 = 0.0;
+            const double shorter = std::min(c, static_cast<double>(m));
+            if (shorter <= 32) {
+                // Symmetric finite product avoids lgamma cancellation for small c or m.
+                const double longer = std::max(c, static_cast<double>(m));
+                for (int k = 0; k < shorter; ++k)
+                    log_p0 += std::log1p(-longer / (s.n - k));
+            } else log_p0 = logbinom(s.n - c, m) - log_cnm;
+            total += s.f[i] * -std::expm1(std::min(0.0, log_p0));
+        }
+        return total;
+    }
     if (q == 1) return std::exp(rtd_moment(s, m, 1));
     if (q == 2) return d2(s, static_cast<double>(m));
     return std::pow(rtd_moment(s, m, q), 1.0 / (1 - q));
@@ -228,7 +251,7 @@ void fill_curve(const Sample& s, const std::vector<int>& qs, const Vec& sizes,
 }
 
 // Augmented-assemblage detection probabilities (unnormalized). (``_bootstrap_probs``)
-Vec bootstrap_probs(const Sample& s) {
+Vec bootstrap_probs(const Sample& s, std::uint64_t& unseen) {
     const double n = s.n, f1 = s.f1, f2 = s.f2;
     double f0 = (f2 == 0) ? (n - 1) / n * f1 * (f1 - 1) / 2.0
                           : (n - 1) / n * f1 * f1 / 2.0 / f2;
@@ -237,11 +260,13 @@ Vec bootstrap_probs(const Sample& s) {
     double b = 0.0;
     for (double xi : s.x) b += xi / n * std::pow(1 - xi / n, n);
     double w = (f0 == 0 || b == 0) ? 0.0 : a / b;
-    int k = static_cast<int>(std::ceil(f0));
+    const auto k = static_cast<std::uint64_t>(std::ceil(f0));
+    unseen = k > 4096 ? k : 0;
     Vec p;
-    p.reserve(s.x.size() + (k > 0 ? k : 0));
+    p.reserve(s.x.size() + (unseen ? 1 : k));
     for (double xi : s.x) p.push_back(xi / n * (1 - w * std::pow(1 - xi / n, n)));
-    for (int i = 0; i < k; ++i) p.push_back(a / k);
+    if (unseen) p.push_back(a);
+    else for (std::uint64_t i = 0; i < k; ++i) p.push_back(a / k);
     return p;
 }
 
@@ -268,7 +293,8 @@ void multinomial(std::mt19937_64& rng, int n, const Vec& p, std::vector<int>& ou
 Mat bootstrap_se(const Sample& s, const std::vector<int>& qs, const Vec& sizes,
                  int nboot, std::uint64_t seed) {
     const std::size_t nq = qs.size(), nm = sizes.size();
-    Vec p = bootstrap_probs(s);
+    std::uint64_t unseen = 0;
+    Vec p = bootstrap_probs(s, unseen);
     double psum = 0.0;
     for (double v : p) psum += v;
     for (double& v : p) v /= psum;
@@ -281,13 +307,28 @@ Mat bootstrap_se(const Sample& s, const std::vector<int>& qs, const Vec& sizes,
     std::mt19937_64 rng(seed);
     std::vector<int> reps;
     Vec xb;
+    std::vector<std::uint64_t> ids;
     Mat qD;
     Vec cov;  // discarded
     for (int r = 0; r < nboot; ++r) {
         multinomial(rng, n, p, reps);
         xb.clear();
-        for (int v : reps)
-            if (v > 0) xb.push_back(static_cast<double>(v));
+        const auto observed_end = reps.size() - (unseen ? 1 : 0);
+        for (std::size_t i = 0; i < observed_end; ++i)
+            if (reps[i] > 0) xb.push_back(static_cast<double>(reps[i]));
+        if (unseen) {
+            // Conditional on unseen mass, each individual chooses a uniform virtual taxon.
+            ids.resize(reps.back());
+            std::uniform_int_distribution<std::uint64_t> taxon(0, unseen - 1);
+            for (auto& id : ids) id = taxon(rng);
+            std::sort(ids.begin(), ids.end());
+            for (std::size_t i = 0; i < ids.size();) {
+                std::size_t j = i + 1;
+                while (j < ids.size() && ids[j] == ids[i]) ++j;
+                xb.push_back(static_cast<double>(j - i));
+                i = j;
+            }
+        }
         Sample sb = make_sample(xb);
         qD.assign(nq, Vec(nm));
         for (std::size_t i = 0; i < nq; ++i)

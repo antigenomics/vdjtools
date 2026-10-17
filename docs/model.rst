@@ -21,6 +21,10 @@ Custom germline libraries
 :func:`~vdjtools.model.io.from_germline` builds a model scaffold from **any** V(D)J library — your
 own FASTA, a population-specific reference, or arda's. ``from_arda`` is a thin wrapper over it.
 
+``load_germline`` preserves every locus membership declared by arda's anchor table.
+Shared ``TRAV…/DV…`` alleles therefore occur in both TRA and TRD libraries; an
+allele's single compatibility ``Anchor.locus`` label does not restrict membership.
+
 .. code-block:: python
 
    from vdjtools.model import read_germline_fasta, validate_germline
@@ -61,7 +65,7 @@ builds the per-read V/J masks that make EM tractable on a D-bearing locus.
    model, report = infer_frame(template, clones, max_iter=15, gene_prior=1.0)
    training_frame(model)       # run, iter, loglik, n_scoreable, rel_change
 
-Train on **non-functional** reads — out-of-frame *or* stop-codon, since both escaped selection.
+Train on **non-productive** reads — out-of-frame *or* stop-codon, since both escaped selection.
 Keeping only the out-of-frame half conditions the training set on junction length modulo 3, which
 the insertion-length model would then happily learn.
 
@@ -206,7 +210,7 @@ Likelihood and BIC
    model_fit(model, held_out_junctions)            # loglik, k, AIC, BIC
    pgen_summary(compare_pgen(a, b, sequences))     # how differently two models score one set
 
-Two conventions matter. **Likelihoods use nucleotide Pgen**, because ``Σ Pgen_nt`` over all nt CDR3s
+Two conventions matter. **Likelihoods use nucleotide Pgen**, because ``Σ Pgen_nt`` over all nt junctions
 is 1, so ``log Pgen_nt`` is a proper log-likelihood. ``Pgen_aa`` sums only the in-frame, stop-free
 nucleotide fiber of a translation, so an amino-acid log-likelihood is unnormalized and its missing
 constant *differs between models* — it is a relative score on one fixed sequence set, never an
@@ -282,8 +286,8 @@ alleles carry some, most of it small). :func:`~vdjtools.model.check.check_model`
 can see whether a gene you care about is affected.
 
 **What to do about it.** Use the gene-collapsed models — the default — where the effect is absorbed
-by the collapse, or use the ``learned`` set, which is refit from data on arda germline and does not
-inherit the grid. If you need allele resolution *and* an affected gene, be aware Pgen through it is
+by the collapse, or use the ``arda`` set, which is refit from data on arda germline and does not
+inherit the OLGA grid. If you need allele resolution *and* an affected gene, be aware Pgen through it is
 an underestimate.
 
 Genomically impossible D–J pairs
@@ -395,7 +399,8 @@ Exporting and importing tables
 Building from the read corpus
 -----------------------------
 
-The models shipped in the wheel are fitted to real 5'RACE reads. That whole pipeline —
+The EM-fitted model sets shipped in the wheel use real 5'RACE reads; ``olga`` is an import.
+The fitting pipeline —
 fetch FASTQ, map with arda, collapse to unique clonotypes, run EM — is
 :func:`~vdjtools.model.data.build_all`, parallel across chains:
 

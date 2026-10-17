@@ -683,9 +683,29 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
     std::vector<double> Lf, dp(25), ndp(25);
     std::vector<char> lf_any;
     for (int j : mask_or_all(j_idx, m.func_j)) {
-        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any);
         const auto& gj = m.cut_j[j];
-        int Lj = gj.size();
+        int Lj = gj.size(), shortest = 0;
+        for (int len_j = 1; len_j <= std::min(Lj, N - 1); ++len_j) {
+            int idxj = Lj - len_j;
+            if (idxj < m.nbins_j && m.del_j[j * m.nbins_j + idxj] != 0.0) {
+                shortest = len_j;
+                break;
+            }
+        }
+        if (shortest == 0) continue;
+        // Every longer suffix contains these same full codons: failure of the shortest
+        // live trim proves zero J mass. Leave its partial boundary codon to the original DP.
+        int right = N - shortest, idxj = Lj - shortest;
+        bool possible = true;
+        for (int c = (right + 2) / 3; c < alen; ++c) {
+            int o = idxj + 3 * c - right;
+            if (!ok_codon(allowed[c], gj[o] * 16 + gj[o + 1] * 4 + gj[o + 2])) {
+                possible = false;
+                break;
+            }
+        }
+        if (!possible) continue;
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any);
         for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
             int p = N - len_j, idxj = Lj - len_j;
             if (p < 1 || !lf_any[p]) continue;  // >=1 V/insertion nt before J

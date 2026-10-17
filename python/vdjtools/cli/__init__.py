@@ -476,23 +476,48 @@ def diversity(
     _write(pl.concat(rows, how="vertical_relaxed"), out)
 
 
+def _feature_definition(configuration, motifs, v_context, path):
+    from vdjtools.signature.layout import feature_definition
+    import json
+    data = json.loads(path.read_text()) if path else {}
+    try:
+        return feature_definition(configuration, motifs=motifs, v_context=v_context,
+                                  motif_map=data.get("motif_map") if motifs == "blosum62" else None,
+                                  v_maps=data.get("v_maps") if v_context == "cluster" else None)
+    except ValueError as exc:
+        _err(str(exc))
+
+
 @app.command(name="features")
 def raw_features(
     samples: Optional[list[Path]] = _SAMPLES,
     threads: int = _THREADS,
     organism: str = typer.Option("human"),
     coverage: str = typer.Option("min", help="min, own, or a shared coverage fraction"),
+    feature_set: str = typer.Option("legacy", "--feature-set", help="legacy | basic | joint statistical blocks"),
+    motifs: str = typer.Option("none", help="none | imgt11 | blosum62; three distinct motif shapes"),
+    v_context: str = typer.Option("none", "--v-context", help="none | gene | cluster joint motif context"),
+    motif_definition: Optional[Path] = typer.Option(None, "--motif-definition", help="Frozen motif/V maps from the library builder"),
+    feature_vocabulary: Optional[Path] = typer.Option(None, "--feature-vocabulary", help="Saved raw-feature vocabulary from a reference bundle"),
     out: Optional[Path] = _OUT,
 ) -> None:
     """Raw vsig feature families and channels, with no corpus, winsorization or PCA."""
     from vdjtools.io import read
     from vdjtools.signature.signature import raw_features_cohort
 
+    definition = _feature_definition(feature_set, motifs, v_context, motif_definition)
     items = _sample_items(samples,None,None,'sample_id','{sample}.tsv')
     deferred = [(sid,functools.partial(read,path,keep=("v_identity",))) for sid,path in items]
     target = None if coverage == 'own' else 'min' if coverage == 'min' else float(coverage)
+    import json
+    vocab = json.loads(feature_vocabulary.read_text()) if feature_vocabulary else None
+    if vocab is not None and (not isinstance(vocab, dict) or any(
+            not isinstance(groups, dict) or any(not isinstance(names, list) or
+            any(not isinstance(name, str) for name in names) for names in groups.values())
+            for groups in vocab.values())):
+        _err("feature vocabulary must map loci to groups of string names")
     _write(raw_features_cohort(deferred,organism=organism,n_jobs=threads,
-                              cstar_target=target),out)
+                              cstar_target=target,feature_definition=definition,vocab=vocab),out)
 
 
 @app.command(name="pca")
@@ -540,7 +565,8 @@ def signature(
     corpus: str = typer.Option(..., "--corpus",
                                help="Corpus to rotate through: a published name (blood, tissue, "
                                     "deep-tcr, blood-uncapped, tissue-uncapped, synthetic-blood, "
-                                    "synthetic-tissue, naive, memory) or a path to an artifact. "
+                                    "synthetic-tissue, naive, memory), a configured name, or a path. "
+                                    "List the complete catalog with vdjtools corpus --list. "
                                     "A published name is fetched on first use and cached. "
                                     "REQUIRED -- a silently chosen rotation makes two matrices "
                                     "look comparable when they are not."),
@@ -564,7 +590,7 @@ def signature(
                                                     "cohort's own per-locus minimum attained "
                                                     "coverage, or 'own' for each sample's own "
                                                     "(one pass, not comparable across samples)."),
-    weight: str = typer.Option("log2p1", help="Clone-size weight g: log2p1 | duplicate_count | "
+    weight: Optional[str] = typer.Option(None, help="Artifact clone-size weight (legacy default log2p1): log2p1 | duplicate_count | "
                                               "distinct | log1p | anscombe."),
     columns: Optional[Path] = typer.Option(None, "--columns",
                                            help="File of column names (one per line) to restrict "
@@ -623,7 +649,7 @@ def signature(
         blocks = True if named.strip().lower() == "all" else tuple(
             b for b in (x.strip() for x in named.split(",")) if b)
         try:
-            L.resolve_named(art.sig, blocks)
+            L.resolve_named(art.sig, blocks, feature_definition=art.meta.get("feature_definition"))
         except ValueError as e:
             _err(str(e))
     want = None
@@ -634,8 +660,8 @@ def signature(
         cols = art.columns(ncomp, named=blocks)
         if want is not None:
             cols = [c for c in cols if c in set(want)]
-        named_set = set(L.named_columns(art.sig, blocks, art.vocab) if blocks else ())
-        spec = {(r["block"], r["feature"]): r for r in L.channel_table(art.sig)}
+        named_set = set(L.named_columns(art.sig, blocks, art.vocab, feature_definition=art.meta.get("feature_definition")) if blocks else ())
+        spec = {(r["block"], r["feature"]): r for r in L.channel_table(art.sig, feature_definition=art.meta.get("feature_definition"))}
         rows = []
         for c in cols:
             _sig, block, locus, feature = L.parse(c)
@@ -644,12 +670,15 @@ def signature(
             rows.append({"column": c, "block": block, "locus": locus, "feature": feature,
                          "kind": kind,
                          "transform": spec.get((block, feature), {}).get("transform", "none"),
-                         "support": L.support_of(c)})
+                         "support": L.support_of(c, feature_definition=art.meta.get("feature_definition"))})
+        if L._configured(art.meta.get("feature_definition")):
+            rows.append({"column": "rotation_space", "block": "identity", "locus": "-",
+                         "feature": "fit_identity", "kind": "identity", "transform": "none", "support": "identity"})
         _write(pl.DataFrame(rows), out)
         return
 
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
-    target: object = "min"
+    target: object = "corpus"
     if cstar_target is not None:
         target = None if cstar_target == "own" else (
             "min" if cstar_target == "min" else float(cstar_target))
@@ -663,7 +692,7 @@ def signature(
     typer.echo(f"{result.height} samples x {len(cols)} vsig columns | corpus {art.name} "
                f"({art.meta.get('content_sha256', '?')[:12]}) | winsorize={winsorize} | "
                f"k={art.resolve_k(ncomp)}", err=True)
-    _write(result.select(["sample_id", *cols]), out)
+    _write(result.select(["sample_id", *cols, *(["rotation_space"] if "rotation_space" in result.columns else [])]), out)
 
 
 def _parse_components(spec: Optional[str]):
@@ -703,6 +732,7 @@ def _bundled_names() -> list[str]:
 
 @app.command()
 def corpus(
+    list_: bool = typer.Option(False, "--list", help="List all published corpus names and exit."),
     name: str = typer.Option("naive", "--corpus",
                              help="naive (every clone size 1) | memory (Zipf rank-abundance clone "
                                   "sizes) | synthetic-blood | synthetic-tissue (the naive/memory "
@@ -742,9 +772,13 @@ def corpus(
                                              "~/.cache/vdjtools/signature). `all` pre-warms every "
                                              "corpus -- the install-time step, since an artifact is "
                                              "otherwise fetched on first use."),
-    jobs: int = typer.Option(0, "--jobs", "-j", help="Worker threads across samples; inner kernels use one thread: "
+    feature_set: str = typer.Option("legacy", "--feature-set", help="legacy | basic | joint"),
+    motifs: str = typer.Option("none", help="none | imgt11 | blosum62"),
+    v_context: str = typer.Option("none", "--v-context", help="none | gene | cluster"),
+    motif_definition: Optional[Path] = typer.Option(None, "--motif-definition", help="Frozen cluster maps"),
+    solver: str = typer.Option("full", help="full | randomized; explicit for new wide bases"),
+    jobs: int = typer.Option(0, "--jobs", "-j", help="Pool-generation processes, then sample-map threads; serial inner kernels: "
                                                      "0 = allocated cores, 1 = no pool. "
-                                                     "Reference pool sampling is GIL-limited. "
                                                      "The artifact is identical at any value."),
 ) -> None:
     """Build a synthetic corpus and fit its rotation, bounds and scaling.
@@ -780,6 +814,9 @@ def corpus(
 
     from vdjtools.signature.corpus import synthesize
 
+    if list_:
+        typer.echo("\n".join(_bundled_names()))
+        return
     if fetch is not None:
         from vdjtools.signature.corpus import (bundled_names, corpora_index, corpus_cache_dir,
                                                fetch_artifact)
@@ -797,6 +834,7 @@ def corpus(
         typer.echo(f"cache: {corpus_cache_dir()}", err=True)
         raise typer.Exit(0)
 
+    definition = _feature_definition(feature_set, motifs, v_context, motif_definition)
     if out is None:
         _err("--out is required when building a corpus (it is not used by --fetch)")
     sz: object = None if size == "auto" else size
@@ -814,7 +852,7 @@ def corpus(
     kw = {} if which is None else {"loci": which}
     art, _rows = synthesize(name, n_samples=n_samples, size=sz, seed=seed, n_components=ks,
                             mode=winsorize, winsor_p=winsor_p, source=source, n_jobs=jobs,
-                            depth_spread=depth_spread,
+                            depth_spread=depth_spread, feature_definition=definition, solver=solver,
                             progress=lambda loc, d, t: print(
                                 f"  {loc:4s} {d}/{t}  {time.time() - t0:5.0f}s",
                                 file=sys.stderr, flush=True),

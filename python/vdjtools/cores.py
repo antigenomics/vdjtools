@@ -171,6 +171,7 @@ _KERNEL_ENV = ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
 
 
 _LOCAL = threading.local()
+_SPAWN_ENV_LOCK = threading.RLock()
 
 
 def kernel_threads(threads: int = 0) -> int:
@@ -200,10 +201,30 @@ def configure_runtime() -> None:
     import sys
 
     os.environ.update(dict.fromkeys(_KERNEL_ENV, "1"))
+    # NumPy and SciPy may load distinct BLAS pools; idle pools must sleep at handoff.
+    # OpenBLAS clamps its timeout exponent to at least 4 (zero means its long default).
+    os.environ.update(OPENBLAS_THREAD_TIMEOUT="4", OMP_WAIT_POLICY="PASSIVE")
     if "numpy" in sys.modules or "scipy" in sys.modules:
         from threadpoolctl import threadpool_limits
 
         threadpool_limits(limits=1)
+
+
+@contextmanager
+def single_threaded_children():
+    """Set import-time limits before spawning workers and restore the parent environment."""
+    # ponytail: serialize generation pools; their import limits share the process environment.
+    with _SPAWN_ENV_LOCK:
+        previous = {key: os.environ.get(key) for key in _KERNEL_ENV}
+        os.environ.update(dict.fromkeys(_KERNEL_ENV, "1"))
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 @contextmanager
@@ -215,6 +236,20 @@ def serial_kernels():
         yield
     finally:
         _LOCAL.serial = previous
+
+
+@contextmanager
+def numerical_kernels(threads: int = 1):
+    """Temporarily budget BLAS after outer workers have joined; restore caller limits.
+
+    ``0`` selects the allocation, ``1`` is serial. This process-wide context must
+    not overlap an outer worker pool; native worker calls remain serial.
+    """
+    from threadpoolctl import threadpool_limits
+
+    budget = kernel_threads(threads)
+    with threadpool_limits(limits=budget, user_api="blas"):
+        yield budget
 
 
 def require_serial_pools() -> None:

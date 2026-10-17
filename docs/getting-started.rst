@@ -2,8 +2,8 @@ Getting started
 ===============
 
 A first pass through vdjtools in about ten minutes: install it, get a repertoire to work on,
-measure it, compare two samples, and reduce a sample to one feature vector. Everything here runs
-offline with no data to download.
+measure it, compare two samples, and reduce a sample to one feature vector. The synthetic
+examples run offline; the signature artifact is downloaded on first use.
 
 If you are looking for a specific task rather than an introduction, the :doc:`guides <usage>` are
 organised by task, and :doc:`cli` lists every command.
@@ -68,13 +68,14 @@ recombination models that ship in the wheel. Generated receptor sequences, with 
 
 This is the **canonical clonotype frame**, and it is the only table vdjtools passes around: a polars
 ``DataFrame`` on AIRR column names, one row per clonotype. Whatever format you read, you get these
-columns, and every analysis function takes and returns them -- which is what lets results chain
-without a converter between steps.
+columns, and repertoire analyses consume this schema and return Polars result tables --
+which lets results feed into the next step without a format converter.
 
 .. note::
 
-   The column pair is ``junction_nt`` / ``junction_aa``, not ``cdr3``. An AIRR **junction** includes
-   the conserved Cys104 and Phe118 anchor residues; an IMGT **CDR3** excludes them, so
+   vdjtools uses ``junction_nt`` / ``junction_aa``; AIRR spells the nucleotide field
+   ``junction``. A **junction** includes the conserved Cys104 and Phe/Trp118 anchor residues;
+   an IMGT **CDR3** excludes them, so
    ``junction_aa`` is two residues longer than the CDR3 for the same receptor. This matters before
    any Pgen, clustering or database-matching work -- see :doc:`glossary`.
 
@@ -109,7 +110,8 @@ Gene usage and the junction-length spectrum:
 
 .. code-block:: python
 
-   stats.segment_usage(sample, "v")     # or "j", "d", "c", "vj"
+   stats.segment_usage(sample, "v")     # or "j", "d", "c"
+   stats.vj_usage(sample)                # joint V/J usage
    stats.spectratype(sample)            # junction length distribution
 
 Step 3 -- compare two repertoires

@@ -59,7 +59,7 @@ vdjtools signature --corpus blood samples/*.tsv -o vsig.tsv
 ```
 
 `features` exports unrotated measurements and channels without a corpus.
-Declared log/CLR/logit transforms remain; “raw” means before corpus scaling,
+Declared log/CLR/logit/arcsine transforms remain; “raw” means before corpus scaling,
 winsorization and PCA. `signature` applies the published vsig corpus transform.
 These are different outputs. mirpy's rsig geometry half joins vsig on `sample_id`;
 mirpy's sample RFF vectors are a separate representation.
@@ -98,7 +98,9 @@ Import `vdjtools` before numerical libraries in a fresh interpreter. Native batc
 APIs use allocation-aware CPU budgets; sample workers use serial inner kernels.
 Signature `--jobs` and analysis `--threads` select bounded workers, with `0` for the
 detected allocation. Excessive or nested budgets raise. The final feature table
-and PCA workspace still grow with sample count and feature width. See
+still grows with sample count and feature width. Configured randomized corpus fits
+and `TablePCA.fit_features` use sparse rows and bounded statistic chunks; their
+remaining workspace grows with nonzero entries and the requested component count. See
 [CPU/container limits](https://docs.isalgo.dev/vdjtools/usage.html#cpu-container-limits).
 
 ## Development
@@ -118,10 +120,21 @@ public functions and the model workshop for native model workflows.
 
 For the v2 rewrite, cite this repository. For the original tool, cite
 [Shugay et al., *PLoS Computational Biology* 2015](https://doi.org/10.1371/journal.pcbi.1004503).
-The VDJtrack recapture model in `vdjtools.dynamics` is Pavlova, Zvyagin and Shugay (2024).
+The VDJtrack recapture model in `vdjtools.dynamics` is
+[Pavlova, Zvyagin and Shugay (2024)](https://doi.org/10.3389/fimmu.2024.1321603).
 
 ## License
 
 GPL-3.0-or-later. The legacy Groovy/Java v1.x tool lives on the
 [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch, with its releases
 under the repository tags `v0.0.1` … `1.2.1`.
+
+### Configurable statistical features
+
+Opt-in `basic` uses diversity, V–J usage, junction-length spectratype and separate
+isotype composition; `joint` uses diversity, V–J–length usage and separate isotype.
+Their extended variants add IMGT11 or frozen BLOSUM62 motifs (`XXX`, `XX_X`, `X_XX`),
+with optional gene or clustered V context. Existing feature/signature defaults stay
+legacy. See [features](https://docs.isalgo.dev/vdjtools/features.html) and
+[corpus fitting](https://docs.isalgo.dev/vdjtools/signature.html) for fit/save/apply
+and the distinction between an available definition and a published rotation.

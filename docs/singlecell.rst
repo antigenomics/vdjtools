@@ -18,7 +18,8 @@ other words, consuming someone else's scirpy or dandelion result costs you no ne
 Ingestion
 ---------
 
-Everything lands in one flat, ``cell_id``-keyed frame — one row per productive contig, with
+Everything lands in one flat, ``cell_id``-keyed frame — one row per contig retained by the
+reader's filters, with
 canonical AIRR Rearrangement columns.
 
 .. list-table::

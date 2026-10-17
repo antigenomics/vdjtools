@@ -42,7 +42,7 @@ def _locus_frames(sample) -> dict[str, pl.DataFrame]:
 
 def vsig(sample, corpus: C.Corpus, *, mode: "str | None" = None,
          winsor_p: "float | None" = None, n_components: "int | float | None" = None,
-         cstar_target: "float | dict[str, float] | None" = None, weight: str = "log2p1",
+         cstar_target: "float | dict[str, float] | None" = None, weight: "str | None" = None,
          prefiltered: bool = False, on_duplicate: str = "error",
          named: "bool | Sequence[str]" = (),
          columns: "list[str] | None" = None) -> dict[str, float]:
@@ -84,9 +84,17 @@ def vsig(sample, corpus: C.Corpus, *, mode: "str | None" = None,
     """
     if corpus.sig != "vsig":
         raise ValueError(f"corpus {corpus.name!r} is for {corpus.sig!r}, not 'vsig'")
+    definition = corpus.meta.get("feature_definition")
+    configured = L._configured(definition)
+    expected_weight = corpus.meta.get("weight", "log2p1")
+    if configured and weight is not None and weight != expected_weight:
+        raise ValueError("clone weighting differs from the fitted feature basis")
+    weight = expected_weight if weight is None else weight
+    if configured and cstar_target is None:
+        cstar_target = corpus.meta.get("cstar_target")
     raw, chan = F.raw_and_channels(_locus_frames(sample), corpus.vocab, cstar_target=cstar_target,
                                   weight=weight, prefiltered=prefiltered,
-                                  on_duplicate=on_duplicate)
+                                  on_duplicate=on_duplicate, feature_definition=definition)
     out = C.apply(raw, chan, corpus, mode=mode, winsor_p=winsor_p, n_components=n_components,
                   named=named)
     if columns is None:
@@ -140,7 +148,7 @@ def _coverage_target(items, n_jobs, cstar_target, kw):
 
 
 def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
-                cstar_target: "float | dict[str, float] | str | None" = "min",
+                cstar_target: "float | dict[str, float] | str | None" = "corpus",
                 columns: "list[str] | None" = None, **kw) -> pl.DataFrame:
     """One row per sample, ``sample_id`` first.
 
@@ -149,7 +157,8 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
             ``O(n_jobs)`` samples rather than the whole cohort.
         corpus: A fitted corpus.
         n_jobs: Worker threads. ``1`` stays in-process, ``0`` uses every available core.
-        cstar_target: ``"min"`` (default) reads every sample's attained coverage first and
+        cstar_target: ``"corpus"`` (default) uses the frozen coverage target for configured
+            bases and preserves ``"min"`` for legacy corpora. ``"min"`` reads every sample's attained coverage first and
             standardises the whole cohort to the per-locus minimum, so the diversity columns are
             comparable across samples and the level is a property of *this* cohort rather than of
             somebody's corpus. That is a cheap extra pass over the count column -- but it does
@@ -163,6 +172,10 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
         A frame whose columns are ``sample_id`` then the corpus's signature columns.
     """
     items = list(samples.items() if isinstance(samples, dict) else samples)
+    if cstar_target == "corpus":
+        cstar_target = corpus.meta.get("cstar_target") if L._configured(corpus.meta.get("feature_definition")) else "min"
+    elif cstar_target is None and L._configured(corpus.meta.get("feature_definition")):
+        raise ValueError("configured signatures require a shared coverage target; use corpus, min, or an explicit target")
     cstar_target = _coverage_target(items, n_jobs, cstar_target, kw)
 
     rows = parallel_rows(items, functools.partial(_one, corpus=corpus,
@@ -172,7 +185,10 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
                            else corpus.columns(kw.get("n_components"),
                                                named=kw.get("named", ())))]
     have = [c for c in want if any(c in r for r in rows)]
-    return pl.DataFrame(rows).select(have)
+    result = pl.DataFrame(rows).select(have)
+    if L._configured(corpus.meta.get("feature_definition")):
+        result = result.with_columns(pl.lit("vsig:" + corpus.meta["fit_identity"]).alias("rotation_space"))
+    return result
 
 
 def _demo() -> None:
@@ -210,35 +226,43 @@ if __name__ == "__main__":
 
 
 def raw_features_cohort(samples, *, vocab=None, organism="human", n_jobs=1,
-                        cstar_target="min", weight="log2p1", on_duplicate="error"):
+                        cstar_target="min", weight="log2p1", on_duplicate="error", feature_definition=None):
     """Unrotated vsig features and channels, without a fitted corpus.
 
     Raw means before corpus scaling/PCA: declared log/CLR/logit transforms still
     apply. Use explicit shared coverage when comparing independently read cohorts.
     Only numeric output rows survive each worker; no per-cohort dict-of-floats copy.
     """
-    import hashlib
-    import json
     from ..cores import require_memory
 
     items = list(samples.items() if isinstance(samples, dict) else samples)
     ids = [sid for sid,_ in items]
     if not items or len(set(ids)) != len(ids):
         raise ValueError('sample ids must be nonempty and unique')
-    vocab = vocab if vocab is not None else {loc:F.gene_vocab(loc,organism) for loc in L.LOCI}
+    L.validate_feature_definition(feature_definition)
+    vocab = vocab if vocab is not None else {loc:F.gene_vocab(loc,organism,feature_definition=feature_definition) for loc in L.LOCI}
     target = _coverage_target(items,n_jobs,cstar_target,{'on_duplicate':on_duplicate})
-    columns = [c for loc in (*vocab,L.NO_LOCUS) for c in L.raw_columns('vsig',loc,vocab.get(loc))]
-    columns += L.channel_columns('vsig')
+    columns = [c for loc in (*vocab,L.NO_LOCUS) for c in L.raw_columns('vsig',loc,vocab.get(loc),feature_definition=feature_definition)]
+    columns += L.channel_columns('vsig',feature_definition=feature_definition)
     require_memory(16*len(items)*len(columns),'raw feature table')
     values = np.full((len(items),len(columns)),np.nan)
     def one(indexed):
         i,(_,sample) = indexed
         raw,channels = F.raw_and_channels(_locus_frames(resolve_sample(sample)),vocab,
-                                          cstar_target=target,weight=weight,on_duplicate=on_duplicate)
+                                          cstar_target=target,weight=weight,on_duplicate=on_duplicate,
+                                          feature_definition=feature_definition)
         raw.update(channels)
         values[i] = [raw.get(c,np.nan) for c in columns]
     parallel_rows(enumerate(items),one,n_jobs)
-    identity = hashlib.sha256(json.dumps({'columns':columns,'vocab':vocab,'weight':weight,
-                                          'coverage':target},sort_keys=True).encode()).hexdigest()
+    identity = _raw_feature_identity(columns, vocab, weight, target, feature_definition)
     return pl.DataFrame({'sample_id':ids,'embedding_space':['vsig:'+identity]*len(ids)}).hstack(
         pl.from_numpy(values,schema=columns))
+
+
+def _raw_feature_identity(columns, vocab, weight, target, definition):
+    """One identity for dense raw tables and sparse fitted reference tables."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps({'columns': columns, 'vocab': vocab, 'weight': weight,
+        'coverage': target, **({'definition': definition} if L._configured(definition) else {})},
+        sort_keys=True).encode()).hexdigest()

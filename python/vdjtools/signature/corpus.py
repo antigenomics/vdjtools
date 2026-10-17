@@ -62,7 +62,8 @@ MIN_SPREAD = 1e-12
 #: Default components per locus. A count rather than a variance fraction, because the artifact
 #: stores the rotation only up to the count it was fitted at and a fraction on a wide sparse group
 #: resolves to enough components to make the artifact hundreds of megabytes. The full eigenvalue
-#: spectrum is stored either way, so the variance a given count reaches is always readable.
+#: spectrum is stored by full SVD. Configured randomized fits store the truncated spectrum and
+#: full input variance, so the variance reached by a retained count remains readable.
 DEFAULT_COMPONENTS: int = 128
 
 #: Modes for :func:`apply`. ``features`` clamps raw features to the corpus bounds before rotating;
@@ -89,13 +90,18 @@ def bounds_for(x: np.ndarray, supports: list[str], p: float) -> tuple[np.ndarray
     if not 0.0 < p < 0.5:
         raise ValueError(f"winsor p must be in (0, 0.5); got {p}")
     sides = np.array([L.SUPPORTS[s] for s in supports])          # (p_L, 2) bottom, top
+    trimmed = sides.any(axis=1)
+    lo, hi = np.full(len(supports), -np.inf), np.full(len(supports), np.inf)
+    if not trimmed.any():
+        return lo, hi
     with np.errstate(invalid="ignore"), warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)     # all-nan column: see robust_loc_scale
-        finite = np.where(np.isfinite(x), x, np.nan)
+        selected = x[:, trimmed]
+        finite = np.where(np.isfinite(selected), selected, np.nan)
         qlo = np.nanquantile(finite, p, axis=0)
         qhi = np.nanquantile(finite, 1.0 - p, axis=0)
-    lo = np.where(sides[:, 0], qlo, -np.inf)
-    hi = np.where(sides[:, 1], qhi, np.inf)
+    lo[trimmed] = np.where(sides[trimmed, 0], qlo, -np.inf)
+    hi[trimmed] = np.where(sides[trimmed, 1], qhi, np.inf)
     # An all-nan column yields nan quantiles, which would clamp everything to nan. A column the
     # corpus never observed has no bound to offer, so it offers none.
     lo = np.where(np.isfinite(lo), lo, -np.inf)
@@ -168,6 +174,8 @@ class LocusFit:
     pc_bounds: dict[float, tuple[np.ndarray, np.ndarray]]   # p -> pc  (lo, hi)
     n_obs: np.ndarray                        # (p,) rows that observed each column
     n_rows: int                              # rows this locus was fitted on
+    total_variance: float | None = None       # new truncated spectra use the full trace
+    pca_offset: np.ndarray | None = None      # arithmetic center after missing-value imputation
 
     @property
     def k(self) -> int:
@@ -176,7 +184,7 @@ class LocusFit:
     def variance_at(self, k: int) -> float:
         """Cumulative variance fraction the first ``k`` components reach."""
         ev = self.eigenvalues
-        tot = float(ev.sum())
+        tot = float(ev.sum()) if self.total_variance is None else self.total_variance
         return float(ev[:k].sum() / tot) if tot > 0 else float("nan")
 
 
@@ -206,8 +214,9 @@ class Corpus:
     def columns(self, n_components: "int | float | None" = None,
                 named: "bool | Sequence[str]" = ()) -> list[str]:
         """The signature columns this corpus emits: rotated, then channels, then named blocks."""
-        cols = L.signature_columns(self.sig, self.resolve_k(n_components))
-        return [*cols, *(L.named_columns(self.sig, named, self.vocab) if named else ())]
+        definition = self.meta.get("feature_definition")
+        cols = L.signature_columns(self.sig, self.resolve_k(n_components), feature_definition=definition)
+        return [*cols, *(L.named_columns(self.sig, named, self.vocab, feature_definition=definition) if named else ())]
 
     def resolve_k(self, n_components: "int | float | None" = None) -> dict[str, int]:
         """``{locus: k}`` after apply-time truncation.
@@ -236,12 +245,14 @@ class Corpus:
                 # cross-locus block has 5 raw features, so `--components 128` fitted it at 5 and
                 # then refused to apply itself. Nothing is padded: no column is invented under a
                 # name it does not hold, which is the property the refusal existed for.
+                if L._configured(self.meta.get("feature_definition")) and int(n_components) > f.k:
+                    raise ValueError(f"{loc} stores only {f.k} components; refit for a larger request")
                 out[loc] = min(int(n_components), f.k)
             else:
                 frac = float(n_components)
                 if not 0.0 < frac < 1.0:
                     raise ValueError(f"n_components as a fraction must be in (0, 1); got {frac}")
-                need = _k_for_variance(f.eigenvalues, frac, cap=f.k)
+                need = _k_for_variance(f.eigenvalues, frac, cap=f.k, total=f.total_variance)
                 if need is None:
                     raise ValueError(
                         f"{self.name}:{loc} reaches only {f.variance_at(f.k):.4f} of the variance "
@@ -265,6 +276,10 @@ class Corpus:
             arrays[f"{loc}/pc_loc"] = f.pc_loc
             arrays[f"{loc}/pc_scale"] = f.pc_scale
             arrays[f"{loc}/n_obs"] = f.n_obs
+            if f.total_variance is not None:
+                arrays[f"{loc}/total_variance"] = np.array(f.total_variance)
+            if f.pca_offset is not None:
+                arrays[f"{loc}/pca_offset"] = f.pca_offset
             for p, (lo, hi) in f.bounds.items():
                 arrays[f"{loc}/bound_lo_{p}"] = lo
                 arrays[f"{loc}/bound_hi_{p}"] = hi
@@ -309,7 +324,7 @@ class Corpus:
             cols = [str(c) for c in z[f"{loc}/columns"]]
             fits[loc] = LocusFit(
                 columns=cols,
-                supports=[L.support_of(c) for c in cols],
+                supports=[L.support_of(c, feature_definition=meta.get("feature_definition")) for c in cols],
                 loc=z[f"{loc}/loc"], scale=z[f"{loc}/scale"],
                 rotation=z[f"{loc}/rotation"].astype(np.float64),
                 eigenvalues=z[f"{loc}/eigenvalues"],
@@ -318,7 +333,9 @@ class Corpus:
                         for p in meta["winsor_ps"] if f"{loc}/bound_lo_{p}" in z.files},
                 pc_bounds={p: (z[f"{loc}/pcbound_lo_{p}"], z[f"{loc}/pcbound_hi_{p}"])
                            for p in meta["winsor_ps"] if f"{loc}/pcbound_lo_{p}" in z.files},
-                n_obs=z[f"{loc}/n_obs"], n_rows=int(meta["n_rows"][loc]))
+                n_obs=z[f"{loc}/n_obs"], n_rows=int(meta["n_rows"][loc]),
+                total_variance=float(z[f"{loc}/total_variance"]) if f"{loc}/total_variance" in z.files else None,
+                pca_offset=z[f"{loc}/pca_offset"] if f"{loc}/pca_offset" in z.files else None)
         out = cls(sig=sig, name=name, vocab=vocab, fits=fits, meta=meta)
         if verify:
             out.verify()
@@ -326,8 +343,15 @@ class Corpus:
 
     def verify(self) -> None:
         """Raise unless the stored column order and model version match this installation."""
+        definition = self.meta.get("feature_definition")
+        L.validate_feature_definition(definition)
+        if L._configured(definition):
+            if self.meta.get("basis_identity") != _basis_identity(self):
+                raise ValueError("corpus vocabulary, organism or measurement policy identity mismatch")
+            if self.meta.get("fit_identity") != _fit_identity(self):
+                raise ValueError("corpus rotation identity mismatch")
         for loc, f in self.fits.items():
-            want = L.raw_columns(self.sig, loc, self.vocab.get(loc))
+            want = L.raw_columns(self.sig, loc, self.vocab.get(loc), feature_definition=definition)
             if want != f.columns:
                 extra, missing = set(f.columns) - set(want), set(want) - set(f.columns)
                 raise ValueError(
@@ -352,13 +376,32 @@ class Corpus:
                     f"if you have established the models did not change.")
 
 
+def _basis_identity(corpus: Corpus) -> str:
+    payload = {"definition": corpus.meta.get("feature_definition"), "vocab": corpus.vocab,
+               "weight": corpus.meta.get("weight", "log2p1"), "coverage": corpus.meta.get("cstar_target"),
+               "organism": corpus.meta.get("organism", "human")}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _fit_identity(corpus: Corpus) -> str:
+    digest = hashlib.sha256(_basis_identity(corpus).encode())
+    for loc in sorted(corpus.fits, key=_locus_order):
+        f = corpus.fits[loc]
+        digest.update(loc.encode())
+        for arr in (f.loc, f.scale, f.rotation.astype(np.float32), f.pc_loc, f.pc_scale):
+            digest.update(np.ascontiguousarray(arr).tobytes())
+        if f.pca_offset is not None:
+            digest.update(np.ascontiguousarray(f.pca_offset).tobytes())
+    return digest.hexdigest()
+
+
 def _locus_order(loc: str) -> int:
     order = [*L.LOCI, L.NO_LOCUS]
     return order.index(loc) if loc in order else len(order)
 
 
-def _k_for_variance(ev: np.ndarray, frac: float, cap: int) -> "int | None":
-    tot = float(ev.sum())
+def _k_for_variance(ev: np.ndarray, frac: float, cap: int, total=None) -> "int | None":
+    tot = float(ev.sum()) if total is None else float(total)
     if tot <= 0:
         return None
     cum = np.cumsum(ev) / tot
@@ -373,7 +416,8 @@ def _k_for_variance(ev: np.ndarray, frac: float, cap: int) -> "int | None":
 
 def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
               n_components: "int | float" = DEFAULT_COMPONENTS,
-              winsor_p: float = 0.01) -> "LocusFit | None":
+              winsor_p: float = 0.01, feature_definition=None, solver="full", seed=0,
+              max_components=128, bounded=True) -> "LocusFit | None":
     """Fit bounds, centre, scale, rotation and PC scaling for one locus, in one pass.
 
     Args:
@@ -388,6 +432,10 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
         n_components: Count, or a variance fraction in ``(0, 1)``.
         winsor_p: The percentile whose bounds are used when ``mode="features"``. All of
             :data:`WINSOR_PS` are stored regardless.
+        feature_definition: Frozen basic/joint definition, or ``None`` for legacy scaling.
+        solver: ``"full"`` (default), or explicit ``"randomized"`` for configured features.
+        seed: Randomized SVD seed; recorded by the corpus builder.
+        max_components: Stored rank cap for randomized fits requesting a variance fraction.
 
     Returns:
         The fit, or ``None`` when the locus cannot support one (fewer rows than 2, or no column
@@ -396,12 +444,22 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
     """
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}; known: {MODES}")
+    configured = L._configured(feature_definition)
+    if configured and mode != "features":
+        raise ValueError("new feature definitions require block-aware features mode")
+    if solver not in ("full", "randomized") or (solver != "full" and not configured):
+        raise ValueError("randomized solver is explicit and applies only to new feature definitions")
     n, p = x.shape
     if n < 2 or p == 0:
         return None
+    if configured and solver == "randomized" and bounded:
+        from .bounded import fit_locus as fit_bounded
+        return fit_bounded(x, columns, feature_definition=feature_definition,
+                           n_components=n_components, seed=seed, max_components=max_components,
+                           winsor_p=winsor_p)
     from ..cores import require_memory
     require_memory(6 * x.nbytes + 16 * min(n, p)**2, "corpus PCA fit")
-    supports = [L.support_of(c) for c in columns]
+    supports = [L.support_of(c, feature_definition=feature_definition) for c in columns]
     n_obs = np.isfinite(x).sum(axis=0).astype(np.int64)
 
     bounds = {q: bounds_for(x, supports, q) for q in WINSOR_PS}
@@ -409,10 +467,37 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
     if mode == "features":
         work, _ = clamp(x, *bounds[winsor_p])
 
-    loc, scale = robust_loc_scale(work)
+    transformed = _composition_coordinates(work, columns) if configured else work
+    if configured:
+        composition = np.array([L.parse(c)[1] in L.COMPOSITION_BLOCKS for c in columns])
+        loc, scale = np.zeros(p), np.zeros(p)
+        loc[~composition], scale[~composition] = robust_loc_scale(transformed[:, ~composition])
+        for group in L.COMPOSITION_BLOCKS:
+            mask = np.array([L.parse(c)[1] == group for c in columns])
+            if not mask.any():
+                continue
+            block = transformed[:, mask]
+            observed = np.isfinite(block).any(1)
+            if not observed.any():
+                loc[mask], scale[mask] = 0.0, 0.0
+                continue
+            block = block[observed]
+            means = np.nanmean(block, axis=0)
+            variances = np.nanvar(block, axis=0)
+            loc[mask] = np.nan_to_num(means)
+            scale[mask] = np.sqrt(np.nansum(variances))
+    else:
+        loc, scale = robust_loc_scale(transformed)
     if not (scale > MIN_SPREAD).any():
         return None
-    z = _standardize(work, loc, scale)
+    z = _standardize(transformed, loc, scale)
+    offset = None
+    if configured:
+        # Impute at the measured center before subtracting the PCA arithmetic center.
+        # Folding this offset into loc would re-impute holes at the wrong center on apply.
+        offset = z.mean(0)
+        z -= offset
+    total_variance = float(np.sum(np.var(z, axis=0, ddof=1))) if configured else None
 
     if mode == "pcs":
         # The corpus still has its tails here, so the scaler has to resist them: median/IQR, then
@@ -425,15 +510,46 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
         ev_all = pca.explained_variance_
         comps = pca.components_.T                       # (p, min(n-1, p))
     else:
-        u, s, vt = np.linalg.svd(z - z.mean(0), full_matrices=False)
+        if solver == "randomized":
+            from sklearn.utils.extmath import randomized_svd
+            cap = n_components if isinstance(n_components, int) else max_components
+            cap = min(cap, n - 1, p)
+            if cap < 1:
+                raise ValueError("component cap must be positive")
+            u, singular, vt = randomized_svd(z, n_components=cap, n_iter=4, random_state=seed)
+        else:
+            u, singular, vt = np.linalg.svd(z - z.mean(0), full_matrices=False)
         del u
-        ev_all = (s ** 2) / max(n - 1, 1)
+        ev_all = (singular ** 2) / max(n - 1, 1)
         comps = vt.T
 
-    k = _resolve_k(ev_all, n_components, p, n)
+    return _finish_locus(columns, supports, loc, scale, n_obs, bounds, z, ev_all, comps, n, p,
+                         feature_definition=feature_definition, n_components=n_components,
+                         total_variance=total_variance, offset=offset)
+
+
+def _finish_locus(columns, supports, loc, scale, n_obs, bounds, z, ev_all, comps, n, p, *,
+                  feature_definition, n_components, total_variance, offset):
+    """Shared rank, rounded basis and score scaling for dense and bounded fits."""
+    configured = L._configured(feature_definition)
+    if configured and ev_all.size:
+        rank = int(np.sum(ev_all > np.finfo(float).eps * max(n, p) * ev_all[0]))
+        ev_all, comps = ev_all[:rank], comps[:, :rank]
+    if configured and not isinstance(n_components, int):
+        frac = float(n_components)
+        if not 0 < frac < 1:
+            raise ValueError("variance fraction must be in (0,1)")
+        k = _k_for_variance(ev_all, frac, cap=ev_all.size, total=total_variance)
+        if k is None:
+            raise ValueError("stored component cap does not reach the requested variance; increase max_components")
+    else:
+        k = _resolve_k(ev_all, n_components, p, n)
     if k is None:
         return None
     comps = _fix_signs(comps[:, :k])
+    if configured:
+        # Fit PC scaling against the same float32-rounded basis that loading restores.
+        comps = comps.astype(np.float32).astype(np.float64)
     scores = z @ comps
     pc_loc, pc_scale = robust_loc_scale(scores)
     pc_supports = ["real"] * k
@@ -441,7 +557,19 @@ def fit_locus(x: np.ndarray, columns: list[str], *, mode: str = "features",
                                pc_supports, q) for q in WINSOR_PS}
     return LocusFit(columns=list(columns), supports=supports, loc=loc, scale=scale,
                     rotation=comps, eigenvalues=ev_all, pc_loc=pc_loc, pc_scale=pc_scale,
-                    bounds=bounds, pc_bounds=pc_bounds, n_obs=n_obs, n_rows=int(n))
+                    bounds=bounds, pc_bounds=pc_bounds, n_obs=n_obs, n_rows=int(n), total_variance=total_variance,
+                    pca_offset=offset)
+
+
+def _composition_coordinates(x: np.ndarray, columns: list[str]) -> np.ndarray:
+    """Square-root only the declared frequency blocks; preserve measurement holes."""
+    out = np.array(x, copy=True, dtype=float)
+    mask = np.array([L.parse(c)[1] in L.COMPOSITION_BLOCKS for c in columns])
+    parts = out[..., mask]
+    if ((parts[np.isfinite(parts)] < -1e-12) | (parts[np.isfinite(parts)] > 1 + 1e-12)).any():
+        raise ValueError("composition frequencies must be in [0,1]")
+    out[..., mask] = np.sqrt(np.clip(parts, 0, 1))
+    return out
 
 
 def _resolve_k(ev: np.ndarray, n_components: "int | float", p: int, n: int) -> "int | None":
@@ -477,7 +605,7 @@ def _fix_signs(comps: np.ndarray) -> np.ndarray:
 
 
 def locus_matrix(vocab: dict[str, dict[str, list[str]]], sig: str, locus: str,
-                 n: int) -> "tuple[np.ndarray, list[str]] | None":
+                 n: int, *, feature_definition=None) -> "tuple[np.ndarray, list[str]] | None":
     """A preallocated ``(n, p_L)`` buffer and its column order, or ``None`` if the locus is empty.
 
     Preallocated and filled in place rather than built from a list of per-sample dicts. At the
@@ -485,7 +613,7 @@ def locus_matrix(vocab: dict[str, dict[str, list[str]]], sig: str, locus: str,
     for a matrix that is 1.08 GB as float64 -- and the dicts have to coexist with the array while it
     is assembled. See :func:`fill_row`.
     """
-    cols = L.raw_columns(sig, locus, vocab.get(locus))
+    cols = L.raw_columns(sig, locus, vocab.get(locus), feature_definition=feature_definition)
     if not cols:
         return None
     return np.full((n, len(cols)), np.nan), cols
@@ -499,30 +627,55 @@ def fill_row(buf: np.ndarray, cols: list[str], i: int, raw: dict[str, float]) ->
 def fit_matrices(mats: dict[str, tuple[np.ndarray, list[str]]],
                  vocab: dict[str, dict[str, list[str]]], *, sig: str, name: str,
                  mode: str = "features", n_components: "int | float" = DEFAULT_COMPONENTS,
-                 winsor_p: float = 0.01, meta: "dict | None" = None) -> Corpus:
+                 winsor_p: float = 0.01, meta: "dict | None" = None, feature_definition=None,
+                 solver="full", seed=0, max_components=128, threads: int = 1, bounded=True) -> Corpus:
     """Fit a corpus from per-locus matrices -- the memory-bounded path.
 
     Each locus is fitted only on the rows that observed it, so a corpus where half the samples have
     no TRD does not learn TRD from imputed values.
+    ``threads`` budgets BLAS for fitting only: 1 is serial, 0 uses allocated cores.
     """
+    L.validate_feature_definition(feature_definition)
     fits: dict[str, LocusFit] = {}
     trimmed: dict[str, float] = {}
-    for locus, (x, cols) in mats.items():
-        keep = np.isfinite(x).any(axis=1)
-        if keep.sum() < 2:
-            continue
-        f = fit_locus(x[keep], cols, mode=mode, n_components=n_components, winsor_p=winsor_p)
-        if f is None:
-            continue
-        fits[locus] = f
-        _, moved = clamp(x[keep], *f.bounds[winsor_p])
-        obs = np.isfinite(x[keep]).sum()
-        trimmed[locus] = float(moved.sum() / obs) if obs else 0.0
-    return Corpus(sig=sig, name=name, vocab=vocab, fits=fits,
-                  meta={**(meta or {}), "mode": mode, "winsor_p": winsor_p,
-                        "n_components_requested": n_components,
-                        "trimmed_frac": trimmed,
-                        "platform": platform.platform(), "numpy": np.__version__})
+    from ..cores import numerical_kernels
+    from .bounded import BlockMatrix, trimmed_fraction
+    if solver == "randomized":
+        # Load the solver's BLAS pools before applying their runtime limits.
+        from sklearn.utils import extmath  # noqa: F401
+
+    with numerical_kernels(threads) as threads:
+        for locus, (x, cols) in mats.items():
+            sparse_input = isinstance(x, BlockMatrix)
+            keep = x.observed() if sparse_input else np.isfinite(x).any(axis=1)
+            if keep.sum() < 2:
+                continue
+            observed = x.take_rows(keep) if sparse_input else x[keep]
+            f = fit_locus(observed, cols, mode=mode, n_components=n_components, winsor_p=winsor_p,
+                          feature_definition=feature_definition, solver=solver, seed=seed,
+                          max_components=max_components, bounded=bounded)
+            if f is None:
+                continue
+            fits[locus] = f
+            if sparse_input:
+                trimmed[locus] = trimmed_fraction(observed, *f.bounds[winsor_p])
+            else:
+                _, moved = clamp(observed, *f.bounds[winsor_p])
+                obs = np.isfinite(observed).sum()
+                trimmed[locus] = float(moved.sum() / obs) if obs else 0.0
+            del observed
+    definition_meta = ({"feature_definition": feature_definition, "solver": solver, "solver_seed": seed,
+                        "max_components": max_components, "spectrum_complete": solver == "full",
+                        "fit_threads": threads}
+                       if L._configured(feature_definition) else {})
+    corpus = Corpus(sig=sig, name=name, vocab=vocab, fits=fits,
+                    meta={**(meta or {}), **definition_meta, "mode": mode, "winsor_p": winsor_p,
+                          "n_components_requested": n_components, "trimmed_frac": trimmed,
+                          "platform": platform.platform(), "numpy": np.__version__})
+    if L._configured(feature_definition):
+        corpus.meta["basis_identity"] = _basis_identity(corpus)
+        corpus.meta["fit_identity"] = _fit_identity(corpus)
+    return corpus
 
 
 #: ``{sig: featurise}``, filled by each half at import. ``featurise(frames, vocab, **kw)`` returns
@@ -563,7 +716,7 @@ def fit(rows: list[dict[str, float]], vocab: dict[str, dict[str, list[str]]], *,
     order = [loc for loc in (*L.LOCI, L.NO_LOCUS) if loc in vocab or loc == L.NO_LOCUS]
     mats: dict[str, tuple[np.ndarray, list[str]]] = {}
     for locus in order:
-        got = locus_matrix(vocab, sig, locus, len(rows))
+        got = locus_matrix(vocab, sig, locus, len(rows), feature_definition=kw.get("feature_definition"))
         if got is None:
             continue
         buf, cols = got
@@ -588,7 +741,7 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
                vocab: "dict[str, dict[str, list[str]]] | None" = None,
                loci: "tuple[str, ...] | None" = None, organism: str = "human",
                n_components: "int | float" = 128, weight: str = "log2p1",
-               n_jobs: int = 0, **kw) -> Corpus:
+               n_jobs: int = 0, feature_definition=None, cstar_target="min", threads: int = 1, **kw) -> Corpus:
     """Fit a corpus on **your own** cohort of clonotype frames.
 
     The shipped corpora are one route and this is the other. ``fit`` takes feature rows, so a
@@ -609,6 +762,7 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
         n_components: Components per locus, as an int or a cumulative variance fraction.
         weight: Clone-size weight, forwarded to the featuriser.
         n_jobs: Worker threads; ``0`` uses every available core.
+        threads: BLAS threads after all workers join; 1 is serial, 0 uses allocated cores.
         **kw: Forwarded to :func:`fit_matrices` (``mode``, ``winsor_p``, ...).
 
     Returns:
@@ -627,6 +781,10 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
        Both routes are legitimate and they answer different questions. Fit here when you want a
        basis for *this* cohort; use a shipped corpus when the number has to travel.
     """
+    from ..cores import kernel_threads
+
+    threads = kernel_threads(threads)
+    kw["threads"] = threads
     items = list(samples.items() if isinstance(samples, dict) else samples)
     if items and not isinstance(items[0], tuple):
         items = [(i, s) for i, s in enumerate(items)]
@@ -635,12 +793,57 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
 
         if loci is None:
             loci = tuple(l for l in L.LOCI if any(_carries(s, l) for _, s in items))
-        vocab = {loc: gene_vocab(loc, organism) for loc in loci}
+        vocab = {loc: gene_vocab(loc, organism, feature_definition=feature_definition) for loc in loci}
     from .cohort import parallel_rows
 
+    feature_kw = {"weight": weight}
+    if L._configured(feature_definition):
+        if sig != "vsig":
+            raise ValueError("new statistical definitions require vsig")
+        from .signature import _coverage_target
+        target = _coverage_target(items, n_jobs, cstar_target, {})
+        feature_kw.update(feature_definition=feature_definition, cstar_target=target)
+        meta = dict(kw.pop("meta", {}) or {})
+        meta.update(weight=weight, cstar_target=target, organism=organism)
+        kw["meta"] = meta
+    if (L._configured(feature_definition) and kw.get("solver", "full") == "randomized"
+            and kw.get("bounded", True)):
+        from .bounded import feature_matrices
+        mats = feature_matrices(items, vocab, feature_definition, feature_kw, n_jobs)
+        # These matrices are owned here: discard old row-index buffers before fitting.
+        mats = {loc: (x.take_rows(x.observed()), cols) for loc, (x, cols) in mats.items()}
+        return fit_matrices(mats, vocab, sig=sig, name=name, n_components=n_components,
+                            feature_definition=feature_definition, **kw)
+    if L._configured(feature_definition):
+        from ..cores import require_memory
+        columns = {loc: L.raw_columns(sig, loc, vocab[loc], feature_definition=feature_definition) for loc in vocab}
+        require_memory(8 * len(items) * sum(map(len, columns.values())), "configured corpus matrices")
+        mats = {loc: (np.full((len(items), len(cols)), np.nan), cols) for loc, cols in columns.items()}
+        blocks = {}
+        for loc, (buf, cols) in mats.items():
+            offset = 0
+            blocks[loc] = {}
+            for group in L._feature_groups(sig, feature_definition):
+                if loc not in group.emitted_loci:
+                    continue
+                names = vocab[loc][group.name] if group.dynamic else tuple(group.features)
+                blocks[loc][group.name] = (slice(offset, offset + len(names)),
+                                           {name: j for j, name in enumerate(names)})
+                offset += len(names)
+            assert offset == len(cols)
+        def fill(indexed):
+            i, item = indexed
+            output = {loc: {group: (mats[loc][0][i, span], names)
+                            for group, (span, names) in groups.items()}
+                      for loc, groups in blocks.items()}
+            _row_for(item, sig, vocab, {**feature_kw, "_raw_array": output})
+        parallel_rows(enumerate(items), fill, n_jobs)
+        return fit_matrices(mats, vocab, sig=sig, name=name, n_components=n_components,
+                            feature_definition=feature_definition, **kw)
     rows = parallel_rows(items, functools.partial(_row_for, sig=sig, vocab=vocab,
-                                                  kw={"weight": weight}), n_jobs)
-    return fit(rows, vocab, sig=sig, name=name, n_components=n_components, **kw)
+                                                  kw=feature_kw), n_jobs)
+    return fit(rows, vocab, sig=sig, name=name, n_components=n_components,
+               feature_definition=feature_definition, **kw)
 
 
 def _carries(sample, locus: str) -> bool:
@@ -692,6 +895,9 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
     mode = mode or corpus.meta.get("mode", "features")
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}; known: {MODES}")
+    definition = corpus.meta.get("feature_definition")
+    if L._configured(definition) and mode == "pcs":
+        raise ValueError("new feature definitions do not support pcs winsorization mode")
     p = corpus.meta.get("winsor_p", 0.01) if winsor_p is None else winsor_p
     ks = corpus.resolve_k(n_components)
 
@@ -707,7 +913,11 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
                                  f"available: {sorted(f.bounds)}")
             x, moved = clamp(x, *f.bounds[p])
             n_moved += int(moved.sum())
-        z = _standardize(x, f.loc, f.scale)
+        present = np.isfinite(x).any()
+        work = _composition_coordinates(x, f.columns) if L._configured(definition) else x
+        z = _standardize(work, f.loc, f.scale)
+        if f.pca_offset is not None:
+            z -= f.pca_offset
         # Rotate through the WHOLE rotation, then slice. `z @ rotation[:, :k]` is the same
         # arithmetic in a different GEMM shape, and OpenBLAS accumulates it in a different
         # order: the truncated and untruncated TRB PC01 differed at 2e-15 on Linux while
@@ -725,10 +935,12 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
             vals, moved = clamp(vals, lo[:k], hi[:k])
             n_moved += int(moved.sum())
             n_seen += k
+        if L._configured(definition) and not present:
+            vals[:] = np.nan
         for i in range(k):
             out[f"{corpus.sig}:{L.PC_BLOCK}:{locus}:PC{i + 1:02d}"] = float(vals[i])
 
-    for c in L.channel_columns(corpus.sig):
+    for c in L.channel_columns(corpus.sig, feature_definition=definition):
         out[c] = float(chan.get(c, np.nan))
     wf = f"{corpus.sig}:qc:{L.NO_LOCUS}:winsor_frac"
     if wf in out:
@@ -736,7 +948,7 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
 
     # Read from `raw`, which is pre-winsorization and pre-rotation. Taking them from `x` inside
     # the loop above would hand back a clamped value under a name that promises a measurement.
-    for c in L.named_columns(corpus.sig, named, corpus.vocab) if named else ():
+    for c in L.named_columns(corpus.sig, named, corpus.vocab, feature_definition=definition) if named else ():
         out[c] = float(raw.get(c, np.nan))
     return out
 
@@ -838,9 +1050,10 @@ def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") 
         tmp.unlink(missing_ok=True)
         raise OSError(f"{url} hashed {got[:12]}, the shipped index expects {sha256[:12]}; refusing "
                       "to cache it. Either the release asset was replaced or the download truncated.")
-    if nbytes and tmp.stat().st_size != nbytes:
+    received = tmp.stat().st_size
+    if nbytes and received != nbytes:
         tmp.unlink(missing_ok=True)
-        raise OSError(f"{url} is {tmp.stat().st_size} bytes, the index expects {nbytes}")
+        raise OSError(f"{url} is {received} bytes, the index expects {nbytes}")
     tmp.replace(dest)
     return dest
 
@@ -1191,7 +1404,7 @@ def draw_pool(locus: str, n: int, *, seed: int, source: str = "olga") -> pl.Data
     core of a 16-core M-series laptop: **4,200 sequences/s**, and identical at 1 and 16 polars
     threads -- the sampler is a per-sequence Python/numpy loop, so it does not thread. Pool
     generation is therefore the dominant serial cost of a synthetic build (about 15M sequences at
-    ``size=10,000`` across seven loci) and remains GIL-limited in the bounded thread pool.
+    ``size=10,000`` across seven loci); spawned pool workers parallelize the fixed chunks.
 
     NOTE an earlier docstring here claimed 20,372 seq/s on IGH. That figure is 4.8x the measured
     rate and it is what made a 77 s stage look like a 16 s one when the build was planned.
@@ -1395,17 +1608,20 @@ def _pool_chunk(args) -> tuple:
     """Generate one contiguous chunk of one locus's pool; write it as uncompressed Arrow IPC."""
     locus, k, n, seed, source, tmp = args
     path = Path(tmp) / f"pool_{locus}_{k:03d}.arrow"
-    draw_pool(locus, n, seed=seed, source=source).write_ipc(path, compression="uncompressed")
+    from ..cores import serial_kernels
+
+    with serial_kernels():
+        draw_pool(locus, n, seed=seed, source=source).write_ipc(path, compression="uncompressed")
     return locus, k, path
 
 
 def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path,
                 n_jobs: int = 1, progress=None, depth_spread: "float | str | None" = None,
                 cohort: "str | None" = None) -> dict:
-    """Generate every locus's pool across bounded threads; return ``{locus: [chunk path, ...]}``.
+    """Generate every locus's pool across spawned processes; return ``{locus: [chunk path, ...]}``.
 
     Chunk seeds and the reference sampler are unchanged. Python sampling is GIL-limited;
-    threads bound resource use but do not promise multicore scaling for that stage.
+    Each process uses serial numerical kernels and the same fixed chunk seeds.
     Uncompressed IPC chunks are mapped once and shared by feature workers.
     """
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
@@ -1438,9 +1654,16 @@ def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path
 
 def _map_unordered(fn, tasks: list, n_jobs: int) -> list:
     """``[fn(t) for t in tasks]``, load-balanced one task at a time. Raises if the pool cannot start."""
-    from .cohort import parallel_rows
+    from multiprocessing import get_context
+    from ..cores import single_threaded_children
 
-    return parallel_rows(tasks, fn, n_jobs)
+    workers = _workers(n_jobs, len(tasks))
+    if workers == 1:
+        from .cohort import parallel_rows
+
+        return parallel_rows(tasks, fn, 1)
+    with single_threaded_children(), get_context("spawn").Pool(workers) as pool:
+        return list(pool.imap_unordered(fn, tasks, chunksize=1))
 
 
 def read_pools(paths: dict) -> dict:
@@ -1494,7 +1717,7 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
                    size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "olga",
                    n_jobs: int = 1, progress=None, tmp: "Path | None" = None,
                    depth_spread: "float | str | None" = None,
-                   cohort: "str | None" = None) -> dict:
+                   cohort: "str | None" = None, feature_definition=None) -> dict:
     """The corpus matrix, ``{locus: (array, columns)}``, built across ``n_jobs`` threads.
 
     Shared by both halves of the signature: ``vsig`` and ``rsig`` differ only in ``featurise`` and
@@ -1520,7 +1743,7 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
     cols = {}
     for locus in (*ordered, L.NO_LOCUS):
-        got = locus_matrix(vocab, sig, locus, n_samples)
+        got = locus_matrix(vocab, sig, locus, n_samples, feature_definition=feature_definition)
         if got is not None:
             cols[locus] = got[1]
     mats = {loc: (np.full((n_samples, len(c)), np.nan), c) for loc, c in cols.items()}
@@ -1615,7 +1838,8 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
                size: "int | str | None" = None, seed: int = SEED,
                n_components: "int | float" = DEFAULT_COMPONENTS, mode: str = "features",
                winsor_p: float = 0.01, source: str = "olga", fit_corpus: bool = True,
-               progress=None, n_jobs: int = 1, depth_spread: "float | str | None" = None):
+               progress=None, n_jobs: int = 1, depth_spread: "float | str | None" = None,
+               feature_definition=None, solver="full", max_components=128):
     """Build a synthetic corpus, and fit it.
 
     Args:
@@ -1638,7 +1862,8 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
         fit_corpus: ``False`` returns the raw samples instead of fitting, for scoring a held-out
             draw against a corpus fitted on another.
         progress: Optional ``callable(locus, done, total)``.
-        n_jobs: Worker **threads** (not kernel threads). ``0`` means every available core; ``1``,
+        n_jobs: Pool-generation processes, then sample-map threads (not kernel threads).
+            ``0`` means every available core; ``1``,
             the default, runs in-process. The result is bit-identical at every value.
         depth_spread: Multiplicative depth range each repertoire's size is drawn log-uniformly
             across, around ``size``. ``None`` is the corpus's own -- :data:`DEPTH_SPREAD` for a pure
@@ -1665,25 +1890,57 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
 
     regime, cohort, size, depth_spread = corpus_plan(corpus_name, size=size,
                                                     depth_spread=depth_spread)
-    vocab = {loc: FE.gene_vocab(loc) for loc in loci}
+    vocab = {loc: FE.gene_vocab(loc, feature_definition=feature_definition) for loc in loci}
     if not fit_corpus:
         _ordered, draw = sample_stream(regime, loci=loci, n_samples=n_samples, size=size,
                                        seed=seed, source=source, progress=progress, n_jobs=n_jobs,
                                        depth_spread=depth_spread, cohort=cohort)
         return [draw(j) for j in range(n_samples)]
 
-    mats = build_matrices(regime, sig="vsig", featurise=partial(FE.raw_and_channels, vocab=vocab),
+    target_meta = {}
+    if L._configured(feature_definition):
+        import tempfile
+        from .cohort import parallel_rows
+        from .signature import _coverage_target
+        from ..cores import require_memory
+        scratch = Path(tempfile.mkdtemp(prefix="vdjtools-configured-"))
+        pools = None
+        try:
+            _, draw = sample_stream(regime, loci=loci, n_samples=n_samples, size=size,
+                                   seed=seed, source=source, progress=progress, n_jobs=n_jobs,
+                                   depth_spread=depth_spread, cohort=cohort, tmp=scratch)
+            pools = draw.args[0]
+            items = [(i, partial(draw, i)) for i in range(n_samples)]
+            target = _coverage_target(items, n_jobs, "min", {})
+            target_meta = {"cstar_target": target, "weight": "log2p1", "organism": "human"}
+            cols = {loc: L.raw_columns("vsig", loc, vocab[loc], feature_definition=feature_definition)
+                    for loc in loci}
+            require_memory(8 * n_samples * sum(map(len, cols.values())), "configured synthetic matrices")
+            mats = {loc: (np.full((n_samples, len(c)), np.nan), c) for loc, c in cols.items()}
+            def fill(i):
+                raw, _ = FE.raw_and_channels(draw(i), vocab, feature_definition=feature_definition,
+                                             cstar_target=target)
+                for buf, columns in mats.values():
+                    fill_row(buf, columns, i, raw)
+            parallel_rows(range(n_samples), fill, n_jobs)
+        finally:
+            if pools is not None:
+                pools.clear()
+            shutil.rmtree(scratch)
+    else:
+        mats = build_matrices(regime, sig="vsig", featurise=partial(FE.raw_and_channels, vocab=vocab, feature_definition=feature_definition),
                           vocab=vocab, loci=loci, n_samples=n_samples, size=size, seed=seed,
                           source=source, n_jobs=n_jobs, progress=progress,
-                          depth_spread=depth_spread, cohort=cohort)
+                          depth_spread=depth_spread, cohort=cohort, feature_definition=feature_definition)
 
     from .. import __version__
     corpus = fit_matrices(mats, vocab, sig="vsig", name=corpus_name, mode=mode,
-                          n_components=n_components, winsor_p=winsor_p,
+                          n_components=n_components, winsor_p=winsor_p, feature_definition=feature_definition,
+                          solver=solver, seed=seed, max_components=max_components,
                           meta=corpus_meta(regime, cohort, loci, n_samples=n_samples,
                                            size=size, seed=seed, source=source,
                                            depth_spread=depth_spread,
-                                           vdjtools_version=__version__))
+                                           vdjtools_version=__version__, **target_meta))
     return corpus, mats
 
 
@@ -1845,20 +2102,25 @@ class TablePCA:
 
     @classmethod
     def fit(cls, table: pl.DataFrame, *, n_components: int = 256, seed: int = 0,
-            columns: list[str] | None = None):
+            columns: list[str] | None = None, threads: int = 1):
         """Fit selected sample features; unselected channels and metadata pass through.
 
         RFF columns (phi:) are the default. For vsig/rsig tables supply explicit
         columns and an embedding_space column naming their actual feature basis.
-        This standard scaler/PCA does not replace corpus winsorization."""
+        This standard scaler/PCA does not replace corpus winsorization.
+        ``threads`` budgets BLAS during fitting (1 serial, 0 allocated cores)."""
+        from ..cores import kernel_threads, numerical_kernels
+
+        threads = kernel_threads(threads)
         space = _space(table)
         cols = list(columns) if columns is not None else [c for c in table.columns if c.startswith('phi:')]
-        if len(set(cols)) != len(cols) or any(c not in table.columns for c in cols):
+        if len(set(cols)) != len(cols) or not set(cols).issubset(table.columns):
             raise ValueError('feature columns must be present and unique')
         if not cols or table.height < 2 or n_components < 1:
             raise ValueError('PCA needs feature columns, at least two sample rows and a positive dimension')
         from vdjtools.cores import require_memory
-        require_memory(32 * table.height * len(cols) + 16 * len(cols)**2, 'sample feature PCA fit')
+        require_memory(32 * table.height * len(cols) + 16 * min(table.height, len(cols))**2,
+                       'sample feature PCA fit')
         X = table.select(cols).to_numpy(order='c').copy()
         X[~np.isfinite(X)] = np.nan
         fill = np.zeros(len(cols))
@@ -1867,16 +2129,59 @@ class TablePCA:
         missing = np.isnan(X)
         np.copyto(X, fill, where=missing)
         del missing
-        reducer = fit_pca(X, min(n_components, *X.shape), seed=seed, copy=False)
+        # Import the lazy solver before limiting its newly loaded BLAS pools.
+        from sklearn import decomposition  # noqa: F401
+
+        with numerical_kernels(threads):
+            reducer = fit_pca(X, min(n_components, *X.shape), seed=seed, copy=False)
         scaler, pca = reducer.steps[0][1], reducer.steps[1][1]
         return cls(cols, space, fill, scaler.mean_, scaler.scale_, pca.mean_, pca.components_,
                    np.nan_to_num(pca.explained_variance_ratio_, nan=0.0))
+
+    @classmethod
+    def fit_features(cls, samples, *, vocab, feature_definition, n_components=256,
+                     seed=0, n_jobs=1, threads=1, cstar_target="min", weight="log2p1",
+                     on_duplicate="error"):
+        """Fit configured raw sample features without materializing a dense cohort table.
+
+        Preserves TablePCA's median imputation and StandardScaler semantics; this
+        is distinct from the composition-aware corpus transform. Sparse raw rows
+        and byte-bounded chunks are transient; only model parameters are saved.
+        Sample workers join before the bounded numerical phase starts.
+        """
+        from .bounded import BlockMatrix, feature_matrices, table_pca
+        from .signature import _coverage_target, _raw_feature_identity
+        from ..cores import kernel_threads, numerical_kernels
+        L.validate_feature_definition(feature_definition)
+        if not L._configured(feature_definition):
+            raise ValueError("sparse raw-feature PCA requires a configured definition")
+        items = list(samples.items() if isinstance(samples, dict) else samples)
+        ids = [sid for sid, _ in items]
+        if len(items) < 2 or len(set(ids)) != len(ids) or n_components < 1:
+            raise ValueError("PCA needs at least two unique samples and a positive dimension")
+        threads = kernel_threads(threads)
+        target = _coverage_target(items, n_jobs, cstar_target, {'on_duplicate': on_duplicate})
+        kw = dict(feature_definition=feature_definition, cstar_target=target,
+                  weight=weight, on_duplicate=on_duplicate)
+        mats = feature_matrices(items, vocab, feature_definition, kw, n_jobs)
+        columns = [c for _, cols in mats.values() for c in cols]
+        if not columns:
+            raise ValueError("PCA needs feature columns")
+        identity_columns = columns + L.channel_columns('vsig', feature_definition=feature_definition)
+        space = 'vsig:' + _raw_feature_identity(identity_columns, vocab, weight, target, feature_definition)
+        raw = BlockMatrix([b for matrix, _ in mats.values() for b in matrix.blocks])
+        # Import before the numerical context so newly loaded native pools are capped.
+        from sklearn import preprocessing  # noqa: F401
+        with numerical_kernels(threads):
+            parameters = table_pca(raw, n_components, seed=seed)
+        return cls(columns, space, *parameters)
 
     def transform(self, table: pl.DataFrame) -> pl.DataFrame:
         """Apply this exact rotation; preserve sample IDs and metadata in input order."""
         if _space(table) != self.space:
             raise ValueError('embedding space differs from the fitted rotation')
-        if not set(self.columns).issubset(table.columns):
+        selected = set(self.columns)
+        if not selected.issubset(table.columns):
             raise ValueError('embedding columns differ from the fitted rotation')
         from vdjtools.cores import require_memory
         require_memory(24 * table.height * len(self.columns)
@@ -1887,7 +2192,7 @@ class TablePCA:
         X /= self.scale
         X -= self.center
         scores = X @ self.components.T
-        metadata = table.select([c for c in table.columns if c not in self.columns])
+        metadata = table.select([c for c in table.columns if c not in selected])
         return metadata.hstack(pl.from_numpy(scores, schema=[f'pc{i}' for i in range(scores.shape[1])]))
 
     def save(self, path) -> None:

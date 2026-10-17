@@ -208,7 +208,7 @@ def _codes(series: pl.Series, mapping: dict, default: int) -> np.ndarray:
 # ------------------------------------------------------------------------ germline vocabulary
 
 
-def gene_vocab(locus: str, organism: str = "human") -> dict[str, list[str]]:
+def gene_vocab(locus: str, organism: str = "human", *, feature_definition=None) -> dict[str, list[str]]:
     """Column names for the three germline-width raw groups at one locus.
 
     arda's germline is the single source of truth for V/J vocabulary across this ecosystem, so the
@@ -225,8 +225,40 @@ def gene_vocab(locus: str, organism: str = "human") -> dict[str, list[str]]:
     germ = load_germline(locus, organism=organism)
     v = sorted(set(germ.filter(pl.col("segment") == "V")["gene"].to_list()))
     j = sorted(set(germ.filter(pl.col("segment") == "J")["gene"].to_list()))
-    return {"vus": v, "jus": j,
-            "spec": [f"{g}_{n}" for g in v for n in SPECTRATYPE_LENGTHS]}
+    out = {"vus": v, "jus": j,
+           "spec": [f"{g}_{n}" for g in v for n in SPECTRATYPE_LENGTHS]}
+    from . import layout as L
+    if not L._configured(feature_definition):
+        return out
+    L.validate_feature_definition(feature_definition)
+    import itertools
+    if feature_definition["configuration"] == "basic":
+        out["vj"] = [f"{a}|{b}" for a in v for b in j] + ["_unknown"]
+        out["length"] = [str(n) for n in SPECTRATYPE_LENGTHS]
+    else:
+        out["vjl"] = [f"{a}|{b}|{n}" for a in v for b in j for n in SPECTRATYPE_LENGTHS] + ["_unknown"]
+    if locus == "IGH":
+        out["isotype"] = [*ISOTYPES, "_uncalled"]
+    if feature_definition["motifs"] != "none":
+        if feature_definition["motifs"] == "imgt11":
+            tokens = ["".join(t) for t in itertools.product("0123456789a", repeat=3)]
+        else:
+            tokens = sorted(set(feature_definition["motif_map"]["mapping"].values()))
+        context = feature_definition["v_context"]
+        if context == "none":
+            contexts = [""]
+        elif context == "gene":
+            contexts = [*v, "_unknown"]
+        else:
+            mapping = (feature_definition.get("v_maps") or {}).get(locus, {}).get("mapping", {})
+            missing = set(v) - set(mapping)
+            if missing:
+                raise ValueError(f"V cluster map lacks {len(missing)} genes for {locus}")
+            contexts = sorted(set(mapping.values()) - {"_unknown"}) + ["_unknown"]
+        names = [f"{c}|{t}" if c else t for c in contexts for t in tokens]
+        for shape in L.MOTIF_SHAPES:
+            out["motif_" + shape] = list(names)
+    return out
 
 
 # ---------------------------------------------------------------------------- raw feature groups
@@ -528,6 +560,51 @@ def pair_group(reads: dict[str, float]) -> dict[str, float]:
             for a, b in PAIRS}
 
 
+def composition_groups(df: pl.DataFrame, vocab: dict, *, feature_definition) -> dict[str, dict[str, float]]:
+    """New usage blocks as frequencies, with explicit closing residuals.
+
+    The frame must already carry normalized signature clone weights. Unknown or
+    unresolved V/J calls close a joint composition rather than becoming known genes.
+    """
+    from ..stats.usage import vj_usage
+    from ..stats.spectratype import spectratype, vj_spectratype
+    out = {}
+    pairs = [g for g in ("vj", "length", "vjl") if g in vocab]
+    for group in pairs:
+        if group == "length":
+            table = spectratype(df, weight="freq", by_locus=False)
+            table = table.with_columns(pl.col("length").clip(SPECTRATYPE_LENGTHS[0], SPECTRATYPE_LENGTHS[-1]).cast(pl.String).alias("_key"))
+        else:
+            table = (vj_usage(df, weight="freq", by_locus=False) if group == "vj" else
+                     vj_spectratype(df, weight="freq", by_locus=False))
+            key = pl.col(V_CALL) + pl.lit("|") + pl.col(J_CALL)
+            if group == "vjl":
+                key = key + pl.lit("|") + pl.col("length").clip(SPECTRATYPE_LENGTHS[0], SPECTRATYPE_LENGTHS[-1]).cast(pl.String)
+            table = table.with_columns(key.alias("_key"))
+        vals = dict.fromkeys(vocab[group], 0.0)
+        if df.is_empty():
+            out[group] = dict.fromkeys(vals, np.nan)
+            continue
+        grouped = table.group_by("_key").agg(pl.col("weight").sum())
+        for name, value in grouped.iter_rows():
+            target = name if name in vals else "_unknown"
+            vals[target] = vals.get(target, 0.0) + float(value)
+        if group != "length":
+            vals["_unknown"] += max(0.0, 1.0 - sum(vals.values()))
+        out[group] = vals
+    if "isotype" in vocab:
+        calls = (strip_allele_values(df[C_CALL]) if C_CALL in df.columns
+                 else pl.Series([None] * df.height, dtype=pl.String))
+        mapping = {g: iso for iso, genes in ISOTYPES.items() for g in genes}
+        codes = calls.replace_strict(mapping, default="_uncalled")
+        table = pl.DataFrame({'_key': codes, 'weight': df[FREQ]})
+        vals = dict.fromkeys(vocab['isotype'], 0.0 if df.height else np.nan)
+        for key, value in table.group_by('_key').agg(pl.col('weight').sum()).iter_rows():
+            vals[key] = float(value)
+        out['isotype'] = vals
+    return out
+
+
 # -------------------------------------------------------------------------- channel functions
 
 
@@ -581,7 +658,8 @@ def qc_channel(raw: pl.DataFrame, clean: pl.DataFrame, locus: str,
 def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str, list[str]]], *,
                      cstar_target: "float | dict[str, float] | None" = None,
                      weight: str = "log2p1", prefiltered: bool = False,
-                     on_duplicate: str = "error") -> tuple[dict[str, float], dict[str, float]]:
+                     on_duplicate: str = "error", feature_definition=None,
+                     _raw_array=None) -> tuple[dict[str, float], dict[str, float]]:
     """Every raw feature and every channel for one sample.
 
     Args:
@@ -601,6 +679,8 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
         ``(raw, channels)`` -- both ``{column: value}``, holes as ``nan``.
     """
     from .layout import NO_LOCUS
+    from . import layout as L
+    configured = L._configured(feature_definition)
 
     raw: dict[str, float] = {}
     chan: dict[str, float] = {}
@@ -631,8 +711,8 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
             if locus == "IGH":
                 chan["vsig:mask:IGH:c_call"] = 0.0
                 chan["vsig:mask:IGH:shm"] = 0.0
-            if modelled:
-                for c in _locus_raw_columns(locus, vocab):
+            if modelled and _raw_array is None:
+                for c in L.raw_columns("vsig", locus, vocab.get(locus), feature_definition=feature_definition):
                     raw[c] = np.nan
             continue
 
@@ -653,6 +733,52 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
         div = div_group(clean, float(level)) if level is not None and np.isfinite(level) \
             else dict.fromkeys(("1D_c", "0D_c", "2D_c", "clonality", "0D_chao", "d50"), np.nan)
         chan[f"vsig:mask:{locus}:estimable"] = float(np.isfinite(div["1D_c"]))
+
+        if configured:
+            groups = {"div": div, **composition_groups(wf, vocab[locus], feature_definition=feature_definition)}
+            depths = depth_group(clean, n_reads, richness)
+            chan.update({f"vsig:depth:{locus}:{k}": depths[k] for k in ("reads", "richness")})
+            lengths = clean[JUNCTION_AA].str.len_chars().to_numpy()
+            for name, mask in (("length_below_frac", lengths < SPECTRATYPE_LENGTHS[0]),
+                               ("length_above_frac", lengths > SPECTRATYPE_LENGTHS[-1])):
+                chan[f"vsig:qc:{locus}:{name}"] = float(_w(wf)[mask].sum())
+            if feature_definition["motifs"] != "none":
+                from ..features.kmer import motif_profile
+                context = feature_definition["v_context"]
+                mapping = ({g: g for g in vocab[locus]["vus"]} if context == "gene" else
+                           feature_definition["v_maps"][locus]["mapping"] if context == "cluster" else None)
+                profile = motif_profile(wf, alphabet=feature_definition["motifs"],
+                                        motif_map=feature_definition["motif_map"], v_context=context,
+                                        v_map=mapping, weight="freq")
+                for shape in L.MOTIF_SHAPES:
+                    part = profile.filter(pl.col("shape") == shape)
+                    g = "motif_" + shape
+                    vals = ({} if _raw_array is not None else
+                            dict.fromkeys(vocab[locus][g], 0.0 if part.height else np.nan))
+                    for ctx, token, frequency in part.select("context", "motif", "frequency").iter_rows():
+                        key = f"{ctx}|{token}" if ctx else token
+                        vals[key] = float(frequency)
+                    groups[g] = vals
+                    for name in ("eligible_frac", "unknown_v_frac"):
+                        chan[f"vsig:motif_qc:{locus}:{shape}_{name}"] = float(part[name][0]) if part.height else 0.0
+            if locus == "IGH":
+                chan["vsig:mask:IGH:c_call"] = float(C_CALL in clean.columns and clean[C_CALL].is_not_null().any())
+                chan["vsig:mask:IGH:shm"] = float(np.isfinite(shm_group(wf)["mean_v_identity"]))
+            for g, vals in groups.items():
+                if _raw_array is None:
+                    raw.update({f"vsig:{g}:{locus}:{k}": float(v) for k, v in vals.items()})
+                elif g in _raw_array[locus]:
+                    row, names = _raw_array[locus][g]
+                    if g.startswith("motif_"):
+                        row.fill(0.0 if vals else np.nan)
+                        indices = np.fromiter((names.get(k, -1) for k in vals), dtype=np.intp, count=len(vals))
+                        values = np.fromiter(vals.values(), dtype=float, count=len(vals))
+                        valid = indices >= 0
+                        row[indices[valid]] = values[valid]
+                    else:
+                        row[:] = np.fromiter(map(vals.__getitem__, names), dtype=float, count=len(names))
+                chan[f"vsig:observed:{locus}:{g}"] = float(any(np.isfinite(v) for v in vals.values()))
+            continue
 
         groups: dict[str, dict[str, float]] = {
             "div": div,
@@ -675,7 +801,12 @@ def raw_and_channels(frames: dict[str, pl.DataFrame], vocab: dict[str, dict[str,
         for g, vals in groups.items():
             raw |= {f"vsig:{g}:{locus}:{k}": float(v) for k, v in vals.items()}
 
-    raw |= {f"vsig:pair:{NO_LOCUS}:{k}": v for k, v in pair_group(reads).items()}
+    pair = {f"vsig:pair:{NO_LOCUS}:{k}": v for k, v in pair_group(reads).items()}
+    (chan if configured else raw).update(pair)
+    if configured:
+        for c in L.channel_columns("vsig", feature_definition=feature_definition):
+            if c not in chan:
+                chan[c] = 0.0 if ":observed:" in c else np.nan
     chan["vsig:qc:-:n_loci_present"] = float(n_present)
     chan["vsig:qc:-:winsor_frac"] = 0.0       # corpus.apply overwrites; 0.0 = nothing clamped
     return raw, chan

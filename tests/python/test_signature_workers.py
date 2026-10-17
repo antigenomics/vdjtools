@@ -21,6 +21,40 @@ def _probe(i):
             "blas": [p['num_threads'] for p in threadpool_info()]}
 
 
+def _generation_probe(i):
+    import time
+    time.sleep(.1)
+    return _probe(i)
+
+
+@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
+def test_generation_uses_processes_with_serial_import_pools(monkeypatch):
+    from vdjtools.signature.corpus import _map_unordered
+    for key in _KERNEL_ENV:
+        monkeypatch.setenv(key, "4")
+    rows = _map_unordered(_generation_probe, list(range(8)), 2)
+    assert sorted(r['i'] for r in rows) == list(range(8))
+    assert len({r['pid'] for r in rows}) == 2
+    assert all(r['pid'] != os.getpid() and r['polars'] == 1 for r in rows)
+    assert all(set(r['limits'].values()) == {'1'} for r in rows)
+    assert all(all(n == 1 for n in r['blas']) for r in rows)
+    assert all(os.environ[k] == '4' for k in _KERNEL_ENV)
+
+
+@pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
+def test_generation_pool_startup_failure_restores_parent(monkeypatch):
+    from vdjtools.signature.corpus import _map_unordered
+    monkeypatch.setenv('POLARS_MAX_THREADS', '7')
+    monkeypatch.delenv('OMP_THREAD_LIMIT', raising=False)
+    def broken(_):
+        raise RuntimeError('cannot start generation pool')
+    monkeypatch.setattr('multiprocessing.get_context', broken)
+    with pytest.raises(RuntimeError, match='cannot start generation pool'):
+        _map_unordered(abs, [1, 2], 2)
+    assert os.environ['POLARS_MAX_THREADS'] == '7'
+    assert 'OMP_THREAD_LIMIT' not in os.environ
+
+
 @pytest.mark.skipif(available_cores() < 2, reason="requires two allocated cores")
 def test_workers_limit_kernels_before_import_and_restore_parent(monkeypatch):
     for key in _KERNEL_ENV:
@@ -143,7 +177,7 @@ def test_corpus_releases_mapped_pools_before_scratch_cleanup(monkeypatch, n_jobs
     monkeypatch.setattr('vdjtools.cores.available_cores', lambda: 2)
     monkeypatch.setattr(corpus, 'build_pools', lambda *a, **kw: {})
     monkeypatch.setattr(corpus, 'draw_plan', lambda *a, **kw: {})
-    monkeypatch.setattr(corpus, 'locus_matrix', lambda *a: None)
+    monkeypatch.setattr(corpus, 'locus_matrix', lambda *a, **kw: None)
 
     def read(paths):
         frame = pl.DataFrame({'x': [1]})
@@ -216,3 +250,12 @@ def test_worker_base_exceptions_propagate_instead_of_killing_a_pool_thread(error
         raise error('worker stopped')
     with pytest.raises(error,match='worker stopped'):
         parallel_rows(range(10),fail,2)
+
+
+def test_runtime_prevents_idle_native_pools_spinning_across_phases(monkeypatch):
+    from vdjtools.cores import configure_runtime
+    monkeypatch.setenv('OPENBLAS_THREAD_TIMEOUT', '28')
+    monkeypatch.setenv('OMP_WAIT_POLICY', 'ACTIVE')
+    configure_runtime()
+    assert os.environ['OPENBLAS_THREAD_TIMEOUT'] == '4'
+    assert os.environ['OMP_WAIT_POLICY'] == 'PASSIVE'

@@ -18,8 +18,8 @@ repertoires --- fixes the last two:
 In plain terms, reading left to right:
 
 #. **Raw features** are the ordinary measurements of one repertoire --- how diverse, how clonal,
-   which V and J genes, what junction lengths, which isotypes. They come from this sample and
-   nothing else.
+   which V and J genes, what junction lengths, which isotypes. They use this sample
+   and a declared feature vocabulary; no corpus scaling or rotation is applied yet.
 #. :term:`Winsorization` clips each measurement to a range measured on the corpus, so that one
    pathological sample cannot dominate everything downstream. Clipping edits a real number, so how
    much of the row was clipped is always reported --- see ``winsor_frac`` below.
@@ -127,8 +127,9 @@ A corpus is required
 --------------------
 
 There is no default. A signature is comparable to another one **only** if both were rotated
-through the same corpus, so the artifact has to be named, and the emitted row records which one it
-was. Two matrices whose column names match but whose corpora differ are not comparable, and nothing
+through the same corpus, so the artifact has to be named. Keep its identity and checksum
+with the emitted matrix: the signature columns do not encode them. Two matrices whose column names
+match but whose corpora differ are not comparable, and nothing
 about the numbers says so — which is why the choice is not allowed to be implicit.
 
 All nine corpora are published. Four are **synthetic** -- every receptor drawn from the bundled
@@ -189,12 +190,19 @@ cross-locus covariance of libraries prepared together).
 Artifacts are fetched, not bundled
 ----------------------------------
 
-At 256 components a ``vsig`` artifact is about 10 MB of float32 rotation, and the nine corpora across
-both halves are roughly 110 MB. Making every ``pip install`` carry all of that in order to use one of
-them is the wrong trade, so the wheel ships a few KB of **index** -- ``corpora.json``, naming every
-corpus with its size and SHA-256 -- and the artifact itself is a GitHub release asset fetched on first
-use into ``$VDJTOOLS_CORPUS_DIR`` (default ``~/.cache/vdjtools/signature``) and verified against that
-digest.
+The named catalog contains nine legacy corpora and 70 configured real-data corpora: 14 feature
+definitions for each of ``blood``, ``tissue``, ``blood-uncapped``, ``tissue-uncapped`` and ``deep-tcr``.
+Configured names have the form ``<corpus>__<configuration>__<motifs>__v-<context>__v1``;
+for example, ``deep-tcr__basic__none__v-none__v1``. Configured synthetic corpora remain deferred.
+
+Each corpus is a compressed NPZ of fitted parameters plus a JSON manifest, with no sample matrix.
+The rotation has one row per feature and one column per retained PC. Wide motif-by-V definitions
+therefore need larger downloads: the configured NPZ files range from about 1.6 to 588 MiB, at 128
+PCs per fitted locus. The wheel carries only **corpora.json**, naming every file with its exact byte
+count and SHA-256. Parameters are GitHub release assets, fetched on first use into
+``$VDJTOOLS_CORPUS_DIR`` (default ``~/.cache/vdjtools/signature``) and verified against that digest.
+Fetch the named corpus you need; fetching all configured models is a multi-gigabyte download.
+List the complete catalog without downloading anything with ``vdjtools corpus --list``.
 
 The resolution order is **a local path, then the wheel, then the cache, then the release**. A local
 path always wins, so a caller who fitted their own corpus and passes its path is never served a
@@ -390,8 +398,8 @@ silently moves every component. Per-locus blocking is what keeps a hole a hole.
      - what
    * - ``div``
      - 6
-     - Coverage-standardised Hill numbers ``0D_c``/``1D_c``/``2D_c``, ``clonality``, ``0D_chao``,
-       ``d50``
+     - Coverage-standardised Hill numbers ``0D_c``/``1D_c``/``2D_c`` and clonality;
+       observed-count Chao richness ``0D_chao`` and the ``d50`` fraction ``k/Sobs``
    * - ``depth``
      - 3
      - ``reads``, ``richness``, ``S_unseen`` (Chao's estimate of what was never drawn)
@@ -421,7 +429,7 @@ silently moves every component. Per-locus blocking is what keeps a hole a hole.
      - IGH only: isotype composition in clr, and mean V identity
    * - ``pair``
      - 5
-     - Cross-locus: five log read-count ratios, depth divided out
+     - Cross-locus: five log10 ratios of ``reads + 1``
 
 Widths per locus run from 685 (TRD) to 3,744 (IGH), 13,483 raw features in total.
 
@@ -454,24 +462,26 @@ Building a corpus
 The synthetic corpora use **no samples from anybody's cohort**: every receptor is drawn from the
 bundled recombination models.
 
-The build runs across worker **threads**, one contiguous block of samples each; ``--jobs/-j``
+Pool generation uses spawned worker processes. Feature extraction then runs across worker
+**threads**, one contiguous block of samples each; ``--jobs/-j``
 sets how many and defaults to every core the process may use (``-j 1`` stays in-process). A sample
 is a pure function of its index -- its generator is seeded from ``(seed, locus, index)`` -- so each
 worker draws its own repertoires from memory-mapped pools and returns one row of numbers, and
 **the artifact is identical at every** ``--jobs``. The earlier process implementation, measured
 on Aldan-3 for seven loci at ``--samples 10000 --size 10000`` on 72 cores, took 157 s to generate
 the receptor pools (4,850 s in one process) and about 50 samples/s to featurise them. These are
-historical process timings, not throughput of the current thread implementation.
+historical process timings, not a new measurement of the current implementation.
 
-The unchanged reference pool sampler is Python/GIL-limited. Worker threads bound resource use
-and share memory, but do not accelerate that stage; full synthetic builds can therefore take
-about an hour or longer to generate pools. More ``--jobs`` does not remove this bottleneck.
-Use ``--fetch NAME`` for an existing published corpus. Feature extraction can still scale when
-its numerical kernels release the GIL.
+The reference sampler is Python/GIL-limited within each process. Pool workers use one kernel
+thread each and distribute the fixed, independently seeded chunks across processes. The process
+pool closes before sample extraction starts. An importable entry point with a
+``if __name__ == "__main__":`` guard is required for parallel generation.
+Use ``--fetch NAME`` for an existing published corpus.
 
 .. note::
 
-   Two settings, two layers. ``--jobs`` is worker **threads**; ``POLARS_MAX_THREADS`` and
+   Two settings, two layers. ``--jobs`` selects generation processes and subsequent sample-map
+   threads; ``POLARS_MAX_THREADS`` and
    ``OMP_NUM_THREADS`` are **kernel threads**. The builder sets its workers to one kernel thread
    each, because ``jobs x cores`` threads is how a 15 s stage was once measured at 296 s.
 
@@ -515,6 +525,15 @@ interpreters, pickling, or process helper threads are needed. A failed pool rais
 The CLI passes filenames to workers. Python readers may be closures or lambdas.
 Already-loaded frames remain resident in the caller. Callbacks must not mutate
 shared inputs or resources. ``n_jobs=1`` runs without a worker pool.
+
+Configured cohort fitting writes ordered raw groups into preallocated NumPy rows;
+the standalone raw-feature API continues to return its full column dictionary.
+
+For fitting, ``fit_cohort(..., n_jobs=16, threads=16)`` finishes and joins the
+feature workers before PCA uses up to 16 BLAS threads. ``threads=1`` preserves
+serial fitting; ``threads=0`` uses the scheduler/container allocation. Excessive
+counts raise. ``fit_matrices`` and ``TablePCA.fit`` accept the same fitting-only
+``threads`` budget and restore the caller's BLAS limits afterwards.
 The default cohort coverage target requires two passes through the input; an explicit
 ``cstar_target`` avoids the coverage pass without changing worker allocation.
 
@@ -563,8 +582,8 @@ byte-identical to a run without the argument. The reportable blocks are:
      - what it holds
    * - ``vsig``
      - ``div``
-     - Coverage-standardised Hill numbers ``1D_c``/``0D_c``/``2D_c``, ``0D_chao``, clonality,
-       ``d50``
+     - Coverage-standardised Hill numbers ``1D_c``/``0D_c``/``2D_c`` and clonality;
+       observed-count Chao richness ``0D_chao`` and the ``d50`` fraction ``k/Sobs``
    * - ``vsig``
      - ``depth``
      - ``reads``, ``richness``, ``S_unseen``
@@ -687,3 +706,69 @@ API
 
 .. automodule:: vdjtools.signature.transform
    :members:
+
+Fitting configurable bases
+--------------------------
+
+The ``basic`` and ``joint`` configurations and their extended motifs are described
+in :doc:`features`. Each configuration needs its own per-locus corpus rotation;
+a base rotation is not a subset of an extended rotation. Legacy artifacts and
+legacy scaling remain unchanged.
+
+New composition blocks enter PCA as square-root frequencies. Columns are centered
+by their corpus means, and a single scale per block is fitted as the square root
+of the sum of population column variances. Rare variable bins survive even when
+their median absolute deviation is zero. Constant blocks contribute zero. Diversity
+retains its established transforms and robust scaling; new bounded compositions
+are not winsorized. Missing blocks are projected at the fitted center and carry
+observation masks. A wholly absent locus has missing PCs.
+
+.. code-block:: python
+
+   from vdjtools.signature import feature_definition, vsig_cohort
+   from vdjtools.signature.corpus import fit_cohort, Corpus
+
+   definition = feature_definition("basic", motifs="imgt11")
+   fitted = fit_cohort(readers, name="reference", loci=("TRA", "TRB"),
+                       feature_definition=definition, cstar_target=0.8,
+                       n_components=32, n_jobs=1)
+   fitted.save("reference.npz")
+   loaded = Corpus.load("reference.npz")
+   projected = vsig_cohort(new_readers, loaded, n_jobs=1)
+
+``readers`` and ``new_readers`` are repeatable ``(sample_id, reader)`` pairs;
+each zero-argument reader returns a locus-to-frame dictionary. The artifact stores
+the feature definition, maps, vocabulary, clone weights, coverage target, fitted
+scales, bounds, rotation and variance. PC scaling is fitted using the same
+float32-rounded rotation restored from disk. Application defaults to its measurement
+policy; incompatible clone weights raise. An explicit shared coverage or cohort
+minimum may override it; ``own`` is refused for configured signatures. Match the
+target across tables being compared. ``rotation_space`` identifies the fitted rotation in new
+projected tables. ``signature --describe`` includes this identity column.
+
+.. code-block:: bash
+
+   vdjtools corpus --corpus memory --feature-set joint --motifs imgt11 \
+       --solver randomized --components 128 -o joint-reference.npz
+   vdjtools signature --corpus joint-reference.npz samples/*.tsv -o projected.tsv
+
+The randomized solver is an explicit option for wide new bases. Configured fits
+assemble sparse float64 rows and use a centered operator instead of allocating a
+dense sample-by-feature matrix. Winsorization includes implicit zeros and excludes
+missing observations; missing blocks retain their existing imputation semantics.
+Dense statistic chunks target 8 MiB each, with a minimum of one column. RAM scales
+with observed entries and the sample/feature-by-component workspaces, so component
+count still matters. Sample-map workers finish before BLAS uses the numerical
+thread budget; selecting the allocation for both phases does not nest them.
+
+The seeded solver retains four power iterations, ten oversampling vectors and the
+existing component sign rule. Floating reduction order can reverse a component
+whose largest opposite loadings tie; dense comparisons must align that sign (or
+compare a degenerate subspace). Existing saved rotations are applied unchanged.
+Legacy fits and full SVD retain their previous paths. No feature intermediates are
+written to disk. The solver records the
+full input variance and a truncated spectrum; an unreachable variance fraction or
+an application request beyond the stored component count raises. Full SVD remains
+the default. The new block-aware fit supports ``features`` mode, not ``pcs`` mode.
+Neither projection nor a corpus load fits scales, recomputes raw-source features
+for reference samples, or reconstructs cluster maps.
