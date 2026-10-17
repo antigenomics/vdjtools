@@ -1050,9 +1050,10 @@ def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") 
         tmp.unlink(missing_ok=True)
         raise OSError(f"{url} hashed {got[:12]}, the shipped index expects {sha256[:12]}; refusing "
                       "to cache it. Either the release asset was replaced or the download truncated.")
-    if nbytes and tmp.stat().st_size != nbytes:
+    received = tmp.stat().st_size
+    if nbytes and received != nbytes:
         tmp.unlink(missing_ok=True)
-        raise OSError(f"{url} is {tmp.stat().st_size} bytes, the index expects {nbytes}")
+        raise OSError(f"{url} is {received} bytes, the index expects {nbytes}")
     tmp.replace(dest)
     return dest
 

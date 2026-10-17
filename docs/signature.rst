@@ -190,12 +190,18 @@ cross-locus covariance of libraries prepared together).
 Artifacts are fetched, not bundled
 ----------------------------------
 
-At 256 components a ``vsig`` artifact is about 10 MB of float32 rotation, and the nine corpora across
-both halves are roughly 110 MB. Making every ``pip install`` carry all of that in order to use one of
-them is the wrong trade, so the wheel ships a few KB of **index** -- ``corpora.json``, naming every
-corpus with its size and SHA-256 -- and the artifact itself is a GitHub release asset fetched on first
-use into ``$VDJTOOLS_CORPUS_DIR`` (default ``~/.cache/vdjtools/signature``) and verified against that
-digest.
+The named catalog contains nine legacy corpora and 70 configured real-data corpora: 14 feature
+definitions for each of ``blood``, ``tissue``, ``blood-uncapped``, ``tissue-uncapped`` and ``deep-tcr``.
+Configured names have the form ``<corpus>__<configuration>__<motifs>__v-<context>__v1``;
+for example, ``deep-tcr__basic__none__v-none__v1``. Configured synthetic corpora remain deferred.
+
+Each corpus is a compressed NPZ of fitted parameters plus a JSON manifest, with no sample matrix.
+The rotation has one row per feature and one column per retained PC. Wide motif-by-V definitions
+therefore need larger downloads: the configured NPZ files range from about 1.6 to 588 MiB, at 128
+PCs per fitted locus. The wheel carries only **corpora.json**, naming every file with its exact byte
+count and SHA-256. Parameters are GitHub release assets, fetched on first use into
+``$VDJTOOLS_CORPUS_DIR`` (default ``~/.cache/vdjtools/signature``) and verified against that digest.
+Fetch the named corpus you need; fetching all configured models is a multi-gigabyte download.
 
 The resolution order is **a local path, then the wheel, then the cache, then the release**. A local
 path always wins, so a caller who fitted their own corpus and passes its path is never served a

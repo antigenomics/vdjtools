@@ -724,3 +724,13 @@ def test_a_corpus_artifact_resolves_from_path_wheel_cache_then_release(tmp_path,
 
     with pytest.raises(ValueError, match="no corpus named"):
         C.fetch_artifact("nope", sig="vsig", res_dir=res, repo="x/y", quiet=True)
+
+
+def test_download_size_mismatch_reports_received_size_and_removes_partial_file(tmp_path):
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"abc")
+    target = tmp_path / "download.bin"
+    with pytest.raises(OSError, match="is 3 bytes, the index expects 4"):
+        C._download(source.as_uri(), target, None, 4)
+    assert not target.exists()
+    assert not target.with_suffix(".bin.part").exists()
