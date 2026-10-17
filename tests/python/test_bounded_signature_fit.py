@@ -358,3 +358,17 @@ def test_cohort_releases_original_sparse_indices_before_fitting(monkeypatch):
     monkeypatch.setattr(C, 'fit_matrices', fit)
     assert C.fit_cohort([('sample', {})], vocab={'TRB': {}}, feature_definition=L.feature_definition('basic'),
                         cstar_target=.5, solver='randomized') == 'fitted'
+
+
+def test_centered_operator_vector_hooks_accept_column_vectors():
+    from scipy import sparse
+    from vdjtools.signature.bounded import CenteredOperator
+    x = np.array([[1., 0., 2.], [0., 3., 0.]])
+    baseline = np.array([.1, .2, .3])
+    offset = np.array([.4, .5, .6])
+    op = CenteredOperator([(sparse.csr_matrix(x), np.ones(2), baseline)], offset)
+    dense = x + baseline - offset
+    for hook, matrix in [(op._matvec, dense), (op._rmatvec, dense.T)]:
+        q = np.arange(matrix.shape[1], dtype=float)
+        for shape in [(len(q),), (len(q), 1)]:
+            np.testing.assert_allclose(hook(q.reshape(shape)), matrix @ q)

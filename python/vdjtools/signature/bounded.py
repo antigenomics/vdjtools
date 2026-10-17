@@ -183,10 +183,10 @@ class CenteredOperator(LinearOperator):
         return out
 
     def _matvec(self, q):
-        return self._matmat(q[:, None])[:, 0]
+        return self._matmat(np.asarray(q).reshape(-1, 1))[:, 0]
 
     def _rmatvec(self, q):
-        return self._rmatmat(q[:, None])[:, 0]
+        return self._rmatmat(np.asarray(q).reshape(-1, 1))[:, 0]
 
 
 def randomized_svd(matrix, k, *, seed, n_iter=4, oversamples=10):

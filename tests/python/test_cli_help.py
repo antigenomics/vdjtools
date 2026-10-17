@@ -7,6 +7,7 @@ library actually ships (it named 2 of 9 for a whole release).
 """
 from __future__ import annotations
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from vdjtools.cli import app
@@ -18,7 +19,7 @@ runner = CliRunner()
 def _help(*args: str) -> str:
     result = runner.invoke(app, [*args, "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0, result.output
-    return result.output
+    return unstyle(result.output)
 
 
 def test_the_signature_help_prints_column_names_verbatim_not_as_emoji():
