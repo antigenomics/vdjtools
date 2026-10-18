@@ -278,3 +278,29 @@ def test_read_immunoseq_uses_the_validated_gene_map(tmp_path):
                  "TCRBV09-01\tTCRBD01-01\tTCRBJ02-04\t50\t50\n")
     r = convert.read_immunoseq(p).row(0, named=True)
     assert (r["v_call"], r["d_call"], r["j_call"]) == ("TRBV9", "TRBD1", "TRBJ2-4")
+
+
+def test_tcr_best_gene_column_aliases(tmp_path):
+    from vdjtools import io
+    p = tmp_path / "tcr.tsv"
+    p.write_text("Rank\tRead.count\tRead.proportion\tCDR3.nucleotide.sequence\tCDR3.amino.acid.sequence\tbestVGene\tbestJGene\n"
+                 "1\t7\t1.0\tTGTGCCAGCAGCTTT\tCASSF\tTRBV2*01\tTRBJ1-1*01\n")
+    for frame in (convert.read_mitcr(p), io.read(p)):
+        assert frame.height == 1
+        assert frame["junction_aa"].item() == "CASSF"
+        assert frame["v_call"].item() == "TRBV2"
+        assert frame["j_call"].item() == "TRBJ1-1"
+        assert frame["duplicate_count"].item() == 7
+
+
+def test_mitcr_preserve_source_rows_when_not_collapsing(tmp_path):
+    p = tmp_path / "raw.tsv"
+    p.write_text("Read.count\tCDR3.nucleotide.sequence\tCDR3.amino.acid.sequence\tbestVGene\tbestJGene\n"
+                 "7\tTGTGCCAGCAGCTTT\tCASSF\tTRBV2\tTRBJ1-1\n"
+                 "8\tTGTGCCAGCAGCTTT\tCASSF\tTRBV2\tTRBJ1-1\n"
+                 "9\tTGTGCCAGCAGCTTT\tCASSF\tTRBV2,TRBV3\t\n")
+    frame = convert.read_mitcr(p, collapse=False)
+    assert frame.height == 3 and frame["duplicate_count"].to_list() == [7,8,9]
+    assert frame["j_call"].null_count() == 1
+    assert frame["v_call"].to_list() == ["TRBV2", "TRBV2", "TRBV2,TRBV3"]
+    assert convert.read_mitcr(p)["duplicate_count"].to_list() == [15]
