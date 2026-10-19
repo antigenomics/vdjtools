@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "5.2.1"
+version = "5.2.2"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -73,7 +73,7 @@ dependencies = [
     # that actually bounds what pip may resolve; the pre-1.0 floor let it pick releases
     # nothing here has been run against. (0.6.1, the old floor, fixed a corrupted MJ A-N
     # contact energy in structural() and named the bad sequence in gapblock's alphabet error.)
-    "seqtree>=1.2.0,<2",
+    "seqtree>=1.3.1,<2",
     "vdjmatch>=0.1.2",  # 0.1.2 fixes cluster.overlap() raising SchemaError on zero fuzzy matches
     # We declare huggingface_hub OURSELVES rather than borrowing seqtree's `[control]` extra:
     # it is genuinely OUR dependency (model/data.py imports hf_hub_download directly), and
