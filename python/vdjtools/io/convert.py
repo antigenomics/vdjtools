@@ -298,7 +298,7 @@ def translate_junctions(nt, *, threads: int = 0) -> pl.Series:
     return aa.zip_with(s.is_not_null() & (s.str.len_bytes() > 0), blank)
 
 
-def _finalize(df: pl.DataFrame) -> pl.DataFrame:
+def _finalize(df: pl.DataFrame, *, collapse: bool = True) -> pl.DataFrame:
     """Filter bad rows, collapse to unique clonotypes (summed counts), coerce to canonical.
 
     Takes the frame the reader built with expressions. It used to take a list of one dict per
@@ -309,6 +309,8 @@ def _finalize(df: pl.DataFrame) -> pl.DataFrame:
         return schema.add_locus(schema.normalize(pl.DataFrame(schema={c: pl.Utf8 for c in
                                 (V_CALL, D_CALL, J_CALL, JUNCTION_AA, JUNCTION_NT)})))
     df = df.with_columns(pl.col(COUNT).cast(pl.Int64, strict=False))
+    if not collapse:
+        return schema.add_locus(schema.normalize(df, recompute_freq=True))
     keep = (
         pl.col(JUNCTION_NT).is_not_null() & (pl.col(JUNCTION_NT).str.len_bytes() > 0)
         & pl.col(JUNCTION_AA).is_not_null() & (pl.col(JUNCTION_AA).str.len_bytes() > 0)
@@ -390,18 +392,20 @@ def read_migec(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
     ))
 
 
-def read_mitcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
+def read_mitcr(path: str | os.PathLike, n_rows: int | None = None, *, collapse: bool = True) -> pl.DataFrame:
     """Read a MiTCR / tcR (R package) clonotype table — the dot-separated dialect.
 
     Header is ``Read.count Read.proportion CDR3.nucleotide.sequence CDR3.amino.acid.sequence
     V.gene J.gene D.gene V.end J.start D5.end D3.end VD.insertions DJ.insertions
-    Total.insertions``. Distinct from MiGEC's ``CDR3 nucleotide sequence`` / ``V segments``
+    Total.insertions``; tcR exports may instead use ``bestVGene`` / ``bestJGene``. Distinct from MiGEC's ``CDR3 nucleotide sequence`` / ``V segments``
     (spaces, not dots), so it needs its own picks. ``D.gene`` may carry an ambiguous call
     (``"TRBD1, TRBD2"``); :func:`extract_vdj` keeps the first.
 
     Args:
         path: Path to a MiTCR/tcR table.
         n_rows: Read only the first ``n_rows`` rows.
+        collapse: Keep the historical bulk collapse/filter by default. False preserves
+            source row order, counts, ambiguous gene calls and missing calls for identity-aware callers.
 
     Returns:
         Canonical clonotype frame.
@@ -414,18 +418,26 @@ def read_mitcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
     count_c = _pick(lo, "read.count")
     nt_c = _pick(lo, "cdr3.nucleotide.sequence")
     aa_c = _pick(lo, "cdr3.amino.acid.sequence")
-    v_c = _pick(lo, "v.gene")
-    j_c = _pick(lo, "j.gene")
+    v_c = _pick(lo, "v.gene", "bestvgene")
+    j_c = _pick(lo, "j.gene", "bestjgene")
     d_c = _pick(lo, "d.gene")
     if not (count_c and nt_c and aa_c and v_c and j_c):
         raise ValueError(f"not a MiTCR/tcR table; have {raw.columns}")
+    count = pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64)
+    if not collapse:
+        value = pl.col(count_c).str.strip_chars()
+        count = pl.when(value.str.contains(r"^[+]?[0-9]+(?:\.0+)?$")).then(
+            value.str.replace(r"\.0+$", "").cast(pl.Int64, strict=False)).otherwise(None)
+        if raw.select(count.is_null().any()).item():
+            raise ValueError('source rows require nonnegative int64 integer counts without missing values')
+    gene_expr = _vdj_expr if collapse else lambda col: _upper_expr(col) if col else pl.lit(None, pl.Utf8)
     return _finalize(raw.select(
-        _vdj_expr(v_c).alias(V_CALL), _vdj_expr(d_c).alias(D_CALL),
-        _vdj_expr(j_c).alias(J_CALL),
+        gene_expr(v_c).alias(V_CALL), gene_expr(d_c).alias(D_CALL),
+        gene_expr(j_c).alias(J_CALL),
         _upper_expr(nt_c).alias(JUNCTION_NT),
         _unified_expr(aa_c).alias(JUNCTION_AA),
-        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
-    ))
+        count.alias(COUNT),
+    ), collapse=collapse)
 
 
 def read_rtcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFrame:
