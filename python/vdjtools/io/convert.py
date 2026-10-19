@@ -423,13 +423,20 @@ def read_mitcr(path: str | os.PathLike, n_rows: int | None = None, *, collapse: 
     d_c = _pick(lo, "d.gene")
     if not (count_c and nt_c and aa_c and v_c and j_c):
         raise ValueError(f"not a MiTCR/tcR table; have {raw.columns}")
+    count = pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64)
+    if not collapse:
+        value = pl.col(count_c).str.strip_chars()
+        count = pl.when(value.str.contains(r"^[+]?[0-9]+(?:\.0+)?$")).then(
+            value.str.replace(r"\.0+$", "").cast(pl.Int64, strict=False)).otherwise(None)
+        if raw.select(count.is_null().any()).item():
+            raise ValueError('source rows require nonnegative int64 integer counts without missing values')
     gene_expr = _vdj_expr if collapse else lambda col: _upper_expr(col) if col else pl.lit(None, pl.Utf8)
     return _finalize(raw.select(
         gene_expr(v_c).alias(V_CALL), gene_expr(d_c).alias(D_CALL),
         gene_expr(j_c).alias(J_CALL),
         _upper_expr(nt_c).alias(JUNCTION_NT),
         _unified_expr(aa_c).alias(JUNCTION_AA),
-        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+        count.alias(COUNT),
     ), collapse=collapse)
 
 

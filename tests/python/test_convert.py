@@ -304,3 +304,15 @@ def test_mitcr_preserve_source_rows_when_not_collapsing(tmp_path):
     assert frame["j_call"].null_count() == 1
     assert frame["v_call"].to_list() == ["TRBV2", "TRBV2", "TRBV2,TRBV3"]
     assert convert.read_mitcr(p)["duplicate_count"].to_list() == [15]
+
+
+def test_mitcr_source_counts_do_not_round_through_float(tmp_path):
+    p=tmp_path/'exact.tsv'
+    header='Read.count\tCDR3.nucleotide.sequence\tCDR3.amino.acid.sequence\tbestVGene\tbestJGene\n'
+    for value in ('9007199254740993','9007199254740993.0'):
+        p.write_text(header+value+'\tTGTGCCAGCAGCTTT\tCASSF\tTRBV2\tTRBJ1-1\n')
+        assert convert.read_mitcr(p,collapse=False)['duplicate_count'].item()==9007199254740993
+    for value in ('-1','1.5','9223372036854775808',''):
+        p.write_text(header+value+'\tTGTGCCAGCAGCTTT\tCASSF\tTRBV2\tTRBJ1-1\n')
+        with pytest.raises(ValueError,match='integer counts'):
+            convert.read_mitcr(p,collapse=False)
