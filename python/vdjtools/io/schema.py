@@ -154,7 +154,7 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False,
     for col, dtype in SCHEMA.items():
         if col not in df.columns:
             exprs.append(pl.lit(None, dtype=dtype).alias(col))
-        elif col == COUNT:
+        elif col == COUNT and not df.schema[col].is_integer():
             # Route the count through Float64: read via the all-Utf8 TSV path, a count of "5000.0"
             # (pandas float-formats any integer column that once held a NaN) fails a direct
             # Utf8->Int64 cast, becomes null, and recompute_frequency then reports frequency 0.0
