@@ -13,7 +13,8 @@ result is readable **without installing dandelion**.
 NOTE: dandelion also ships a polars backend (``ddl.set_backend("polars")``,
 ``DandelionPolars``) whose ``.data``/``.metadata`` take polars frames directly. If you are
 on that backend, hand :func:`~vdjtools.sc.to_airr` output straight over; the pandas
-conversion here is only for the default backend.
+conversion here explicitly uses the pandas backend, including with Dandelion 1.0,
+whose default is Polars. The caller's backend selection is unchanged.
 """
 from __future__ import annotations
 
@@ -52,7 +53,11 @@ def to_dandelion(cells: pl.DataFrame):
 
     from .anndata import _to_pandas
 
-    return ddl.Dandelion(data=_to_pandas(to_airr(cells)))
+    if hasattr(ddl, "get_backend"):  # Dandelion 1.0 exposes both backend classes.
+        from dandelion.base.core import Dandelion
+    else:
+        Dandelion = ddl.Dandelion
+    return Dandelion(data=_to_pandas(to_airr(cells)))
 
 
 def from_dandelion(vdj) -> pl.DataFrame:

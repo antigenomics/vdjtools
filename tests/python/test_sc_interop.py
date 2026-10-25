@@ -117,8 +117,15 @@ def test_dandelion_round_trip_is_lossless():
 
 
 def test_to_dandelion_builds_contig_and_cell_tables():
-    _need("dandelion")
+    ddl = _need("dandelion")
+    import pandas as pd
+
+    backend = ddl.get_backend() if hasattr(ddl, "get_backend") else None
     vdj = sc.to_dandelion(_cells())
+    assert isinstance(vdj.data, pd.DataFrame)
+    assert isinstance(vdj.metadata, pd.DataFrame)
+    if backend is not None:
+        assert ddl.get_backend() == backend
     assert len(vdj.data) == 3          # contig level
     assert len(vdj.metadata) == 2      # cell level
 
