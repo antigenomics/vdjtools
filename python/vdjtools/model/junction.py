@@ -153,6 +153,19 @@ def _reachable(model, eps: float = 1e-9):
     return out
 
 
+def _d_posteriors(scen: pl.DataFrame) -> pl.DataFrame:
+    """Sum ranked scenarios in stable order before normalising each query's D weights."""
+    return (scen.with_columns(pl.col("d_call").cast(pl.String, strict=False))
+            .with_columns(pl.col("d_call").str.split("*").list.first().alias("_g"))
+            .filter(pl.col("_g").is_not_null())
+            .sort("row", "_g", "rank")
+            .group_by("row", "_g", maintain_order=True).agg(pl.col("w").sum())
+            .sort("row", "_g")
+            .with_columns((pl.col("w") / pl.col("w").sum().over("row")).alias("_p"))
+            .sort(["row", "_p", "_g"], descending=[False, True, False])
+            .group_by("row", maintain_order=True).first())
+
+
 def _aa_span(start_nt: int, end_nt: int) -> tuple[int | None, int | None]:
     """Residues whose codons the nucleotide span ``[start_nt, end_nt]`` (1-based closed) touches.
 
@@ -343,17 +356,7 @@ def annotate_junctions(junction_aas: Sequence[str], v_calls: Sequence[str],
                 continue
             # A VJ locus scores every scenario with no D at all, and polars gives an all-null column
             # of dtype Object there -- `.str` on which is a SchemaError, not an empty result.
-            top = (scen.with_columns(pl.col("d_call").cast(pl.String, strict=False))
-                       .with_columns(pl.col("d_call").str.split("*").list.first().alias("_g"))
-                       .filter(pl.col("_g").is_not_null())
-                       .group_by("row", "_g").agg(pl.col("w").sum())
-                       .with_columns((pl.col("w") / pl.col("w").sum().over("row")).alias("_p"))
-                       # Sort then take the head of each group, rather than `unique(keep="first")`:
-                       # a hash-unique is not order-stable, and two D genes CAN carry the same summed
-                       # weight -- `_g` is in the sort so that tie breaks by name and not by thread
-                       # scheduling. Determinism is a requirement here, not a nicety.
-                       .sort(["row", "_p", "_g"], descending=[False, True, False])
-                       .group_by("row", maintain_order=True).first())
+            top = _d_posteriors(scen)
             for k_, g_, p_ in zip(top["row"].to_list(), top["_g"].to_list(), top["_p"].to_list()):
                 d_gene[idx[k_]], d_post[idx[k_]] = g_, p_
 

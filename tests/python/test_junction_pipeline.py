@@ -237,3 +237,28 @@ def test_a_junction_naming_neither_side_gets_a_locus_proposed():
     assert got["cdr3_nt"].null_count() == 0
     assert all("V" in p and "J" in p for p in got["proposed"]), got["proposed"].to_list()
     assert got["d_call"][0] is not None and got["d_call"][1] is None   # TRB has a D, TRA has none
+
+
+def test_d_posterior_reduction_has_one_value_across_repeated_hash_grouping():
+    """Consumers may initialise multithreaded Polars before importing vdjtools."""
+    import os
+    import subprocess
+    import sys
+
+    probe = r"""
+import polars as pl
+assert pl.thread_pool_size() == 4
+from vdjtools.model.junction import _d_posteriors
+import sys
+scenarios = pl.read_parquet(sys.argv[1])
+values = {_d_posteriors(scenarios).filter(pl.col("row") == 1228)["_p"][0]
+          for _ in range(128)}
+assert values == {0.8072042852066905}, values
+"""
+    from pathlib import Path
+
+    fixture = Path(__file__).parents[1] / "data" / "junction_d_scenarios.parquet"
+    result = subprocess.run([sys.executable, "-c", probe, str(fixture)], timeout=30,
+                            capture_output=True, text=True,
+                            env={**os.environ, "POLARS_MAX_THREADS": "4"})
+    assert result.returncode == 0, result.stdout + result.stderr
