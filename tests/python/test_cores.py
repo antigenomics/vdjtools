@@ -116,3 +116,20 @@ def test_memory_guard_uses_remaining_cgroup_bytes(tmp_path, monkeypatch):
     cores.require_memory(1024**2, 'small operation')
     with pytest.raises(MemoryError, match='additional workspace'):
         cores.require_memory(5 * 1024**3, 'PCA fit')
+
+
+@pytest.mark.parametrize("hard_limit", [None, "4"])
+def test_import_preserves_caller_openmp_hard_limit(hard_limit):
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    if hard_limit is None:
+        env.pop("OMP_THREAD_LIMIT", None)
+    else:
+        env["OMP_THREAD_LIMIT"] = hard_limit
+    probe = "import os, vdjtools; print(os.environ.get('OMP_THREAD_LIMIT')); print(os.environ['OMP_NUM_THREADS'])"
+    result = subprocess.run([sys.executable, "-c", probe], env=env, timeout=30,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [str(hard_limit), "1"]
