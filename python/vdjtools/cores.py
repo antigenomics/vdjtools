@@ -200,7 +200,9 @@ def configure_runtime() -> None:
     """
     import sys
 
-    os.environ.update(dict.fromkeys(_KERNEL_ENV, "1"))
+    # Keep serial defaults without imposing a hard cap on later caller-owned contexts.
+    os.environ.update(dict.fromkeys((key for key in _KERNEL_ENV
+                                    if key != "OMP_THREAD_LIMIT"), "1"))
     # NumPy and SciPy may load distinct BLAS pools; idle pools must sleep at handoff.
     # OpenBLAS clamps its timeout exponent to at least 4 (zero means its long default).
     os.environ.update(OPENBLAS_THREAD_TIMEOUT="4", OMP_WAIT_POLICY="PASSIVE")
