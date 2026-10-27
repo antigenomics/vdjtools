@@ -1040,21 +1040,26 @@ def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") 
     rotation that loads is far worse than one that is missing.
     """
     import urllib.request
+    import tempfile
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url) as r, tmp.open("wb") as f:
-        shutil.copyfileobj(r, f)
-    got = hashlib.sha256(tmp.read_bytes()).hexdigest()
-    if sha256 and got != sha256:
-        tmp.unlink(missing_ok=True)
-        raise OSError(f"{url} hashed {got[:12]}, the shipped index expects {sha256[:12]}; refusing "
-                      "to cache it. Either the release asset was replaced or the download truncated.")
-    received = tmp.stat().st_size
-    if nbytes and received != nbytes:
-        tmp.unlink(missing_ok=True)
-        raise OSError(f"{url} is {received} bytes, the index expects {nbytes}")
-    tmp.replace(dest)
+    with tempfile.NamedTemporaryFile(dir=dest.parent, prefix=dest.name + ".", suffix=".part",
+                                     delete=False) as f:
+        tmp = Path(f.name)
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r:
+                shutil.copyfileobj(r, f)
+            f.close()
+            got = hashlib.sha256(tmp.read_bytes()).hexdigest()
+            if sha256 and got != sha256:
+                raise OSError(f"{url} hashed {got[:12]}, the shipped index expects {sha256[:12]}; refusing "
+                              "to cache it. Either the release asset was replaced or the download truncated.")
+            received = tmp.stat().st_size
+            if nbytes and received != nbytes:
+                raise OSError(f"{url} is {received} bytes, the index expects {nbytes}")
+            tmp.replace(dest)
+        finally:
+            tmp.unlink(missing_ok=True)
     return dest
 
 
