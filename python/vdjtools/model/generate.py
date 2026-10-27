@@ -240,7 +240,9 @@ def _generate_native(model: Model, n: int, seed: int | None, productive_only: bo
     from .native import pack
 
     pm, vi, ji = pack(model)
-    got = generate_batch(pm, int(n), int(seed or 0), bool(productive_only), kernel_threads(threads))
+    if seed is None:
+        seed = int(np.random.SeedSequence().generate_state(1, dtype=np.uint64)[0])
+    got = generate_batch(pm, int(n), int(seed), bool(productive_only), kernel_threads(threads))
     names_v = np.array([a for a, _i in sorted(vi.items(), key=lambda kv: kv[1])], dtype=object)
     names_j = np.array([a for a, _i in sorted(ji.items(), key=lambda kv: kv[1])], dtype=object)
     names_d = np.array(model.genomic["genes_d"]["d_allele"].to_list()
@@ -270,7 +272,7 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
     Args:
         model: The generative model.
         n: Number of sequences to return.
-        seed: RNG seed for reproducibility.
+        seed: RNG seed for reproducibility; ``None`` draws fresh entropy for either engine.
         productive_only: If True, reject out-of-frame / stop-codon draws and keep sampling.
         engine: ``"reference"`` (default) is the Python ancestral sampler -- the implementation
             every shipped artifact drawn from this function was built with, and the one whose

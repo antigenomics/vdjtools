@@ -136,3 +136,21 @@ def test_zero_rows_is_an_empty_frame_not_an_error(trb):
     got = generate(trb, 0, seed=1, engine="native")
     assert got.height == 0
     assert got.columns == generate(trb, 1, seed=1, engine="native").columns
+
+
+def test_omitted_native_seed_uses_fresh_entropy(trb, monkeypatch):
+    import vdjtools._core as core
+
+    original = core.generate_batch
+    seeds = []
+
+    def record(model, n, seed, productive, threads):
+        seeds.append(seed)
+        return original(model, n, seed, productive, threads)
+
+    monkeypatch.setattr(core, "generate_batch", record)
+    generate(trb, 1, engine="native")
+    generate(trb, 1, engine="native")
+    generate(trb, 1, seed=0, engine="native")
+    assert seeds[0] != seeds[1]
+    assert seeds[2] == 0
