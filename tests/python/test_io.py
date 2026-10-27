@@ -29,6 +29,24 @@ def test_schema_normalize_adds_missing_and_types():
     assert out[S.FREQ].to_list() == [1.0]           # single clonotype -> freq 1
 
 
+@pytest.mark.parametrize("values", [
+    [9007199254740993, 9223372036854775807],
+    ["9007199254740993", "9223372036854775807.0"],
+])
+def test_normalize_preserves_exact_int64_counts(values):
+    assert S.normalize(pl.DataFrame({S.COUNT: values}))[S.COUNT].to_list() == [
+        9007199254740993, 9223372036854775807,
+    ]
+
+
+@pytest.mark.parametrize("count", ["9007199254740993", "9007199254740993.0"])
+def test_airr_reader_preserves_large_counts(tmp_path, count):
+    path = tmp_path / "counts.tsv"
+    path.write_text("v_call\tj_call\tjunction\tjunction_aa\tduplicate_count\n"
+                    f"TRBV1\tTRBJ1-1\tTGTGCC\tCA\t{count}\n")
+    assert vio.read_airr(path)[S.COUNT].item() == 9007199254740993
+
+
 def test_locus_helpers():
     assert S.locus_of("TRBV12-3*01") == "TRB"
     assert S.locus_of(None) is None

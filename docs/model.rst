@@ -236,12 +236,14 @@ way, which is the case for any two compared through this function.
 Known quirks of the OLGA models
 -------------------------------
 
-The bundled ``olga`` model set is a **bit-faithful import** of OLGA's published models: vdjtools
-reproduces their marginals exactly, and native Pgen matches ``olga``'s own to machine precision
-across all seven loci. Faithful means faithful to the defects too. These are properties of the
-source models, verified against OLGA's raw ``model_marginals.txt`` with OLGA's own parser — not
-import bugs, and **not** things to "correct" here, because doing so would break the exact-Pgen
-invariant that makes the import checkable in the first place.
+The bundled ``olga`` model set preserves OLGA's published probability tables.
+Importing or loading a model also applies documented germline anchor repairs.
+For example, human TRB ``TRBV4-3*02`` moves from anchor 267 to 270;
+its repaired germline can contribute probability absent from original OLGA output.
+Engine oracle tests therefore compare identical raw germlines and probability
+tables, using relative tolerances with zero absolute tolerance. Anchor repairs
+are tested separately. Equality of probability tables alone does not establish
+equality of Pgen after a germline repair.
 
 Deletion mass on trims that cannot be reached
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

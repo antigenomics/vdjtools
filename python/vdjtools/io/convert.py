@@ -27,6 +27,7 @@ import gzip
 import json
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from importlib import resources
 from pathlib import Path
 
@@ -46,7 +47,7 @@ from .schema import (
 
 
 def _to_int(*cells) -> int:
-    """First cell parsing to a **positive** integer count (double-then-truncate); none → 0.
+    """First cell parsing to a **positive** integer count (truncate fractions); none → 0.
 
     Skips non-numeric *and* non-positive cells so the legacy count fallback fires correctly —
     e.g. Adaptive immunoSEQ v1 ``templates`` is often ``"null"`` **or** ``"0"`` and the real
@@ -54,8 +55,8 @@ def _to_int(*cells) -> int:
     """
     for x in cells:
         try:
-            v = int(float(x))
-        except (TypeError, ValueError):
+            v = int(Decimal(str(x)))
+        except (InvalidOperation, TypeError, ValueError, OverflowError):
             continue
         if v > 0:
             return v
@@ -367,7 +368,7 @@ def read_mixcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
         _upper_expr(nt_c).alias(JUNCTION_NT),
         # MiXcr aa is milib-based -- kept verbatim (no unify)
         pl.col(aa_c).cast(pl.Utf8).alias(JUNCTION_AA),
-        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+        schema.count_expr(count_c).alias(COUNT),
     ))
 
 
@@ -388,7 +389,7 @@ def read_migec(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFra
         _vdj_expr(j_c).alias(J_CALL),
         _upper_expr(nt_c).alias(JUNCTION_NT),
         _unified_expr(aa_c).alias(JUNCTION_AA),
-        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+        schema.count_expr(count_c).alias(COUNT),
     ))
 
 
@@ -423,7 +424,7 @@ def read_mitcr(path: str | os.PathLike, n_rows: int | None = None, *, collapse: 
     d_c = _pick(lo, "d.gene")
     if not (count_c and nt_c and aa_c and v_c and j_c):
         raise ValueError(f"not a MiTCR/tcR table; have {raw.columns}")
-    count = pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64)
+    count = schema.count_expr(count_c)
     if not collapse:
         value = pl.col(count_c).str.strip_chars()
         count = pl.when(value.str.contains(r"^[+]?[0-9]+(?:\.0+)?$")).then(
@@ -453,7 +454,7 @@ def read_rtcr(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFram
     got = raw.select(
         _vdj_expr(v_c).alias(V_CALL), pl.lit(None, pl.Utf8).alias(D_CALL),
         _vdj_expr(j_c).alias(J_CALL), _upper_expr(nt_c).alias(JUNCTION_NT),
-        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+        schema.count_expr(count_c).alias(COUNT),
     )
     return _finalize(got.with_columns(
         translate_junctions(got[JUNCTION_NT]).alias(JUNCTION_AA)))
@@ -526,11 +527,11 @@ def read_immunoseq(path: str | os.PathLike, n_rows: int | None = None) -> pl.Dat
     nt = (pl.when(start.is_not_null() & ln.is_not_null() & (start >= 0) & (ln > 0))
           .then(pl.col(full_c).cast(pl.Utf8).str.slice(start, ln).str.to_uppercase())
           .otherwise(None))
-    count = pl.col(count_c).cast(pl.Float64, strict=False)
+    count = schema.count_expr(count_c)
     if count2_c:
         # `_to_int` skips non-numeric AND non-positive cells: v1 writes "null" *or* "0" into
         # templates and the real count is in reads. Falling back only on null loses the "0" case.
-        alt = pl.col(count2_c).cast(pl.Float64, strict=False)
+        alt = schema.count_expr(count2_c)
         count = pl.when(count.is_not_null() & (count > 0)).then(count).otherwise(alt)
 
     got = raw.select(
@@ -625,7 +626,7 @@ def read_trust4(path: str | os.PathLike, n_rows: int | None = None) -> pl.DataFr
         _vdj_expr(v_c).alias(V_CALL), _vdj_expr(d_c).alias(D_CALL),
         _vdj_expr(j_c).alias(J_CALL), _vdj_expr(c_c).alias(C_CALL),
         _upper_expr(nt_c).alias(JUNCTION_NT), _unified_expr(aa_c).alias(JUNCTION_AA),
-        pl.col(count_c).cast(pl.Float64, strict=False).cast(pl.Int64).alias(COUNT),
+        schema.count_expr(count_c).alias(COUNT),
     # skip TRUST4 partial / out-of-frame / N-containing CDR3s
     ).filter(pl.col(JUNCTION_NT).str.contains(r"^[ATGC]+$")))
 

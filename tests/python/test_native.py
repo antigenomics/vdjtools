@@ -30,7 +30,7 @@ pytestmark = pytest.mark.skipif(not OLGA_MODELS.exists(), reason=f"OLGA models n
 def test_native_nt_beta_oracle():
     m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
     p = native.pgen_nt(m, "TGTGCCTGGAGTGTAGCTCCGGACAGGGGTGGCTACACCTTC", "TRBV30*01", "TRBJ1-2*01")
-    assert np.isclose(p, 2.3986503758867323e-12, rtol=1e-9)
+    assert np.isclose(p, 2.3986503758867323e-12, rtol=1e-9, atol=0)
 
 
 @pytest.mark.parametrize("sub,locus", [("human_T_alpha", "TRA"), ("human_T_beta", "TRB")])
@@ -40,16 +40,16 @@ def test_native_matches_python(sub, locus):
     df = generate(m, 8, seed=3, productive_only=True)
     for r in df.to_dicts():
         nt, v, j = r["junction_nt"], r["v_call"], r["j_call"]
-        assert np.isclose(native.pgen_nt(m, nt, v, j), py_pgen_nt(prep, nt, v, j), rtol=1e-9)
+        assert np.isclose(native.pgen_nt(m, nt, v, j), py_pgen_nt(prep, nt, v, j), rtol=1e-9, atol=0)
     # unrestricted (sum over all genes) must also agree
     nt = df["junction_nt"][0]
-    assert np.isclose(native.pgen_nt(m, nt), py_pgen_nt(prep, nt), rtol=1e-9)
+    assert np.isclose(native.pgen_nt(m, nt), py_pgen_nt(prep, nt), rtol=1e-9, atol=0)
 
 
 def test_native_aa_beta_oracle():
     m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
     p = native.pgen_aa(m, "CAWSVAPDRGGYTF", "TRBV30*01", "TRBJ1-2*01")
-    assert np.isclose(p, 1.203646865765782e-10, rtol=1e-6)
+    assert np.isclose(p, 1.203646865765782e-10, rtol=1e-6, atol=0)
 
 
 def _olga_vdj(sub):
@@ -69,7 +69,7 @@ def _olga_vdj(sub):
     return gp.GenerationProbabilityVDJ(gen, gd)
 
 
-def test_native_aa_vdj_matches_olga():
+def test_native_aa_vdj_matches_olga(monkeypatch):
     """Native transfer-matrix VDJ aa-Pgen == OLGA's compute_aa_CDR3_pgen (both fast, exact).
 
     This is the primary VDJ aa-Pgen check: it compares the native ``_core`` transfer matrix
@@ -77,25 +77,33 @@ def test_native_aa_vdj_matches_olga():
     pure-Python enumeration is too slow to be a routine oracle here (``test_native_aa_matches_
     python_vdj`` covers it under ``-m slow``); OLGA is the authoritative fast oracle.
     """
-    m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
+    # Engine oracle uses identical raw germlines; anchor repair has separate coverage.
+    from vdjtools.model import io as model_io
+    with monkeypatch.context() as patch:
+        patch.setattr(model_io, "repair_anchors", lambda genomic: genomic)
+        m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
     olga = _olga_vdj("human_T_beta")
     seqs = sorted(
         generate(m, 40, seed=7, productive_only=True).to_dicts(), key=lambda r: len(r["junction_aa"])
     )
     for r in seqs[:12]:
         aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
-        assert np.isclose(native.pgen_aa(m, aa), olga.compute_aa_CDR3_pgen(aa), rtol=1e-9)  # all V/J/D
-        assert np.isclose(native.pgen_aa(m, aa, v, j), olga.compute_aa_CDR3_pgen(aa, v, j), rtol=1e-9)
+        assert np.isclose(native.pgen_aa(m, aa), olga.compute_aa_CDR3_pgen(aa), rtol=1e-9, atol=0)  # all V/J/D
+        assert np.isclose(native.pgen_aa(m, aa, v, j), olga.compute_aa_CDR3_pgen(aa, v, j), rtol=1e-9, atol=0)
 
 
-def test_native_aa_hamming1_matches_olga():
+def test_native_aa_hamming1_matches_olga(monkeypatch):
     """Native 1-mismatch aa-Pgen (``mismatches=1``) == OLGA's compute_hamming_dist_1_pgen.
 
     The native path evaluates the inclusion-exclusion identity with the fast transfer matrix and
     a single wildcard mask per position (no 19x per-neighbour enumeration), so it is several times
     faster than OLGA while matching it to machine precision — unrestricted and V/J-restricted.
     """
-    m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
+    # Engine oracle uses identical raw germlines; anchor repair has separate coverage.
+    from vdjtools.model import io as model_io
+    with monkeypatch.context() as patch:
+        patch.setattr(model_io, "repair_anchors", lambda genomic: genomic)
+        m = from_olga(OLGA_MODELS / "human_T_beta", locus="TRB")
     olga = _olga_vdj("human_T_beta")
     seqs = sorted(
         generate(m, 40, seed=7, productive_only=True).to_dicts(), key=lambda r: len(r["junction_aa"])
@@ -103,12 +111,12 @@ def test_native_aa_hamming1_matches_olga():
     for r in seqs[:8]:
         aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
         assert np.isclose(
-            native.pgen_aa(m, aa, mismatches=1), olga.compute_hamming_dist_1_pgen(aa), rtol=1e-9
+            native.pgen_aa(m, aa, mismatches=1), olga.compute_hamming_dist_1_pgen(aa), rtol=1e-9, atol=0
         )
         assert np.isclose(
             native.pgen_aa(m, aa, v, j, mismatches=1),
             olga.compute_hamming_dist_1_pgen(aa, v, j),
-            rtol=1e-9,
+            rtol=1e-9, atol=0,
         )
 
 
@@ -117,7 +125,7 @@ def test_native_aa_matches_python_vj():
     prep = prepare(m)
     for r in generate(m, 6, seed=3, productive_only=True).to_dicts():
         aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
-        assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6)
+        assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6, atol=0)
 
 
 def test_native_estep_matches_python():
@@ -190,4 +198,4 @@ def test_native_aa_matches_python_vdj():
     # short beta CDR3s (the VDJ aa enumeration is O(D x deletions x positions))
     for r in sorted(generate(m, 60, seed=3, productive_only=True).to_dicts(), key=lambda r: len(r["junction_aa"]))[:3]:
         aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
-        assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6)
+        assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6, atol=0)
