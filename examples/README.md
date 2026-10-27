@@ -22,12 +22,14 @@ donors, ages 0–103), reading each signal three complementary ways from a singl
 
 - **Cohort-streaming stats** — `stats.diversity_cohort`, the singleton→hyperexpanded clone-size
   distribution, and the CDR3 `spectratype`, each a single streamed `group_by` over a
-  `io.scan_cohort` LazyFrame (peak memory independent of cohort size).
+  `io.scan_cohort` LazyFrame without materialising every input repertoire together.
+  The count spectrum and output still grow with the number of samples.
 - **Diversity declines with age** — coverage-standardized Hill-number diversity via iNEXT
   (`sample_coverage`, `estimate_d`, `inext_batch`) that removes the sequencing-depth confound,
   plus the classic rarefaction/extrapolation curves (`rarefaction`).
 - **Repertoires diverge with age** — pairwise exact-match overlap (`vdjtools.overlap`, the `F`
-  metric on CDR3aa+V+J) after equal-depth downsampling, embedded with metric MDS: young samples
+  metric on junction amino acids+V+J, including the conserved anchors) after equal-depth
+  downsampling, embedded with metric MDS: young samples
   cluster centrally and older donors scatter to the periphery.
 - **Repertoires become more clonal with age** — top-clone read share.
 

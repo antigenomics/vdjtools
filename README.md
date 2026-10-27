@@ -54,7 +54,7 @@ v_usage = stats.segment_usage(sample, "v")
 
 ```bash
 vdjtools diversity samples/*.tsv -o diversity.tsv
-vdjtools features samples/*.tsv --coverage 0.8 --threads 1 -o features.tsv
+vdjtools features samples/*.tsv --coverage 0.8 --threads 0 -o features.tsv
 vdjtools signature --corpus blood samples/*.tsv -o vsig.tsv
 ```
 
@@ -63,6 +63,15 @@ Declared log/CLR/logit/arcsine transforms remain; “raw” means before corpus 
 winsorization and PCA. `signature` applies the published vsig corpus transform.
 These are different outputs. mirpy's rsig geometry half joins vsig on `sample_id`;
 mirpy's sample RFF vectors are a separate representation.
+
+For large new sequence draws, select the native sampler and its allocated CPU budget:
+
+```bash
+vdjtools generate -m TRB -n 10000 --engine native --threads 0 --seed 7 -o generated.tsv
+```
+
+Native draws are identical across thread counts. The default reference sampler preserves
+historical seeded draws; the two engines use different random streams.
 
 Fit your own sample PCA on selected measurements, compatible control rows, or reuse
 a saved rotation:
