@@ -208,6 +208,8 @@ def generate(
     n: int = typer.Option(100, "--number", "-n", help="Number of sequences to generate."),
     seed: Optional[int] = typer.Option(None, help="Random seed for reproducible draws."),
     productive: bool = typer.Option(False, help="Only keep in-frame, stop-free (productive) rearrangements."),
+    engine: str = typer.Option("reference", help="Sampler: reference preserves historical seeds; native uses a distinct, faster random stream."),
+    threads: int = typer.Option(0, min=0, help="Native kernel CPU budget; 0 uses allocated cores. Reference sampling is serial."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout)."),
 ) -> None:
     """Sample recombined sequences from a model — like ``olga-generate_sequences``.
@@ -218,7 +220,7 @@ def generate(
     from vdjtools.model.generate import generate as _generate
 
     m = _load_model(model, source, model_path)
-    _write(_generate(m, n, seed=seed, productive_only=productive), out)
+    _write(_generate(m, n, seed=seed, productive_only=productive, engine=engine, threads=threads), out)
 
 
 # ---------------------------------------------------------------------------- analytics commands

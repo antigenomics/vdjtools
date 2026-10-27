@@ -538,3 +538,16 @@ Packed-model state is bounded; successive EM iterations do not retain an unbound
 ``annotate_junctions`` also returns the stage-one ``v_fix``, ``j_fix``, ``v_canonical`` and
 ``j_canonical`` fields. Consumers can reuse the repair classifications without rerunning markup.
 The repaired amino-acid junction remains authoritative when applying nucleotide flanks.
+
+Native sampling from the command line
+-------------------------------------
+
+For large new sequence draws, select the existing native sampler explicitly::
+
+   vdjtools generate --model TRB --number 10000 --seed 7 --engine native --threads 0 -o draws.tsv
+
+``--threads 0`` selects the allocated CPU budget; a positive count selects a smaller
+budget. Native draws are invariant to thread count. The default reference sampler
+preserves historical seeded draws and runs serially. Native and reference engines
+use different random streams, so the same seed does not produce identical sequences
+across engines. Neither option fits or rebuilds a model.

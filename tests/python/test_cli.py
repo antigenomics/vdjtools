@@ -16,6 +16,18 @@ from vdjtools.cli import app
 runner = CliRunner()
 
 
+def test_generate_native_cli_matches_library(tmp_path):
+    from vdjtools.model import load_bundled
+    from vdjtools.model.generate import generate
+
+    out = tmp_path / "native.parquet"
+    result = runner.invoke(app, ["generate", "-m", "TRB", "-n", "64", "--seed", "7",
+                                 "--engine", "native", "--threads", "1", "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    assert pl.read_parquet(out).equals(generate(load_bundled("TRB"), 64, seed=7,
+                                               engine="native", threads=1))
+
+
 def _airr_sample(df: pl.DataFrame, seed: int) -> pl.DataFrame:
     rng = np.random.default_rng(seed)
     return df.with_columns(
