@@ -15,7 +15,7 @@
   <a href="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://docs.isalgo.dev/vdjtools/"><img alt="docs" src="https://github.com/antigenomics/vdjtools/actions/workflows/docs.yml/badge.svg"></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue">
-  <img alt="license" src="https://img.shields.io/badge/license-GPLv3-green">
+  <img alt="license" src="https://img.shields.io/badge/license-Academic%20Non--Commercial-green">
 </p>
 
 <p align="center"><b>
@@ -125,7 +125,7 @@ The VDJtrack recapture model in `vdjtools.dynamics` is
 
 ## License
 
-GPL-3.0-or-later. The legacy Groovy/Java v1.x tool lives on the
+ISALGO LAB Academic and Non-Commercial Research License. The legacy Groovy/Java v1.x tool lives on the
 [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch, with its releases
 under the repository tags `v0.0.1` … `1.2.1`.
 
