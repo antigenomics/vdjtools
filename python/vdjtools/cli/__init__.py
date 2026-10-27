@@ -233,8 +233,8 @@ _FMT = typer.Option("auto", "--format", help="auto | vdjtools | airr.")
 _OUT = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout).")
 _THREADS = typer.Option(
     0, "--threads", "-t",
-    help="Worker threads over samples (0 = all cores). Threads, not processes: the heavy work "
-         "releases the GIL, so this is the setting that scales. Lower it only to share the machine.",
+    help="Worker threads over samples (0 = allocated cores). Inner kernels stay serial; "
+         "reduce the budget to share resources or bound simultaneous sample memory.",
 )
 _ONDUP = typer.Option(
     "error", "--on-duplicate",
@@ -608,9 +608,9 @@ def signature(
                                    "see the 'transform' column of --describe."),
     describe: bool = typer.Option(False, "--describe",
                                   help="Print the columns THIS invocation emits, and exit."),
-    jobs: int = typer.Option(1, "--jobs", "-j",
-                             help="Worker processes over samples (default: 1, 0 = all available cores). "
-                                  "Each spawned worker uses one kernel thread."),
+    jobs: int = typer.Option(0, "--jobs", "-j",
+                             help="Worker threads over samples (0 = allocated cores, 1 = serial). "
+                                  "Each worker uses one kernel thread."),
     on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
     """One repertoire in, one row of named features out -- rotated through a named corpus.
@@ -1229,7 +1229,7 @@ def model_learn(
 def model_build(
     chains: str = typer.Option(",".join(("TRA", "TRB")), "--chains", help="Comma-separated chains."),
     groups: str = typer.Option("human", "--groups", help="Comma-separated read groups."),
-    workers: Optional[int] = typer.Option(None, help="Concurrent chain builds (default: cores/2)."),
+    workers: Optional[int] = typer.Option(None, help="Concurrent chain builds (default: allocated cores, capped at chain count); one kernel thread per build."),
     work_dir: Path = typer.Option(Path("/tmp/vdjtools_build"), help="Scratch dir for arda output."),
     cap: Optional[int] = typer.Option(None, help="Cap reads per chain (default: use every read)."),
     max_iter: int = typer.Option(15, help="EM iteration cap."),

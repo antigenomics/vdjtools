@@ -514,8 +514,9 @@ per locus.
 Parallelism
 -----------
 
-``--jobs`` / ``n_jobs`` selects worker threads: 1 (the default) runs in the
-calling process, 0 requests all available cores, and a positive count must fit the allocation and is capped
+``--jobs`` / ``n_jobs`` selects worker threads: 0 (the default for signature
+application) uses the allocated cores, capped at the sample count; 1 runs in the
+calling process, and a positive count must fit the allocation and is capped
 by the number of samples. No timing or sample-depth heuristic changes that count.
 
 Workers share frozen resources and use one thread per numerical kernel. Each worker
