@@ -250,17 +250,24 @@ def diversity_stats(df: pl.DataFrame, extrapolate_to: int | None = None, *,
     """
     df = resolve_duplicates(df, on_duplicate)
     counts = _counts(df)
-    return pl.DataFrame({
-        "reads": [int(counts.sum())],
-        "observed_diversity": [observed_richness(counts)],
-        "chao1": [chao1(counts)],
-        "chaoE": [chao_e(counts, extrapolate_to)],
-        "efron_thisted": [efron_thisted(counts)],
-        "shannon_wiener": [shannon_wiener(counts)],
-        "normalized_shannon_wiener": [normalized_shannon_wiener(counts)],
-        "inverse_simpson": [inverse_simpson(counts)],
-        "d50": [d50(counts)],
-    })
+    return pl.DataFrame({k: [v] for k, v in _diversity_values(counts, extrapolate_to).items()})
+
+
+def _diversity_values(counts: np.ndarray, extrapolate_to: int | None) -> dict:
+    """One summary from sorted counts, without constructing a per-sample table."""
+    entropy = _shannon_entropy(counts)
+    richness = observed_richness(counts)
+    return {
+        "reads": int(counts.sum()),
+        "observed_diversity": richness,
+        "chao1": chao1(counts),
+        "chaoE": chao_e(counts, extrapolate_to),
+        "efron_thisted": efron_thisted(counts),
+        "shannon_wiener": float(math.exp(entropy)),
+        "normalized_shannon_wiener": entropy / math.log(richness) if richness > 1 else 0.0,
+        "inverse_simpson": inverse_simpson(counts),
+        "d50": d50(counts),
+    }
 
 
 def _resolve_cohort_duplicates(lf: pl.LazyFrame, sample_col: str, on_duplicate: str) -> pl.LazyFrame:
@@ -339,9 +346,14 @@ def diversity_cohort(cohort, extrapolate_to: int | None = None, *,
     rows = []
     for sub in spectrum.partition_by(sample_col, maintain_order=True):
         counts = np.repeat(sub[COUNT].to_numpy(), sub["_fx"].to_numpy())
-        row = diversity_stats(pl.DataFrame({COUNT: counts}), extrapolate_to)
-        rows.append(row.select(pl.lit(sub[sample_col][0]).alias(sample_col), pl.all()))
+        values = _diversity_values(np.sort(counts), extrapolate_to)
+        rows.append({sample_col: sub[sample_col][0], **values})
     if not rows:
         base = diversity_stats(pl.DataFrame({COUNT: np.array([], dtype=np.int64)}))
         return base.select(pl.lit(None, dtype=pl.Utf8).alias(sample_col), pl.all()).clear()
-    return pl.concat(rows, how="vertical_relaxed")
+    # Match the scalar-literal dtype promotion used by the original per-sample tables.
+    id_dtype = pl.concat([
+        pl.select(pl.lit(value).alias(sample_col))
+        for value in (spectrum[sample_col].min(), spectrum[sample_col].max())
+    ], how="vertical_relaxed").schema[sample_col]
+    return pl.DataFrame(rows).with_columns(pl.col(sample_col).cast(id_dtype))
