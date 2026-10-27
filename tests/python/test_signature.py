@@ -768,3 +768,19 @@ def test_concurrent_downloads_have_independent_partial_files(tmp_path, monkeypat
     assert not errors
     assert target.read_bytes() == payload
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_download_connection_failure_preserves_existing_artifact(tmp_path, monkeypatch):
+    import urllib.request
+
+    target = tmp_path / "artifact.npz"
+    target.write_bytes(b"existing")
+
+    def fail(url, **kw):
+        raise OSError("connection interrupted")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    with pytest.raises(OSError, match="connection interrupted"):
+        C._download("test://artifact", target, None, None)
+    assert target.read_bytes() == b"existing"
+    assert not list(tmp_path.glob("*.part"))
