@@ -161,3 +161,12 @@ def test_omitted_native_seed_uses_fresh_entropy(trb, monkeypatch):
 def test_generation_rejects_invalid_counts_before_sampling(trb, engine, n, error):
     with pytest.raises(error):
         generate(trb, n, engine=engine)
+
+
+def test_single_vj_draw_keeps_null_d_columns_typed(trg):
+    frame = generate(trg, 1, seed=7, productive_only=True, engine="native", threads=1)
+    import polars as pl
+
+    for column in ("d_call", "d2_call"):
+        assert frame[column].dtype == pl.String
+        assert frame[column].to_list() == [None]

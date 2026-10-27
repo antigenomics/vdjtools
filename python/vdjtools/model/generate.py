@@ -249,8 +249,8 @@ def _generate_native(model: Model, n: int, seed: int | None, productive_only: bo
                        if model.chain_type == "VDJ" else [], dtype=object)
 
     def named(idx, names):
-        if not names.size:
-            return np.full(idx.shape, None, dtype=object)
+        if not names.size or (idx < 0).all():
+            return [None] * len(idx)
         return np.where(idx >= 0, names[np.maximum(idx, 0)], None)
 
     return pl.DataFrame({
