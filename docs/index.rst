@@ -208,6 +208,18 @@ Licensed GPL-3.0-or-later. The legacy Groovy/Java v1.x tool lives on the
 `legacy-1.x <https://github.com/antigenomics/vdjtools/tree/legacy-1.x>`_ branch, with its releases
 under the repository tags ``v0.0.1`` through ``1.2.1``.
 
+Choose a documentation path
+---------------------------
+
+* **Learn by doing:** :doc:`getting-started` walks through a first analysis;
+  :doc:`notebooks` provides interactive worked examples.
+* **Complete a task:** :doc:`usage`, :doc:`preprocessing`, :doc:`features`,
+  :doc:`signature`, :doc:`model` and :doc:`singlecell` describe analysis workflows.
+* **Understand the method:** :doc:`signature-methods` explains the statistical
+  representation, fitting choices and measured behavior.
+* **Look up an interface:** :doc:`cli`, :doc:`api`, :doc:`channels` and
+  :doc:`glossary` define commands, functions, output fields and terminology.
+
 .. toctree::
    :hidden:
    :caption: Getting started
@@ -215,11 +227,10 @@ under the repository tags ``v0.0.1`` through ``1.2.1``.
 
    self
    getting-started
-   glossary
 
 .. toctree::
    :hidden:
-   :caption: Guides
+   :caption: How-to guides
    :maxdepth: 2
 
    usage
@@ -237,10 +248,11 @@ under the repository tags ``v0.0.1`` through ``1.2.1``.
    cli
    api
    channels
+   glossary
 
 .. toctree::
    :hidden:
-   :caption: How it works
+   :caption: Explanation
    :maxdepth: 2
 
    signature-methods

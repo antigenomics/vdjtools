@@ -154,3 +154,10 @@ def test_omitted_native_seed_uses_fresh_entropy(trb, monkeypatch):
     generate(trb, 1, seed=0, engine="native")
     assert seeds[0] != seeds[1]
     assert seeds[2] == 0
+
+
+@pytest.mark.parametrize("engine", ["reference", "native"])
+@pytest.mark.parametrize("n,error", [(-1, ValueError), (1.5, TypeError), (True, TypeError)])
+def test_generation_rejects_invalid_counts_before_sampling(trb, engine, n, error):
+    with pytest.raises(error):
+        generate(trb, n, engine=engine)

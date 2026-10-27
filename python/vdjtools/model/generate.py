@@ -295,6 +295,13 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
     """
     if engine not in ("reference", "native"):
         raise ValueError('engine must be "reference" or "native"')
+    import operator
+
+    if isinstance(n, bool):
+        raise TypeError("n must be an integer, not bool")
+    n = operator.index(n)
+    if n < 0:
+        raise ValueError("n must be non-negative")
     if engine == "native":
         return _generate_native(model, n, seed, productive_only, threads)
     prep = prepare_generation(model)
