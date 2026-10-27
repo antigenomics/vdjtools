@@ -177,7 +177,8 @@ def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
             all V/J — note this changes the quantity from ``P(junction, V, J)`` to ``P(junction)``.
         on_unknown: What to do with a call that does not resolve to exactly one model allele —
             ``"error"`` (default) or ``"marginalize"``.
-        threads: Worker threads for amino-acid scoring (``0`` = auto). Nucleotide scoring is serial.
+        threads: Native kernel threads for amino-acid or nucleotide batches.
+            ``0`` uses allocated cores; an outer sample worker keeps inner kernels serial.
         seq_col: Explicit sequence column, when ``sequences`` is a frame.
         v_col: Explicit V-call column, when ``sequences`` is a frame.
         j_col: Explicit J-call column, when ``sequences`` is a frame.

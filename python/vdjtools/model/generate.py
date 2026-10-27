@@ -251,7 +251,8 @@ def _generate_native(model: Model, n: int, seed: int | None, productive_only: bo
     def named(idx, names):
         if not names.size or (idx < 0).all():
             return [None] * len(idx)
-        return np.where(idx >= 0, names[np.maximum(idx, 0)], None)
+        return (pl.Series(names.tolist(), dtype=pl.String)
+                .gather(np.maximum(idx, 0)).set(pl.Series(idx < 0), None))
 
     return pl.DataFrame({
         "junction_nt": pl.Series(got["junction_nt"], dtype=pl.Utf8),
