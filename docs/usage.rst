@@ -799,7 +799,10 @@ Sample and model-build workers use serial inner numerical kernels. Excessive cou
 Import-time settings also apply to non-signature CLI commands. Existing BLAS pools
 are limited at runtime; their idle OS threads may remain. An already initialized
 multi-thread Polars pool cannot be resized, so outer thread pools require a fresh
-interpreter or ``workers=1``. The default sample-thread backend shares resources
+interpreter or ``workers=1``. A preinitialized Polars pool must still fit the detected
+CPU allocation: sample maps raise if that immutable pool is wider than the allocation,
+including for single-worker workflows. Start a fresh process and import
+vdjtools before Polars in that case. The default sample-thread backend shares resources
 in one interpreter and supports closures and deferred readers.
 
 For file-backed, Python-heavy summaries, ``io.map_samples(..., backend="process")``
