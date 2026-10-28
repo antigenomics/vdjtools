@@ -16,6 +16,18 @@ from vdjtools.cli import app
 runner = CliRunner()
 
 
+def test_generate_native_cli_matches_library(tmp_path):
+    from vdjtools.model import load_bundled
+    from vdjtools.model.generate import generate
+
+    out = tmp_path / "native.parquet"
+    result = runner.invoke(app, ["generate", "-m", "TRB", "-n", "64", "--seed", "7",
+                                 "--engine", "native", "--threads", "1", "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    assert pl.read_parquet(out).equals(generate(load_bundled("TRB"), 64, seed=7,
+                                               engine="native", threads=1))
+
+
 def _airr_sample(df: pl.DataFrame, seed: int) -> pl.DataFrame:
     rng = np.random.default_rng(seed)
     return df.with_columns(
@@ -392,3 +404,17 @@ def test_the_preflight_line_names_the_corpus_and_its_hash(tmp_path, tiny_corpus)
                                  "-o", str(tmp_path / "o.tsv")])
     assert r.exit_code == 0, r.output
     assert "corpus memory" in r.output and "winsorize=features" in r.output and "k=" in r.output
+
+
+def test_diversity_process_backend(tmp_path, gen):
+    from vdjtools.cores import available_cores
+    if available_cores() < 2:
+        pytest.skip('requires two allocated cores')
+    a, b = tmp_path / 'a.tsv', tmp_path / 'b.tsv'
+    _airr_sample(gen[:100], 1).write_csv(a, separator="\t")
+    _airr_sample(gen[100:200], 2).write_csv(b, separator="\t")
+    args = ['diversity', str(a), str(b), '--threads', '2']
+    threaded = runner.invoke(app, args)
+    processes = runner.invoke(app, args + ['--backend', 'process'])
+    assert threaded.exit_code == processes.exit_code == 0, processes.output
+    assert threaded.stdout == processes.stdout

@@ -136,3 +136,37 @@ def test_zero_rows_is_an_empty_frame_not_an_error(trb):
     got = generate(trb, 0, seed=1, engine="native")
     assert got.height == 0
     assert got.columns == generate(trb, 1, seed=1, engine="native").columns
+
+
+def test_omitted_native_seed_uses_fresh_entropy(trb, monkeypatch):
+    import vdjtools._core as core
+
+    original = core.generate_batch
+    seeds = []
+
+    def record(model, n, seed, productive, threads):
+        seeds.append(seed)
+        return original(model, n, seed, productive, threads)
+
+    monkeypatch.setattr(core, "generate_batch", record)
+    generate(trb, 1, engine="native")
+    generate(trb, 1, engine="native")
+    generate(trb, 1, seed=0, engine="native")
+    assert seeds[0] != seeds[1]
+    assert seeds[2] == 0
+
+
+@pytest.mark.parametrize("engine", ["reference", "native"])
+@pytest.mark.parametrize("n,error", [(-1, ValueError), (1.5, TypeError), (True, TypeError)])
+def test_generation_rejects_invalid_counts_before_sampling(trb, engine, n, error):
+    with pytest.raises(error):
+        generate(trb, n, engine=engine)
+
+
+def test_single_vj_draw_keeps_null_d_columns_typed(trg):
+    frame = generate(trg, 1, seed=7, productive_only=True, engine="native", threads=1)
+    import polars as pl
+
+    for column in ("d_call", "d2_call"):
+        assert frame[column].dtype == pl.String
+        assert frame[column].to_list() == [None]

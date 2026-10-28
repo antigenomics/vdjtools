@@ -11,6 +11,7 @@
 #   3. k-mers as a raw feature group, and why the component count is a real choice.
 #
 # Run with:  marimo edit examples/signature_features.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -20,6 +21,7 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
@@ -30,19 +32,18 @@ def _():
 
     from vdjtools.model import load_bundled
     from vdjtools.model.generate import generate
+
     return generate, load_bundled, np, pl
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # The repertoire signature — feature machinery
+    mo.md(r"""
+    # The repertoire signature — feature machinery
 
-        `vdjtools.signature` turns one AIRR sample into a fixed, named, positional vector.
-        This notebook is about the three choices inside it that are easy to get wrong.
-        """
-    )
+    `vdjtools.signature` turns one AIRR sample into a fixed, named, positional vector.
+    This notebook is about the three choices inside it that are easy to get wrong.
+    """)
     return
 
 
@@ -68,23 +69,21 @@ def _(depth, generate, load_bundled, pl):
                                / pl.col("duplicate_count").sum()).alias("frequency")))
 
     shallow, deep = clones(200, 1), clones(depth.value, 2)
-    return clones, deep, model, shallow
+    return deep, shallow
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 1. Arcsine, not log1p of counts
+    mo.md(r"""
+    ## 1. Arcsine, not log1p of counts
 
-        The amino-acid composition block is a set of proportions with a known denominator — the
-        number of junction residues actually observed. Anscombe's arcsine,
+    The amino-acid composition block is a set of proportions with a known denominator — the
+    number of junction residues actually observed. Anscombe's arcsine,
 
-        $$\\arcsin\\sqrt{\\frac{xm + 3/8}{m + 3/4}},$$
+    $$\arcsin\sqrt{\frac{xm + 3/8}{m + 3/4}},$$
 
-        is depth-invariant by construction; `log1p` of the raw count is not.
-        """
-    )
+    is depth-invariant by construction; `log1p` of the raw count is not.
+    """)
     return
 
 
@@ -106,7 +105,7 @@ def _(deep, np, pl, shallow):
                      "log1p(count)": float(np.log1p(_x * _m))})
     drift = pl.DataFrame(rows)
     drift
-    return arcsine, drift
+    return (drift,)
 
 
 @app.cell
@@ -130,14 +129,12 @@ def _(drift, mo):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 2. Resolve an ambiguous V call, do not strip it
+    mo.md(r"""
+    ## 2. Resolve an ambiguous V call, do not strip it
 
-        Amplicon data realigned from junction plus short flanks routinely calls a comma-separated
-        tie. Left alone it shatters every V-keyed feature space into singleton columns.
-        """
-    )
+    Amplicon data realigned from junction plus short flanks routinely calls a comma-separated
+    tie. Left alone it shatters every V-keyed feature space into singleton columns.
+    """)
     return
 
 
@@ -150,95 +147,87 @@ def _(pl):
         resolve_gene(pl.col("v_call")).alias("resolve_gene  (use this)"),
         strip_allele(pl.col("v_call")).alias("strip_allele  (reporting)"),
     )
-    return resolve_gene, strip_allele
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        """
-        `resolve_gene` takes the **first** gene — the aligner orders by score, so the first is the
-        best-supported call. `strip_allele` **sorts** the tie so that reporting is order-insensitive,
-        which is why composing the two would hand you the alphabetically first gene rather than the
-        aligner's. For anything keyed on V, use `resolve_gene`.
-        """
-    )
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 3. k-mers, and why the component count is a real choice
-
-        A junction k-mer profile is now just another **raw feature group** — 400 columns per locus
-        at `k=2` — concatenated with usage, spectratype, composition and the count statistics, and
-        rotated by the corpus's own per-locus PCA. There is no separate frozen k-mer space and no
-        separate TF-IDF basis any more: one corpus, one rotation per locus, one place where
-        anything is fitted.
-
-        That makes `--components` the only knob controlling how much of the k-mer signal survives,
-        and it is not a free choice.
-        """
-    )
+    mo.md(r"""
+    `resolve_gene` takes the **first** gene — the aligner orders by score, so the first is the
+    best-supported call. `strip_allele` **sorts** the tie so that reporting is order-insensitive,
+    which is why composing the two would hand you the alphabetically first gene rather than the
+    aligner's. For anything keyed on V, use `resolve_gene`.
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ### Do not pick components by explained variance alone
+    mo.md(r"""
+    ## 3. k-mers, and why the component count is a real choice
 
-        A truncated SVD keeps the directions of greatest variance *in the fitting corpus*, which for
-        repertoires are depth, V usage and batch. A motif carried by a handful of clonotypes in a
-        handful of donors is not one of those.
+    A junction k-mer profile is now just another **raw feature group** — 400 columns per locus
+    at `k=2` — concatenated with usage, spectratype, composition and the count statistics, and
+    rotated by the corpus's own per-locus PCA. There is no separate frozen k-mer space and no
+    separate TF-IDF basis any more: one corpus, one rotation per locus, one place where
+    anything is fitted.
 
-        Measured on ankylosing spondylitis vs healthy, both HLA-B27+, with the basis fitted on a
-        disjoint cohort:
-
-        | read-out | AUC | perm. *p* |
-        |---|---|---|
-        | sum of the 17 columns the published motif occupies | 0.769 | **0.031** |
-        | best of 64 SVD components | 0.841 | 0.20 |
-        | best single vocabulary column | 0.813 | — |
-
-        The two larger numbers are the meaningless ones: a maximum over 64 components reaches
-        \\|AUC − 0.5\\| = 0.34 under a label permutation null. Any best-of-N read-out must be nulled
-        or not quoted.
-
-        So: **rare and discriminative** → do not rotate. Take the raw features
-        (`features.raw_and_channels`) and an L1 model. **Broad compositional shift** → rotate, and
-        keep only components that survive a study-disjoint refit, rather than components that reach
-        a cumulative-variance threshold.
-
-        This is why the corpus stores its full eigenvalue spectrum and why `--components` accepts a
-        count as well as a fraction: the fraction is convenient, the count is what you pin once you
-        have measured which components transfer.
-        """
-    )
+    That makes `--components` the only knob controlling how much of the k-mer signal survives,
+    and it is not a free choice.
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## The contract
+    mo.md(r"""
+    ### Do not pick components by explained variance alone
 
-        Column names are `vsig:<block>:<locus>:<feature>` throughout, so one `parse()` reads all
-        three kinds: a **raw feature** (an input to the rotation), a **rotated column**
-        (`vsig:pc:<locus>:PCnn`), and a **channel** (carried through untouched).
+    A truncated SVD keeps the directions of greatest variance *in the fitting corpus*, which for
+    repertoires are depth, V usage and batch. A motif carried by a handful of clonotypes in a
+    handful of donors is not one of those.
 
-        Two fields are declared per raw feature and neither is inferred: its `transform`, applied
-        where the feature is computed while its denominator is still in scope, and its `support`,
-        which decides the winsorization side. The support is separate because `transform="none"`
-        spans three different supports — a log-probability is bounded above, a standard deviation
-        below, a log-ratio neither — so deriving the trimming side from the transform silently
-        trims the wrong end of two of them.
-        """
-    )
+    Measured on ankylosing spondylitis vs healthy, both HLA-B27+, with the basis fitted on a
+    disjoint cohort:
+
+    | read-out | AUC | perm. *p* |
+    |---|---|---|
+    | sum of the 17 columns the published motif occupies | 0.769 | **0.031** |
+    | best of 64 SVD components | 0.841 | 0.20 |
+    | best single vocabulary column | 0.813 | — |
+
+    The two larger numbers are the meaningless ones: a maximum over 64 components reaches
+    \|AUC − 0.5\| = 0.34 under a label permutation null. Any best-of-N read-out must be nulled
+    or not quoted.
+
+    So: **rare and discriminative** → do not rotate. Take the raw features
+    (`features.raw_and_channels`) and an L1 model. **Broad compositional shift** → rotate, and
+    keep only components that survive a study-disjoint refit, rather than components that reach
+    a cumulative-variance threshold.
+
+    This is why the corpus stores its full eigenvalue spectrum and why `--components` accepts a
+    count as well as a fraction: the fraction is convenient, the count is what you pin once you
+    have measured which components transfer.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## The contract
+
+    Column names are `vsig:<block>:<locus>:<feature>` throughout, so one `parse()` reads all
+    three kinds: a **raw feature** (an input to the rotation), a **rotated column**
+    (`vsig:pc:<locus>:PCnn`), and a **channel** (carried through untouched).
+
+    Two fields are declared per raw feature and neither is inferred: its `transform`, applied
+    where the feature is computed while its denominator is still in scope, and its `support`,
+    which decides the winsorization side. The support is separate because `transform="none"`
+    spans three different supports — a log-probability is bounded above, a standard deviation
+    below, a log-ratio neither — so deriving the trimming side from the transform silently
+    trims the wrong end of two of them.
+    """)
     return
 
 
@@ -254,23 +243,21 @@ def _(pl):
                    "support": g.dynamic[1] if g.dynamic else
                               ", ".join(sorted({v[1] for v in g.features.values()}))}
                   for g in layout.raw_groups()])
-    return (layout,)
+    return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## Rotating a sample: a corpus is required
+    mo.md(r"""
+    ## Rotating a sample: a corpus is required
 
-        There is no default corpus. A signature is only comparable to another one rotated through
-        the *same* corpus, so the artifact has to be named — and the emitted row carries which one
-        it was, how much of itself got clamped by that corpus's bounds, and the coverage the sample
-        actually attained.
+    There is no default corpus. A signature is only comparable to another one rotated through
+    the *same* corpus, so the artifact has to be named — and the emitted row carries which one
+    it was, how much of itself got clamped by that corpus's bounds, and the coverage the sample
+    actually attained.
 
-        Build one with `vdjtools corpus --smoke -o /tmp/c.npz` (minutes), or load a bundled name.
-        """
-    )
+    Build one with `vdjtools corpus --smoke -o /tmp/c.npz` (minutes), or load a bundled name.
+    """)
     return
 
 
@@ -285,7 +272,7 @@ def _(deep):
                                n_components=6)
     v = vsig({"TRB": deep}, corpus)
     {k: v[k] for k in list(v)[:10]}
-    return corpus, v, vsig
+    return (v,)
 
 
 @app.cell

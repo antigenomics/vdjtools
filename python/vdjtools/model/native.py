@@ -292,8 +292,8 @@ def pgen_aa_degenerate_batch(
         v: Optional per-motif V **alleles** (same length as ``allowed``); ``None`` marginalizes
             over all V for every motif. Individual entries may be ``None``.
         j: Optional per-motif J alleles (as ``v``).
-        threads: Worker threads; ``0`` = auto (the available CPU allocation). Batches under 64
-            motifs run single-threaded.
+        threads: Worker threads; ``0`` = auto (the available CPU allocation). VDJ batches use
+            workers from two motifs; cheaper VJ batches stay serial below 64 motifs.
 
     Returns:
         Per-motif Pgen in input order.
@@ -334,8 +334,9 @@ def pgen_aa_batch(
             ``None``. An unknown or gene-level name raises :class:`KeyError` (see :func:`pgen_aa`).
         j: Optional per-sequence J alleles (as ``v``).
         mismatches: ``0`` for exact Pgen, ``1`` for the Hamming-1 ball (as :func:`pgen_aa`).
-        threads: Worker threads; ``0`` = auto (the available CPU allocation). Batches under 64
-            sequences run single-threaded.
+        threads: Worker threads; ``0`` = auto (the available CPU allocation).
+            VDJ or Hamming-1 batches use workers from two sequences; cheaper exact
+            VJ batches stay serial below 64 sequences.
 
     Returns:
         Per-sequence Pgen in input order.
@@ -371,8 +372,9 @@ def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
             name raises, as in :func:`pgen_nt`.
         j: Optional per-sequence J alleles (as ``v``).
         threads: **Kernel threads**, not worker processes; ``0`` = auto
-            (the available CPU allocation). Batches under 64 sequences stay single-threaded so the
-            result is bitwise-identical to a serial run.
+            (the available CPU allocation). Marginalized VDJ batches use workers from two
+            sequences; cheaper batches stay serial below 64. Answers are bitwise
+            identical at every thread count.
 
     Returns:
         Per-sequence Pgen in input order.
@@ -476,8 +478,9 @@ def best_aa_scenarios_batch(
             all V for every sequence, and individual entries may be ``None``.
         j: Optional per-sequence J names (as ``v``).
         k: Scenarios per sequence.
-        threads: Worker threads; ``0`` = auto (the available CPU allocation). Batches under 64
-            sequences run single-threaded.
+        threads: Worker threads; ``0`` = auto (the available CPU allocation).
+            VDJ batches use workers from two sequences; cheaper VJ batches stay
+            serial below 64 sequences.
         resolve_genes: As :func:`best_aa_scenarios`.
 
     Returns:
@@ -562,8 +565,8 @@ def infer_nt_many(model: Model, cdr3_aas: list, v: list | None = None, j: list |
         j: Optional per-row J calls (as ``v``).
         k: Distinct nucleotide candidates re-scored per row.
         threads: **Kernel threads** -- not worker processes. ``0`` = auto
-            (the available CPU allocation); batches under 64 rows stay single-threaded so their
-            result is bitwise-identical to a serial run.
+            (the available CPU allocation); batches with at least two rows can use workers.
+            Answers remain bitwise identical at every thread count.
         resolve_genes: Resolve a **gene**-level call to a representative allele, as
             :func:`best_aa_scenarios`.
 

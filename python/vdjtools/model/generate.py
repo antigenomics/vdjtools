@@ -240,16 +240,19 @@ def _generate_native(model: Model, n: int, seed: int | None, productive_only: bo
     from .native import pack
 
     pm, vi, ji = pack(model)
-    got = generate_batch(pm, int(n), int(seed or 0), bool(productive_only), kernel_threads(threads))
+    if seed is None:
+        seed = int(np.random.SeedSequence().generate_state(1, dtype=np.uint64)[0])
+    got = generate_batch(pm, int(n), int(seed), bool(productive_only), kernel_threads(threads))
     names_v = np.array([a for a, _i in sorted(vi.items(), key=lambda kv: kv[1])], dtype=object)
     names_j = np.array([a for a, _i in sorted(ji.items(), key=lambda kv: kv[1])], dtype=object)
     names_d = np.array(model.genomic["genes_d"]["d_allele"].to_list()
                        if model.chain_type == "VDJ" else [], dtype=object)
 
     def named(idx, names):
-        if not names.size:
-            return np.full(idx.shape, None, dtype=object)
-        return np.where(idx >= 0, names[np.maximum(idx, 0)], None)
+        if not names.size or (idx < 0).all():
+            return [None] * len(idx)
+        return (pl.Series(names.tolist(), dtype=pl.String)
+                .gather(np.maximum(idx, 0)).set(pl.Series(idx < 0), None))
 
     return pl.DataFrame({
         "junction_nt": pl.Series(got["junction_nt"], dtype=pl.Utf8),
@@ -270,7 +273,7 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
     Args:
         model: The generative model.
         n: Number of sequences to return.
-        seed: RNG seed for reproducibility.
+        seed: RNG seed for reproducibility; ``None`` draws fresh entropy for either engine.
         productive_only: If True, reject out-of-frame / stop-codon draws and keep sampling.
         engine: ``"reference"`` (default) is the Python ancestral sampler -- the implementation
             every shipped artifact drawn from this function was built with, and the one whose
@@ -293,6 +296,13 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
     """
     if engine not in ("reference", "native"):
         raise ValueError('engine must be "reference" or "native"')
+    import operator
+
+    if isinstance(n, bool):
+        raise TypeError("n must be an integer, not bool")
+    n = operator.index(n)
+    if n < 0:
+        raise ValueError("n must be non-negative")
     if engine == "native":
         return _generate_native(model, n, seed, productive_only, threads)
     prep = prepare_generation(model)

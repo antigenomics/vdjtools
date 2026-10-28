@@ -208,6 +208,8 @@ def generate(
     n: int = typer.Option(100, "--number", "-n", help="Number of sequences to generate."),
     seed: Optional[int] = typer.Option(None, help="Random seed for reproducible draws."),
     productive: bool = typer.Option(False, help="Only keep in-frame, stop-free (productive) rearrangements."),
+    engine: str = typer.Option("reference", help="Sampler: reference preserves historical seeds; native uses a distinct, faster random stream."),
+    threads: int = typer.Option(0, min=0, help="Native kernel CPU budget; 0 uses allocated cores. Reference sampling is serial."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout)."),
 ) -> None:
     """Sample recombined sequences from a model — like ``olga-generate_sequences``.
@@ -218,7 +220,7 @@ def generate(
     from vdjtools.model.generate import generate as _generate
 
     m = _load_model(model, source, model_path)
-    _write(_generate(m, n, seed=seed, productive_only=productive), out)
+    _write(_generate(m, n, seed=seed, productive_only=productive, engine=engine, threads=threads), out)
 
 
 # ---------------------------------------------------------------------------- analytics commands
@@ -231,8 +233,11 @@ _FMT = typer.Option("auto", "--format", help="auto | vdjtools | airr.")
 _OUT = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout).")
 _THREADS = typer.Option(
     0, "--threads", "-t",
-    help="Worker threads over samples (0 = all cores). Threads, not processes: the heavy work "
-         "releases the GIL, so this is the setting that scales. Lower it only to share the machine.",
+    help="Sample workers (0 = allocated cores). Inner kernels stay serial; "
+         "reduce the budget to share resources or bound simultaneous sample memory.",
+)
+_SAMPLE_BACKEND = typer.Option(
+    "thread", "--backend", help="Sample map: thread (shared resources) | process (coarse spawned batches).",
 )
 _ONDUP = typer.Option(
     "error", "--on-duplicate",
@@ -455,7 +460,7 @@ def pool(
 def diversity(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
-    fmt: str = _FMT, threads: int = _THREADS, cohort: Optional[Path] = _COHORT,
+    fmt: str = _FMT, threads: int = _THREADS, backend: str = _SAMPLE_BACKEND, cohort: Optional[Path] = _COHORT,
     on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
     """Per-sample diversity (observed richness, Chao, Efron-Thisted, Shannon, Simpson, d50)."""
@@ -472,7 +477,7 @@ def diversity(
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
     fn = functools.partial(diversity_stats, on_duplicate=on_duplicate)
     rows = [_tag(res, sid) for sid, res in
-            map_samples(fn, items, fmt=fmt, workers=threads or None)]
+            map_samples(fn, items, fmt=fmt, workers=threads or None, backend=backend)]
     _write(pl.concat(rows, how="vertical_relaxed"), out)
 
 
@@ -606,9 +611,9 @@ def signature(
                                    "see the 'transform' column of --describe."),
     describe: bool = typer.Option(False, "--describe",
                                   help="Print the columns THIS invocation emits, and exit."),
-    jobs: int = typer.Option(1, "--jobs", "-j",
-                             help="Worker processes over samples (default: 1, 0 = all available cores). "
-                                  "Each spawned worker uses one kernel thread."),
+    jobs: int = typer.Option(0, "--jobs", "-j",
+                             help="Worker threads over samples (0 = allocated cores, 1 = serial). "
+                                  "Each worker uses one kernel thread."),
     on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
     """One repertoire in, one row of named features out -- rotated through a named corpus.
@@ -871,7 +876,7 @@ def spectratype(
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
     fmt: str = _FMT, kind: str = typer.Option("aa", help="aa | nt (length unit)."),
     weight: str = typer.Option("reads", help="reads | unique | freq."),
-    threads: int = _THREADS, cohort: Optional[Path] = _COHORT, out: Optional[Path] = _OUT,
+    threads: int = _THREADS, backend: str = _SAMPLE_BACKEND, cohort: Optional[Path] = _COHORT, out: Optional[Path] = _OUT,
 ) -> None:
     """Per-sample CDR3 length spectratype."""
     from vdjtools.io.batch import map_samples
@@ -885,7 +890,7 @@ def spectratype(
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
     fn = functools.partial(_spec, kind=kind, weight=weight)
     rows = [_tag(res, sid) for sid, res in
-            map_samples(fn, items, fmt=fmt, workers=threads or None)]
+            map_samples(fn, items, fmt=fmt, workers=threads or None, backend=backend)]
     _write(pl.concat(rows, how="vertical_relaxed"), out)
 
 
@@ -895,7 +900,7 @@ def segment_usage(
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
     fmt: str = _FMT, segment: str = typer.Option("v", help="v | d | j | c."),
     weight: str = typer.Option("reads", help="reads | unique | freq."),
-    threads: int = _THREADS, cohort: Optional[Path] = _COHORT, out: Optional[Path] = _OUT,
+    threads: int = _THREADS, backend: str = _SAMPLE_BACKEND, cohort: Optional[Path] = _COHORT, out: Optional[Path] = _OUT,
 ) -> None:
     """Per-sample V/D/J/C segment usage."""
     from vdjtools.io.batch import map_samples
@@ -909,7 +914,7 @@ def segment_usage(
     items = _sample_items(samples, metadata, base_dir, sample_col, file_template)
     fn = functools.partial(_usage, segment=segment, weight=weight)
     rows = [_tag(res, sid) for sid, res in
-            map_samples(fn, items, fmt=fmt, workers=threads or None)]
+            map_samples(fn, items, fmt=fmt, workers=threads or None, backend=backend)]
     _write(pl.concat(rows, how="vertical_relaxed"), out)
 
 
@@ -917,7 +922,7 @@ def segment_usage(
 def overlap(
     samples: Optional[list[Path]] = _SAMPLES, metadata: Optional[Path] = _META,
     base_dir: Optional[Path] = _BASE, sample_col: str = _SCOL, file_template: str = _TMPL,
-    fmt: str = _FMT, threads: int = _THREADS, out: Optional[Path] = _OUT,
+    fmt: str = _FMT, threads: int = _THREADS, backend: str = _SAMPLE_BACKEND, out: Optional[Path] = _OUT,
 ) -> None:
     """Exact-match pairwise repertoire overlap (D, F, F2, R) for every sample pair."""
     from vdjtools.io.batch import map_samples
@@ -930,7 +935,8 @@ def overlap(
     # Aggregate each sample ONCE (streamed + parallel), then every O(n^2) pair is a join
     # over the pre-aggregated frames — not a re-aggregation of both raw frames per pair
     # (bitwise-identical to overlap_metrics, which cluster.pairwise_distances also reuses).
-    aggs = map_samples(lambda df: _aggregate(df, key), items, fmt=fmt, workers=threads or None)
+    aggs = map_samples(functools.partial(_aggregate, key=key), items, fmt=fmt,
+                       workers=threads or None, backend=backend)
     rows = []
     for i in range(len(aggs)):
         for k in range(i + 1, len(aggs)):
@@ -1227,7 +1233,7 @@ def model_learn(
 def model_build(
     chains: str = typer.Option(",".join(("TRA", "TRB")), "--chains", help="Comma-separated chains."),
     groups: str = typer.Option("human", "--groups", help="Comma-separated read groups."),
-    workers: Optional[int] = typer.Option(None, help="Concurrent chain builds (default: cores/2)."),
+    workers: Optional[int] = typer.Option(None, help="Concurrent chain builds (default: allocated cores, capped at chain count); one kernel thread per build."),
     work_dir: Path = typer.Option(Path("/tmp/vdjtools_build"), help="Scratch dir for arda output."),
     cap: Optional[int] = typer.Option(None, help="Cap reads per chain (default: use every read)."),
     max_iter: int = typer.Option(15, help="EM iteration cap."),

@@ -16,6 +16,7 @@ cache, or is read from a local ``./data_dump/`` if present. Needs the ``[sc]`` e
 scirpy and dandelion are optional — every section degrades to a note if its library is
 absent, and the *reading* directions (`from_scirpy`, `read_h5ddl`) need neither.
 """
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -24,25 +25,23 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Single-cell interop — one AIRR table, four ecosystems
+    mo.md(r"""
+    # Single-cell interop — one AIRR table, four ecosystems
 
-        vdjtools is not trying to replace scirpy, dandelion or scRepertoire. It does the
-        repertoire-model work those tools do not — generation probability, mispairing QC,
-        clustering evaluation — and hands the result over.
+    vdjtools is not trying to replace scirpy, dandelion or scRepertoire. It does the
+    repertoire-model work those tools do not — generation probability, mispairing QC,
+    clustering evaluation — and hands the result over.
 
-        The seam is deliberately boring: **a flat AIRR Rearrangement table carrying
-        `sequence_id` and `cell_id`**. That is what all three downstream tools read, so
-        there is one emitter (`sc.to_airr`) and one inverse (`sc.from_airr`), and every
-        bridge is a thin adapter on top.
+    The seam is deliberately boring: **a flat AIRR Rearrangement table carrying
+    `sequence_id` and `cell_id`**. That is what all three downstream tools read, so
+    there is one emitter (`sc.to_airr`) and one inverse (`sc.from_airr`), and every
+    bridge is a thin adapter on top.
 
-        1. **ingest** CellRanger contigs,
-        2. **QC + score** — chain multiplicity, pairing, paired Pgen,
-        3. **out and back** — scirpy, dandelion, scRepertoire,
-        4. **augment** — push `pgen_paired` onto an existing AnnData.
-        """
-    )
+    1. **ingest** CellRanger contigs,
+    2. **QC + score** — chain multiplicity, pairing, paired Pgen,
+    3. **out and back** — scirpy, dandelion, scRepertoire,
+    4. **augment** — push `pgen_paired` onto an existing AnnData.
+    """)
     return
 
 
@@ -57,7 +56,7 @@ def _():
 
     REPO_ID = "isalgo/airr_benchmark"
     FILE = "dcode/vdj_v1_hs_aggregated_donor4_{}.csv.gz"
-    return FILE, Path, REPO_ID, mo, pl, sc
+    return FILE, Path, REPO_ID, mo, sc
 
 
 @app.cell
@@ -115,7 +114,7 @@ def _(cells, mo, sc):
         "to marginalise deliberately."
         f"\n\n{mo.as_html(scored.select(['cell_id', 'alpha_junction_aa', 'beta_junction_aa', 'pgen_paired']).head())}"
     )
-    return paired, scored
+    return (scored,)
 
 
 @app.cell
@@ -129,7 +128,7 @@ def _(cells, mo, sc):
         "emitted and one file feeds all three.\n\n"
         f"`{', '.join(airr.columns)}`\n\n{mo.as_html(airr.head(3))}"
     )
-    return (airr,)
+    return
 
 
 @app.cell
@@ -221,30 +220,28 @@ def _(adata, mo, sc, scored):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## Recap
+    mo.md(r"""
+    ## Recap
 
-        | Direction | Function | Needs |
-        |---|---|---|
-        | in | `read_airr_cell` / `read_10x` / `read_arda_cells` | — |
-        | interchange | `to_airr` / `from_airr` / `write_airr` | — |
-        | scirpy out | `to_scirpy` | `scirpy` |
-        | scirpy in | `from_scirpy` | `awkward` |
-        | dandelion out | `to_dandelion` | `sc-dandelion` |
-        | dandelion in | `from_dandelion` / `read_h5ddl` | — / `h5py` |
-        | scRepertoire out | `write_screpertoire` | — |
-        | augment | `push_obs` | — |
+    | Direction | Function | Needs |
+    |---|---|---|
+    | in | `read_airr_cell` / `read_10x` / `read_arda_cells` | — |
+    | interchange | `to_airr` / `from_airr` / `write_airr` | — |
+    | scirpy out | `to_scirpy` | `scirpy` |
+    | scirpy in | `from_scirpy` | `awkward` |
+    | dandelion out | `to_dandelion` | `sc-dandelion` |
+    | dandelion in | `from_dandelion` / `read_h5ddl` | — / `h5py` |
+    | scRepertoire out | `write_screpertoire` | — |
+    | augment | `push_obs` | — |
 
-        The asymmetry is deliberate: **writing** a container delegates to the library that
-        owns it, so vdjtools never carries a stale copy of somebody's schema — but
-        **reading** one is ours and stays cheap, so a result handed to you is always
-        openable.
+    The asymmetry is deliberate: **writing** a container delegates to the library that
+    owns it, so vdjtools never carries a stale copy of somebody's schema — but
+    **reading** one is ours and stays cheap, so a result handed to you is always
+    openable.
 
-        See `docs/singlecell.rst` for the full guide, and `examples/single_cell.py` for the
-        analysis side (antigen-driven clustering graded with `cluster_eval`).
-        """
-    )
+    See `docs/singlecell.rst` for the full guide, and `examples/single_cell.py` for the
+    analysis side (antigen-driven clustering graded with `cluster_eval`).
+    """)
     return
 
 

@@ -15,7 +15,7 @@
   <a href="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://docs.isalgo.dev/vdjtools/"><img alt="docs" src="https://github.com/antigenomics/vdjtools/actions/workflows/docs.yml/badge.svg"></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue">
-  <img alt="license" src="https://img.shields.io/badge/license-GPLv3-green">
+  <img alt="license" src="https://img.shields.io/badge/license-Academic%20%26%20Non--Commercial-green">
 </p>
 
 <p align="center"><b>
@@ -54,7 +54,7 @@ v_usage = stats.segment_usage(sample, "v")
 
 ```bash
 vdjtools diversity samples/*.tsv -o diversity.tsv
-vdjtools features samples/*.tsv --coverage 0.8 --threads 1 -o features.tsv
+vdjtools features samples/*.tsv --coverage 0.8 --threads 0 -o features.tsv
 vdjtools signature --corpus blood samples/*.tsv -o vsig.tsv
 ```
 
@@ -63,6 +63,15 @@ Declared log/CLR/logit/arcsine transforms remain; “raw” means before corpus 
 winsorization and PCA. `signature` applies the published vsig corpus transform.
 These are different outputs. mirpy's rsig geometry half joins vsig on `sample_id`;
 mirpy's sample RFF vectors are a separate representation.
+
+For large new sequence draws, select the native sampler and its allocated CPU budget:
+
+```bash
+vdjtools generate -m TRB -n 10000 --engine native --threads 0 --seed 7 -o generated.tsv
+```
+
+Native draws are identical across thread counts. The default reference sampler preserves
+historical seeded draws; the two engines use different random streams.
 
 Fit your own sample PCA on selected measurements, compatible control rows, or reuse
 a saved rotation:
@@ -102,6 +111,10 @@ still grows with sample count and feature width. Configured randomized corpus fi
 and `TablePCA.fit_features` use sparse rows and bounded statistic chunks; their
 remaining workspace grows with nonzero entries and the requested component count. See
 [CPU/container limits](https://docs.isalgo.dev/vdjtools/usage.html#cpu-container-limits).
+For file-backed Python-heavy summaries, select `--backend process` (or
+`io.map_samples(..., backend="process")`) to use coarse sample batches. The default
+thread backend shares resources and supports closures; process startup can dominate
+small cohorts.
 
 ## Development
 
@@ -125,7 +138,7 @@ The VDJtrack recapture model in `vdjtools.dynamics` is
 
 ## License
 
-GPL-3.0-or-later. The legacy Groovy/Java v1.x tool lives on the
+ISALGO LAB Academic and Non-Commercial Research License. The legacy Groovy/Java v1.x tool lives on the
 [`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch, with its releases
 under the repository tags `v0.0.1` … `1.2.1`.
 
@@ -138,3 +151,7 @@ with optional gene or clustered V context. Existing feature/signature defaults s
 legacy. See [features](https://docs.isalgo.dev/vdjtools/features.html) and
 [corpus fitting](https://docs.isalgo.dev/vdjtools/signature.html) for fit/save/apply
 and the distinction between an available definition and a published rotation.
+
+Public recombination models, corpus bundles and example sources are mirrored on
+[Hugging Face](https://huggingface.co/datasets/isalgo/vdjtools_models).
+The dataset card shows selective downloads; downloading the whole mirror is unnecessary.

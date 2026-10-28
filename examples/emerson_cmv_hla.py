@@ -6,6 +6,7 @@
 # tail — no per-feature Python loop, the cohort never fully in RAM. Hits are validated against
 # VDJdb (fetched from the antigenomics/vdjdb-db release). Run with:
 #     marimo edit examples/emerson_cmv_hla.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -14,27 +15,25 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Emerson CMV / HLA biomarkers at cohort scale — a vdjtools explorer
+    mo.md(r"""
+    # Emerson CMV / HLA biomarkers at cohort scale — a vdjtools explorer
 
-        Emerson et al. (*Nat Genet* 2017) screen public **TCRβ** chains for association with a
-        phenotype across a large cohort. This notebook reproduces the core screen on the
-        **`isalgo/airr_hip`** cohort (the Emerson HIP repertoires, with per-subject CMV serostatus
-        and 2-digit HLA-A/B typing) with `vdjtools.biomarker.fisher_association`:
+    Emerson et al. (*Nat Genet* 2017) screen public **TCRβ** chains for association with a
+    phenotype across a large cohort. This notebook reproduces the core screen on the
+    **`isalgo/airr_hip`** cohort (the Emerson HIP repertoires, with per-subject CMV serostatus
+    and 2-digit HLA-A/B typing) with `vdjtools.biomarker.fisher_association`:
 
-        - **CMV** — a *one-tailed* enrichment test among CMV+ subjects (Emerson's setting);
-        - **HLA-A\*02** — a *two-tailed* test (positive + negative association);
-        - hits are validated live against **VDJdb** (CMV epitope + HLA allele), fetched from the
-          `antigenomics/vdjdb-db` release.
+    - **CMV** — a *one-tailed* enrichment test among CMV+ subjects (Emerson's setting);
+    - **HLA-A\*02** — a *two-tailed* test (positive + negative association);
+    - hits are validated live against **VDJdb** (CMV epitope + HLA allele), fetched from the
+      `antigenomics/vdjdb-db` release.
 
-        **Scale is the point:** the cohort is streamed into a hive-partitioned Parquet dataset one
-        sample at a time, analysed as a single out-of-core `polars` LazyFrame, and the per-feature
-        Fisher tests are vectorised through the hypergeometric tail — the cohort never fully in RAM.
-        Slide **subjects** up toward the full cohort; data prefers a local `./data_dump/airr_hip/`
-        copy (gitignored), else fetches from HuggingFace.
-        """
-    )
+    **Scale is the point:** the cohort is streamed into a hive-partitioned Parquet dataset one
+    sample at a time, analysed as a single out-of-core `polars` LazyFrame, and the per-feature
+    Fisher tests are vectorised through the hypergeometric tail — the cohort never fully in RAM.
+    Slide **subjects** up toward the full cohort; data prefers a local `./data_dump/airr_hip/`
+    copy (gitignored), else fetches from HuggingFace.
+    """)
     return
 
 
@@ -140,8 +139,22 @@ def _():
         fig.tight_layout()
         return fig
 
-    return (OKABE, Path, REPO, S, fisher_association, hip_local, load_vdjdb_cmv, mo,
-            np, peak_mb, phenotypes, pl, time, vdjdb_slim, vio, volcano)
+    return (
+        Path,
+        REPO,
+        S,
+        fisher_association,
+        hip_local,
+        load_vdjdb_cmv,
+        mo,
+        peak_mb,
+        phenotypes,
+        pl,
+        time,
+        vdjdb_slim,
+        vio,
+        volcano,
+    )
 
 
 @app.cell
@@ -180,20 +193,35 @@ def _(Path, REPO, hip_local, max_samples, mo, phenotypes, pl, vio):
         corr_dir = _root / "corr"
 
     cmv_ph, a02_ph = phenotypes(meta)
-    cohort = (mo.notebook_dir() or Path.cwd()) / ".data" / "emerson_nb" / f"cohort_{meta.height}"
-    if not any(cohort.glob("sample_id=*/*.parquet")):
-        vio.ingest_cohort(meta.select("sample_id", "cmv", "hla", "age", "sex"), corr_dir, cohort,
-                          sample_col="sample_id", file_template="{sample}.txt.gz", fmt="vdjtools")
+    from tempfile import TemporaryDirectory as _TemporaryDirectory
+    from weakref import finalize as _finalize
+    _data_dir = (mo.notebook_dir() or Path.cwd()) / ".data" / "emerson_nb"
+    _data_dir.mkdir(parents=True, exist_ok=True)
+    _cohort_tmp = _TemporaryDirectory(dir=_data_dir, prefix="cohort_")
+    cohort = Path(_cohort_tmp.name)
+    vio.ingest_cohort(meta.select("sample_id", "cmv", "hla", "age", "sex"), corr_dir, cohort,
+                      sample_col="sample_id", file_template="{sample}.txt.gz", fmt="vdjtools")
     lf = vio.scan_cohort(cohort, join_metadata=False)
+    _finalize(lf, _cohort_tmp.cleanup)
     n_a02 = meta["hla"].str.contains(r"HLA-A\*02").sum()   # backslash out of the f-string: py<3.12
     mo.md(f"**{meta.height} subjects** — {(meta['cmv']=='+').sum()} CMV+, "
           f"{(meta['cmv']=='-').sum()} CMV−; {n_a02} "
           f"HLA-A\\*02 carriers. Cohort scanned from `{cohort.name}`.")
-    return a02_ph, cmv_ph, lf, meta
+    return a02_ph, cmv_ph, lf
 
 
 @app.cell
-def _(cmv_ph, fdr, fisher_association, lf, min_incidence, mo, peak_mb, pl, time):
+def _(
+    cmv_ph,
+    fdr,
+    fisher_association,
+    lf,
+    min_incidence,
+    mo,
+    peak_mb,
+    pl,
+    time,
+):
     # CMV: one-tailed enrichment among CMV+ (Emerson's setting), full V+CDR3+J key.
     _t0 = time.perf_counter()
     cmv = fisher_association(lf, cmv_ph, pheno_col="cmv_pos", alternative="greater",
@@ -267,7 +295,18 @@ def _(fdr, hla, mo, volcano):
 
 
 @app.cell
-def _(S, cmv_ph, fdr, fisher_association, lf, min_incidence, mo, pl, time, with_1mm):
+def _(
+    S,
+    cmv_ph,
+    fdr,
+    fisher_association,
+    lf,
+    min_incidence,
+    mo,
+    pl,
+    time,
+    with_1mm,
+):
     # Optional 1-mismatch metaclonotype CMV screen over public keys (incidence≥min).
     if not with_1mm.value:
         cmv1 = None
@@ -290,16 +329,14 @@ def _(S, cmv_ph, fdr, fisher_association, lf, min_incidence, mo, pl, time, with_
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** The incidence-based Fisher screen recovers CMV-associated public TCRβ that
-        overlap VDJdb's CMV-specific clonotypes, and HLA-A\*02-associated chains — at cohort scale,
-        from raw repertoires, with the cohort never held in RAM. Slide **subjects** toward the full
-        cohort for the published signal; the interactive, condition×test×scope version of this
-        screen is `examples/emerson_biomarker.py`.
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** The incidence-based Fisher screen recovers CMV-associated public TCRβ that
+    overlap VDJdb's CMV-specific clonotypes, and HLA-A\*02-associated chains — at cohort scale,
+    from raw repertoires, with the cohort never held in RAM. Slide **subjects** toward the full
+    cohort for the published signal; the interactive, condition×test×scope version of this
+    screen is `examples/emerson_biomarker.py`.
+    """)
     return
 
 

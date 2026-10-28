@@ -1,9 +1,10 @@
-# vdjtools — large-cohort AIRR analytics: Parquet + streaming polars, flat memory.
+# vdjtools — large-cohort AIRR analytics: Parquet + streaming polars, bounded input memory.
 # Reactive marimo app: synthesize N AIRR repertoires, ingest them ONE AT A TIME into a
 # hive-partitioned Parquet dataset (peak RSS ≈ one sample, not the cohort), then run every
 # analysis as a streamed group_by over a single scan_cohort LazyFrame. Slide the sample count
-# up and watch peak RSS stay flat. Run with:
+# up to inspect ingestion and result memory. Run with:
 #     marimo edit examples/scale_cohort.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -12,30 +13,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Large-cohort analytics — Parquet + streaming polars
+    mo.md(r"""
+    # Large-cohort analytics — Parquet + streaming polars
 
-        The pattern for a cohort too large to hold in RAM (think 100k AIRR repertoires with a
-        metadata sheet). Three moves, each demonstrated below on a synthetic cohort you size with
-        the slider:
+    The pattern for a cohort too large to hold in RAM (think 100k AIRR repertoires with a
+    metadata sheet). Three moves, each demonstrated below on a synthetic cohort you size with
+    the slider:
 
-        1. **`io.ingest_cohort`** streams every per-sample file through the readers *one at a time*
-           and writes a hive-partitioned Parquet dataset (`sample_id=<id>/part.parquet`) — peak
-           memory is one sample, not the cohort.
-        2. **`io.scan_cohort`** opens the whole dataset as a single `polars.LazyFrame`
-           (`sample_id` recovered from the path, metadata joined lazily).
-        3. Every analysis is a `group_by(...).agg(...)` collected with `engine="streaming"` — the
-           cohort feature matrix in one pass, the cohort never materialised; predicate/projection
-           pushdown means a filtered query touches only the partitions it needs.
+    1. **`io.ingest_cohort`** streams every per-sample file through the readers *one at a time*
+       and writes a hive-partitioned Parquet dataset (`sample_id=<id>/part.parquet`) — peak
+       memory is one sample, not the cohort.
+    2. **`io.scan_cohort`** opens the whole dataset as a single `polars.LazyFrame`
+       (`sample_id` recovered from the path, metadata joined lazily).
+    3. Every analysis is a `group_by(...).agg(...)` collected with `engine="streaming"` — the
+       cohort feature matrix in one pass, the cohort never materialised; predicate/projection
+       pushdown means a filtered query touches only the partitions it needs.
 
-        Slide **samples** up (toward thousands) and watch the reported peak RSS stay flat.
+    Slide **samples** up (toward thousands) to inspect memory use. Ingestion holds one
+    repertoire at a time; metadata and result tables grow with sample count.
 
-        > Bulk per-sample cohorts go in **Parquet**, not AnnData: `obs=clonotype` would make an
-        > ~1e9 × 100k almost-empty sparse `X`. Single-cell (`obs=cell`) is the AnnData shape — see
-        > `vdjtools.sc.to_anndata`. Rule: bulk cohort → `scan_cohort`; single-cell → AnnData.
-        """
-    )
+    > Bulk per-sample cohorts go in **Parquet**, not AnnData: `obs=clonotype` would make an
+    > ~1e9 × 100k almost-empty sparse `X`. Single-cell (`obs=cell`) is the AnnData shape — see
+    > `vdjtools.sc.to_anndata`. Rule: bulk cohort → `scan_cohort`; single-cell → AnnData.
+    """)
     return
 
 
@@ -96,7 +96,11 @@ def _(mo):
 @app.cell
 def _(Path, mo, n_clones, n_samples, peak_mb, synthesize, time, vio):
     _work = (mo.notebook_dir() or Path.cwd()) / ".data" / "scale"
-    raw, cohort = _work / f"raw_{n_samples.value}", _work / f"cohort_{n_samples.value}"
+    from tempfile import TemporaryDirectory as _TemporaryDirectory
+    from weakref import finalize as _finalize
+    _work.mkdir(parents=True, exist_ok=True)
+    _cohort_tmp = _TemporaryDirectory(dir=_work, prefix="run_")
+    raw, cohort = Path(_cohort_tmp.name) / "raw", Path(_cohort_tmp.name) / "cohort"
 
     _t0 = time.perf_counter()
     meta = synthesize(raw, n_samples.value, n_clones.value)
@@ -104,18 +108,18 @@ def _(Path, mo, n_clones, n_samples, peak_mb, synthesize, time, vio):
 
     # 1. Streaming ingest → hive-partitioned Parquet. Peak RSS ≈ one sample.
     _t0 = time.perf_counter()
-    if not any(cohort.glob("sample_id=*/*.parquet")):
-        vio.ingest_cohort(meta, raw, cohort, file_template="{sample}.tsv")
+    vio.ingest_cohort(meta, raw, cohort, file_template="{sample}.tsv")
     _t_ing = time.perf_counter() - _t0
     lf = vio.scan_cohort(cohort)                           # one LazyFrame; nothing read yet
+    _finalize(lf, _cohort_tmp.cleanup)
 
     mo.md(
         f"Synthesised **{n_samples.value} samples × ~{n_clones.value} clonotypes** in "
         f"{_t_syn:.2f}s; `ingest_cohort` → hive Parquet in **{_t_ing:.2f}s**, "
-        f"**peak RSS {peak_mb():.0f} MB** (flat vs #samples — one sample in RAM at a time). "
+        f"**peak RSS {peak_mb():.0f} MB** (ingestion holds one sample; results grow with sample count). "
         f"Cohort at `{cohort.name}`."
     )
-    return cohort, lf, meta
+    return cohort, lf
 
 
 @app.cell
@@ -170,16 +174,14 @@ def _(S, cohort, mo, vio):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** Ingest RSS stays flat as you slide the sample count up (one sample in RAM at
-        a time), and every downstream statistic — the V-usage matrix, per-sample richness, the
-        age-filtered count — collects with `engine="streaming"` without ever materialising the
-        cohort. This is the shape for 100k-repertoire cohorts: persist once with `ingest_cohort`,
-        then query a `scan_cohort` LazyFrame.
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** Ingestion reads one sample at a time, and every downstream statistic — the V-usage matrix, per-sample richness, the
+    age-filtered count — collects with `engine="streaming"` without ever materialising the
+    cohort. Metadata, spectra and output matrices still grow with sample count. Persist an
+    explicitly prepared input dataset with `ingest_cohort`,
+    then query a `scan_cohort` LazyFrame.
+    """)
     return
 
 

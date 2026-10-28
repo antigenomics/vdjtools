@@ -11,9 +11,9 @@ The paired frame is the :func:`vdjtools.sc.pair.pair_chains` layout — ``alpha_
 β/heavy). Each chain's locus is inferred from its V-call prefix (``TRA``/``TRB``, or
 ``IGK``/``IGL`` + ``IGH`` for BCR) unless given explicitly.
 
-Conditioning on V/J requires the call to match a model **allele** (e.g. ``TRBV20-1*01``);
-a gene-level or unmatched call marginalises over all V/J for that chain (still a valid,
-if less specific, Pgen). Pass ``condition_vj=False`` to marginalise unconditionally.
+Conditioning on V/J resolves gene-level calls to representative model alleles by default
+(e.g. ``TRBV20-1`` to ``TRBV20-1*01``). Unmatched calls yield null for their rows.
+Pass ``condition_vj=False`` to marginalise unconditionally.
 """
 from __future__ import annotations
 

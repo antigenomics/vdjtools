@@ -16,6 +16,7 @@ few real Britanova aging samples through them and shows the before/after effect 
 Data auto-downloads from ``isalgo/airr_benchmark`` (folder ``vdjtools/``) into the
 gitignored ``examples/.data/preprocess_nb/`` cache.
 """
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -24,20 +25,18 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Cleaning a repertoire — the vdjtools preprocessing pipeline
+    mo.md(r"""
+    # Cleaning a repertoire — the vdjtools preprocessing pipeline
 
-        Before any diversity, overlap, or biomarker analysis, a raw repertoire needs
-        cleaning. `vdjtools.preprocess` is a set of composable, pure-polars steps over the
-        canonical clonotype frame. We run a handful of real Britanova TRB samples (three
-        sequencing **batches**, `A2*/A4*/A6*`) through the pipeline and show what each step
-        does:
+    Before any diversity, overlap, or biomarker analysis, a raw repertoire needs
+    cleaning. `vdjtools.preprocess` is a set of composable, pure-polars steps over the
+    canonical clonotype frame. We run a handful of real Britanova TRB samples (three
+    sequencing **batches**, `A2*/A4*/A6*`) through the pipeline and show what each step
+    does:
 
-        **functional filter → error-correct → downsample → frequency/segment filter →
-        decontaminate → pool / join → batch-correct VJ usage.**
-        """
-    )
+    **functional filter → error-correct → downsample → frequency/segment filter →
+    decontaminate → pool / join → batch-correct VJ usage.**
+    """)
     return
 
 
@@ -61,15 +60,35 @@ def _():
     BATCHES = {"A2": 3, "A4": 3, "A6": 3}
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
-    return (BATCHES, HF_FOLDER, OKABE, Path, REPO_ID, correct, correct_vj_usage,
-            decontaminate, downsample, filter_frequency, filter_length,
-            filter_functional_genes, filter_productive,
-            filter_segment, join_samples, mo, np, pl, plt, pool_samples, vio)
+    return (
+        BATCHES,
+        HF_FOLDER,
+        OKABE,
+        Path,
+        REPO_ID,
+        correct,
+        correct_vj_usage,
+        decontaminate,
+        downsample,
+        filter_frequency,
+        filter_length,
+        filter_productive,
+        filter_segment,
+        join_samples,
+        mo,
+        np,
+        pl,
+        plt,
+        pool_samples,
+        vio,
+    )
 
 
 @app.cell
 def _(mo):
-    mo.md(r"""## 1 · Load raw samples (three batches)""")
+    mo.md(r"""
+    ## 1 · Load raw samples (three batches)
+    """)
     return
 
 
@@ -101,7 +120,7 @@ def _(BATCHES, HF_FOLDER, Path, REPO_ID, mo, pl, vio):
             pl.lit(_s).alias("sample_id"), pl.lit(_b).alias("batch"))
     mo.md(f"Loaded **{len(raw)} raw samples** across {len(BATCHES)} batches "
           f"({', '.join(BATCHES)}). Cache: `{data_dir}`")
-    return data_dir, raw
+    return (raw,)
 
 
 @app.cell
@@ -115,30 +134,28 @@ def _(mo, pl, raw):
                       "pct_noncoding": round(100 * _nc / _df.height, 2)})
     summary = pl.DataFrame(_rows)
     mo.vstack([mo.md("**Raw samples** — note the non-coding fraction:"), summary])
-    return (summary,)
+    return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 2 · The three filtering axes + error correction
+    mo.md(r"""
+    ## 2 · The three filtering axes + error correction
 
-        One English word used to do three jobs here. They are three separate questions:
+    One English word used to do three jobs here. They are three separate questions:
 
-        | axis | question | standard |
-        |---|---|---|
-        | **productive** | does the *rearrangement* encode a chain? | AIRR: in frame, no stop codon |
-        | **functional genes** | is the *germline gene* real? | IMGT: F / ORF / P |
-        | **length** | is `junction_aa` a sane length? | not biology — a sanity bound |
+    | axis | question | standard |
+    |---|---|---|
+    | **productive** | does the *rearrangement* encode a chain? | AIRR: in frame, no stop codon |
+    | **functional genes** | is the *germline gene* real? | IMGT: F / ORF / P |
+    | **length** | is `junction_aa` a sane length? | not biology — a sanity bound |
 
-        They are orthogonal: a perfectly productive rearrangement can use a pseudogene V.
-        `filter_productive` reads the file's own AIRR `productive` column when it has one and
-        only derives from `junction_aa` as a fallback. `correct` then collapses low-count
-        clonotypes whose `cdr3_nt` sit within a couple of mismatches of a much more abundant
-        "parent" — the classic PCR/sequencing-error signature — merging their counts upward.
-        """
-    )
+    They are orthogonal: a perfectly productive rearrangement can use a pseudogene V.
+    `filter_productive` reads the file's own AIRR `productive` column when it has one and
+    only derives from `junction_aa` as a fallback. `correct` then collapses low-count
+    clonotypes whose `cdr3_nt` sit within a couple of mismatches of a much more abundant
+    "parent" — the classic PCR/sequencing-error signature — merging their counts upward.
+    """)
     return
 
 
@@ -162,20 +179,18 @@ def _(correct, filter_length, filter_productive, mo, pl, raw):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 3 · Downsample + filters
+    mo.md(r"""
+    ## 3 · Downsample + filters
 
-        `downsample` equalises sequencing depth (multinomial resample to a common read
-        count) — essential before cross-sample comparison. `filter_frequency` /
-        `filter_segment` subset by abundance or by gene.
-        """
-    )
+    `downsample` equalises sequencing depth (multinomial resample to a common read
+    count) — essential before cross-sample comparison. `filter_frequency` /
+    `filter_segment` subset by abundance or by gene.
+    """)
     return
 
 
 @app.cell
-def _(OKABE, downsample, filter_frequency, filter_segment, mo, np, plt, raw):
+def _(OKABE, downsample, filter_frequency, filter_segment, plt, raw):
     _s, _df = next(iter(raw.items()))
     _reads = int(_df["duplicate_count"].sum())
     _depth = _reads // 4
@@ -200,16 +215,14 @@ def _(OKABE, downsample, filter_frequency, filter_segment, mo, np, plt, raw):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 4 · Decontaminate, pool, and join
+    mo.md(r"""
+    ## 4 · Decontaminate, pool, and join
 
-        `decontaminate` removes clonotypes that are far more abundant in a *different*
-        sample (cross-sample / index-hopping contamination). `pool_samples` unions
-        clonotypes summing counts; `join_samples` keeps clonotypes seen in ≥ `min_samples`
-        samples as a wide sample × clonotype table (the overlap/tracking substrate).
-        """
-    )
+    `decontaminate` removes clonotypes that are far more abundant in a *different*
+    sample (cross-sample / index-hopping contamination). `pool_samples` unions
+    clonotypes summing counts; `join_samples` keeps clonotypes seen in ≥ `min_samples`
+    samples as a wide sample × clonotype table (the overlap/tracking substrate).
+    """)
     return
 
 
@@ -233,17 +246,15 @@ def _(decontaminate, join_samples, mo, pl, pool_samples, raw):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 5 · Batch-effect correction of VJ usage
+    mo.md(r"""
+    ## 5 · Batch-effect correction of VJ usage
 
-        Different sequencing batches carry systematic V/J usage biases. `correct_vj_usage`
-        removes the per-`(gene, batch)` log-space offset (the ComBat location term). Below:
-        PCA of samples on their V-J usage vectors, **before** vs **after** correction,
-        coloured by batch. Before, samples segregate by batch; after, the batch separation
-        collapses while sample-to-sample structure is preserved.
-        """
-    )
+    Different sequencing batches carry systematic V/J usage biases. `correct_vj_usage`
+    removes the per-`(gene, batch)` log-space offset (the ComBat location term). Below:
+    PCA of samples on their V-J usage vectors, **before** vs **after** correction,
+    coloured by batch. Before, samples segregate by batch; after, the batch separation
+    collapses while sample-to-sample structure is preserved.
+    """)
     return
 
 
@@ -284,19 +295,17 @@ def _(OKABE, correct_vj_usage, np, pl, plt, raw):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** Each step is one call over the canonical clonotype frame:
-        `filter_productive` drops non-productive rearrangements, `correct` collapses
-        error-variants (reads conserved, clonotypes down), `downsample` equalises depth,
-        `filter_frequency`/`filter_segment` subset by abundance or gene, `decontaminate`
-        strips cross-sample bleed, `pool_samples`/`join_samples` combine repertoires, and
-        `correct_vj_usage` removes systematic batch biases in gene usage — all pure polars,
-        composable into a preprocessing pipeline ahead of `vdjtools.stats` /
-        `vdjtools.overlap` / `vdjtools.biomarker`.
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** Each step is one call over the canonical clonotype frame:
+    `filter_productive` drops non-productive rearrangements, `correct` collapses
+    error-variants (reads conserved, clonotypes down), `downsample` equalises depth,
+    `filter_frequency`/`filter_segment` subset by abundance or gene, `decontaminate`
+    strips cross-sample bleed, `pool_samples`/`join_samples` combine repertoires, and
+    `correct_vj_usage` removes systematic batch biases in gene usage — all pure polars,
+    composable into a preprocessing pipeline ahead of `vdjtools.stats` /
+    `vdjtools.overlap` / `vdjtools.biomarker`.
+    """)
     return
 
 

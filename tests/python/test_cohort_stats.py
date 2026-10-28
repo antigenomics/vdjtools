@@ -166,3 +166,16 @@ def test_by_default_is_byte_identical_eager(cohort):
     f = next(iter(frames.values()))
     assert stats.spectratype(f).equals(stats.spectratype(f, by=[]))
     assert stats.segment_usage(f, "v").equals(stats.segment_usage(f, "v", by=[]))
+
+
+@pytest.mark.parametrize("ids", [[1, 2], [1, 2**40], ["a", "b"]])
+def test_diversity_cohort_preserves_scalar_sample_id_dtype(ids):
+    from polars.testing import assert_frame_equal
+
+    frame = pl.DataFrame({"sample_id": ids, "duplicate_count": [2, 3]})
+    expected = pl.concat([
+        stats.diversity_stats(frame.filter(pl.col("sample_id") == sample)).select(
+            pl.lit(sample).alias("sample_id"), pl.all())
+        for sample in ids
+    ], how="vertical_relaxed")
+    assert_frame_equal(stats.diversity_cohort(frame), expected, check_exact=True)

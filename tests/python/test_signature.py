@@ -733,4 +733,54 @@ def test_download_size_mismatch_reports_received_size_and_removes_partial_file(t
     with pytest.raises(OSError, match="is 3 bytes, the index expects 4"):
         C._download(source.as_uri(), target, None, 4)
     assert not target.exists()
-    assert not target.with_suffix(".bin.part").exists()
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_concurrent_downloads_have_independent_partial_files(tmp_path, monkeypatch):
+    import hashlib
+    import io
+    import threading
+    import urllib.request
+
+    barrier = threading.Barrier(2)
+    payload = b"verified artifact"
+    errors = []
+
+    def open_source(url, **kw):
+        barrier.wait(timeout=5)
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(urllib.request, "urlopen", open_source)
+    target = tmp_path / "artifact.npz"
+
+    def fetch():
+        try:
+            C._download("test://artifact", target, hashlib.sha256(payload).hexdigest(), len(payload))
+        except Exception as exc:
+            errors.append(exc)
+
+    workers = [threading.Thread(target=fetch) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+    assert not any(worker.is_alive() for worker in workers)
+    assert not errors
+    assert target.read_bytes() == payload
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_download_connection_failure_preserves_existing_artifact(tmp_path, monkeypatch):
+    import urllib.request
+
+    target = tmp_path / "artifact.npz"
+    target.write_bytes(b"existing")
+
+    def fail(url, **kw):
+        raise OSError("connection interrupted")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    with pytest.raises(OSError, match="connection interrupted"):
+        C._download("test://artifact", target, None, None)
+    assert target.read_bytes() == b"existing"
+    assert not list(tmp_path.glob("*.part"))

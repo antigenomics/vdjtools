@@ -148,6 +148,7 @@ def test_convert_helper_edges():
     assert convert._finalize(pl.DataFrame()).height == 0
     assert convert.translate("") == ""
     assert convert.to_unified_cdr3aa(None) is None
+    assert convert._to_int("9007199254740993.0") == 9007199254740993
     assert convert._to_int("null", "x") == 0          # nothing numeric → 0
     assert convert._to_int("0", "50") == 50           # skip non-positive → fallback
 

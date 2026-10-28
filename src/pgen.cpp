@@ -2,6 +2,8 @@
 #include "vdjtools/model.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <cctype>
@@ -270,6 +272,18 @@ inline bool ok_codon(uint64_t allowed_c, int codon_idx) {
     return (allowed_c >> codon_idx) & 1ULL;
 }
 
+// Necessary per-base constraints prune impossible partial codons before the
+// complete-codon check. Remaining transitions retain their original order.
+unsigned codon_nt_mask(uint64_t codons, int phase) {
+    uint64_t pattern = phase == 0 ? 0xffffULL : phase == 1 ? 0x000f000f000f000fULL
+                                                               : 0x1111111111111111ULL;
+    int step = phase == 0 ? 16 : phase == 1 ? 4 : 1;
+    unsigned mask = 0;
+    for (int nt = 0; nt < 4; ++nt)
+        if (codons & (pattern << (nt * step))) mask |= 1u << nt;
+    return mask;
+}
+
 uint64_t mask_for_aa(char x) {
     uint64_t m = 0;
     for (int t = 0; t < 64; ++t)
@@ -328,6 +342,11 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
                 if (!ok_codon(allowed[c], gv[3 * c] * 16 + gv[3 * c + 1] * 4 + gv[3 * c + 2])) { ok = false; break; }
             }
             if (!ok) continue;
+            // The incomplete germline codon must admit some completion too.
+            int phase = len_v % 3;
+            if (phase == 1 && !(allowed[len_v / 3] & (0xffffULL << (gv[len_v - 1] * 16)))) continue;
+            if (phase == 2 && !(allowed[len_v / 3] &
+                    (0xfULL << (gv[len_v - 2] * 16 + gv[len_v - 1] * 4)))) continue;
             int a = gv[len_v - 1], b = (len_v >= 2) ? gv[len_v - 2] : -1;
             seed[len_v * 25 + sidx(a, b)] += pv * pdv;
             has_seed[len_v] = 1;
@@ -343,13 +362,15 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
             int mm = q + ell - 1;
             bool ce = (mm % 3 == 2);
             uint64_t am = allowed[mm / 3];
+            unsigned candidates = codon_nt_mask(am, mm % 3);
             std::fill(ncur.begin(), ncur.end(), 0.0);
             bool any = false;
             for (int s = 0; s < 25; ++s) {
                 double w = cur[s];
                 if (w == 0.0) continue;
                 int p1 = s / 5 - 1, p2 = s % 5 - 1;
-                for (int nt = 0; nt < 4; ++nt) {
+                for (unsigned todo = candidates; todo; todo &= todo - 1) {
+                    int nt = std::countr_zero(todo);
                     double mult = (ell == 1) ? bias[nt] : R[nt * 4 + p1];
                     if (mult == 0.0) continue;
                     if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
@@ -401,6 +422,10 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
                 }
             }
             if (!ok) continue;
+            int phase = right % 3;
+            if (phase == 1 && !(allowed[right / 3] &
+                    (0x0001000100010001ULL << (gj[idxj] * 4 + gj[idxj + 1])))) continue;
+            if (phase == 2 && !(allowed[right / 3] & (0x1111111111111111ULL << gj[idxj]))) continue;
             int cc = gj[idxj], dd = (len_j >= 2) ? gj[idxj + 1] : -1;
             seed[right * 25 + sidx(cc, dd)] += pdg * pj * pdj;
             has_seed[right] = 1;
@@ -416,13 +441,15 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
             int mm = right - ell;
             bool ce = (mm % 3 == 0);  // codon [mm,mm+1,mm+2] completes now
             uint64_t am = allowed[mm / 3];
+            unsigned candidates = codon_nt_mask(am, mm % 3);
             std::fill(ncur.begin(), ncur.end(), 0.0);
             bool any = false;
             for (int s = 0; s < 25; ++s) {
                 double w = cur[s];
                 if (w == 0.0) continue;
                 int c = s / 5 - 1, d = s % 5 - 1;  // nt[mm+1], nt[mm+2]
-                for (int nt = 0; nt < 4; ++nt) {
+                for (unsigned todo = candidates; todo; todo &= todo - 1) {
+                    int nt = std::countr_zero(todo);
                     double mult = (ell == 1) ? bias[nt] : R[nt * 4 + c];
                     if (mult == 0.0) continue;
                     if (ce && !ok_codon(am, nt * 16 + c * 4 + d)) continue;
@@ -444,18 +471,34 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
 
 // Stitch left dp (state nt[p-1],nt[p-2]) with right rb (state nt[p],nt[p+1]) at boundary p,
 // checking the single codon (if any) that straddles p against its allowed-codon mask.
-double combine_tm(const std::vector<double>& dp, const double* rb, int p, const uint64_t* allowed) {
+double combine_tm(const double* dp, const double* rb, int p, const uint64_t* allowed,
+                  const double* reduced = nullptr, int sole_state = -1,
+                  uint64_t right_terms = 0) {
     if (p % 3 == 0) {  // clean cut — no straddling codon
         double a = 0.0, b = 0.0;
-        for (int s = 0; s < 25; ++s) { a += dp[s]; b += rb[s]; }
+        if (sole_state >= 0) a = dp[sole_state];
+        else for (int s = 0; s < 25; ++s) a += dp[s];
+        if (reduced) b = reduced[0];
+        else for (int s = 0; s < 25; ++s) b += rb[s];
         return a * b;
     }
     if (p % 3 == 1) {  // codon [p-1,p,p+1] = (a,c,d), completes at p+1
         uint64_t am = allowed[(p - 1) / 3];
         double dpA[4] = {0, 0, 0, 0};
-        for (int s = 0; s < 25; ++s)
+        for (int s = sole_state >= 0 ? sole_state : 0;
+             s < (sole_state >= 0 ? sole_state + 1 : 25); ++s)
             if (dp[s] != 0.0) { int a = s / 5 - 1; if (a >= 0) dpA[a] += dp[s]; }
         double tot = 0.0;
+        if (reduced) {
+            // Terms are ordered (right-state, left-base), exactly as below.
+            while (right_terms) {
+                int term = std::countr_zero(right_terms), a = term % 4;
+                if (dpA[a] != 0.0)
+                    tot += dpA[a] * rb[sidx(term / 16, (term / 4) % 4)];
+                right_terms &= right_terms - 1;
+            }
+            return tot;
+        }
         for (int s = 0; s < 25; ++s) {
             double w = rb[s];
             if (w == 0.0) continue;
@@ -469,10 +512,12 @@ double combine_tm(const std::vector<double>& dp, const double* rb, int p, const 
     // p % 3 == 2: codon [p-2,p-1,p] = (b,a,c), completes at p
     uint64_t am = allowed[p / 3];
     double rbC[4] = {0, 0, 0, 0};
-    for (int s = 0; s < 25; ++s)
+    if (reduced) std::copy(reduced, reduced + 4, rbC);
+    else for (int s = 0; s < 25; ++s)
         if (rb[s] != 0.0) { int c = s / 5 - 1; if (c >= 0) rbC[c] += rb[s]; }
     double tot = 0.0;
-    for (int s = 0; s < 25; ++s) {
+    for (int s = sole_state >= 0 ? sole_state : 0;
+         s < (sole_state >= 0 ? sole_state + 1 : 25); ++s) {
         double w = dp[s];
         if (w == 0.0) continue;
         int a = s / 5 - 1, b = s % 5 - 1;
@@ -489,6 +534,7 @@ inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt
                        const uint64_t* allowed) {
     bool ce = (mm % 3 == 2);
     uint64_t am = allowed[mm / 3];
+    if (!(codon_nt_mask(am, mm % 3) & (1u << nt))) return false;
     std::fill(ndp.begin(), ndp.end(), 0.0);
     bool any = false;
     for (int s = 0; s < 25; ++s) {
@@ -505,13 +551,63 @@ inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt
 
 double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
     int N = 3 * alen;
-    std::vector<double> Lf, Rb, res;
+    std::vector<double> Lf, Rb, res, reduced((N + 1) * 4);
+    std::vector<uint64_t> right_terms(N + 1);
+    std::vector<double> short_results((N + 1) * 21);
+    std::vector<int> first, last;
     std::vector<char> lf_any, rb_any, live;
     mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);
     double total = 0.0;
     std::vector<double> dp(25), ndp(25);
+    // The first two emitted D bases depend only on Lf and those bases, not on
+    // the D allele/trim. Compute all 4/16 possibilities once for this query.
+    std::vector<double> first_dp((N + 1) * 4 * 25), second_weight((N + 1) * 16);
+    std::vector<char> first_any((N + 1) * 4);
+    std::vector<double> cur(25), ncur(25);
+    for (int pos = 1; pos < N; ++pos) {
+        if (!lf_any[pos]) continue;
+        for (int a = 0; a < 4; ++a) {
+            std::copy_n(&Lf[pos * 25], 25, dp.begin());
+            if (!thread_one(dp, ndp, a, pos, allowed)) continue;
+            first_any[pos * 4 + a] = 1;
+            std::copy(dp.begin(), dp.end(), &first_dp[(pos * 4 + a) * 25]);
+            if (pos + 1 >= N) continue;
+            for (int b = 0; b < 4; ++b) {
+                cur = dp;
+                if (thread_one(cur, ncur, b, pos + 1, allowed))
+                    second_weight[pos * 16 + a * 4 + b] = cur[sidx(b, a)];
+            }
+        }
+    }
     for (int D : m.func_d) {
         mk_right_tm(m, allowed, N, D, j_idx, Rb, rb_any);
+        // Empty, one-base and two-base prefixes recur across cuts of this D.
+        // Their nonnegative boundary probabilities are local to this query/D.
+        std::fill(short_results.begin(), short_results.end(), -1.0);
+        // These reductions depend on (D, boundary), never on the D trim. Preserve
+        // the original state order rather than regrouping products in combine_tm.
+        std::fill(reduced.begin(), reduced.end(), 0.0);
+        std::fill(right_terms.begin(), right_terms.end(), 0);
+        for (int p = 0; p <= N; ++p) {
+            double* r = &reduced[p * 4];
+            if (p % 3 == 0) {
+                for (int s = 0; s < 25; ++s) r[0] += Rb[p * 25 + s];
+            } else if (p % 3 == 1) {
+                for (int s = 0; s < 25; ++s) {
+                    int c = s / 5 - 1, d = s % 5 - 1;
+                    if (Rb[p * 25 + s] == 0.0 || c < 0 || d < 0) continue;
+                    for (int a = 0; a < 4; ++a)
+                        if (ok_codon(allowed[p / 3], a * 16 + c * 4 + d))
+                            right_terms[p] |= uint64_t{1} << (c * 16 + d * 4 + a);
+                }
+            } else if (p % 3 == 2) {
+                for (int s = 0; s < 25; ++s) {
+                    double w = Rb[p * 25 + s];
+                    int c = s / 5 - 1;
+                    if (w != 0.0 && c >= 0) r[c] += w;
+                }
+            }
+        }
         const auto& cutd = m.cut_d[D];
         int Ld = cutd.size();
         const double* del_row = &m.del_d[D * m.nbins_d5 * m.nbins_d3];
@@ -527,39 +623,68 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
             for (int idx3 = 0; idx3 <= hi3; ++idx3)
                 if (del_row[idx5 * m.nbins_d3 + idx3] != 0.0) live[Ld - idx5 - idx3] = 1;
             res.assign((ld_hi + 1) * (N + 1), 0.0);
+            first.assign(ld_hi + 1, N + 1);
+            last.assign(ld_hi + 1, 0);
             for (int pos = 1; pos <= N; ++pos) {
                 if (!lf_any[pos]) continue;
-                for (int s = 0; s < 25; ++s) dp[s] = Lf[pos * 25 + s];
+                const double* weights = &Lf[pos * 25];
+                int sole_state = -1;
                 for (int ld = 0; ld <= ld_hi && pos + ld <= N; ++ld) {
-                    if (ld > 0 && !thread_one(dp, ndp, cutd[idx5 + ld - 1], pos + ld - 1, allowed))
-                        break;  // mass gone; every longer prefix stays 0 and res is pre-zeroed
+                    if (ld > 0) {
+                        int nt = cutd[idx5 + ld - 1], mm = pos + ld - 1;
+                        if (sole_state >= 0) {
+                            int p1 = sole_state / 5 - 1, p2 = sole_state % 5 - 1;
+                            if (mm % 3 == 2 && !ok_codon(allowed[mm / 3], p2 * 16 + p1 * 4 + nt))
+                                break;
+                            double w = dp[sole_state];
+                            sole_state = sidx(nt, p1);
+                            dp[sole_state] = w;
+                        } else if (ld == 1) {
+                            if (!first_any[pos * 4 + nt]) break;
+                            weights = &first_dp[(pos * 4 + nt) * 25];
+                        } else {
+                            double w = second_weight[pos * 16 + cutd[idx5] * 4 + nt];
+                            if (w == 0.0) break;
+                            sole_state = sidx(nt, cutd[idx5]);
+                            dp[sole_state] = w;
+                            weights = dp.data();
+                        }
+                    }
                     int p = pos + ld;
-                    if (live[ld] && rb_any[p])
-                        res[ld * (N + 1) + pos] = combine_tm(dp, &Rb[p * 25], p, allowed);
+                    if (live[ld] && rb_any[p]) {
+                        int key = -1;
+                        if (ld == 0) key = pos * 21;
+                        else if (ld == 1) key = pos * 21 + 1 + cutd[idx5];
+                        else if (ld == 2) key = pos * 21 + 5 + cutd[idx5] * 4 + cutd[idx5 + 1];
+                        double value = key >= 0 ? short_results[key] : -1.0;
+                        if (value < 0.0) {
+                            value = combine_tm(weights, &Rb[p * 25], p, allowed,
+                                               &reduced[p * 4], sole_state, right_terms[p]);
+                            if (key >= 0) short_results[key] = value;
+                        }
+                        res[ld * (N + 1) + pos] = value;
+                        if (value != 0.0) {
+                            first[ld] = std::min(first[ld], pos);
+                            last[ld] = pos;
+                        }
+                    }
                 }
             }
-            // Second pass, in the ORIGINAL (idx3 ascending, pos ascending) order. That is what
-            // keeps `total` bitwise identical rather than merely equal to 1e-16 -- summing
-            // straight out of the walk reassociates, and vsig:pgen:*:frac_atypical is compared
-            // against a frozen pgen_q05 reference where a last-bit move is a data bug.
+            // Retain the original (idx3 ascending, pos ascending) reduction order
+            // so optimized probabilities remain bitwise identical.
             for (int idx3 = 0; idx3 <= hi3; ++idx3) {
                 double pdel = del_row[idx5 * m.nbins_d3 + idx3];
                 if (pdel == 0.0) continue;
                 int ld = Ld - idx5 - idx3;
                 const double* r = &res[ld * (N + 1)];
-                for (int pos = 1; pos <= N - ld; ++pos) total += pdel * r[pos];
+                // Outside this interval every contribution is exactly zero.
+                for (int pos = first[ld]; pos <= last[ld]; ++pos) total += pdel * r[pos];
             }
         }
     }
     return total;
 }
 
-// NOTE: `combine_tm` is the bottleneck now that the D walk shares its prefixes -- unchanged at
-// ~437k calls per 20-aa IGH junction against 588k threading steps. The available win is hoisting
-// its per-boundary reduction (rb -> 4 or 16 numbers, loop-invariant in dp) out to one pass per
-// (D, p), worth roughly another 2x. It is NOT free: that regroups the sum, so Pgen moves in the
-// last ~1e-16 and the bitwise gate on `tests/python/fixtures/pgen_golden.json` has to be relaxed
-// to a tolerance. Its own piece of work, with its own concordance run.
 // Thread a fixed germline block g[0..ld) starting at CDR3 position `start` forward through the
 // codon-constrained state DP (25 states). Returns false if the codon masks kill all mass.
 inline bool thread_fixed(std::vector<double>& dp, std::vector<double>& ndp,
@@ -664,7 +789,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
                             double wgt = pd2 * pdel2;
                             for (int s = 0; s < 25; ++s) dp[s] = Mf[pos2 * 25 + s] * wgt;
                             if (!thread_fixed(dp, ndp, g, ld2, pos2, allowed)) continue;
-                            total += combine_tm(dp, &RbJ[p2 * 25], p2, allowed);
+                            total += combine_tm(dp.data(), &RbJ[p2 * 25], p2, allowed);
                         }
                     }
             }
@@ -784,25 +909,34 @@ namespace {
 // embarrassingly disjoint (no shared state, no reduction), so the result is bitwise-identical to
 // the serial loop regardless of thread count; worker exceptions are joined and rethrown on the calling thread.
 template <class F>
-auto run_batch(size_t n, int nthreads, F&& one) -> std::vector<decltype(one(size_t{0}))> {
+auto run_batch(size_t n, int nthreads, F&& one, bool expensive = false)
+    -> std::vector<decltype(one(size_t{0}))> {
     std::vector<decltype(one(size_t{0}))> out(n);
     if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
     int T = nthreads > 0 ? nthreads : 1;
-    constexpr size_t kBatchThreadMin = 64;  // small batches stay single-threaded (bitwise-exact)
-    if (n < kBatchThreadMin || T <= 1) {
+    if (n < (expensive ? 2u : 64u) || T <= 1) {
         for (size_t i = 0; i < n; ++i) out[i] = one(i);
         return out;
     }
     if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
+    // Costly, unequal queries take several contiguous spans per worker; cheap rows
+    // retain one large span. Keep shared state alive until startup failures join.
+    size_t spans = static_cast<size_t>(T) * (expensive ? 4u : 1u);
+    size_t chunk = (n + spans - 1) / spans;
+    std::atomic<size_t> next{0};
     std::vector<std::exception_ptr> errors(T);
     std::vector<std::thread> pool;
     ThreadJoiner joiner{pool};
-    size_t chunk = (n + T - 1) / T;
     for (int t = 0; t < T; ++t) {
-        size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
-        if (lo >= hi) break;
-        pool.emplace_back([&, lo, hi, t] {
-            try { for (size_t i = lo; i < hi; ++i) out[i] = one(i); }
+        pool.emplace_back([&, t] {
+            try {
+                for (;;) {
+                    size_t lo = next.fetch_add(chunk, std::memory_order_relaxed);
+                    if (lo >= n) break;
+                    size_t hi = std::min(n, lo + chunk);
+                    for (size_t i = lo; i < hi; ++i) out[i] = one(i);
+                }
+            }
             catch (...) { errors[t] = std::current_exception(); }
         });
     }
@@ -827,7 +961,7 @@ std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::s
     return run_batch(seqs.size(), nthreads, [&](size_t i) {
         return mismatches == 1 ? pgen_aa_hamming1(m, seqs[i], vi(i), ji(i))
                                : pgen_aa(m, seqs[i], vi(i), ji(i));
-    });
+    }, m.vdj || mismatches == 1);
 }
 
 // Batch nucleotide Pgen, parallelized across sequences exactly as ``pgen_aa_batch`` is. The
@@ -854,8 +988,11 @@ std::vector<double> pgen_nt_batch(const PackedModel& m, const std::vector<std::s
     }
     auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
+    bool marginal = v_idxs.empty() || j_idxs.empty()
+        || std::find(v_idxs.begin(), v_idxs.end(), -1) != v_idxs.end()
+        || std::find(j_idxs.begin(), j_idxs.end(), -1) != j_idxs.end();
     return run_batch(seqs.size(), nthreads,
-                     [&](size_t i) { return pgen_nt(m, code[i], vi(i), ji(i)); });
+                     [&](size_t i) { return pgen_nt(m, code[i], vi(i), ji(i)); }, m.vdj && marginal);
 }
 
 namespace {
@@ -988,7 +1125,7 @@ std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
     return run_batch(masks.size(), nthreads, [&](size_t i) {
         return pgen_aa_masked(m, masks[i].data(), static_cast<int>(masks[i].size()), vi(i), ji(i));
-    });
+    }, m.vdj);
 }
 
 // ---- EM E-step ----------------------------------------------------------------------------
@@ -1762,7 +1899,7 @@ AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m, const std::vector<
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
     auto per = run_batch(seqs.size(), nthreads, [&](size_t i) {
         return best_aa_scenarios(m, seqs[i], vi(i), ji(i), k);
-    });
+    }, m.vdj);
     size_t total = 0;
     for (const auto& one : per) total += one.size();
     AaScenarioBatch out;
@@ -2044,7 +2181,7 @@ std::vector<InferNt> infer_nt_batch(const PackedModel& m, const std::vector<std:
     return run_batch(aas.size(), nthreads, [&](size_t i) {
         CodonDP dp;  // per row, so nothing is shared between workers
         return infer_nt_one(m, aas[i], v_alts[i], j_alts[i], k, dp);
-    });
+    }, true);
 }
 
 // ---------------------------------------------------------------------------------------------
