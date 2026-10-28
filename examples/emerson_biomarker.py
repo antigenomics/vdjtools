@@ -15,10 +15,10 @@ the significance threshold. Hits are validated live against a local **VDJdb** du
 by CMV epitope + HLA allele.
 
 Data: a balanced subset of the 786-subject Emerson HIP cohort auto-downloads from
-the HuggingFace dataset ``isalgo/airr_hip`` into the gitignored
-``examples/.data/emerson_nb/`` cache (HF verifies integrity; a re-run fetches
-nothing). The full-cohort, non-interactive version is ``examples/emerson_cmv_hla.py``.
+the Hugging Face dataset ``isalgo/airr_hip`` into its raw-file cache. Each input
+run rebuilds a temporary Parquet cohort under ``examples/.data/emerson_nb/``. The full-cohort, non-interactive version is ``examples/emerson_cmv_hla.py``.
 """
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -27,34 +27,32 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Finding CMV- and HLA-associated T-cell receptors — a vdjtools walkthrough
+    mo.md(r"""
+    # Finding CMV- and HLA-associated T-cell receptors — a vdjtools walkthrough
 
-        A person's T-cell repertoire is a record of what their immune system has
-        seen. Chronic infections such as **cytomegalovirus (CMV)** drive clonal
-        expansions of antigen-specific T cells, and because many of the responding
-        **TCRβ** chains are *public* (shared across people with the same exposure and
-        HLA type), their presence/absence across a cohort carries a statistical
-        signature of the phenotype.
+    A person's T-cell repertoire is a record of what their immune system has
+    seen. Chronic infections such as **cytomegalovirus (CMV)** drive clonal
+    expansions of antigen-specific T cells, and because many of the responding
+    **TCRβ** chains are *public* (shared across people with the same exposure and
+    HLA type), their presence/absence across a cohort carries a statistical
+    signature of the phenotype.
 
-        Emerson et al. (2017) turned this into a screen: for every public TCRβ, a
-        **2×2 Fisher's-exact test** of *how many subjects carry it* vs the phenotype.
-        This notebook runs that screen with **vdjtools**
-        (`vdjtools.biomarker.fisher_association`) on the Emerson HIP cohort, and lets
-        you turn the method's two knobs live —
+    Emerson et al. (2017) turned this into a screen: for every public TCRβ, a
+    **2×2 Fisher's-exact test** of *how many subjects carry it* vs the phenotype.
+    This notebook runs that screen with **vdjtools**
+    (`vdjtools.biomarker.fisher_association`) on the Emerson HIP cohort, and lets
+    you turn the method's two knobs live —
 
-        - **V/J-match requirement** — is a "clonotype" its CDR3 alone, or CDR3 **+ V**,
-          or CDR3 **+ V + J** (Emerson's definition)?
-        - **exact vs 1-mismatch** — must two subjects share the *identical* CDR3, or
-          does a single amino-acid substitution still count (grouping near-variants
-          into a **metaclonotype**)?
+    - **V/J-match requirement** — is a "clonotype" its CDR3 alone, or CDR3 **+ V**,
+      or CDR3 **+ V + J** (Emerson's definition)?
+    - **exact vs 1-mismatch** — must two subjects share the *identical* CDR3, or
+      does a single amino-acid substitution still count (grouping near-variants
+      into a **metaclonotype**)?
 
-        Every significant hit is checked against **VDJdb** — do the TCRβs our
-        statistics flag as CMV-associated actually appear there as CMV-specific, with
-        a matching HLA restriction?
-        """
-    )
+    Every significant hit is checked against **VDJdb** — do the TCRβs our
+    statistics flag as CMV-associated actually appear there as CMV-specific, with
+    a matching HLA restriction?
+    """)
     return
 
 
@@ -110,27 +108,36 @@ def _():
         except Exception:
             return None
 
-    return (N_SUBJECTS, OKABE, Path, REPO_ID, S, fisher_association,
-            mo, np, pl, plt, vdjdb_slim, vio)
+    return (
+        N_SUBJECTS,
+        OKABE,
+        Path,
+        REPO_ID,
+        S,
+        fisher_association,
+        mo,
+        np,
+        pl,
+        plt,
+        vdjdb_slim,
+        vio,
+    )
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 1 · Data bootstrap
+    mo.md(r"""
+    ## 1 · Data bootstrap
 
-        The `metadata.txt` sheet (786 subjects) carries each subject's **CMV
-        serostatus** (`+`/`−`/`NA`) and **2-digit HLA-A/B typing**. We take a balanced
-        subset (half CMV+, half CMV−) and pull just those subjects' repertoires
-        (`corr/HIP#####.txt.gz`, VDJtools format) from HuggingFace into the gitignored
-        `examples/.data/emerson_nb/` cache. A re-run re-uses the cache and the
-        already-ingested Parquet cohort.
+    The `metadata.txt` sheet (786 subjects) carries each subject's **CMV
+    serostatus** (`+`/`−`/`NA`) and **2-digit HLA-A/B typing**. We take a balanced
+    subset (half CMV+, half CMV−) and pull just those subjects' repertoires
+    (`corr/HIP#####.txt.gz`, VDJtools format) through the Hugging Face raw-file cache.
+    Each input run rebuilds a temporary Parquet cohort.
 
-        > **Note on the split on TAB, not comma** — the `race` metadata field itself
-        > contains commas, so the sheet must be parsed tab-delimited.
-        """
-    )
+    > **Note on the split on TAB, not comma** — the `race` metadata field itself
+    > contains commas, so the sheet must be parsed tab-delimited.
+    """)
     return
 
 
@@ -172,15 +179,18 @@ def _(N_SUBJECTS, Path, REPO_ID, mo, pl):
 
 
 @app.cell
-def _(corr_dir, data_dir, meta, mo, pl, vio):
+def _(Path, corr_dir, data_dir, meta, mo, pl, vio):
     # Stream the per-sample VDJtools files into a hive-partitioned Parquet cohort once
     # (one sample in RAM at a time), then scan it as a single out-of-core LazyFrame.
-    cohort = data_dir / "cohort"
-    if not any(cohort.glob("sample_id=*/*.parquet")):
-        vio.ingest_cohort(meta.select("sample_id", "cmv", "hla"), corr_dir, cohort,
-                          sample_col="sample_id", file_template="{sample}.txt.gz",
-                          fmt="vdjtools")
+    from tempfile import TemporaryDirectory as _TemporaryDirectory
+    from weakref import finalize as _finalize
+    _cohort_tmp = _TemporaryDirectory(dir=data_dir, prefix="cohort_")
+    cohort = Path(_cohort_tmp.name)
+    vio.ingest_cohort(meta.select("sample_id", "cmv", "hla"), corr_dir, cohort,
+                      sample_col="sample_id", file_template="{sample}.txt.gz",
+                      fmt="vdjtools")
     lf = vio.scan_cohort(cohort, join_metadata=False)
+    _finalize(lf, _cohort_tmp.cleanup)
 
     # Per-subject binary phenotypes: CMV +/− and HLA-A*02 present/absent (2-digit).
     cmv_ph = meta.select(
@@ -219,22 +229,20 @@ def _(mo, pl, vdjdb_slim):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 2 · The screen — turn the knobs
+    mo.md(r"""
+    ## 2 · The screen — turn the knobs
 
-        `fisher_association` computes, for every feature present in **≥ `min incidence`**
-        subjects, the 2×2 incidence table against the phenotype and its Fisher p-value
-        (one-tailed *enrichment* for CMV, two-tailed for HLA), plus a Benjamini-Hochberg
-        `q`. Set the four controls below — the screen re-runs when the phenotype,
-        matching, or min-incidence change; the **threshold** only re-draws.
+    `fisher_association` computes, for every feature present in **≥ `min incidence`**
+    subjects, the 2×2 incidence table against the phenotype and its Fisher p-value
+    (one-tailed *enrichment* for CMV, two-tailed for HLA), plus a Benjamini-Hochberg
+    `q`. Set the four controls below — the screen re-runs when the phenotype,
+    matching, or min-incidence change; the **threshold** only re-draws.
 
-        > **On significance.** With millions of features, BH-`q` is extremely strict at
-        > this subset size — so, like Emerson, the primary line is a **nominal
-        > p-threshold** (the paper used P < 1e-4, FDR ≈ 0.14). `q` is shown as the
-        > conservative secondary.
-        """
-    )
+    > **On significance.** With millions of features, BH-`q` is extremely strict at
+    > this subset size — so, like Emerson, the primary line is a **nominal
+    > p-threshold** (the paper used P < 1e-4, FDR ≈ 0.14). `q` is shown as the
+    > conservative secondary.
+    """)
     return
 
 
@@ -258,7 +266,17 @@ def _(mo):
 
 
 @app.cell
-def _(S, a02_ph, cmv_ph, fisher_association, key, lf, match, min_inc, phenotype):
+def _(
+    S,
+    a02_ph,
+    cmv_ph,
+    fisher_association,
+    key,
+    lf,
+    match,
+    min_inc,
+    phenotype,
+):
     _KEYS = {"vj": (S.JUNCTION_AA, S.V_CALL, S.J_CALL),
              "v": (S.JUNCTION_AA, S.V_CALL), "cdr3": (S.JUNCTION_AA,)}
     _is_cmv = phenotype.value == "cmv"
@@ -337,17 +355,15 @@ def _(logp, mo, pl, res, top, vdjdb_cmv):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 3 · 1-mismatch to VDJdb (bonus)
+    mo.md(r"""
+    ## 3 · 1-mismatch to VDJdb (bonus)
 
-        The exact-match column above undercounts biology: a CMV-driving TCRβ and a
-        VDJdb entry can differ by a single residue. Switch **CDR3 matching → 1
-        mismatch** to group near-variants into metaclonotypes; the cell below also asks
-        the looser question directly — how many of our top hits have a VDJdb-CMV
-        neighbour **within one substitution** (`vdjmatch.cluster.overlap`)?
-        """
-    )
+    The exact-match column above undercounts biology: a CMV-driving TCRβ and a
+    VDJdb entry can differ by a single residue. Switch **CDR3 matching → 1
+    mismatch** to group near-variants into metaclonotypes; the cell below also asks
+    the looser question directly — how many of our top hits have a VDJdb-CMV
+    neighbour **within one substitution** (`vdjmatch.cluster.overlap`)?
+    """)
     return
 
 
@@ -372,20 +388,18 @@ def _(mo, top, vdjdb_cmv):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** A pure incidence Fisher screen — no antigen assay, no structure —
-        rediscovers known CMV-specific public TCRβs (e.g. `CASSLAPGATNEKLFF` ↔ the
-        pp65 epitope **NLVPMVATV**, HLA-A\*02:01) and their HLA restriction, straight
-        from raw repertoires. Widening the clonotype key from CDR3-only to CDR3+V+J
-        sharpens specificity; allowing a single mismatch recovers more of the VDJdb
-        overlap. Built on `vdjtools.io` (streamed Parquet cohort),
-        `vdjtools.biomarker.fisher_association` (vectorised hypergeometric Fisher over
-        millions of features), and `vdjtools.overlap` (the native 1-mismatch matcher).
-        The full 786-subject screen is `examples/emerson_cmv_hla.py`.
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** A pure incidence Fisher screen — no antigen assay, no structure —
+    rediscovers known CMV-specific public TCRβs (e.g. `CASSLAPGATNEKLFF` ↔ the
+    pp65 epitope **NLVPMVATV**, HLA-A\*02:01) and their HLA restriction, straight
+    from raw repertoires. Widening the clonotype key from CDR3-only to CDR3+V+J
+    sharpens specificity; allowing a single mismatch recovers more of the VDJdb
+    overlap. Built on `vdjtools.io` (streamed Parquet cohort),
+    `vdjtools.biomarker.fisher_association` (vectorised hypergeometric Fisher over
+    millions of features), and `vdjtools.overlap` (the native 1-mismatch matcher).
+    The full 786-subject screen is `examples/emerson_cmv_hla.py`.
+    """)
     return
 
 

@@ -3,11 +3,12 @@
 # (`isalgo/airr_benchmark`, folder `vdjtools/`, 78 donors aged 0-103). It loads the cohort once
 # and reads off every aging signal three ways:
 #   * cohort-STREAMING stats — diversity_cohort, the clone-size distribution, and the CDR3
-#     spectratype, each a single streamed group_by over a `scan_cohort` LazyFrame (flat memory);
+#     spectratype, each a single streamed group_by over a `scan_cohort` LazyFrame (streamed input);
 #   * coverage-standardized iNEXT diversity + rarefaction (the depth-confound-free headline);
 #   * pairwise repertoire overlap -> MDS (repertoires diverge from a cord-blood centre with age).
 # Data auto-loads from HuggingFace, preferring a local `./data_dump/` copy (gitignored; symlink your data there). Run with:
 #     marimo edit examples/aging.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -16,31 +17,28 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Ageing of the human TCR repertoire — a vdjtools walkthrough
+    mo.md(r"""
+    # Ageing of the human TCR repertoire — a vdjtools walkthrough
 
-        As we age the naive T-cell pool contracts and a handful of clones expand, so the T-cell
-        receptor (TCR) repertoire becomes **less diverse and more clonal** — and, because those
-        expansions are largely *private* (stochastic, person-specific), individual repertoires
-        **drift apart** with age. This notebook reads all three signals off the full-depth
-        **Britanova "Cord Blood to Centenarians" TRB cohort** (`isalgo/airr_benchmark`, 78 donors,
-        ages **0 → 103**) with vdjtools, three complementary ways:
+    As we age the naive T-cell pool contracts and a handful of clones expand, so the T-cell
+    receptor (TCR) repertoire becomes **less diverse and more clonal** — and, because those
+    expansions are largely *private* (stochastic, person-specific), individual repertoires
+    **drift apart** with age. This notebook reads all three signals off the full-depth
+    **Britanova "Cord Blood to Centenarians" TRB cohort** (`isalgo/airr_benchmark`, 78 donors,
+    ages **0 → 103**) with vdjtools, three complementary ways:
 
-        - **Cohort-streaming stats** — the cohort is ingested once into a hive-partitioned Parquet
-          dataset, then `stats.diversity_cohort`, the clone-size distribution, and the
-          `spectratype` are each a *single* streamed `group_by` over `io.scan_cohort` (memory stays
-          flat however many samples you scan).
-        - **Coverage-standardized diversity** — the rigorous headline: Hill diversity read at a
-          common *sample coverage* (iNEXT), which removes the sequencing-depth confound, plus the
-          classic rarefaction/extrapolation curves.
-        - **Repertoire divergence** — pairwise exact-match overlap (`vdjtools.overlap`) turned into
-          a distance and embedded with **MDS**: cord-blood samples cluster centrally, older donors
-          scatter to the periphery.
+    - **Cohort-streaming stats** — the cohort is ingested once into a hive-partitioned Parquet
+      dataset, then `stats.diversity_cohort`, the clone-size distribution, and the
+      `spectratype` are each a *single* streamed `group_by` over `io.scan_cohort` (the input scan is streamed; count spectra and results grow with sample count).
+    - **Coverage-standardized diversity** — the rigorous headline: Hill diversity read at a
+      common *sample coverage* (iNEXT), which removes the sequencing-depth confound, plus the
+      classic rarefaction/extrapolation curves.
+    - **Repertoire divergence** — pairwise exact-match overlap (`vdjtools.overlap`) turned into
+      a distance and embedded with **MDS**: cord-blood samples cluster centrally, older donors
+      scatter to the periphery.
 
-        Data auto-loads from HuggingFace, preferring a local `./data_dump/` copy (gitignored; symlink your data there).
-        """
-    )
+    Data auto-loads from HuggingFace, preferring a local `./data_dump/` copy (gitignored; symlink your data there).
+    """)
     return
 
 
@@ -87,10 +85,31 @@ def _():
                 return cand
         return None
 
-    return (COUNT, HF_FOLDER, KEY, MDS, OKABE, Path, REPO, diversity_cohort,
-            estimate_d, inext_batch, ingest_cohort, local_base, mo, np,
-            overlap_metrics, pl, plt, rarefaction, read_metadata,
-            sample_coverage, scan_cohort, spearmanr, spectratype)
+    return (
+        COUNT,
+        HF_FOLDER,
+        KEY,
+        MDS,
+        OKABE,
+        Path,
+        REPO,
+        diversity_cohort,
+        estimate_d,
+        inext_batch,
+        ingest_cohort,
+        local_base,
+        mo,
+        np,
+        overlap_metrics,
+        pl,
+        plt,
+        rarefaction,
+        read_metadata,
+        sample_coverage,
+        scan_cohort,
+        spearmanr,
+        spectratype,
+    )
 
 
 @app.cell
@@ -102,8 +121,18 @@ def _(mo):
 
 
 @app.cell
-def _(HF_FOLDER, Path, REPO, ingest_cohort, local_base, mo, n_samples, pl,
-      read_metadata, scan_cohort):
+def _(
+    HF_FOLDER,
+    Path,
+    REPO,
+    ingest_cohort,
+    local_base,
+    mo,
+    n_samples,
+    pl,
+    read_metadata,
+    scan_cohort,
+):
     _nb = mo.notebook_dir() or Path.cwd()
     _base = local_base(_nb)
     if _base is not None:                                  # local mirror present
@@ -125,11 +154,15 @@ def _(HF_FOLDER, Path, REPO, ingest_cohort, local_base, mo, n_samples, pl,
         base = _root / HF_FOLDER
 
     data_dir = (mo.notebook_dir() or Path.cwd()) / ".data" / "aging_nb"
-    cohort = data_dir / f"cohort_{meta.height}"
-    if not any(cohort.glob("sample_id=*/*.parquet")):
-        ingest_cohort(meta.select("sample_id", "age", "sex"), base, cohort,
-                      sample_col="sample_id", file_template="{sample}.txt.gz", fmt="vdjtools")
+    from tempfile import TemporaryDirectory as _TemporaryDirectory
+    from weakref import finalize as _finalize
+    data_dir.mkdir(parents=True, exist_ok=True)
+    _cohort_tmp = _TemporaryDirectory(dir=data_dir, prefix="cohort_")
+    cohort = Path(_cohort_tmp.name)
+    ingest_cohort(meta.select("sample_id", "age", "sex"), base, cohort,
+                  sample_col="sample_id", file_template="{sample}.txt.gz", fmt="vdjtools")
     lf = scan_cohort(cohort, join_metadata=False)
+    _finalize(lf, _cohort_tmp.cleanup)
     ages = meta.select(pl.col("sample_id"), pl.col("age").cast(pl.Int64))
     mo.md(f"**{meta.height} donors**, ages {meta['age'].min()}–{meta['age'].max()}. "
           f"Cohort scanned from `{cohort.name}`.")
@@ -187,15 +220,13 @@ def _(DEPTH, age_arr, mo, n_clones, pl, reads, samples):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 1 · Diversity falls with age
+    mo.md(r"""
+    ## 1 · Diversity falls with age
 
-        First the fast **streamed** view: `stats.diversity_cohort` computes the whole cohort's
-        diversity table from the count-frequency spectrum in one pass over the `scan_cohort`
-        LazyFrame — memory flat regardless of cohort size.
-        """
-    )
+    First the fast **streamed** view: `stats.diversity_cohort` computes the whole cohort's
+    diversity table from the count-frequency spectrum in one pass over the `scan_cohort`
+    LazyFrame. Input is streamed; count spectra and result rows grow with sample count.
+    """)
     return
 
 
@@ -221,23 +252,30 @@ def _(OKABE, ages, diversity_cohort, lf, np, plt, spearmanr):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ### …now depth-standardized (iNEXT)
+    mo.md(r"""
+    ### …now depth-standardized (iNEXT)
 
-        Comparing raw diversity across samples is a trap: a deeper or more completely sampled
-        repertoire looks more diverse just from more sequencing. The principled fix is **coverage
-        standardization** — evaluate every sample's Hill diversity at a common *sample coverage* Ĉ
-        (the fraction of the repertoire the reads represent), following iNEXT. Here the full-depth
-        samples span a wide Ĉ, so we fix the common coverage at **C = min Ĉ** and read off Hill
-        diversity there for orders q = 0 (richness), 1 (Shannon) and 2 (Simpson).
-        """
-    )
+    Comparing raw diversity across samples is a trap: a deeper or more completely sampled
+    repertoire looks more diverse just from more sequencing. The principled fix is **coverage
+    standardization** — evaluate every sample's Hill diversity at a common *sample coverage* Ĉ
+    (the fraction of the repertoire the reads represent), following iNEXT. Here the full-depth
+    samples span a wide Ĉ, so we fix the common coverage at **C = min Ĉ** and read off Hill
+    diversity there for orders q = 0 (richness), 1 (Shannon) and 2 (Simpson).
+    """)
     return
 
 
 @app.cell
-def _(age_arr, counts, estimate_d, inext_batch, pl, sample_coverage, samples, spearmanr):
+def _(
+    age_arr,
+    counts,
+    estimate_d,
+    inext_batch,
+    pl,
+    sample_coverage,
+    samples,
+    spearmanr,
+):
     import numpy as _np
     _cov = _np.array([sample_coverage(counts[s]) for s in samples])
     cov_df = pl.DataFrame({"sample": samples, "age": age_arr, "coverage": _cov})
@@ -320,16 +358,14 @@ def _(mo, raw_shannon, spear):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 2 · Rarefaction / extrapolation curves
+    mo.md(r"""
+    ## 2 · Rarefaction / extrapolation curves
 
-        The classic vdjtools rarefaction plot: clonotype **richness** (Hill q=0) as a function of
-        sampling depth *m* (`rarefaction(sample, q=0)`), with bootstrap bands, for the youngest
-        (cord-blood) vs the oldest donors. The depth axis is log-scaled — full-depth samples differ
-        many-fold in sequencing depth, exactly the confound the coverage standardization above removes.
-        """
-    )
+    The classic vdjtools rarefaction plot: clonotype **richness** (Hill q=0) as a function of
+    sampling depth *m* (`rarefaction(sample, q=0)`), with bootstrap bands, for the youngest
+    (cord-blood) vs the oldest donors. The depth axis is log-scaled — full-depth samples differ
+    many-fold in sequencing depth, exactly the confound the coverage standardization above removes.
+    """)
     return
 
 
@@ -363,16 +399,14 @@ def _(OKABE, age_arr, counts, np, plt, rarefaction, reads, samples):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 3 · The clone-size distribution shifts: naive → clonal
+    mo.md(r"""
+    ## 3 · The clone-size distribution shifts: naive → clonal
 
-        Diversity's flip side. The **singleton fraction** (clonotypes seen once — the naive-rich
-        tail) falls, while the **hyperexpanded fraction** (reads carried by clones above 1%
-        frequency) rises — both one streamed `group_by(sample_id)` over the cohort. Alongside,
-        the read share of the **top 10 clones**, straight from the per-sample count vectors.
-        """
-    )
+    Diversity's flip side. The **singleton fraction** (clonotypes seen once — the naive-rich
+    tail) falls, while the **hyperexpanded fraction** (reads carried by clones above 1%
+    frequency) rises — both one streamed `group_by(sample_id)` over the cohort. Alongside,
+    the read share of the **top 10 clones**, straight from the per-sample count vectors.
+    """)
     return
 
 
@@ -426,7 +460,9 @@ def _(OKABE, age_arr, counts, np, plt, reads, samples, spearmanr):
 
 @app.cell
 def _(mo):
-    mo.md(r"""## 4 · CDR3-length spectratype by age group (one fused pass)""")
+    mo.md(r"""
+    ## 4 · CDR3-length spectratype by age group (one fused pass)
+    """)
     return
 
 
@@ -453,17 +489,15 @@ def _(OKABE, ages, lf, pl, plt, spectratype):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 5 · Repertoires diverge with age — overlap MDS
+    mo.md(r"""
+    ## 5 · Repertoires diverge with age — overlap MDS
 
-        The headline result of this cohort: repertoires **diverge from a central cord-blood cluster
-        outward with age**, driven by *private* clonal expansions. We measure it with pairwise
-        exact-match **overlap** (`vdjtools.overlap`, the frequency-overlap **F** metric on the
-        CDR3aa+V+J key) after equal-depth downsampling (§ setup), turn overlap into a distance
-        (`d = -log₁₀ F`), embed every sample with **metric MDS**, and colour the map by age.
-        """
-    )
+    The headline result of this cohort: repertoires **diverge from a central cord-blood cluster
+    outward with age**, driven by *private* clonal expansions. We measure it with pairwise
+    exact-match **overlap** (`vdjtools.overlap`, the frequency-overlap **F** metric on the
+    CDR3aa+V+J key) after equal-depth downsampling (§ setup), turn overlap into a distance
+    (`d = -log₁₀ F`), embed every sample with **metric MDS**, and colour the map by age.
+    """)
     return
 
 
@@ -533,17 +567,15 @@ def _(cb_dist, mds_div, mo, old_dist):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** Across dozens of healthy donors from cord blood to centenarians, the TRB
-        repertoire loses diversity, gains clonality, and drifts apart with age — reproduced
-        end-to-end from raw full-depth files. The streaming panels (`diversity_cohort`, the
-        clone-size `group_by`, the fused `spectratype`) keep peak memory independent of cohort size
-        via `io.ingest_cohort` / `scan_cohort`; the coverage-standardized iNEXT diversity,
-        rarefaction, and pairwise-overlap→MDS panels add the depth-confound-free, per-sample view.
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** Across dozens of healthy donors from cord blood to centenarians, the TRB
+    repertoire loses diversity, gains clonality, and drifts apart with age — reproduced
+    end-to-end from raw full-depth files. The streaming panels (`diversity_cohort`, the
+    clone-size `group_by`, the fused `spectratype`) keep peak memory independent of cohort size
+    via `io.ingest_cohort` / `scan_cohort`; the coverage-standardized iNEXT diversity,
+    rarefaction, and pairwise-overlap→MDS panels add the depth-confound-free, per-sample view.
+    """)
     return
 
 

@@ -52,9 +52,9 @@ Auto-loads from the HuggingFace dataset
 [`isalgo/airr_benchmark`](https://huggingface.co/datasets/isalgo/airr_benchmark) (folder
 `vdjtools/`, full sequencing depth — **~0.5 GB total**), preferring a local **`./data_dump/`** copy
 (gitignored — symlink your data there, e.g. `ln -s /path/to/airr_benchmark data_dump/airr_benchmark`).
-The selected samples are ingested once into the **gitignored** `examples/.data/aging_nb/`
-hive-partitioned Parquet cohort; HuggingFace verifies integrity and caches, so a re-run fetches
-nothing. The `samples` slider trades coverage of the age range against runtime (overlap is O(n²)).
+The selected raw downloads are reusable. Each input run rebuilds a temporary
+hive-partitioned Parquet cohort under the **gitignored** `examples/.data/aging_nb/`;
+its lifetime follows the notebook input frame. The `samples` slider trades coverage of the age range against runtime (overlap is O(n²)).
 
 ## `single_cell.py` — paired-chain single-cell TCR (10x dCODE)
 
@@ -152,8 +152,8 @@ marimo edit examples/emerson_biomarker.py
 ```
 
 Data: a **balanced 400-subject subset** of [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip)
-(the Emerson HIP cohort) auto-downloads into the gitignored `examples/.data/emerson_nb/` cache
-(HuggingFace verifies integrity; a re-run fetches nothing). VDJdb validation resolves a
+(the Emerson HIP cohort) uses the local Hugging Face raw-file cache. Each input run
+rebuilds a temporary Parquet cohort under `examples/.data/emerson_nb/`. VDJdb validation resolves a
 `./data_dump/` copy, else fetches the latest `antigenomics/vdjdb-db` release (both cached), and is
 skipped gracefully if unavailable.
 
@@ -179,7 +179,9 @@ A [marimo](https://marimo.io) notebook demonstrating the out-of-core cohort patt
 hive-partitioned Parquet dataset one at a time (peak RSS ≈ one sample, reported), then every
 statistic — the V-usage matrix, per-sample richness, an age-filtered count — is a `group_by`
 collected with `engine="streaming"` over a single `scan_cohort` LazyFrame. Slide the sample count
-up (toward thousands) and watch peak RSS stay flat. No data download.
+up (toward thousands) to inspect bounded ingestion memory; metadata and result tables
+still grow with sample count. Changing either slider regenerates the temporary
+inputs and cohort. No data download.
 
 ```bash
 pip install -e ".[examples]"
