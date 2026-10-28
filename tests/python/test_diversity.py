@@ -81,6 +81,12 @@ def test_efron_thisted_matches_independent_reference():
     assert stats.efron_thisted(c) == _efron_reference(c) == 8.0
 
 
+def test_efron_thisted_full_depth_matches_reference():
+    counts = np.random.default_rng(17).integers(1, 40, 2000)
+    for depth in (1, 5, 20):
+        assert stats.efron_thisted(counts, depth, math.inf) == _efron_reference(counts, depth, math.inf)
+
+
 def test_chao_e_extrapolation_hand_value():
     c = np.array([1, 1, 2, 3, 5])                     # n=12, Sobs=5, F1=2, F2=1, F0=0.5
     n = int(c.sum())

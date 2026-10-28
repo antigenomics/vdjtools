@@ -23,6 +23,7 @@ Data: a subset of the Britanova human TRB "Cord Blood to Centenarians" cohort (n
 vdjtools format) auto-downloads from the HuggingFace dataset ``isalgo/airr_benchmark``
 (folder ``vdjtools/``) into the gitignored ``examples/.data/overlap_nb/`` cache.
 """
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -31,31 +32,29 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Repertoire overlap, three ways — exact, fuzzy, and similarity-aware
+    mo.md(r"""
+    # Repertoire overlap, three ways — exact, fuzzy, and similarity-aware
 
-        How similar are two T-cell repertoires? The textbook answer counts the
-        **identical** clonotypes they share. But antigen recognition is degenerate: a
-        single amino-acid substitution in a CDR3 usually preserves specificity, so two
-        people responding to the same pathogen carry *near-variants* of the same
-        receptors that an exact-match count scores as **zero overlap**.
+    How similar are two T-cell repertoires? The textbook answer counts the
+    **identical** clonotypes they share. But antigen recognition is degenerate: a
+    single amino-acid substitution in a CDR3 usually preserves specificity, so two
+    people responding to the same pathogen carry *near-variants* of the same
+    receptors that an exact-match count scores as **zero overlap**.
 
-        `vdjtools.overlap` measures overlap under a CDR3-**similarity kernel** `Z`
-        (the TINA / Leinster-Cobbold form `pᵀZq`), and the choice of `Z` slides between
-        three regimes:
+    `vdjtools.overlap` measures overlap under a CDR3-**similarity kernel** `Z`
+    (the TINA / Leinster-Cobbold form `pᵀZq`), and the choice of `Z` slides between
+    three regimes:
 
-        | Lens | kernel `Z` | what counts as "shared" |
-        |---|---|---|
-        | **exact** | `I` (identity) | identical CDR3 + V + J |
-        | **fuzzy** | `1[≤ 1 substitution]` | one-mismatch neighbours |
-        | **similarity** | `exp(−BLOSUM62 / τ)` | smooth sequence similarity |
+    | Lens | kernel `Z` | what counts as "shared" |
+    |---|---|---|
+    | **exact** | `I` (identity) | identical CDR3 + V + J |
+    | **fuzzy** | `1[≤ 1 substitution]` | one-mismatch neighbours |
+    | **similarity** | `exp(−BLOSUM62 / τ)` | smooth sequence similarity |
 
-        We compute all three on a slice of the Britanova **"Cord Blood to
-        Centenarians"** TRB cohort, embed the samples with MDS, and show where the
-        similarity kernel sees structure the exact count misses.
-        """
-    )
+    We compute all three on a slice of the Britanova **"Cord Blood to
+    Centenarians"** TRB cohort, embed the samples with MDS, and show where the
+    similarity kernel sees structure the exact count misses.
+    """)
     return
 
 
@@ -82,22 +81,35 @@ def _():
     MAX_PENALTY = 40
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
-    return (DEPTH, HF_FOLDER, MAX_PENALTY, N_SAMPLES, OKABE, Path, REPO_ID,
-            cluster_samples, mo, np, pairwise_distances, pl, plt,
-            similarity_overlap, tcrnet, vio)
+    return (
+        DEPTH,
+        HF_FOLDER,
+        MAX_PENALTY,
+        N_SAMPLES,
+        OKABE,
+        Path,
+        REPO_ID,
+        cluster_samples,
+        mo,
+        np,
+        pairwise_distances,
+        pl,
+        plt,
+        similarity_overlap,
+        tcrnet,
+        vio,
+    )
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 1 · Load a slice of the cohort, equalised to a common depth
+    mo.md(r"""
+    ## 1 · Load a slice of the cohort, equalised to a common depth
 
-        Overlap is depth-sensitive, so every sample is **downsampled to a common read
-        depth** before any cross-sample comparison — the standard normalization. We
-        take samples evenly spaced across age (cord blood → centenarian).
-        """
-    )
+    Overlap is depth-sensitive, so every sample is **downsampled to a common read
+    depth** before any cross-sample comparison — the standard normalization. We
+    take samples evenly spaced across age (cord blood → centenarian).
+    """)
     return
 
 
@@ -143,21 +155,19 @@ def _(DEPTH, HF_FOLDER, N_SAMPLES, Path, REPO_ID, mo, np, pl, vio):
     age_arr = np.array([ages[s] for s in reps])
     mo.md(f"**{len(reps)} samples** (ages {age_arr.min()}–{age_arr.max()}), "
           f"each downsampled to ≤ {DEPTH:,} reads. Cache: `{data_dir}`")
-    return age_arr, ages, meta, reps
+    return age_arr, ages, reps
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 2 · All-pairs overlap under each kernel
+    mo.md(r"""
+    ## 2 · All-pairs overlap under each kernel
 
-        `pairwise_distances` turns each overlap similarity into a distance:
-        exact/fuzzy **F** → `−log10 F`, similarity cosine → `1 − cos`. The three
-        matrices below are the same 15 samples seen through progressively more
-        forgiving notions of "shared".
-        """
-    )
+    `pairwise_distances` turns each overlap similarity into a distance:
+    exact/fuzzy **F** → `−log10 F`, similarity cosine → `1 − cos`. The three
+    matrices below are the same 15 samples seen through progressively more
+    forgiving notions of "shared".
+    """)
     return
 
 
@@ -209,17 +219,15 @@ def _(age_arr, d_exact, d_fuzzy, d_sim, plt, reps):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 3 · Similarity sees overlap that exact-match misses
+    mo.md(r"""
+    ## 3 · Similarity sees overlap that exact-match misses
 
-        Per sample pair, the exact overlap (`F`) vs the similarity-weighted cosine. The
-        points sitting on the left edge (`F ≈ 0`) but well above zero on the y-axis are
-        pairs with **almost no shared identical clonotypes yet substantial
-        sequence-similarity overlap** — the near-variant sharing that only the kernel
-        captures.
-        """
-    )
+    Per sample pair, the exact overlap (`F`) vs the similarity-weighted cosine. The
+    points sitting on the left edge (`F ≈ 0`) but well above zero on the y-axis are
+    pairs with **almost no shared identical clonotypes yet substantial
+    sequence-similarity overlap** — the near-variant sharing that only the kernel
+    captures.
+    """)
     return
 
 
@@ -246,21 +254,19 @@ def _(OKABE, d_exact, d_sim, np, plt, reps):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 4 · Embed the cohort — one operator, three kernels
+    mo.md(r"""
+    ## 4 · Embed the cohort — one operator, three kernels
 
-        Metric MDS of each distance matrix, coloured by age — the **same** `pᵀZq` operator
-        read through `Z = I` → `1[≤1 sub]` → `exp(−BLOSUM62/τ)`. The number under each panel
-        is the fraction of sample **pairs with any detectable overlap**: exact aa+V+J
-        overlap of TRB is sparse (public sharing is rare, so many pairs share *nothing* and
-        the exact embedding is dominated by all-or-nothing distances), a one-substitution
-        kernel recovers more, and the smooth BLOSUM62 kernel places **every** pair on a
-        graded continuum. (At this deliberately shallow, tractable depth the age structure
-        itself is faint — the point here is the *sensitivity* of each lens, not an age
-        clock; the full-depth aging signal is the `aging.py` notebook.)
-        """
-    )
+    Metric MDS of each distance matrix, coloured by age — the **same** `pᵀZq` operator
+    read through `Z = I` → `1[≤1 sub]` → `exp(−BLOSUM62/τ)`. The number under each panel
+    is the fraction of sample **pairs with any detectable overlap**: exact aa+V+J
+    overlap of TRB is sparse (public sharing is rare, so many pairs share *nothing* and
+    the exact embedding is dominated by all-or-nothing distances), a one-substitution
+    kernel recovers more, and the smooth BLOSUM62 kernel places **every** pair on a
+    graded continuum. (At this deliberately shallow, tractable depth the age structure
+    itself is faint — the point here is the *sensitivity* of each lens, not an age
+    clock; the full-depth aging signal is the `aging.py` notebook.)
+    """)
     return
 
 
@@ -292,16 +298,14 @@ def _(ages, cluster_samples, d_exact, d_fuzzy, d_sim, np, pl, plt, reps):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 5 · Convergence within one repertoire — TCRnet
+    mo.md(r"""
+    ## 5 · Convergence within one repertoire — TCRnet
 
-        `tcrnet` asks a related question *within* a sample: which CDR3s sit in a dense
-        1-substitution neighbourhood far above what a background generation model
-        predicts (`vdjmatch` / `seqtree` e-values)? These enriched hubs are the
-        convergent, likely antigen-driven clusters.
-        """
-    )
+    `tcrnet` asks a related question *within* a sample: which CDR3s sit in a dense
+    1-substitution neighbourhood far above what a background generation model
+    predicts (`vdjmatch` / `seqtree` e-values)? These enriched hubs are the
+    convergent, likely antigen-driven clusters.
+    """)
     return
 
 
@@ -325,19 +329,17 @@ def _(mo, reps, tcrnet):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** The same cohort, three notions of "shared": exact identity is the
-        strictest and sparsest; a one-substitution kernel already recovers near-variant
-        sharing; and a smooth BLOSUM62 similarity kernel (TINA_w) is the most sensitive,
-        registering overlap between repertoires that share no identical clonotype at
-        all. All three are one call to `vdjtools.overlap`
-        (`pairwise_distances` → `cluster_samples`), differing only in the kernel `Z`;
-        `tcrnet` applies the same 1-substitution neighbourhood idea *within* a sample to
-        surface convergent, antigen-driven clusters.
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** The same cohort, three notions of "shared": exact identity is the
+    strictest and sparsest; a one-substitution kernel already recovers near-variant
+    sharing; and a smooth BLOSUM62 similarity kernel (TINA_w) is the most sensitive,
+    registering overlap between repertoires that share no identical clonotype at
+    all. All three are one call to `vdjtools.overlap`
+    (`pairwise_distances` → `cluster_samples`), differing only in the kernel `Z`;
+    `tcrnet` applies the same 1-substitution neighbourhood idea *within* a sample to
+    surface convergent, antigen-driven clusters.
+    """)
     return
 
 

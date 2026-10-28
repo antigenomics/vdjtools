@@ -4,6 +4,7 @@
 # extend its allele library, and re-weight its V/J usage. Everything runs offline in seconds on a
 # toy locus; toggle "use real reads" to pull a small pre-annotated TRB/TRA subset from HuggingFace.
 # Run with:  marimo edit examples/model_workshop.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -13,6 +14,7 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
@@ -35,6 +37,7 @@ def _():
     from vdjtools.model.infer import extend_alleles, infer_frame, training_frame
     from vdjtools.model.io import from_germline, marginals_frame
     from vdjtools.model.score import compare_pgen, diversity, model_fit, pgen_spectrum, pgen_summary
+
     return (
         check_model,
         compare_models,
@@ -64,24 +67,24 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # The recombination-model workshop
+    mo.md("""
+    # The recombination-model workshop
 
-        A model here is a **manifest** (the recombination Bayes net), a set of **tidy polars
-        marginal tables**, and the **germline** those tables are keyed against. Because the
-        probabilities are ordinary DataFrames, every step below is table-in / table-out.
+    A model here is a **manifest** (the recombination Bayes net), a set of **tidy polars
+    marginal tables**, and the **germline** those tables are keyed against. Because the
+    probabilities are ordinary DataFrames, every step below is table-in / table-out.
 
-        We build one from scratch on a three-gene toy locus, fit it, check it, compare it, score
-        sequences under it, and ask how much diversity it actually describes.
-        """
-    )
+    We build one from scratch on a three-gene toy locus, fit it, check it, compare it, score
+    sequences under it, and ask how much diversity it actually describes.
+    """)
     return
 
 
 @app.cell
 def _(mo):
-    mo.md("## 1 · A custom germline library")
+    mo.md("""
+    ## 1 · A custom germline library
+    """)
     return
 
 
@@ -126,17 +129,15 @@ def _(from_germline, toy_germline):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 2 · Training data
+    mo.md("""
+    ## 2 · Training data
 
-        Real models are fitted to **non-functional** reads — out-of-frame *or* stop-codon, since
-        both escaped selection. Keeping only the out-of-frame half would condition the training set
-        on junction length modulo 3, which the insertion-length model would then happily learn.
+    Real models are fitted to **non-functional** reads — out-of-frame *or* stop-codon, since
+    both escaped selection. Keeping only the out-of-frame half would condition the training set
+    on junction length modulo 3, which the insertion-length model would then happily learn.
 
-        Here we simulate from a "truth" model so the fit can be checked against a known answer.
-        """
-    )
+    Here we simulate from a "truth" model so the fit can be checked against a known answer.
+    """)
     return
 
 
@@ -188,7 +189,9 @@ def _(generate, mo, pl, template, use_real):
 
 @app.cell
 def _(mo):
-    mo.md("## 3 · Fit, and read the training log")
+    mo.md("""
+    ## 3 · Fit, and read the training log
+    """)
     return
 
 
@@ -230,15 +233,13 @@ def _(fitted, mo, pl, truth):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 4 · Check the model
+    mo.md("""
+    ## 4 · Check the model
 
-        `check_model` returns a tidy issue frame instead of raising, so every problem is visible at
-        once. `severity == "error"` means the model will crash or score wrongly; `warn` means
-        suspicious but usable. Each check exists because it once produced a silently wrong answer.
-        """
-    )
+    `check_model` returns a tidy issue frame instead of raising, so every problem is visible at
+    once. `severity == "error"` means the model will crash or score wrongly; `warn` means
+    suspicious but usable. Each check exists because it once produced a silently wrong answer.
+    """)
     return
 
 
@@ -271,17 +272,15 @@ def _(check_model, load_bundled, mo, pl):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 5 · Information content and total diversity
+    mo.md("""
+    ## 5 · Information content and total diversity
 
-        Two different questions. **Scenario entropy** is the information in one recombination
-        *event*, summed over the Bayes net. **Sequence entropy** is the entropy of the junction
-        distribution itself — always smaller, because different scenarios can produce the same
-        junction — estimated by Monte Carlo (sequences drawn from the model *are* distributed as
-        Pgen, so `E[-log2 Pgen]` is unbiased and the standard error comes free).
-        """
-    )
+    Two different questions. **Scenario entropy** is the information in one recombination
+    *event*, summed over the Bayes net. **Sequence entropy** is the entropy of the junction
+    distribution itself — always smaller, because different scenarios can produce the same
+    junction — estimated by Monte Carlo (sequences drawn from the model *are* distributed as
+    Pgen, so `E[-log2 Pgen]` is unbiased and the standard error comes free).
+    """)
     return
 
 
@@ -332,16 +331,14 @@ def _(mo, pgen_spectrum, plt, trb):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## 6 · Compare two models
+    mo.md("""
+    ## 6 · Compare two models
 
-        OLGA's TRB model was fit to DNA-multiplex data; the `learned` one to 5'RACE reads. They
-        describe the same recombination machinery but were amplified differently, so **V usage
-        should disagree and neither is wrong** — while the junction model (trims, insertions,
-        dinucleotides) is the genuinely comparable part.
-        """
-    )
+    OLGA's TRB model was fit to DNA-multiplex data; the `learned` one to 5'RACE reads. They
+    describe the same recombination machinery but were amplified differently, so **V usage
+    should disagree and neither is wrong** — while the junction model (trims, insertions,
+    dinucleotides) is the genuinely comparable part.
+    """)
     return
 
 
@@ -389,7 +386,9 @@ def _(compare_usage, learned_trb, mo, plt, trb):
 
 @app.cell
 def _(mo):
-    mo.md("## 7 · Score sequences: Pgen distributions, log-likelihood and BIC")
+    mo.md("""
+    ## 7 · Score sequences: Pgen distributions, log-likelihood and BIC
+    """)
     return
 
 
@@ -449,7 +448,9 @@ def _(held_out, learned_trb, mo, model_fit, pl, trb):
 
 @app.cell
 def _(mo):
-    mo.md("## 8 · Extend the allele library, and re-weight usage")
+    mo.md("""
+    ## 8 · Extend the allele library, and re-weight usage
+    """)
     return
 
 
@@ -504,7 +505,9 @@ def _(generate, learned_trb, mo, plt, rescale_usage, trb):
 
 @app.cell
 def _(mo):
-    mo.md("## 9 · Every probability as one table")
+    mo.md("""
+    ## 9 · Every probability as one table
+    """)
     return
 
 
@@ -523,19 +526,17 @@ def _(fitted, marginals_frame, mo):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ---
-        **Building from the real read corpus.** The bundled `learned` models are fitted to raw
-        5'RACE FASTQ from the private `isalgo/airr_model_read` dataset: fetch, map with arda,
-        collapse to unique clonotypes, then EM. That whole pipeline is one command, parallel across
-        chains (it needs HuggingFace access and arda's mmseqs2, and takes minutes per chain):
+    mo.md("""
+    ---
+    **Building from the real read corpus.** The bundled `learned` models are fitted to raw
+    5'RACE FASTQ from the private `isalgo/airr_model_read` dataset: fetch, map with arda,
+    collapse to unique clonotypes, then EM. That whole pipeline is one command, parallel across
+    chains (it needs HuggingFace access and arda's mmseqs2, and takes minutes per chain):
 
-        ```bash
-        vdjtools model build --chains TRB,TRA,IGH --workers 4 -o models/
-        ```
-        """
-    )
+    ```bash
+    vdjtools model build --chains TRB,TRA,IGH --workers 4 -o models/
+    ```
+    """)
     return
 
 

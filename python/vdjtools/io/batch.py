@@ -271,35 +271,41 @@ def read_samples(metadata: pl.DataFrame, base_dir: str | os.PathLike,
     return pl.concat(list(frames.values()), how="vertical_relaxed")
 
 
+def _map_sample_span(task):
+    fn, items, fmt, keep = task
+    return map_samples(fn, items, fmt=fmt, workers=1, keep=keep)
+
+
 def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
-                keep: tuple[str, ...] = ()):
+                keep: tuple[str, ...] = (), backend: str = "thread"):
     """Read each sample and apply ``fn`` to it, in parallel, low peak memory.
 
     The parallel, streaming replacement for "load the whole cohort, then loop over it":
     each worker reads **one** sample, reduces it via ``fn`` (typically a per-sample
     summary statistic returning a small frame), and discards the raw clonotype frame —
-    so peak memory is ``O(workers)`` samples, not the whole cohort. Reading (gzip TSV
-    decode + polars parse) and ``fn`` (polars ``group_by`` / numpy) both release the
-    GIL, so a thread pool runs them genuinely in parallel with no frame pickling.
+    so peak memory is ``O(workers)`` samples, not the whole cohort. Threads share
+    resources without pickling frames; callbacks must not mutate shared state.
 
-    **Measured**, 64 AIRR TSVs of 10,000 clonotypes each (53 MB) reduced by ``diversity_stats``
-    on 16 cores: 0.38 s at one worker, 0.17 s at two, 0.11 s at four, 0.10 s at eight, 0.10 s at
-    sixteen -- 2.24x / 3.49x / 3.85x / 3.91x. So the threads are real (a pool that never ran would
-    sit at 1.0x), and the ceiling is ~4x rather than 16x because polars already multithreads each
-    read internally: past four workers the pool is competing with polars' own thread pool for the
-    same cores. That is the reason ``workers`` exists as a knob and why raising it past the core
-    count buys nothing.
+    The outer map keeps numerical kernels serial within workers. Speedup depends on
+    the reader, callback and sample sizes: Python-heavy callbacks can be limited by
+    the GIL, while native reductions can run concurrently. Benchmark the actual
+    cohort before choosing a smaller explicit worker budget.
 
     Args:
         fn: A callable ``pl.DataFrame -> T`` applied to each sample's canonical
             clonotype frame (e.g. :func:`vdjtools.stats.diversity.diversity_stats`).
         items: Iterable of ``(sample_id, path)`` pairs (e.g. from a metadata sheet).
         fmt: Reader format passed to :func:`read` (``"auto"`` sniffs each file).
-        workers: Max worker threads. ``None`` uses
+        workers: Max sample workers. ``None`` uses
             :func:`vdjtools.cores.available_cores` capped at the number of samples -- the cores
             this process may actually use, which under ``srun -c 8`` on a 40-core node is 8 and
-            not 40. Four is already at the measured ceiling above; more is not faster and is
-            occasionally slower.
+            not 40. Set ``1`` to process samples sequentially without an outer pool.
+        backend: ``"thread"`` shares resources and supports closures. ``"process"``
+            uses coarse contiguous sample spans in spawned workers for Python-heavy
+            reductions; callbacks must be importable/picklable. Only paths and reduced
+            results cross process boundaries. Child numerical pools stay serial.
+            Process startup can dominate small cohorts. Use an importable entry point
+            guarded by ``if __name__ == "__main__":`` for the process backend.
         keep: Non-canonical columns to preserve, passed to :func:`read`. Without it a
             reduction needing a field outside the canonical eight — ``v_identity`` for
             the SHM block — gets a frame that never carried it, and reports a hole
@@ -309,7 +315,23 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
         A list of ``(sample_id, fn(frame))`` in the **same order as** ``items``
         (input/metadata order, regardless of which sample finishes first).
     """
-    from ..signature.cohort import parallel_rows
+    from ..signature.cohort import parallel_rows, slices
+
+    if backend not in ("thread", "process"):
+        raise ValueError('backend must be "thread" or "process"')
+    if backend == "process":
+        from multiprocessing import get_context
+        from ..cores import kernel_threads, single_threaded_children
+
+        budget = kernel_threads(0 if workers is None else workers)
+        items = list(items)
+        count = min(len(items), budget)
+        if count > 1:
+            tasks = [(fn, items[a:b], fmt, keep) for a, b in slices(len(items), count)]
+            with single_threaded_children(), get_context("spawn").Pool(count) as pool:
+                return [row for span in pool.map(_map_sample_span, tasks, chunksize=1)
+                        for row in span]
+        return map_samples(fn, items, fmt=fmt, workers=1, keep=keep)
 
     def work(item):
         sid, path = item

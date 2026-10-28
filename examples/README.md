@@ -14,6 +14,11 @@ ln -s /path/to/airr_benchmark data_dump/airr_benchmark        # etc. per dataset
 # or drop vdjdb.slim.txt(.gz) in data_dump/ to skip the download.
 ```
 
+Example sources and published models are also available in the
+[`isalgo/vdjtools_models`](https://huggingface.co/datasets/isalgo/vdjtools_models)
+mirror. Select the files you need using the dataset card; notebook input datasets
+remain linked below.
+
 ## `aging.py` — TCR repertoire aging (streaming + iNEXT + overlap)
 
 A [marimo](https://marimo.io) notebook reproducing the classic aging signals of the human
@@ -22,12 +27,14 @@ donors, ages 0–103), reading each signal three complementary ways from a singl
 
 - **Cohort-streaming stats** — `stats.diversity_cohort`, the singleton→hyperexpanded clone-size
   distribution, and the CDR3 `spectratype`, each a single streamed `group_by` over a
-  `io.scan_cohort` LazyFrame (peak memory independent of cohort size).
+  `io.scan_cohort` LazyFrame without materialising every input repertoire together.
+  The count spectrum and output still grow with the number of samples.
 - **Diversity declines with age** — coverage-standardized Hill-number diversity via iNEXT
   (`sample_coverage`, `estimate_d`, `inext_batch`) that removes the sequencing-depth confound,
   plus the classic rarefaction/extrapolation curves (`rarefaction`).
 - **Repertoires diverge with age** — pairwise exact-match overlap (`vdjtools.overlap`, the `F`
-  metric on CDR3aa+V+J) after equal-depth downsampling, embedded with metric MDS: young samples
+  metric on junction amino acids+V+J, including the conserved anchors) after equal-depth
+  downsampling, embedded with metric MDS: young samples
   cluster centrally and older donors scatter to the periphery.
 - **Repertoires become more clonal with age** — top-clone read share.
 
@@ -45,9 +52,9 @@ Auto-loads from the HuggingFace dataset
 [`isalgo/airr_benchmark`](https://huggingface.co/datasets/isalgo/airr_benchmark) (folder
 `vdjtools/`, full sequencing depth — **~0.5 GB total**), preferring a local **`./data_dump/`** copy
 (gitignored — symlink your data there, e.g. `ln -s /path/to/airr_benchmark data_dump/airr_benchmark`).
-The selected samples are ingested once into the **gitignored** `examples/.data/aging_nb/`
-hive-partitioned Parquet cohort; HuggingFace verifies integrity and caches, so a re-run fetches
-nothing. The `samples` slider trades coverage of the age range against runtime (overlap is O(n²)).
+The selected raw downloads are reusable. Each input run rebuilds a temporary
+hive-partitioned Parquet cohort under the **gitignored** `examples/.data/aging_nb/`;
+its lifetime follows the notebook input frame. The `samples` slider trades coverage of the age range against runtime (overlap is O(n²)).
 
 ## `single_cell.py` — paired-chain single-cell TCR (10x dCODE)
 
@@ -145,8 +152,8 @@ marimo edit examples/emerson_biomarker.py
 ```
 
 Data: a **balanced 400-subject subset** of [`isalgo/airr_hip`](https://huggingface.co/datasets/isalgo/airr_hip)
-(the Emerson HIP cohort) auto-downloads into the gitignored `examples/.data/emerson_nb/` cache
-(HuggingFace verifies integrity; a re-run fetches nothing). VDJdb validation resolves a
+(the Emerson HIP cohort) uses the local Hugging Face raw-file cache. Each input run
+rebuilds a temporary Parquet cohort under `examples/.data/emerson_nb/`. VDJdb validation resolves a
 `./data_dump/` copy, else fetches the latest `antigenomics/vdjdb-db` release (both cached), and is
 skipped gracefully if unavailable.
 
@@ -172,7 +179,9 @@ A [marimo](https://marimo.io) notebook demonstrating the out-of-core cohort patt
 hive-partitioned Parquet dataset one at a time (peak RSS ≈ one sample, reported), then every
 statistic — the V-usage matrix, per-sample richness, an age-filtered count — is a `group_by`
 collected with `engine="streaming"` over a single `scan_cohort` LazyFrame. Slide the sample count
-up (toward thousands) and watch peak RSS stay flat. No data download.
+up (toward thousands) to inspect bounded ingestion memory; metadata and result tables
+still grow with sample count. Changing either slider regenerates the temporary
+inputs and cohort. No data download.
 
 ```bash
 pip install -e ".[examples]"

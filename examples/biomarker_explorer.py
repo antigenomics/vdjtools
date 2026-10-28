@@ -4,6 +4,7 @@
 # BF / log-odds / permutation), and a match scope (CDR3[+V[+J]], exact or 1-mismatch); see the
 # volcano with a live VDJdb-CMV overlay, the top hits, and a same-chain public-TCRβ
 # co-occurrence panel. Run with:  marimo edit examples/biomarker_explorer.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -12,28 +13,26 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Biomarker association & co-occurrence — a vdjtools explorer
+    mo.md(r"""
+    # Biomarker association & co-occurrence — a vdjtools explorer
 
-        Emerson et al. (2017) screen public **TCRβ** chains for a statistical association
-        between their *presence across a cohort* and a phenotype. `vdjtools.biomarker`
-        generalises that one Fisher test along four axes — this notebook makes all four
-        live on the **Emerson HIP** cohort (`isalgo/airr_hip`):
+    Emerson et al. (2017) screen public **TCRβ** chains for a statistical association
+    between their *presence across a cohort* and a phenotype. `vdjtools.biomarker`
+    generalises that one Fisher test along four axes — this notebook makes all four
+    live on the **Emerson HIP** cohort (`isalgo/airr_hip`):
 
-        - **condition** — a binary phenotype (**CMV**), an **HLA allele** (HLA-A\*02), or a
-          paired condition combined by **Cochran–Mantel–Haenszel** (CMV *stratified by*
-          HLA-A\*02 carriage — does the CMV signal survive controlling for HLA?);
-        - **test** — Fisher exact, χ², a Bayesian **Beta-Binomial Bayes factor**, a Bayesian
-          **log-odds** posterior, or a label **permutation** null;
-        - **scope** — is a clonotype its CDR3 alone, **+V**, or **+V+J** (Emerson), matched
-          **exactly** or within **1 mismatch** (metaclonotypes)?
-        - **co-occurrence** — which public TCRβ *pairs* recur together across subjects
-          (De Witt / Howie co-specificity — subjects are the "wells").
+    - **condition** — a binary phenotype (**CMV**), an **HLA allele** (HLA-A\*02), or a
+      paired condition combined by **Cochran–Mantel–Haenszel** (CMV *stratified by*
+      HLA-A\*02 carriage — does the CMV signal survive controlling for HLA?);
+    - **test** — Fisher exact, χ², a Bayesian **Beta-Binomial Bayes factor**, a Bayesian
+      **log-odds** posterior, or a label **permutation** null;
+    - **scope** — is a clonotype its CDR3 alone, **+V**, or **+V+J** (Emerson), matched
+      **exactly** or within **1 mismatch** (metaclonotypes)?
+    - **co-occurrence** — which public TCRβ *pairs* recur together across subjects
+      (De Witt / Howie co-specificity — subjects are the "wells").
 
-        Every hit is checked live against a local **VDJdb** dump.
-        """
-    )
+    Every hit is checked live against a local **VDJdb** dump.
+    """)
     return
 
 
@@ -85,23 +84,35 @@ def _():
         except Exception:
             return None
 
-    return (N_SUBJECTS, OKABE, Path, REPO_ID, S, association, condition,
-            cooccurrence, mo, np, pl, plt, vdjdb_slim, vio)
+    return (
+        N_SUBJECTS,
+        OKABE,
+        Path,
+        REPO_ID,
+        S,
+        association,
+        condition,
+        cooccurrence,
+        mo,
+        np,
+        pl,
+        plt,
+        vdjdb_slim,
+        vio,
+    )
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 1 · Data bootstrap
+    mo.md(r"""
+    ## 1 · Data bootstrap
 
-        `metadata.txt` (786 subjects) carries **CMV serostatus** (`+`/`−`/`NA`) and **2-digit
-        HLA-A/B typing**. We take a balanced subset and pull just those repertoires
-        (`corr/HIP#####.txt.gz`, VDJtools format) from HuggingFace into the gitignored
-        `examples/.data/biomarker_nb/` cache, stream them into a hive-partitioned Parquet
-        cohort once, then scan it as one out-of-core `polars` LazyFrame.
-        """
-    )
+    `metadata.txt` (786 subjects) carries **CMV serostatus** (`+`/`−`/`NA`) and **2-digit
+    HLA-A/B typing**. We take a balanced subset and pull just those repertoires
+    (`corr/HIP#####.txt.gz`, VDJtools format) through the Hugging Face raw-file cache,
+    rebuild a temporary Parquet cohort, then scan it as one out-of-core
+    `polars` LazyFrame.
+    """)
     return
 
 
@@ -134,12 +145,15 @@ def _(N_SUBJECTS, Path, REPO_ID, mo, pl):
 
 
 @app.cell
-def _(corr_dir, data_dir, meta, mo, vio):
-    cohort = data_dir / "cohort"
-    if not any(cohort.glob("sample_id=*/*.parquet")):
-        vio.ingest_cohort(meta.select("sample_id", "cmv", "hla", "a02"), corr_dir, cohort,
-                          sample_col="sample_id", file_template="{sample}.txt.gz", fmt="vdjtools")
+def _(Path, corr_dir, data_dir, meta, mo, vio):
+    from tempfile import TemporaryDirectory as _TemporaryDirectory
+    from weakref import finalize as _finalize
+    _cohort_tmp = _TemporaryDirectory(dir=data_dir, prefix="cohort_")
+    cohort = Path(_cohort_tmp.name)
+    vio.ingest_cohort(meta.select("sample_id", "cmv", "hla", "a02"), corr_dir, cohort,
+                      sample_col="sample_id", file_template="{sample}.txt.gz", fmt="vdjtools")
     lf = vio.scan_cohort(cohort, join_metadata=False)
+    _finalize(lf, _cohort_tmp.cleanup)
     mo.md(f"Cohort ingested → `{cohort}`.")
     return (lf,)
 
@@ -165,20 +179,18 @@ def _(mo, pl, vdjdb_slim):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 2 · The screen — turn the knobs
+    mo.md(r"""
+    ## 2 · The screen — turn the knobs
 
-        The screen re-runs when the **condition**, **test**, **scope**, or **min incidence**
-        change; the **threshold** only re-draws. With CMH the *test* knob is ignored (the
-        stratified odds are always combined the Mantel–Haenszel way).
+    The screen re-runs when the **condition**, **test**, **scope**, or **min incidence**
+    change; the **threshold** only re-draws. With CMH the *test* knob is ignored (the
+    stratified odds are always combined the Mantel–Haenszel way).
 
-        > **On significance.** With this many features BH-`q` is strict at a 400-subject
-        > subset, so — like Emerson — the primary line is a **nominal p threshold** (paper:
-        > P < 1e-4). Permutation is heavier than the closed-form tests; raise *min incidence*
-        > to keep it snappy.
-        """
-    )
+    > **On significance.** With this many features BH-`q` is strict at a 400-subject
+    > subset, so — like Emerson — the primary line is a **nominal p threshold** (paper:
+    > P < 1e-4). Permutation is heavier than the closed-form tests; raise *min incidence*
+    > to keep it snappy.
+    """)
     return
 
 
@@ -236,7 +248,20 @@ def _(cond, np, pl, res):
 
 
 @app.cell
-def _(OKABE, cond, is_cmv, juncs, logp, np, plt, thr_kind, vdjdb_cmv, x, y, ylab):
+def _(
+    OKABE,
+    cond,
+    is_cmv,
+    juncs,
+    logp,
+    np,
+    plt,
+    thr_kind,
+    vdjdb_cmv,
+    x,
+    y,
+    ylab,
+):
     _cut = logp.value if thr_kind == "p" else 3.0        # log-BF>3 ≈ strong evidence
     _hit = y >= _cut
     _val = ((juncs.is_in(list(vdjdb_cmv["cdr3"])).to_numpy() if vdjdb_cmv is not None
@@ -260,7 +285,7 @@ def _(OKABE, cond, is_cmv, juncs, logp, np, plt, thr_kind, vdjdb_cmv, x, y, ylab
 
 
 @app.cell
-def _(is_cmv, mo, pl, res, vdjdb_cmv):
+def _(is_cmv, mo, res, vdjdb_cmv):
     # Top hits — the significance column depends on the test that ran.
     _score = ("p_value" if "p_value" in res.columns
               else "log_bf" if "log_bf" in res.columns else "p_or_gt1")
@@ -283,17 +308,15 @@ def _(is_cmv, mo, pl, res, vdjdb_cmv):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 3 · Public-TCRβ co-occurrence (same-chain)
+    mo.md(r"""
+    ## 3 · Public-TCRβ co-occurrence (same-chain)
 
-        Beyond single-clone association: which public TCRβ **pairs** recur *together* across
-        subjects more than chance? `cooccurrence` builds a boolean subject×feature incidence
-        matrix per chain, gets every pair's co-occurrence count by one matmul, and reports the
-        **lift θ = n·n_AB/(n_A·n_B)** with a Fisher p and BH-`q` (De Witt / Howie
-        co-specificity; on paired TRA+TRB data the same call does in-silico α-β pairing).
-        """
-    )
+    Beyond single-clone association: which public TCRβ **pairs** recur *together* across
+    subjects more than chance? `cooccurrence` builds a boolean subject×feature incidence
+    matrix per chain, gets every pair's co-occurrence count by one matmul, and reports the
+    **lift θ = n·n_AB/(n_A·n_B)** with a Fisher p and BH-`q` (De Witt / Howie
+    co-specificity; on paired TRA+TRB data the same call does in-silico α-β pairing).
+    """)
     return
 
 
@@ -321,18 +344,16 @@ def _(S, cc_cooc, cc_inc, cooccurrence, lf, mo, pl):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** One streamed incidence table drives every knob. A pure incidence screen
-        rediscovers CMV-specific public TCRβs and their HLA restriction; the CMH control shows
-        which of the CMV signal is *not* just HLA-A\*02 tagging along; widening the key sharpens
-        specificity and 1-mismatch recovers more VDJdb overlap; and the same substrate yields
-        co-occurring public-clone pairs. Built on `vdjtools.io` (streamed Parquet cohort),
-        `vdjtools.biomarker.{association, cooccurrence, condition, stats}`, and the native
-        1-mismatch matcher. The full 786-subject benchmark lives in the separate benchmark repo.
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** One streamed incidence table drives every knob. A pure incidence screen
+    rediscovers CMV-specific public TCRβs and their HLA restriction; the CMH control shows
+    which of the CMV signal is *not* just HLA-A\*02 tagging along; widening the key sharpens
+    specificity and 1-mismatch recovers more VDJdb overlap; and the same substrate yields
+    co-occurring public-clone pairs. Built on `vdjtools.io` (streamed Parquet cohort),
+    `vdjtools.biomarker.{association, cooccurrence, condition, stats}`, and the native
+    1-mismatch matcher. The full 786-subject benchmark lives in the separate benchmark repo.
+    """)
     return
 
 

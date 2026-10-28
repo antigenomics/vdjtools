@@ -147,7 +147,7 @@ def _coverage_target(items, n_jobs, cstar_target, kw):
     return cstar_target
 
 
-def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
+def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 0,
                 cstar_target: "float | dict[str, float] | str | None" = "corpus",
                 columns: "list[str] | None" = None, **kw) -> pl.DataFrame:
     """One row per sample, ``sample_id`` first.
@@ -156,7 +156,7 @@ def vsig_cohort(samples, corpus: C.Corpus, *, n_jobs: int = 1,
         samples: ``{sample_id: sample}`` or an iterable of pairs. A sample may be a zero-argument callable, which defers the read into the worker and keeps peak memory at
             ``O(n_jobs)`` samples rather than the whole cohort.
         corpus: A fitted corpus.
-        n_jobs: Worker threads. ``1`` stays in-process, ``0`` uses every available core.
+        n_jobs: Worker threads. ``0`` (default) uses allocated cores; ``1`` is serial.
         cstar_target: ``"corpus"`` (default) uses the frozen coverage target for configured
             bases and preserves ``"min"`` for legacy corpora. ``"min"`` reads every sample's attained coverage first and
             standardises the whole cohort to the per-locus minimum, so the diversity columns are
@@ -225,7 +225,7 @@ if __name__ == "__main__":
     _demo()
 
 
-def raw_features_cohort(samples, *, vocab=None, organism="human", n_jobs=1,
+def raw_features_cohort(samples, *, vocab=None, organism="human", n_jobs=0,
                         cstar_target="min", weight="log2p1", on_duplicate="error", feature_definition=None):
     """Unrotated vsig features and channels, without a fitted corpus.
 

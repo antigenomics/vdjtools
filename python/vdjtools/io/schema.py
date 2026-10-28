@@ -129,6 +129,22 @@ def recompute_frequency(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns((pl.col(COUNT) / pl.lit(total)).cast(pl.Float64).alias(FREQ))
 
 
+def count_expr(column: str) -> pl.Expr:
+    """Parse counts exactly for integer text; truncate historical fractional counts.
+
+    Out-of-range integer strings become null rather than rounding through Float64.
+    """
+    value = pl.col(column).cast(pl.String).str.strip_chars()
+    integer = value.str.contains(r"^[+-]?[0-9]+(?:\.0+)?$")
+    decimal = pl.when(integer).then(None).otherwise(value).cast(pl.Decimal(38, 18), strict=False)
+    truncated = pl.when(decimal >= 0).then(decimal.floor()).otherwise(decimal.ceil())
+    return pl.when(integer).then(
+        value.str.replace(r"\.0+$", "").cast(pl.Int64, strict=False)
+    ).otherwise(pl.coalesce(
+        truncated.cast(pl.Int64, strict=False), pl.col(column).cast(pl.Int64, strict=False),
+    ))
+
+
 def normalize(df: pl.DataFrame, *, recompute_freq: bool = False,
               keep: tuple[str, ...] = ()) -> pl.DataFrame:
     """Coerce an arbitrary frame to the canonical clonotype schema.
@@ -155,11 +171,7 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False,
         if col not in df.columns:
             exprs.append(pl.lit(None, dtype=dtype).alias(col))
         elif col == COUNT and not df.schema[col].is_integer():
-            # Route the count through Float64: read via the all-Utf8 TSV path, a count of "5000.0"
-            # (pandas float-formats any integer column that once held a NaN) fails a direct
-            # Utf8->Int64 cast, becomes null, and recompute_frequency then reports frequency 0.0
-            # for a real clone. Float64->Int64 truncates toward zero (== io/convert.py::_to_int).
-            exprs.append(pl.col(col).cast(pl.Float64, strict=False).cast(dtype, strict=False).alias(col))
+            exprs.append(count_expr(col).alias(col))
         else:
             exprs.append(pl.col(col).cast(dtype, strict=False).alias(col))
     df = df.with_columns(exprs)

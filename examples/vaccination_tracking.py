@@ -5,6 +5,7 @@
 # effective-sample-size paired test (`vdjtools.dynamics.test_pair`), and read off the VDJtrack
 # recapture model (size buckets x Poisson capture). Run with:
 #     marimo edit examples/vaccination_tracking.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -13,29 +14,27 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Clonotype tracking in vaccination — a vdjtools explorer
+    mo.md(r"""
+    # Clonotype tracking in vaccination — a vdjtools explorer
 
-        A vaccine drives a **clonal expansion**: antigen-specific T-cell clones divide, so their
-        clonotypes rise in frequency around the response peak (day ~15 for yellow fever) and a
-        subset **persist** into memory. `vdjtools.dynamics` makes that measurable within one
-        donor:
+    A vaccine drives a **clonal expansion**: antigen-specific T-cell clones divide, so their
+    clonotypes rise in frequency around the response peak (day ~15 for yellow fever) and a
+    subset **persist** into memory. `vdjtools.dynamics` makes that measurable within one
+    donor:
 
-        - **`test_pair`** — the Ayestaran (2024) effective-sample-size paired test: it reads each
-          pair's own noise off its mean–variance scaling (`N_eff`), so it does not manufacture
-          hits the way a naive Fisher-on-read-counts does. Every clonotype is called *emergent /
-          expanded / persistent / contracted / vanishing*.
-        - **the recapture model** (VDJtrack; Pavlova, Zvyagin & Shugay 2024) — under Poisson
-          sampling a clone of frequency `f` is recaptured with probability `1 − exp(−f·R)`, so
-          recapture rises with clone **size** (singleton → large). Binning by size and comparing
-          an annotated group (here: the clones that expanded at the peak) to that baseline shows
-          whether the *response* persists more than background.
+    - **`test_pair`** — the Ayestaran (2024) effective-sample-size paired test: it reads each
+      pair's own noise off its mean–variance scaling (`N_eff`), so it does not manufacture
+      hits the way a naive Fisher-on-read-counts does. Every clonotype is called *emergent /
+      expanded / persistent / contracted / vanishing*.
+    - **the recapture model** (VDJtrack; Pavlova, Zvyagin & Shugay 2024) — under Poisson
+      sampling a clone of frequency `f` is recaptured with probability `1 − exp(−f·R)`, so
+      recapture rises with clone **size** (singleton → large). Binning by size and comparing
+      an annotated group (here: the clones that expanded at the peak) to that baseline shows
+      whether the *response* persists more than background.
 
-        Data auto-loads from HuggingFace (`isalgo/airr_yfv19` · `airr_flu_vac` · `airr_tbev_vac`),
-        preferring a local `./data_dump/` copy (gitignored) if present.
-        """
-    )
+    Data auto-loads from HuggingFace (`isalgo/airr_yfv19` · `airr_flu_vac` · `airr_tbev_vac`),
+    preferring a local `./data_dump/` copy (gitignored) if present.
+    """)
     return
 
 
@@ -79,8 +78,22 @@ def _():
         import huggingface_hub as hub
         return hub.hf_hub_download(repo, filename, repo_type="dataset")
 
-    return (CLASSES, CLASS_COLOR, Path, SIZE_CLASSES, VACCINES, capture_rates, capture_test,
-            fetch, mo, np, pl, plt, read, test_pair, track_clonotypes)
+    return (
+        CLASSES,
+        CLASS_COLOR,
+        SIZE_CLASSES,
+        VACCINES,
+        capture_rates,
+        capture_test,
+        fetch,
+        mo,
+        np,
+        pl,
+        plt,
+        read,
+        test_pair,
+        track_clonotypes,
+    )
 
 
 @app.cell
@@ -122,21 +135,19 @@ def _(cfg, donor, fetch, meta, mo, pl, read):
                           "reads": [int(frames[d]["duplicate_count"].sum()) for d in order]})
     mo.vstack([mo.md(f"Loaded **{len(order)} timepoints** for donor **{donor.value}** "
                      f"(days {order})."), sizes])
-    return frames, order, sizes
+    return frames, order
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 1 · Track every clonotype, classify each pre→post transition
+    mo.md(r"""
+    ## 1 · Track every clonotype, classify each pre→post transition
 
-        `track_clonotypes` pivots per-sample frequency into one column per timepoint;
-        `test_pair` then classifies each clonotype between the **baseline** (first timepoint) and
-        each later timepoint. The stacked area shows the read-fraction in each dynamics class over
-        the course — the vaccine peak is the emergent/expanded swell.
-        """
-    )
+    `track_clonotypes` pivots per-sample frequency into one column per timepoint;
+    `test_pair` then classifies each clonotype between the **baseline** (first timepoint) and
+    each later timepoint. The stacked area shows the read-fraction in each dynamics class over
+    the course — the vaccine peak is the emergent/expanded swell.
+    """)
     return
 
 
@@ -154,11 +165,11 @@ def _(CLASSES, frames, order, pl, test_pair, track_clonotypes):
         comp[d] = {r["dynamics"]: r["frac"] for r in frac.iter_rows(named=True)}
     class_frac = pl.DataFrame(
         [{"day": d, **{c: comp[d].get(c, 0.0) for c in CLASSES}} for d in order[1:]])
-    return base, class_frac, comp, tracked
+    return base, class_frac, tracked
 
 
 @app.cell
-def _(CLASS_COLOR, CLASSES, base, class_frac, np, order, plt):
+def _(CLASSES, CLASS_COLOR, base, class_frac, np, order, plt):
     _days = class_frac["day"].to_list()
     _classes = [c for c in CLASSES if c != "untested"]
     _stack = np.array([class_frac[c].to_numpy() for c in _classes])
@@ -177,14 +188,12 @@ def _(CLASS_COLOR, CLASSES, base, class_frac, np, order, plt):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 2 · Trajectories of the top responding clonotypes
+    mo.md(r"""
+    ## 2 · Trajectories of the top responding clonotypes
 
-        The clonotypes that **expanded** at the peak, followed across every timepoint — the
-        classic "rise at day 15, contract into memory" vaccine trajectory.
-        """
-    )
+    The clonotypes that **expanded** at the peak, followed across every timepoint — the
+    classic "rise at day 15, contract into memory" vaccine trajectory.
+    """)
     return
 
 
@@ -211,18 +220,16 @@ def _(base, frames, order, pl, plt, test_pair, tracked):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 3 · The recapture model — do the responders persist?
+    mo.md(r"""
+    ## 3 · The recapture model — do the responders persist?
 
-        Take the clones that **expanded at the peak** as the "response" group and everything else
-        as background, then measure the recapture rate from the peak into the **latest** timepoint
-        per size class (singleton / doubleton / tripleton / large). Recapture rises with size for
-        *both* groups (Poisson sampling), but the response group sits far above the size baseline —
-        it persists. `capture_test` fits `log(recapture) ~ size + group` and reports the group
-        effect.
-        """
-    )
+    Take the clones that **expanded at the peak** as the "response" group and everything else
+    as background, then measure the recapture rate from the peak into the **latest** timepoint
+    per size class (singleton / doubleton / tripleton / large). Recapture rises with size for
+    *both* groups (Poisson sampling), but the response group sits far above the size baseline —
+    it persists. `capture_test` fits `log(recapture) ~ size + group` and reports the group
+    effect.
+    """)
     return
 
 
@@ -269,18 +276,16 @@ def _(SIZE_CLASSES, coef, late, mo, peak, plt, rates):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** One `test_pair` call classifies every clonotype's within-donor change with a
-        pair-specific noise model; the recapture model then asks the survival question the raw
-        counts cannot. Swap the **vaccine** and **donor** above to compare yellow fever, influenza
-        and TBE responses. The per-clonotype test is `vdjtools.dynamics.test_pair` (Ayestaran
-        2024); the capture model and the 1-mismatch metaclonotype grouping
-        (`vdjtools.dynamics.capture_rates`, `test_metaclonotypes`) port the VDJtrack pipeline
-        (Pavlova, Zvyagin & Shugay, *Front Immunol* 2024).
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** One `test_pair` call classifies every clonotype's within-donor change with a
+    pair-specific noise model; the recapture model then asks the survival question the raw
+    counts cannot. Swap the **vaccine** and **donor** above to compare yellow fever, influenza
+    and TBE responses. The per-clonotype test is `vdjtools.dynamics.test_pair` (Ayestaran
+    2024); the capture model and the 1-mismatch metaclonotype grouping
+    (`vdjtools.dynamics.capture_rates`, `test_metaclonotypes`) port the VDJtrack pipeline
+    (Pavlova, Zvyagin & Shugay, *Front Immunol* 2024).
+    """)
     return
 
 

@@ -154,3 +154,39 @@ def test_a_nested_functions_return_is_not_the_cells_return() -> None:
         "    return (phenotypes,)\n"
     )
     assert _provided(_cells(nested)[0]) == {"phenotypes"}
+
+
+def test_scale_example_rebuilds_after_clonotype_slider_changes(tmp_path):
+    """Same sample count with a new clone count must not reuse the old cohort."""
+    import time
+    from types import SimpleNamespace
+    import polars as pl
+    from vdjtools import io
+
+    path = next(p for p in EXAMPLES if p.stem == 'scale_cohort')
+    cell = next(c for c in _cells(ast.parse(path.read_text()))
+                if {'synthesize', 'n_samples', 'n_clones'} <= _consumed(c))
+    cell.decorator_list = []
+    namespace = {}
+    exec(compile(ast.Module(body=[cell], type_ignores=[]), str(path), 'exec'), namespace)
+
+    def synthesize(base, n_samples, n_clones):
+        base.mkdir(parents=True, exist_ok=True)
+        for i in range(n_samples):
+            pl.DataFrame({'v_call': ['TRBV1'] * n_clones, 'j_call': ['TRBJ1'] * n_clones,
+                'junction_aa': [f'C{j}F' for j in range(n_clones)],
+                'duplicate_count': [1] * n_clones}).write_csv(base / f'S{i}.tsv', separator='\t')
+        return pl.DataFrame({'sample_name': [f'S{i}' for i in range(n_samples)]})
+
+    mo = SimpleNamespace(notebook_dir=lambda: tmp_path, md=lambda value: None)
+    args = dict(Path=pathlib.Path, mo=mo, n_samples=SimpleNamespace(value=2),
+        peak_mb=lambda: 0, synthesize=synthesize, time=time, vio=io)
+    first = namespace['_'](n_clones=SimpleNamespace(value=3), **args)
+    second = namespace['_'](n_clones=SimpleNamespace(value=5), **args)
+    assert first[1].collect().height == 6
+    assert second[1].collect().height == 10
+    first_path, second_path = first[0], second[0]
+    del first, second
+    import gc
+    gc.collect()
+    assert not first_path.exists() and not second_path.exists()

@@ -15,6 +15,15 @@ generation probability and sampling see :doc:`usage`; for the complete surface s
    :depth: 1
 
 
+Published model downloads
+-------------------------
+
+The `Hugging Face model mirror <https://huggingface.co/datasets/isalgo/vdjtools_models>`_
+contains the public recombination models, corpus bundles and example sources. Its
+dataset card provides selective-download examples. Ordinary bundled-model loading
+continues to use the models installed with vdjtools.
+
+
 Custom germline libraries
 -------------------------
 
@@ -236,12 +245,25 @@ way, which is the case for any two compared through this function.
 Known quirks of the OLGA models
 -------------------------------
 
-The bundled ``olga`` model set is a **bit-faithful import** of OLGA's published models: vdjtools
-reproduces their marginals exactly, and native Pgen matches ``olga``'s own to machine precision
-across all seven loci. Faithful means faithful to the defects too. These are properties of the
-source models, verified against OLGA's raw ``model_marginals.txt`` with OLGA's own parser — not
-import bugs, and **not** things to "correct" here, because doing so would break the exact-Pgen
-invariant that makes the import checkable in the first place.
+The bundled ``olga`` model set preserves OLGA's published probability tables.
+Importing or loading a model also applies documented germline anchor repairs.
+For example, human TRB ``TRBV4-3*02`` moves from anchor 267 to 270;
+its repaired germline can contribute probability absent from original OLGA output.
+Engine oracle tests therefore compare identical raw germlines and probability
+tables, using relative tolerances with zero absolute tolerance. Anchor repairs
+are tested separately. Equality of probability tables alone does not establish
+equality of Pgen after a germline repair.
+
+Insertion-workspace boundary in the oracle
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+OLGA 1.3.0's codon-group iteration can omit the final nonzero insertion-length
+bin for some support lengths. A fixed 27-residue synthetic TRD regression with
+insertion support ending at 40 nucleotides exposes this: native Pgen agrees with independent nucleotide scenario
+enumeration, while unmodified OLGA gives a smaller probability. Adding three zero
+bins to the test-only OLGA workspace restores strict relative agreement without
+changing any probability table. The regression checks this explicitly; production
+scoring and bundled model parameters are unchanged.
 
 Deletion mass on trims that cannot be reached
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -536,3 +558,16 @@ Packed-model state is bounded; successive EM iterations do not retain an unbound
 ``annotate_junctions`` also returns the stage-one ``v_fix``, ``j_fix``, ``v_canonical`` and
 ``j_canonical`` fields. Consumers can reuse the repair classifications without rerunning markup.
 The repaired amino-acid junction remains authoritative when applying nucleotide flanks.
+
+Native sampling from the command line
+-------------------------------------
+
+For large new sequence draws, select the existing native sampler explicitly::
+
+   vdjtools generate --model TRB --number 10000 --seed 7 --engine native --threads 0 -o draws.tsv
+
+``--threads 0`` selects the allocated CPU budget; a positive count selects a smaller
+budget. Native draws are invariant to thread count. The default reference sampler
+preserves historical seeded draws and runs serially. Native and reference engines
+use different random streams, so the same seed does not produce identical sequences
+across engines. Neither option fits or rebuilds a model.

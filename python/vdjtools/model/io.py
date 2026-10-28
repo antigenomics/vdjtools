@@ -232,7 +232,10 @@ def from_olga(model_dir: str | Path, *, locus: str, organism: str = "human", der
         organism: Organism label (default ``"human"``).
 
     Returns:
-        A validated :class:`Model` whose tables reproduce OLGA's arrays exactly.
+        A validated :class:`Model` whose probability tables reproduce OLGA's arrays.
+        Germlines undergo :func:`repair_anchors`; repaired-model Pgen can therefore
+        differ from the original OLGA model. Engine comparisons require identical
+        germlines as well as identical probability tables.
     """
     import olga.load_model as olm  # optional dep (the [oracle] extra)
 
