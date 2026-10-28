@@ -707,8 +707,8 @@ def test_a_corpus_artifact_resolves_from_path_wheel_cache_then_release(tmp_path,
     # fetched from the "release" over file://, cached, and verified
     got = C.fetch_artifact("demo", sig="vsig", res_dir=res, repo="x/y", quiet=True,
                            base_url=served.as_uri())
-    assert got == cache / "vsig_demo.npz" and got.exists()
-    assert (cache / "vsig_demo.json").exists(), "the manifest must come with the arrays"
+    assert got.is_relative_to(cache) and got.exists()
+    assert got.with_suffix(".json").exists(), "the manifest must come with the arrays"
     assert C.Corpus.load(got).name == "naive"
 
     # second call is a cache hit: break the source and it still resolves
@@ -716,11 +716,11 @@ def test_a_corpus_artifact_resolves_from_path_wheel_cache_then_release(tmp_path,
     assert C.resolve_artifact("demo", sig="vsig", res_dir=res, repo="x/y") == got
 
     # ...but a FRESH fetch of corrupted bytes must refuse rather than cache them
-    (cache / "vsig_demo.npz").unlink()
+    got.unlink()
     with pytest.raises(OSError, match="refusing to cache|hashed"):
         C.fetch_artifact("demo", sig="vsig", res_dir=res, repo="x/y", quiet=True,
                          base_url=served.as_uri())
-    assert not (cache / "vsig_demo.npz").exists(), "a failed download was left in the cache"
+    assert not got.exists(), "a failed download was left in the cache"
 
     with pytest.raises(ValueError, match="no corpus named"):
         C.fetch_artifact("nope", sig="vsig", res_dir=res, repo="x/y", quiet=True)

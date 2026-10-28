@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "5.3.1"
+version = "5.3.2"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -85,6 +85,7 @@ dependencies = [
     # ourselves would couple our install to seqtree's packaging choices; this states the real
     # requirement. (Same on-demand-reference pattern as arda's IMGT fetch.)
     "huggingface_hub",
+    "filelock",  # cross-process immutable corpus bootstrap
 ]
 
 [project.scripts]

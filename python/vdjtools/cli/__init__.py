@@ -535,6 +535,7 @@ def project_features(
     space: Optional[str] = typer.Option(None, help="Explicit shared feature-basis identity when absent from tables."),
     components: int = typer.Option(256, min=1),
     seed: int = typer.Option(0),
+    threads: int = typer.Option(0, min=0, help="PCA CPU budget; 0 uses the allocation."),
     out: Optional[Path] = _OUT,
 ) -> None:
     """Fit/apply sample PCA for vsig, rsig or RFF tables, preserving IDs and channels."""
@@ -555,8 +556,8 @@ def project_features(
     cols = columns.read_text().splitlines() if columns else None
     reducer = (TablePCA.load(rotation) if rotation else
                TablePCA.fit(load(cohort) if cohort else data, columns=cols,
-                            n_components=components,seed=seed))
-    result = reducer.transform(data)
+                            n_components=components,seed=seed,threads=threads))
+    result = reducer.transform(data,threads=threads)
     if fit:
         reducer.save(fit)
     _write(result,out)

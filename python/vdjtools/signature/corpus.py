@@ -1073,42 +1073,51 @@ def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") 
 
 
 def fetch_artifact(name: str, *, sig: str, res_dir: Path, repo: str, quiet: bool = False,
-                   base_url: "str | None" = None) -> Path:
-    """Download one corpus artifact and its manifest into the cache, verified. Returns the ``.npz``.
+                   base_url: "str | None" = None, lock_timeout: float = 120) -> Path:
+    """Fetch and verify a corpus pair under its immutable published identity.
 
-    Both files, because :meth:`Corpus.load` reads the ``.json`` beside the ``.npz`` -- fetching only
-    the arrays would leave a corpus that cannot say what it was fitted on.
-
-    ``base_url`` overrides where the assets come from -- an internal mirror, or a ``file://`` URL,
-    which is what lets the resolution order be tested without a network.
+    Concurrent processes share a bounded, crash-releasing OS lock. Both payloads
+    are checked before returning, including cache hits. Complete read-only caches
+    need no lock file. ``base_url`` supports mirrors and offline ``file://`` inputs.
     """
-    idx = corpora_index(res_dir)
-    entry = idx.get(name)
+    from filelock import FileLock
+
+    entry = corpora_index(res_dir).get(name)
     if entry is None:
-        raise ValueError(f"no corpus named {name!r} in the shipped index; have "
-                         f"{', '.join(sorted(idx)) or '(none)'}")
-    cache = corpus_cache_dir()
+        raise ValueError(f"no corpus named {name!r} in the shipped index")
+    root = corpus_cache_dir()
+    identity = hashlib.sha256(json.dumps([repo, sig, name, entry], sort_keys=True).encode()).hexdigest()
+    cache = root / f"{sig}_{name}" / identity
     npz = cache / f"{sig}_{name}.npz"
     base = base_url or f"https://github.com/{repo}/releases/download/{CORPUS_RELEASE}"
-    for ext in ("npz", "json"):
-        part = entry.get(ext, {})
-        target = cache / f"{sig}_{name}.{ext}"
-        if target.exists() and (not part.get("sha256")
-                                or _file_sha256(target)
-                                == part["sha256"]):
-            continue
-        url = f"{base}/{sig}_{name}.{ext}"
-        if not quiet:
-            mb = part.get("bytes", 0) / 1e6
-            print(f"[vdjtools] fetching {sig}_{name}.{ext} ({mb:.1f} MB) -> {cache}",
-                  file=sys.stderr, flush=True)
-        try:
-            _download(url, target, part.get("sha256"), part.get("bytes"))
-        except OSError as e:
-            raise OSError(
-                f"could not fetch {url}: {e}. Corpus artifacts are published as release assets "
-                f"rather than bundled in the wheel (they are ~110 MB across all of them). Download "
-                f"it by hand into {cache}, or point --corpus at a local .npz.") from e
+
+    def valid(path, part):
+        return (path.is_file() and (part.get("bytes") is None or path.stat().st_size == part["bytes"])
+                and (not part.get("sha256") or _file_sha256(path) == part["sha256"]))
+
+    def complete():
+        return all(valid(cache / f"{sig}_{name}.{ext}", entry.get(ext, {}))
+                   for ext in ("npz", "json"))
+
+    if complete():
+        return npz
+    cache.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(cache / ".fetch.lock"), timeout=lock_timeout):
+        for ext in ("npz", "json"):
+            part = entry.get(ext, {})
+            target = cache / f"{sig}_{name}.{ext}"
+            if valid(target, part):
+                continue
+            legacy = root / target.name
+            url = legacy.resolve().as_uri() if valid(legacy, part) else f"{base}/{target.name}"
+            if not quiet:
+                print(f"[vdjtools] fetching {target.name} -> {cache}", file=sys.stderr, flush=True)
+            try:
+                _download(url, target, part.get("sha256"), part.get("bytes"))
+            except OSError as exc:
+                command = "mir" if sig == "rsig" else "vdjtools"
+                raise OSError(f"could not fetch {target.name}: {exc}. Pre-stage online with "
+                              f"{command} corpus --fetch {name}, or use --corpus with a local .npz.") from exc
     return npz
 
 
@@ -1126,11 +1135,11 @@ def resolve_artifact(name: "str | Path", *, sig: str, res_dir: Path, repo: str) 
     cand = Path(res_dir) / f"{sig}_{name}.npz"
     if cand.exists():
         return cand
+    if str(name) in corpora_index(res_dir):
+        return fetch_artifact(str(name), sig=sig, res_dir=res_dir, repo=repo)
     cached = corpus_cache_dir() / f"{sig}_{name}.npz"
     if cached.exists():
         return cached
-    if str(name) in corpora_index(res_dir):
-        return fetch_artifact(str(name), sig=sig, res_dir=res_dir, repo=repo)
     return None
 
 
@@ -2135,7 +2144,7 @@ class TablePCA:
         from vdjtools.cores import require_memory
         require_memory(32 * table.height * len(cols) + 16 * min(table.height, len(cols))**2,
                        'sample feature PCA fit')
-        X = table.select(cols).to_numpy(order='c').copy()
+        X = table.select(cols).to_numpy(order='c', writable=True)
         X[~np.isfinite(X)] = np.nan
         fill = np.zeros(len(cols))
         observed = np.isfinite(X).any(axis=0)
@@ -2190,22 +2199,36 @@ class TablePCA:
             parameters = table_pca(raw, n_components, seed=seed)
         return cls(columns, space, *parameters)
 
-    def transform(self, table: pl.DataFrame) -> pl.DataFrame:
-        """Apply this exact rotation; preserve sample IDs and metadata in input order."""
+    def transform(self, table: pl.DataFrame, *, threads: int = 1) -> pl.DataFrame:
+        """Project bounded row blocks; preserve sample IDs and metadata in input order.
+
+        ``threads`` budgets BLAS during application (1 serial, 0 allocated cores).
+        The selected input stays columnar; only a bounded block becomes dense.
+        """
         if _space(table) != self.space:
             raise ValueError('embedding space differs from the fitted rotation')
         selected = set(self.columns)
         if not selected.issubset(table.columns):
             raise ValueError('embedding columns differ from the fitted rotation')
-        from vdjtools.cores import require_memory
-        require_memory(24 * table.height * len(self.columns)
-                       + 8 * table.height * self.components.shape[0], 'sample feature PCA transform')
-        X = table.select(self.columns).to_numpy(order='c')
-        X = np.where(np.isfinite(X), X, self.fill)
-        X -= self.mean
-        X /= self.scale
-        X -= self.center
-        scores = X @ self.components.T
+        from vdjtools.cores import kernel_threads, numerical_kernels, require_memory
+        budget = kernel_threads(threads)
+        # Two dense blocks plus masks/scaling scratch fit in 32 MiB; output is N x rank.
+        rows = max(1, (32 * 1024**2) // (16 * len(self.columns)))
+        dtype = np.result_type(self.components.dtype, self.fill.dtype, np.float64)
+        require_memory(16 * min(rows, table.height) * len(self.columns)
+                       + dtype.itemsize * table.height * self.components.shape[0],
+                       'sample feature PCA transform')
+        scores = np.empty((table.height, self.components.shape[0]), dtype=dtype)
+        features = table.select(self.columns)
+        with numerical_kernels(budget):
+            for i, block in enumerate(features.iter_slices(rows)):
+                X = block.to_numpy(order='c', writable=True).astype(dtype, copy=False)
+                np.copyto(X, self.fill, where=~np.isfinite(X))
+                X -= self.mean
+                X /= self.scale
+                X -= self.center
+                start = i * rows
+                np.matmul(X, self.components.T, out=scores[start:start+block.height])
         metadata = table.select([c for c in table.columns if c not in selected])
         return metadata.hstack(pl.from_numpy(scores, schema=[f'pc{i}' for i in range(scores.shape[1])]))
 
