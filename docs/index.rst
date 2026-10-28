@@ -204,7 +204,7 @@ For the v2 rewrite, cite this repository. For the original tool, cite
 `Shugay et al., PLoS Computational Biology 2015 <https://doi.org/10.1371/journal.pcbi.1004503>`_.
 The VDJtrack recapture model in :mod:`vdjtools.dynamics` is Pavlova, Zvyagin and Shugay (2024).
 
-Licensed GPL-3.0-or-later. The legacy Groovy/Java v1.x tool lives on the
+Licensed ISALGO LAB Academic and Non-Commercial Research License. The legacy Groovy/Java v1.x tool lives on the
 `legacy-1.x <https://github.com/antigenomics/vdjtools/tree/legacy-1.x>`_ branch, with its releases
 under the repository tags ``v0.0.1`` through ``1.2.1``.
 
