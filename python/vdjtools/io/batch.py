@@ -278,17 +278,13 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
     The parallel, streaming replacement for "load the whole cohort, then loop over it":
     each worker reads **one** sample, reduces it via ``fn`` (typically a per-sample
     summary statistic returning a small frame), and discards the raw clonotype frame —
-    so peak memory is ``O(workers)`` samples, not the whole cohort. Reading (gzip TSV
-    decode + polars parse) and ``fn`` (polars ``group_by`` / numpy) both release the
-    GIL, so a thread pool runs them genuinely in parallel with no frame pickling.
+    so peak memory is ``O(workers)`` samples, not the whole cohort. Threads share
+    resources without pickling frames; callbacks must not mutate shared state.
 
-    **Measured**, 64 AIRR TSVs of 10,000 clonotypes each (53 MB) reduced by ``diversity_stats``
-    on 16 cores: 0.38 s at one worker, 0.17 s at two, 0.11 s at four, 0.10 s at eight, 0.10 s at
-    sixteen -- 2.24x / 3.49x / 3.85x / 3.91x. So the threads are real (a pool that never ran would
-    sit at 1.0x), and the ceiling is ~4x rather than 16x because polars already multithreads each
-    read internally: past four workers the pool is competing with polars' own thread pool for the
-    same cores. That is the reason ``workers`` exists as a knob and why raising it past the core
-    count buys nothing.
+    The outer map keeps numerical kernels serial within workers. Speedup depends on
+    the reader, callback and sample sizes: Python-heavy callbacks can be limited by
+    the GIL, while native reductions can run concurrently. Benchmark the actual
+    cohort before choosing a smaller explicit worker budget.
 
     Args:
         fn: A callable ``pl.DataFrame -> T`` applied to each sample's canonical
@@ -298,8 +294,7 @@ def map_samples(fn, items, *, fmt: str = "auto", workers: int | None = None,
         workers: Max worker threads. ``None`` uses
             :func:`vdjtools.cores.available_cores` capped at the number of samples -- the cores
             this process may actually use, which under ``srun -c 8`` on a 40-core node is 8 and
-            not 40. Four is already at the measured ceiling above; more is not faster and is
-            occasionally slower.
+            not 40. Set ``1`` to process samples sequentially without an outer pool.
         keep: Non-canonical columns to preserve, passed to :func:`read`. Without it a
             reduction needing a field outside the canonical eight — ``v_identity`` for
             the SHM block — gets a frame that never carried it, and reports a hole

@@ -100,6 +100,28 @@ else:
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=30)
 
 
+def test_serial_sample_map_accepts_preinitialized_polars():
+    import subprocess
+    import sys
+    code = """import polars as pl
+pl.DataFrame({'x':[1]}).select(pl.col('x').sum())
+assert pl.thread_pool_size() == 4
+import vdjtools
+from vdjtools.signature.cohort import parallel_rows
+assert parallel_rows([1,2], abs, 1) == [1,2]
+from vdjtools.cores import available_cores
+if available_cores() >= 2:
+    try:
+        parallel_rows([1,2], abs, 2)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('outer pool accepted multithreaded Polars')
+"""
+    env = {**os.environ, 'POLARS_MAX_THREADS': '4'}
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=30)
+
+
 @pytest.mark.parametrize('v2', [True, False])
 def test_cgroup_mount_mapping_includes_visible_ancestors(v2):
     from io import StringIO

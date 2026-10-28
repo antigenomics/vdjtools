@@ -57,9 +57,9 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
         with serial_kernels():
             return fn(item)
 
-    require_serial_pools()
     if workers < 2:
         return [row(it) for it in items]
+    require_serial_pools()
 
     # Exactly one task per worker, never one queued object per sample.
     pending = iter(enumerate(items))
