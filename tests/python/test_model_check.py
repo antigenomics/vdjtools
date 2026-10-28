@@ -124,9 +124,8 @@ def test_deletion_unreachable_scales_with_the_lost_mass(toy_model):
     """Reported as the FRACTION of an allele's mass that no trim can reach, not per row."""
     t = toy_model.tables["v_3_del"]
     # TOYV1*01's cut_segment is 13 nt with palindrome_max 4, so ndel > 8 is unreachable.
-    heavy = t.with_columns(
-        p=pl.when((pl.col("v_allele") == "TOYV1*01") & (pl.col("ndel") > 8))
-        .then(1.0).otherwise(pl.col("p")))
+    heavy = pl.concat([t, t.filter(pl.col("v_allele") == "TOYV1*01").head(1).with_columns(
+        ndel=pl.lit(9).cast(t.schema["ndel"]), p=pl.lit(2.0))])
     heavy = heavy.with_columns(p=pl.col("p") / pl.col("p").sum().over("v_allele"))
     issues = check_model(_rebuild(toy_model, v_3_del=heavy), germline="none")
     row = issues.filter(pl.col("check") == "deletion_unreachable").filter(

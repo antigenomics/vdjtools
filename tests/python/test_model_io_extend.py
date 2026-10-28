@@ -21,6 +21,14 @@ def _gene_usage(model, seg):
     return out
 
 
+def test_germline_initializer_projects_short_allele_deletions(toy_germline):
+    from vdjtools.model.io import from_germline
+    germline = toy_germline.with_columns(sequence=pl.when(pl.col('allele') == 'TOYV2*01')
+        .then(pl.lit('TGT')).otherwise(pl.col('sequence')))
+    model = from_germline(germline, locus='TOY')
+    assert check_model(model, germline='none').filter(pl.col('severity') == 'error').is_empty()
+
+
 @pytest.mark.parametrize('missing', [False, True])
 def test_completion_restores_j_deletion_newly_reachable_through_v(toy_model, missing):
     from vdjtools.model import Model

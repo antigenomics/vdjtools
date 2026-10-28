@@ -615,7 +615,10 @@ def from_germline(germline: pl.DataFrame, *, locus: str, organism: str = "custom
     manifest = Manifest(locus=locus, organism=organism, chain_type=chain_type, events=events,
                         palindrome_max={k: int(v) for k, v in pal.items()},
                         source=source or f"germline:{locus}")
-    return Model(manifest=manifest, tables=tables, genomic=genomic).validate()
+    from .collapse import _project_onto_germline
+    from .infer import enforce_dj_order
+    tables = _project_onto_germline(tables, genomic, manifest)
+    return enforce_dj_order(Model(manifest=manifest, tables=tables, genomic=genomic)).validate()
 
 
 def from_arda(locus: str, organism: str = "human", *,
