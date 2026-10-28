@@ -1,7 +1,8 @@
 """Precomputed models loaded without network access or an OLGA runtime dependency.
 
-``learned`` is the working default: native EM fits on ARDA germline scaffolds,
-covering seven human loci and mouse TRA/TRB/IGH/IGK/IGL. Human keys are bare loci;
+``learned`` is the working default: precomputed parameters for twelve contexts,
+seven human loci and mouse TRA/TRB/IGH/IGK/IGL. Each manifest describes its
+parameter source and reference. Human keys are bare loci;
 mouse keys are ``mouse_{LOCUS}``. ``arda`` retains its legacy organism-prefixed
 paths; its corrected fitted assets remain available explicitly. ``olga`` retains
 the seven human bootstrap models for exact oracle and historical reproduction.
@@ -49,7 +50,8 @@ def load_bundled(locus: str, source: str = "learned", *, organism: str = "human"
         source: ``"learned"`` (default; EM fits on ARDA references), ``"olga"``
             (human bootstrap for exact Pgen reproduction), or legacy ``"arda"`` paths.
         organism: ``"human"`` (default) or ``"mouse"``. The learned mouse catalog covers TRA/TRB/IGH/IGK/IGL.
-            Missing source/species/locus combinations fail rather than using a human model.
+            No mouse TRG/TRD model is bundled. Their data acquisition is a separate
+            future project. Missing combinations fail rather than using a human model.
         collapse: If ``True`` (default), collapse each gene to a single ``*01`` allele via
             :func:`~vdjtools.model.collapse.collapse_alleles` — the working gene-level resolution,
             in which Pgen also collapses a clonotype's allele to ``*01`` (short-read aligners cannot

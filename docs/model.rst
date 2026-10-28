@@ -26,12 +26,17 @@ continues to use the models installed with vdjtools.
 The candidate working-model APIs and CLIs default to ``source="learned"``.
 vdjtools owns model fitting, probability tables, generation and Pgen; ARDA supplies
 the germline reference scaffolds, without OLGA probability-parameter seeding.
-The replacement catalog targets all seven human loci and mouse TRA, TRB, IGH,
-IGK and IGL. Fresh fitted assets and full-catalog validation are release gates;
-these API changes alone do not establish completed training or publication. Human bundle keys remain bare
-loci; mouse keys are prefixed ``mouse_``. Missing assets fail explicitly. Mouse
-TRG/TRD remain unsupported until suitable training sources are available; neither
-missing assets nor species are replaced with a human model.
+The supported working-model catalog comprises twelve contexts: all seven human
+loci and mouse TRA, TRB, IGH, IGK and IGL. Each manifest describes the parameter
+source and reference. Delivery and validation of these twelve parameter sets are
+release gates; API changes alone do not establish completed training or publication.
+Human bundle keys remain bare loci; mouse keys are prefixed ``mouse_``. Missing
+assets fail explicitly and never fall back to a human model.
+
+No mouse TRG or TRD model is bundled. Acquiring suitable 10X or other public
+training data for these two loci is a separate future project, not a blocker for
+this twelve-context release. Their absence from the bundle does not establish
+that suitable public data do not exist.
 ``source="olga"`` and CLI ``--source olga`` retain the human bootstrap models
 for oracle checks and historical reproduction, including ``collapse=False``
 for allele-level comparisons. Legacy ``source="arda"`` paths remain available.

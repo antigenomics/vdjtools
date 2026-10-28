@@ -26,6 +26,13 @@ def test_default_resolves_canonical_learned_model(organism, locus):
     assert all(default.tables[name].equals(explicit.tables[name]) for name in default.tables)
 
 
+@pytest.mark.parametrize('locus', ['TRG', 'TRD'])
+def test_unbundled_mouse_loci_fail_without_human_fallback(locus):
+    # Human models exist, but cannot stand in for the deferred mouse contexts.
+    with pytest.raises(FileNotFoundError, match="organism 'mouse'"):
+        load_bundled(locus, organism='mouse')
+
+
 def test_all_olga_loci_bundled():
     """Every one of the 7 human loci ships an OLGA bootstrap model."""
     assert set(list_bundled()["olga"]) == set(LOCI)
