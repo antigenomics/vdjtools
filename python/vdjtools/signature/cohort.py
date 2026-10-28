@@ -58,6 +58,8 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
             return fn(item)
 
     if workers < 2:
+        if workers:
+            require_serial_pools(outer=False)
         return [row(it) for it in items]
     require_serial_pools()
 
