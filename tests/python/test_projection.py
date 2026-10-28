@@ -188,3 +188,47 @@ def test_corpus_map_finishes_before_blas_fit(monkeypatch):
                           loci=('TRB',), feature_definition=feature_definition('basic'),
                           cstar_target=None, n_jobs=2, threads=2, n_components=2)
     assert result.fits
+
+
+def test_table_projection_bounds_conversion_and_restores_threads(monkeypatch):
+    from threadpoolctl import threadpool_info, threadpool_limits
+    from vdjtools.cores import available_cores
+    rng = np.random.default_rng(13)
+    x = rng.normal(size=(1050, 2048))
+    x[3, 5] = np.nan
+    x[8, 9] = np.inf
+    columns = [f'phi:{i}' for i in range(x.shape[1])]
+    table = pl.from_numpy(x, schema=columns).with_columns(
+        pl.Series('sample_id', [str(i) for i in range(len(x))]),
+        pl.lit('fixed').alias('embedding_space'))
+    rotation = TablePCA(columns, 'fixed', np.zeros(x.shape[1]),
+                        rng.normal(size=x.shape[1]), np.ones(x.shape[1]),
+                        rng.normal(size=x.shape[1]), rng.normal(size=(4, x.shape[1])))
+    expected = (np.where(np.isfinite(x), x, rotation.fill)
+                - rotation.mean - rotation.center) @ rotation.components.T
+    original = pl.DataFrame.to_numpy
+    heights = []
+    def bounded(frame, *args, **kwargs):
+        if frame.width == len(columns):
+            heights.append(frame.height)
+            assert frame.height < table.height, 'full feature table materialized'
+        return original(frame, *args, **kwargs)
+    monkeypatch.setattr(pl.DataFrame, 'to_numpy', bounded)
+    with threadpool_limits(limits=1, user_api='blas'):
+        actual = rotation.transform(table, threads=min(2, available_cores()))
+        assert all(p['num_threads'] == 1 for p in threadpool_info() if p['user_api'] == 'blas')
+    with threadpool_limits(limits=1, user_api='blas'), monkeypatch.context() as patch:
+        def failed(*args, **kwargs):
+            raise RuntimeError('projection failed')
+        patch.setattr(np, 'matmul', failed)
+        with pytest.raises(RuntimeError, match='projection failed'):
+            rotation.transform(table, threads=min(2, available_cores()))
+        assert all(p['num_threads'] == 1 for p in threadpool_info() if p['user_api'] == 'blas')
+    assert len(heights) > 1
+    assert actual['sample_id'].equals(table['sample_id'])
+    np.testing.assert_allclose(actual.select('^pc.*$').to_numpy(), expected, rtol=0, atol=1e-10)
+    assert np.isnan(x[3, 5]) and np.isinf(x[8, 9])
+    with pytest.raises(ValueError, match='between'):
+        rotation.transform(table, threads=available_cores()+1)
+    with pytest.raises(ValueError, match='spaces'):
+        rotation.transform(table.head(0))

@@ -231,3 +231,9 @@ The two configurations each support seven definitions: base plus the two motif
 representations with three V-context choices. Every definition has a distinct
 identity. Availability of fitted published variants is determined by the corpus
 registry; an implemented feature definition does not imply a published rotation.
+
+Sample PCA application processes byte-bounded row blocks instead of converting
+the entire feature table to a dense array. ``TablePCA.transform(table, threads=0)``
+uses allocated BLAS cores; its default is serial, matching ``TablePCA.fit``.
+``vdjtools project-features --threads 0`` uses the allocation for fit and apply.
+The numerical phase restores the caller's native thread limits on exit.
