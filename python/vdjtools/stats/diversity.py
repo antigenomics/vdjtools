@@ -32,7 +32,7 @@ def _counts(df: pl.DataFrame) -> np.ndarray:
     (:func:`diversity_cohort`, which reconstructs the vector from the count spectrum)
     is bit-identical to the per-sample path.
     """
-    c = df[COUNT].drop_nulls().to_numpy().astype(np.int64)
+    c = df[COUNT].drop_nulls().to_numpy().astype(np.int64, copy=False)
     return np.sort(c[c > 0])
 
 
@@ -126,12 +126,10 @@ def efron_thisted(counts: np.ndarray, max_depth: int = 20,
     fx = {int(k): int(v) for k, v in zip(*np.unique(counts, return_counts=True))}
     s = float(sobs)
     for depth in range(1, max_depth + 1):
-        h = [0.0] * depth
+        # Sum_{y=x..depth} C(y-1, x-1) = C(depth, x).
+        h = [float(math.comb(depth, x)) * (1 if x % 2 else -1)
+             for x in range(1, depth + 1)]
         nx = [float(fx.get(y, 0)) for y in range(1, depth + 1)]
-        for y in range(1, depth + 1):
-            for x in range(1, y + 1):
-                coef = math.comb(y - 1, x - 1)
-                h[x - 1] += coef if x % 2 == 1 else -coef
         s = sobs + sum(h[i] * nx[i] for i in range(depth))
         d = math.sqrt(sum(h[i] * h[i] * nx[i] for i in range(depth)))
         if s != 0 and d / s >= cv_threshold:
