@@ -4,6 +4,7 @@
 # and settle its confound — B27 is ~26/27 tied to disease, so only the B27-MATCHED contrast
 # (AS/B27+ vs healthy/B27+) can separate disease from carriage. Run with:
 #     marimo edit examples/ankspond_motif.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -12,25 +13,23 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # The ankylosing-spondylitis "AS27" motif — a vdjtools explorer
+    mo.md(r"""
+    # The ankylosing-spondylitis "AS27" motif — a vdjtools explorer
 
-        Komech et al. (2018, *Rheumatology* 57:1097) found a **public TRBV9 / TRBJ2-3 CDR3β
-        motif** (`CASSVGLYSTDTQYF` and relatives) expanded in the blood and synovial fluid of
-        **ankylosing-spondylitis** patients — nearly all of whom carry **HLA-B27**. That raises
-        the question this notebook answers: is the motif a marker of **disease**, or merely of
-        **B27 carriage**?
+    Komech et al. (2018, *Rheumatology* 57:1097) found a **public TRBV9 / TRBJ2-3 CDR3β
+    motif** (`CASSVGLYSTDTQYF` and relatives) expanded in the blood and synovial fluid of
+    **ankylosing-spondylitis** patients — nearly all of whom carry **HLA-B27**. That raises
+    the question this notebook answers: is the motif a marker of **disease**, or merely of
+    **B27 carriage**?
 
-        Because B27 is ~26/27 confounded with AS in this cohort, "AS vs healthy" cannot tell them
-        apart. The only contrast that can is **B27-matched**: AS/B27+ vs *healthy* B27+ donors —
-        the paper's actual claim (the motif is absent from B27+ healthy blood). Two controls keep
-        us honest: B27 carriage **among healthy donors** (should be null if it is disease), and
-        the lone AS/B27− donor.
+    Because B27 is ~26/27 confounded with AS in this cohort, "AS vs healthy" cannot tell them
+    apart. The only contrast that can is **B27-matched**: AS/B27+ vs *healthy* B27+ donors —
+    the paper's actual claim (the motif is absent from B27+ healthy blood). Two controls keep
+    us honest: B27 carriage **among healthy donors** (should be null if it is disease), and
+    the lone AS/B27− donor.
 
-        Data auto-loads from HuggingFace (`isalgo/airr_ankspond`), preferring a local `./data_dump/` copy (gitignored).
-        """
-    )
+    Data auto-loads from HuggingFace (`isalgo/airr_ankspond`), preferring a local `./data_dump/` copy (gitignored).
+    """)
     return
 
 
@@ -77,8 +76,17 @@ def _():
                     out.add(u)
         return list(out)
 
-    return (MOTIF, OKABE, Path, REPO, V_GENE, J_GENE, fetch, hamming1_ball, mo, pl, plt,
-            fisher_exact, read)
+    return (
+        J_GENE,
+        MOTIF,
+        V_GENE,
+        fetch,
+        fisher_exact,
+        hamming1_ball,
+        mo,
+        pl,
+        read,
+    )
 
 
 @app.cell
@@ -93,11 +101,11 @@ def _(fetch, pl, read):
     clones = pl.concat(_frames, how="vertical_relaxed")
     donors = meta.select("donor_id", "disease_status", "b27").unique("donor_id").rename(
         {"donor_id": "donor"})
-    return clones, donors, meta
+    return clones, donors
 
 
 @app.cell
-def _(donors, mo, pl):
+def _(donors, mo):
     _tab = donors.group_by("disease_status", "b27").len().sort("disease_status", "b27")
     mo.vstack([
         mo.md("## 1 · The confound in one table\n\nB27 tracks disease, so only a **B27-matched** "
@@ -120,8 +128,19 @@ def _(mo):
 
 
 @app.cell
-def _(MOTIF, V_GENE, J_GENE, clones, contrast, donors, fisher_exact, hamming1_ball,
-      mo, onemm, pl):
+def _(
+    J_GENE,
+    MOTIF,
+    V_GENE,
+    clones,
+    contrast,
+    donors,
+    fisher_exact,
+    hamming1_ball,
+    mo,
+    onemm,
+    pl,
+):
     # V-pinned TRBV9/TRBJ2-3 CDR3 universe, optionally expanded to a 1-mismatch ball.
     _v = clones.filter((pl.col("v_call") == V_GENE) & (pl.col("j_call") == J_GENE))
     _seqs = (hamming1_ball(MOTIF, _v["junction_aa"].unique().to_list()) if onemm.value else MOTIF)
@@ -147,25 +166,23 @@ def _(MOTIF, V_GENE, J_GENE, clones, contrast, donors, fisher_exact, hamming1_ba
     mo.md(f"## 2 · Motif carriage — {'1-mismatch ball' if onemm.value else 'exact'}\n\n"
           f"**{plabel}: {a}/{len(pos)}** carry the motif vs **{nlabel}: {b}/{len(neg)}** — "
           f"OR = **{orr:.1f}**, one-sided p = **{p:.4f}** {_verdict}")
-    return carriers, neg, pos
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        r"""
-        ## 3 · The motif is a convergent family (metaclonotype clustering)
-
-        The nine motif clonotypes are near-variants of one another — a **convergent** response, not
-        one public clone. `vdjtools.biomarker.metaclonotypes` clusters the AS patients' TRBV9/TRBJ2-3
-        CDR3s within one substitution (single-linkage); the largest component is the AS27 family.
-        """
-    )
     return
 
 
 @app.cell
-def _(MOTIF, V_GENE, J_GENE, clones, donors, mo, pl):
+def _(mo):
+    mo.md(r"""
+    ## 3 · The motif is a convergent family (metaclonotype clustering)
+
+    The nine motif clonotypes are near-variants of one another — a **convergent** response, not
+    one public clone. `vdjtools.biomarker.metaclonotypes` clusters the AS patients' TRBV9/TRBJ2-3
+    CDR3s within one substitution (single-linkage); the largest component is the AS27 family.
+    """)
+    return
+
+
+@app.cell
+def _(J_GENE, MOTIF, V_GENE, clones, donors, mo, pl):
     from vdjtools.biomarker.metaclonotype import metaclonotypes
 
     _as = donors.filter(pl.col("disease_status") == "as")["donor"].to_list()
@@ -183,23 +200,21 @@ def _(MOTIF, V_GENE, J_GENE, clones, donors, mo, pl):
               f"**{int(fam['in_komech'].sum())}** are Komech-2018 clonotypes. A sample:"),
         fam.select("junction_aa", "in_komech").head(14),
     ])
-    return fam, meta_id
+    return
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ---
-        **Takeaway.** The TRBV9/TRBJ2-3 AS27 motif is real and **disease-associated**: B27-matched,
-        AS patients carry it far more than B27+ healthy donors (the confounded "AS vs all healthy"
-        inflates the effect, and B27 carriage among the healthy is null — so it is disease, not
-        carriage). It is a **convergent family** of near-variant CDR3s, recovered here by
-        `biomarker.metaclonotypes`. V-pinning is load-bearing — unpinned, wrong-V convergents leak
-        into the healthy arm. The full campaign (Pgen of the motif under the native model, VDJdb
-        cross-check, de-novo V+k-mer discovery) is `bench/bm_ankspond.py`.
-        """
-    )
+    mo.md(r"""
+    ---
+    **Takeaway.** The TRBV9/TRBJ2-3 AS27 motif is real and **disease-associated**: B27-matched,
+    AS patients carry it far more than B27+ healthy donors (the confounded "AS vs all healthy"
+    inflates the effect, and B27 carriage among the healthy is null — so it is disease, not
+    carriage). It is a **convergent family** of near-variant CDR3s, recovered here by
+    `biomarker.metaclonotypes`. V-pinning is load-bearing — unpinned, wrong-V convergents leak
+    into the healthy arm. The full campaign (Pgen of the motif under the native model, VDJdb
+    cross-check, de-novo V+k-mer discovery) is `bench/bm_ankspond.py`.
+    """)
     return
 
 

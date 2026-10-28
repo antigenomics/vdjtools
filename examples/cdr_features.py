@@ -14,6 +14,7 @@ Centenarians"** aging cohort — a real, continuous biological gradient.
 Data auto-downloads from ``isalgo/airr_benchmark`` (folder ``vdjtools/``) into the
 gitignored ``examples/.data/cdr_nb/`` cache.
 """
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -22,27 +23,25 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # The physicochemistry of the CDR3 loop — does it change with age?
+    mo.md(r"""
+    # The physicochemistry of the CDR3 loop — does it change with age?
 
-        The third complementarity-determining region (**CDR3**) makes most of the direct
-        antigen contacts of a T-cell receptor, and its amino-acid **physicochemistry** —
-        hydropathy, charge, volume, the 10 Kidera factors — is a low-dimensional summary of
-        its binding chemistry. `vdjtools.features` turns raw sequences into these profiles, and
-        into **k-mer** spectra (a sequence fingerprint). We compute both across the
-        Britanova aging cohort and test whether the repertoire's average chemistry
-        tracks donor age.
+    The third complementarity-determining region (**CDR3**) makes most of the direct
+    antigen contacts of a T-cell receptor, and its amino-acid **physicochemistry** —
+    hydropathy, charge, volume, the 10 Kidera factors — is a low-dimensional summary of
+    its binding chemistry. `vdjtools.features` turns raw sequences into these profiles, and
+    into **k-mer** spectra (a sequence fingerprint). We compute both across the
+    Britanova aging cohort and test whether the repertoire's average chemistry
+    tracks donor age.
 
-        One convention to fix before any number below. The profiles are cut from
-        `junction_aa`, which **includes** the conserved Cys104 and Phe118 anchors and is two
-        residues longer than the IMGT CDR3. `region="all"` is that whole junction;
-        `region="trimmed"` drops three residues from each end; `region="center"` keeps the
-        middle five, which on a typical junction is the non-templated, most diverse part.
-        Whichever you use, say so — the anchors are invariant, so including them dilutes any
-        property difference by roughly `2/L`.
-        """
-    )
+    One convention to fix before any number below. The profiles are cut from
+    `junction_aa`, which **includes** the conserved Cys104 and Phe118 anchors and is two
+    residues longer than the IMGT CDR3. `region="all"` is that whole junction;
+    `region="trimmed"` drops three residues from each end; `region="center"` keeps the
+    middle five, which on a typical junction is the non-templated, most diverse part.
+    Whichever you use, say so — the anchors are invariant, so including them dilutes any
+    property difference by roughly `2/L`.
+    """)
     return
 
 
@@ -65,9 +64,24 @@ def _():
     N_SAMPLES = 24
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
-    return (DEFAULT_PROPERTIES, HF_FOLDER, N_SAMPLES, OKABE, Path, REPO_ID,
-            filter_productive, kmer_profile, load_property_table, mo, np,
-            physchem_profile, pl, plt, spearmanr, vio)
+    return (
+        DEFAULT_PROPERTIES,
+        HF_FOLDER,
+        N_SAMPLES,
+        OKABE,
+        Path,
+        REPO_ID,
+        filter_productive,
+        kmer_profile,
+        load_property_table,
+        mo,
+        np,
+        physchem_profile,
+        pl,
+        plt,
+        spearmanr,
+        vio,
+    )
 
 
 @app.cell
@@ -77,12 +91,14 @@ def _(load_property_table, mo):
     mo.vstack([mo.md("## 1 · The amino-acid property table\n"
                      "Hydropathy, charge, volume, strength, polarity + the 10 Kidera factors:"),
                tbl.head(20)])
-    return (tbl,)
+    return
 
 
 @app.cell
 def _(mo):
-    mo.md(r"""## 2 · Load the cohort (coding CDR3s, tagged with age)""")
+    mo.md(r"""
+    ## 2 · Load the cohort (coding CDR3s, tagged with age)
+    """)
     return
 
 
@@ -119,21 +135,29 @@ def _(HF_FOLDER, N_SAMPLES, Path, REPO_ID, filter_productive, mo, np, pl, vio):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 3 · Per-sample CDR3 physicochemistry vs age
+    mo.md(r"""
+    ## 3 · Per-sample CDR3 physicochemistry vs age
 
-        `physchem_profile(group_by=("sample_id",))` gives each sample's read-weighted mean
-        CDR3 property vector. We correlate every property with donor age (Spearman) — the
-        bars rank which chemistry shifts most across the lifespan; the scatter shows the
-        strongest one.
-        """
-    )
+    `physchem_profile(group_by=("sample_id",))` gives each sample's read-weighted mean
+    CDR3 property vector. We correlate every property with donor age (Spearman) — the
+    bars rank which chemistry shifts most across the lifespan; the scatter shows the
+    strongest one.
+    """)
     return
 
 
 @app.cell
-def _(DEFAULT_PROPERTIES, OKABE, ages, cohort, np, physchem_profile, pl, plt, spearmanr):
+def _(
+    DEFAULT_PROPERTIES,
+    OKABE,
+    ages,
+    cohort,
+    np,
+    physchem_profile,
+    pl,
+    plt,
+    spearmanr,
+):
     _prof = physchem_profile(cohort, group_by=("sample_id",), region="all", weight="reads")
     _wide = _prof.pivot(values="mean_value", index="sample_id", on="property")
     _wide = _wide.with_columns(
@@ -164,20 +188,18 @@ def _(DEFAULT_PROPERTIES, OKABE, ages, cohort, np, physchem_profile, pl, plt, sp
     axp2.spines[["top", "right"]].set_visible(False)
     figp.tight_layout()
     figp
-    return (top_prop, top_r)
+    return top_prop, top_r
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 4 · CDR3 k-mer fingerprint
+    mo.md(r"""
+    ## 4 · CDR3 k-mer fingerprint
 
-        `kmer_profile` decomposes each repertoire into overlapping CDR3 amino-acid
-        **3-mers** (frequency-weighted). PCA of the samples on their 3-mer spectra,
-        coloured by age, shows whether sequence composition alone carries an age signal.
-        """
-    )
+    `kmer_profile` decomposes each repertoire into overlapping CDR3 amino-acid
+    **3-mers** (frequency-weighted). PCA of the samples on their 3-mer spectra,
+    coloured by age, shows whether sequence composition alone carries an age signal.
+    """)
     return
 
 

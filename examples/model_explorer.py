@@ -2,6 +2,7 @@
 # Reactive marimo app: pick a locus and model source, see its Bayes net (nodes = marginal entropy H,
 # edges = mutual information I), the per-event entropy / MI tables, a marginal distribution, and an
 # OLGA-vs-learned comparison. Run with:  marimo edit examples/model_explorer.py
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -11,32 +12,32 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
 @app.cell
-def _(mo):
+def _():
     import subprocess
 
     import matplotlib.pyplot as plt
     import polars as pl
 
     from vdjtools.model import analyze, list_bundled, load_bundled
-    return analyze, list_bundled, load_bundled, mo, pl, plt, subprocess
+
+    return analyze, list_bundled, load_bundled, pl, plt, subprocess
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        # V(D)J recombination model explorer
+    mo.md("""
+    # V(D)J recombination model explorer
 
-        Explore any bundled recombination model as a **Bayes net** — nodes are recombination events
-        (sized/annotated by their marginal Shannon entropy *H*), edges are the conditioning
-        dependencies (annotated by mutual information *I*). Compare the **OLGA** bootstrap models to
-        the **EM-learned** models fit to real out-of-frame repertoires.
-        """
-    )
+    Explore any bundled recombination model as a **Bayes net** — nodes are recombination events
+    (sized/annotated by their marginal Shannon entropy *H*), edges are the conditioning
+    dependencies (annotated by mutual information *I*). Compare the **OLGA** bootstrap models to
+    the **EM-learned** models fit to real out-of-frame repertoires.
+    """)
     return
 
 

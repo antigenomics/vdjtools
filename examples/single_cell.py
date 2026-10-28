@@ -16,6 +16,7 @@ pure for the antigen labels (and that a random relabelling collapses the scores)
 Data auto-downloads from ``isalgo/airr_benchmark`` (folder ``dcode/``) into the HuggingFace
 cache. Needs the ``[sc]`` and ``[overlap]`` extras (``scikit-learn``, ``vdjmatch``, ``seqtree``).
 """
+
 import marimo
 
 __generated_with = "0.23.14"
@@ -24,24 +25,22 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # Single-cell paired-chain TCR analysis — dCODE donor 4
+    mo.md(r"""
+    # Single-cell paired-chain TCR analysis — dCODE donor 4
 
-        A 10x single-cell VDJ run resolves both chains of a T-cell receptor **per cell**;
-        a dCODE dextramer panel adds an **antigen label** per cell. This notebook takes the
-        raw 10x contigs of dCODE donor 4 through `vdjtools.sc`:
+    A 10x single-cell VDJ run resolves both chains of a T-cell receptor **per cell**;
+    a dCODE dextramer panel adds an **antigen label** per cell. This notebook takes the
+    raw 10x contigs of dCODE donor 4 through `vdjtools.sc`:
 
-        1. **ingest** the contig + consensus annotations (`read_10x`),
-        2. **QC** cell composition (`chain_multiplicity` — the TRA/TRB presence quadrants),
-        3. **resolve & pair** chains into receptors (`resolve_chains`, `pair_chains`),
-        4. take each cell's dominant **β CDR3**, cluster by **1 substitution**, and
-        5. grade that clustering against the dextramer antigen labels (`cluster_eval`).
+    1. **ingest** the contig + consensus annotations (`read_10x`),
+    2. **QC** cell composition (`chain_multiplicity` — the TRA/TRB presence quadrants),
+    3. **resolve & pair** chains into receptors (`resolve_chains`, `pair_chains`),
+    4. take each cell's dominant **β CDR3**, cluster by **1 substitution**, and
+    5. grade that clustering against the dextramer antigen labels (`cluster_eval`).
 
-        The test question: does an *unsupervised* CDR3 clustering recover the
-        antigen-specific groups?
-        """
-    )
+    The test question: does an *unsupervised* CDR3 clustering recover the
+    antigen-specific groups?
+    """)
     return
 
 
@@ -63,11 +62,11 @@ def _():
     EPITOPES = ("A1101_IVTDFSVIK_EBNA-3B_EBV", "A0301_KLGGALQAK_IE-1_CMV")
     OKABE = {"blue": "#0072B2", "vermillion": "#D55E00", "green": "#009E73",
              "orange": "#E69F00", "purple": "#CC79A7", "grey": "#8C8C8C"}
-    return EPITOPES, FILE, OKABE, Path, REPO_ID, cluster_eval, mo, np, pl, plt, sc
+    return EPITOPES, FILE, OKABE, REPO_ID, cluster_eval, mo, np, pl, plt, sc
 
 
 @app.cell
-def _(FILE, REPO_ID, mo, pl):
+def _(FILE, REPO_ID, pl):
     def fetch(tag):
         import huggingface_hub as hub
         return hub.hf_hub_download(REPO_ID, FILE.format(tag), repo_type="dataset")
@@ -109,7 +108,7 @@ def _(FILE, REPO_ID, mo, pl):
 
 
 @app.cell
-def _(fetch, antigen_labels, mo, sc):
+def _(antigen_labels, fetch, mo, sc):
     _all_contig = fetch("all_contig_annotations")
     _consensus = fetch("consensus_annotations")
     contigs = sc.read_10x(_all_contig, _consensus)
@@ -122,15 +121,13 @@ def _(fetch, antigen_labels, mo, sc):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 1 · Cell-composition QC — the TRA/TRB quadrants
+    mo.md(r"""
+    ## 1 · Cell-composition QC — the TRA/TRB quadrants
 
-        `chain_multiplicity` counts each cell's light (TRA) and heavy (TRB) chains. A clean
-        single T cell is **(TRA+, TRB+)** with one of each; TRB-only / TRA-only / multi-chain
-        cells are dropouts or doublets. The dominant quadrant should be (TRA+, TRB+).
-        """
-    )
+    `chain_multiplicity` counts each cell's light (TRA) and heavy (TRB) chains. A clean
+    single T cell is **(TRA+, TRB+)** with one of each; TRB-only / TRA-only / multi-chain
+    cells are dropouts or doublets. The dominant quadrant should be (TRA+, TRB+).
+    """)
     return
 
 
@@ -156,14 +153,12 @@ def _(OKABE, contigs, pl, plt, sc):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 2 · Resolve & pair chains
+    mo.md(r"""
+    ## 2 · Resolve & pair chains
 
-        `resolve_chains` picks each cell's dominant chains; `pair_chains` forms α/β receptors
-        (a 2-alpha / 1-beta cell yields two Cartesian pairs, incomplete cells are dropped).
-        """
-    )
+    `resolve_chains` picks each cell's dominant chains; `pair_chains` forms α/β receptors
+    (a 2-alpha / 1-beta cell yields two Cartesian pairs, incomplete cells are dropped).
+    """)
     return
 
 
@@ -187,17 +182,15 @@ def _(EPITOPES, contigs, labels, mo, pl, sc):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## 3 · Unsupervised β-CDR3 clustering vs the antigen labels
+    mo.md(r"""
+    ## 3 · Unsupervised β-CDR3 clustering vs the antigen labels
 
-        Cluster the per-cell β CDR3s into **1-substitution connected components** (blind to
-        the antigen labels), then grade that clustering against the true epitope labels with
-        `cluster_eval`. A random relabelling is the null. High purity / q-measure for the
-        real labels — and a collapse for the shuffled ones — means the receptor sequence
-        alone recovers the antigen groups.
-        """
-    )
+    Cluster the per-cell β CDR3s into **1-substitution connected components** (blind to
+    the antigen labels), then grade that clustering against the true epitope labels with
+    `cluster_eval`. A random relabelling is the null. High purity / q-measure for the
+    real labels — and a collapse for the shuffled ones — means the receptor sequence
+    alone recovers the antigen groups.
+    """)
     return
 
 
@@ -225,7 +218,7 @@ def _(OKABE, cell_beta, cluster_eval, components, mo, np, pl, plt):
     axc.spines[["top", "right"]].set_visible(False)
     figc.tight_layout()
     mo.vstack([table, figc])
-    return real, table
+    return (real,)
 
 
 @app.cell
