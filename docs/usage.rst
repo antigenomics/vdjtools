@@ -807,6 +807,18 @@ silent switch between backends.
    vdjtools diversity samples/*.tsv --backend process --threads 0 -o diversity.tsv
 
 
+Choose the parallel layer from the workload. For thousands of small sample files,
+map whole samples with bounded workers. For a few deep samples doing Pgen or
+inference, load the model once and iterate over samples, making one native batch
+call per sample with ``threads=0``. Each batch can then use the allocation, instead
+of each sample being confined to one core inside an outer map. For summary
+statistics, prefer the vectorized cohort API before adding a sample pool.
+
+Expensive native Pgen and inference batches can start workers from two records;
+cheap kernels retain a larger startup threshold. Unequal expensive queries take
+several contiguous spans per worker, while numerical results and seeded sampling
+remain independent of worker assignment.
+
 Native worker exceptions are rethrown after joining workers. Thread creation failures
 also join workers already started and raise to Python, rather than terminating the
 interpreter while destroying a joinable thread.

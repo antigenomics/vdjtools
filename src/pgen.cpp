@@ -2,6 +2,7 @@
 #include "vdjtools/model.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <cctype>
@@ -784,25 +785,34 @@ namespace {
 // embarrassingly disjoint (no shared state, no reduction), so the result is bitwise-identical to
 // the serial loop regardless of thread count; worker exceptions are joined and rethrown on the calling thread.
 template <class F>
-auto run_batch(size_t n, int nthreads, F&& one) -> std::vector<decltype(one(size_t{0}))> {
+auto run_batch(size_t n, int nthreads, F&& one, bool expensive = false)
+    -> std::vector<decltype(one(size_t{0}))> {
     std::vector<decltype(one(size_t{0}))> out(n);
     if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
     int T = nthreads > 0 ? nthreads : 1;
-    constexpr size_t kBatchThreadMin = 64;  // small batches stay single-threaded (bitwise-exact)
-    if (n < kBatchThreadMin || T <= 1) {
+    if (n < (expensive ? 2u : 64u) || T <= 1) {
         for (size_t i = 0; i < n; ++i) out[i] = one(i);
         return out;
     }
     if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
+    // Costly, unequal queries take several contiguous spans per worker; cheap rows
+    // retain one large span. Keep shared state alive until startup failures join.
+    size_t spans = static_cast<size_t>(T) * (expensive ? 4u : 1u);
+    size_t chunk = (n + spans - 1) / spans;
+    std::atomic<size_t> next{0};
     std::vector<std::exception_ptr> errors(T);
     std::vector<std::thread> pool;
     ThreadJoiner joiner{pool};
-    size_t chunk = (n + T - 1) / T;
     for (int t = 0; t < T; ++t) {
-        size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
-        if (lo >= hi) break;
-        pool.emplace_back([&, lo, hi, t] {
-            try { for (size_t i = lo; i < hi; ++i) out[i] = one(i); }
+        pool.emplace_back([&, t] {
+            try {
+                for (;;) {
+                    size_t lo = next.fetch_add(chunk, std::memory_order_relaxed);
+                    if (lo >= n) break;
+                    size_t hi = std::min(n, lo + chunk);
+                    for (size_t i = lo; i < hi; ++i) out[i] = one(i);
+                }
+            }
             catch (...) { errors[t] = std::current_exception(); }
         });
     }
@@ -827,7 +837,7 @@ std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::s
     return run_batch(seqs.size(), nthreads, [&](size_t i) {
         return mismatches == 1 ? pgen_aa_hamming1(m, seqs[i], vi(i), ji(i))
                                : pgen_aa(m, seqs[i], vi(i), ji(i));
-    });
+    }, m.vdj || mismatches == 1);
 }
 
 // Batch nucleotide Pgen, parallelized across sequences exactly as ``pgen_aa_batch`` is. The
@@ -854,8 +864,11 @@ std::vector<double> pgen_nt_batch(const PackedModel& m, const std::vector<std::s
     }
     auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
+    bool marginal = v_idxs.empty() || j_idxs.empty()
+        || std::find(v_idxs.begin(), v_idxs.end(), -1) != v_idxs.end()
+        || std::find(j_idxs.begin(), j_idxs.end(), -1) != j_idxs.end();
     return run_batch(seqs.size(), nthreads,
-                     [&](size_t i) { return pgen_nt(m, code[i], vi(i), ji(i)); });
+                     [&](size_t i) { return pgen_nt(m, code[i], vi(i), ji(i)); }, m.vdj && marginal);
 }
 
 namespace {
@@ -988,7 +1001,7 @@ std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
     return run_batch(masks.size(), nthreads, [&](size_t i) {
         return pgen_aa_masked(m, masks[i].data(), static_cast<int>(masks[i].size()), vi(i), ji(i));
-    });
+    }, m.vdj);
 }
 
 // ---- EM E-step ----------------------------------------------------------------------------
@@ -1762,7 +1775,7 @@ AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m, const std::vector<
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
     auto per = run_batch(seqs.size(), nthreads, [&](size_t i) {
         return best_aa_scenarios(m, seqs[i], vi(i), ji(i), k);
-    });
+    }, m.vdj);
     size_t total = 0;
     for (const auto& one : per) total += one.size();
     AaScenarioBatch out;
@@ -2044,7 +2057,7 @@ std::vector<InferNt> infer_nt_batch(const PackedModel& m, const std::vector<std:
     return run_batch(aas.size(), nthreads, [&](size_t i) {
         CodonDP dp;  // per row, so nothing is shared between workers
         return infer_nt_one(m, aas[i], v_alts[i], j_alts[i], k, dp);
-    });
+    }, true);
 }
 
 // ---------------------------------------------------------------------------------------------

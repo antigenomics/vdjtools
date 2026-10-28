@@ -31,13 +31,7 @@ from vdjtools.model.bundled import load_bundled
 from vdjtools.model.generate import generate
 from vdjtools.model.score import _pgen_nt_many
 
-#: The native batch runs single-threaded below this many sequences, so their result stays
-#: bitwise-identical to a serial run (``kBatchThreadMin`` in ``src/pgen.cpp``'s ``run_batch``).
-#: A scaling test below the floor measures nothing, which is the mistake this constant prevents.
-_NATIVE_THREAD_MIN = 64
-
-#: Above the floor, and large enough that the work dominates thread startup, while keeping the
-#: whole module inside a few seconds at ~37 ms per marginalized TRB nt Pgen.
+#: Enough marginalized TRB work to dominate thread startup.
 _N = 96
 
 
@@ -47,7 +41,6 @@ def timings():
     from vdjtools.cores import available_cores
     if available_cores() < 4:
         pytest.skip("four-core scaling requires a four-core allocation")
-    assert _N > _NATIVE_THREAD_MIN, "below the native floor the batch stays serial by design"
     m = load_bundled("TRB", "olga")
     native.pack(m)                       # populate the pack cache before either leg is timed
     seqs = [s for s in generate(m, _N, seed=0)["junction_nt"].to_list() if s]
@@ -86,10 +79,24 @@ def test_quadrupling_the_workers_roughly_quarters_the_wall_time(timings):
         "longer does, threads buy nothing here and the batch is a serial loop with extra steps.")
 
 
-def test_the_small_input_shortcut_stays_serial(timings):
-    """Below the floor the threads cost more than they save, so they must not be started."""
+def test_small_inputs_preserve_exact_answers(timings):
+    """Per-record probabilities are bitwise identical even in a small parallel batch."""
     m, seqs, *_ = timings
     short = seqs[:4]
     none = [None] * len(short)
     from vdjtools.cores import available_cores
     assert _pgen_nt_many(m, short, none, none, min(8, available_cores())) == _pgen_nt_many(m, short, none, none, 1)
+
+
+def test_small_expensive_batch_uses_workers(timings):
+    m, seqs, *_ = timings
+    short = seqs[:16]
+    none = [None] * len(short)
+    start = time.perf_counter()
+    expected = _pgen_nt_many(m, short, none, none, 1)
+    serial = time.perf_counter() - start
+    start = time.perf_counter()
+    actual = _pgen_nt_many(m, short, none, none, 4)
+    parallel = time.perf_counter() - start
+    assert actual == expected
+    assert serial / parallel > 1.5, f'small expensive batch stayed serial: {serial / parallel:.2f}x'
