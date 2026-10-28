@@ -97,6 +97,15 @@ def test_pairwise_distances_single_sample():
     assert dm.height == 1 and dm.select("only").to_numpy()[0, 0] == 0.0
 
 
+@pytest.mark.parametrize("size", [3, 4])
+@pytest.mark.parametrize("metric", ["F", "F2", "D"])
+def test_identical_samples_have_zero_distance_and_cluster(size, metric):
+    sample = _sample(["CASSF"], [10])
+    dist = O.pairwise_distances({str(i): sample for i in range(size)}, metric=metric)
+    assert np.array_equal(dist.drop("sample").to_numpy(), np.zeros((size, size)))
+    assert O.cluster_samples(dist, method="hclust").height == size
+
+
 def test_cluster_samples_hclust_labels():
     dm = O.pairwise_distances(_toy_samples(), metric="F")
     out = O.cluster_samples(dm, method="hclust", n_components=2)

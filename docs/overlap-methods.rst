@@ -35,10 +35,12 @@ where the square root is elementwise. Entry :math:`C_{ij}` counts shared keys,
    F2_{ij}=H_{ij},\qquad
    J_{ij}=\frac{C_{ij}}{n_i+n_j-C_{ij}}.
 
-A zero denominator gives similarity zero. The existing distance transforms remain
-:math:`-\log_{10}(s+10^{-9})` for D/F/F2 and :math:`1-s` for Jaccard, where
-:math:`s` denotes the corresponding similarity. The diagonal is set to zero and
-both output forms preserve sample order.
+A zero denominator gives similarity zero. The distance transforms are
+:math:`\max(0,-\log_{10}(s+10^{-9}))` for D/F/F2 and :math:`1-s` for Jaccard,
+where :math:`s` denotes the corresponding similarity. The zero floor prevents the
+logarithm's offset from producing negative distances at similarity one, which
+hierarchical clustering rejects. The diagonal is set to zero and both output
+forms preserve sample order.
 
 The code accumulates read counts before normalization. Let :math:`Q_{ik}` be the
 nonnegative integer read count of fully specified key :math:`k`, and let
