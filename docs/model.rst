@@ -587,6 +587,9 @@ For large new sequence draws, select the existing native sampler explicitly::
 
 ``--threads 0`` selects the allocated CPU budget; a positive count selects a smaller
 budget. Native draws are invariant to thread count. The default reference sampler
-preserves historical seeded draws and runs serially. Native and reference engines
+preserves historical single-D seeded draws and runs serially. Both samplers reject
+whole tandem proposals lacking a supported second D or a positive contribution from
+both Ds. This fixes the tandem seeded stream to match Pgen scenario weights;
+explicit OLGA single-D streams remain unchanged. Native and reference engines
 use different random streams, so the same seed does not produce identical sequences
 across engines. Neither option fits or rebuilds a model.

@@ -21,6 +21,67 @@ from vdjtools.model.generate import generate
 from vdjtools.model.reference import translate
 
 
+def _finite_tandem_model():
+    """Three equiprobable accepted junctions; tandem D1 may be fully deleted."""
+    import polars as pl
+    from vdjtools.model.io import from_germline
+    from vdjtools.model.dd import to_dd
+    from vdjtools.model import Model
+
+    germline = pl.DataFrame([dict(allele=allele, gene=allele.split('*')[0], segment=segment,
+        sequence=sequence, cdr3_anchor=-1, functional=True, full_germline='')
+        for allele,segment,sequence in [('TOYV1*01','V','TGT'),('TOYD1*01','D','AAA'),('TOYJ1*01','J','TTT')]])
+    base = from_germline(germline, locus='TOY', ins_max=0,
+        palindrome_max={'v_3':0,'j_5':0,'d_5':0,'d_3':0})
+    model = to_dd(base, p_nd2=.5)
+    tables = dict(model.tables)
+    for name in ('v_3_del','j_5_del'):
+        tables[name] = tables[name].with_columns(p=(pl.col('ndel') == 0).cast(pl.Float64))
+    tables['d_del'] = pl.DataFrame({'d_allele':['TOYD1*01']*2,'ndel5':[0,0],'ndel3':[0,3],'p':[.5,.5]})
+    tables['d2_del'] = pl.DataFrame({'d2_allele':['TOYD1*01'],'ndel5':[0],'ndel3':[0],'p':[1.]})
+    return Model(manifest=model.manifest,tables=tables,genomic=model.genomic).validate()
+
+
+@pytest.mark.parametrize('engine', ['reference','native'])
+@pytest.mark.parametrize('invalid', ['missing_partner','empty_d1','empty_d2'])
+def test_invalid_tandem_proposals_exhaust_budget_without_empty_outputs(engine, invalid):
+    import polars as pl
+    from vdjtools.model import Model
+    model = _finite_tandem_model()
+    tables = dict(model.tables)
+    tables['n_d'] = tables['n_d'].with_columns(p=(pl.col('n_d') == 2).cast(pl.Float64))
+    if invalid == 'missing_partner':
+        tables['d2_gene'] = tables['d2_gene'].with_columns(p=pl.lit(0.))
+    else:
+        name, allele = ('d_del','d_allele') if invalid == 'empty_d1' else ('d2_del','d2_allele')
+        tables[name] = pl.DataFrame({allele:['TOYD1*01'],'ndel5':[0],'ndel3':[3],'p':[1.]})
+    model = Model(manifest=model.manifest,tables=tables,genomic=model.genomic).validate()
+    with pytest.raises(RuntimeError, match='attempt budget'):
+        generate(model,1,seed=17,productive_only=False,engine=engine,threads=1)
+
+
+@pytest.mark.parametrize('engine', ['reference','native'])
+def test_tandem_whole_proposal_rejection_matches_finite_pgen_law(engine):
+    from vdjtools.model.native import pgen_nt
+    model = _finite_tandem_model()
+    sequences = ['TGTTTT','TGTAAATTT','TGTAAAAAATTT']
+    assert [pgen_nt(model, sequence) for sequence in sequences] == pytest.approx([.25]*3)
+    result = generate(model,600,seed=19,productive_only=False,engine=engine,threads=1)
+    counts = dict(result.group_by('junction_nt').len().iter_rows())
+    assert set(counts) == set(sequences)
+    assert [counts[sequence]/result.height for sequence in sequences] == pytest.approx([1/3]*3, abs=.07)
+
+
+@pytest.mark.parametrize('locus,digest', [
+    ('TRG','be59dd28359fe56da614d7582e2619831056a9ac213a33df83fc05bd54266805'),
+    ('TRB','7474b1e363f7ac86a08dc7c72cca013075ea1e60a87df8d763a39ae2653d7a0d')])
+def test_explicit_olga_reference_stream_matches_before_tandem_fix(locus, digest):
+    import hashlib
+    import json
+    result = generate(load_bundled(locus,'olga'),8,seed=11,productive_only=True)
+    assert hashlib.sha256(json.dumps(result.to_dicts(),sort_keys=True).encode()).hexdigest() == digest
+
+
 @pytest.fixture(scope="module")
 def trb():
     return load_bundled("TRB", "olga")

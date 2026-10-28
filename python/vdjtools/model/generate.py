@@ -167,21 +167,13 @@ def _insert(rng, length: int, R: np.ndarray, bias: np.ndarray, *, from_right: bo
     return "".join(_NT[i] for i in out)
 
 
-def _d_seg(prep: _GenPrep, d: str, rng, deld: dict, deld_pairs: dict, *, min1: bool) -> str:
-    """Sample D's 5'/3' deletions and return its CDR3 contribution.
-
-    If ``min1``, resample until the D contributes ≥1 nt (a tandem D must be non-empty to match the
-    Pgen partition); gives up after a few tries if the deletion distribution rarely leaves any.
-    """
+def _d_seg(prep: _GenPrep, d: str, rng, deld: dict, deld_pairs: dict) -> str:
+    """Draw one deletion proposal; tandem validity belongs to the whole proposal."""
     cutd = prep.cut["d"][d]
-    for _ in range(64):
-        n5, n3 = deld_pairs[d][_pick(rng, deld[d])]
-        start = n5 + prep.maxpal["d_5"]
-        end = len(cutd) - (n3 + prep.maxpal["d_3"])
-        contrib = cutd[start:end] if start < end else ""
-        if contrib or not min1:
-            return contrib
-    return ""
+    n5, n3 = deld_pairs[d][_pick(rng, deld[d])]
+    start = n5 + prep.maxpal["d_5"]
+    end = len(cutd) - (n3 + prep.maxpal["d_3"])
+    return cutd[start:end] if start < end else ""
 
 
 def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
@@ -209,16 +201,20 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
 
     n_d = int(_pick(rng, prep.p_nd)) if prep.p_nd is not None else 1
     d2_dist = prep.d2_given_d1.get(d) if (n_d == 2 and prep.d2_given_d1) else None
-    if d2_dist is not None and len(d2_dist[0]):  # tandem D, and D1 has >=1 possible D2 partner
+    if n_d == 2:
+        if d2_dist is None or not len(d2_dist[0]):
+            return "", v, d, j, d2
         d2 = _pick(rng, d2_dist)  # P(D2 | D1)
-        d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs, min1=True)
-        d2c = _d_seg(prep, d2, rng, prep.deld2, prep.deld2_pairs, min1=True)
+        d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs)
+        d2c = _d_seg(prep, d2, rng, prep.deld2, prep.deld2_pairs)
+        if not d1c or not d2c:
+            return "", v, d, j, d2
         ins_vd = _insert(rng, int(_pick(rng, prep.ins["vd"])), prep.R["vd"], prep.bias["vd"], from_right=False)
         ins_dd = _insert(rng, int(_pick(rng, prep.ins["dd"])), prep.R["dd"], prep.bias["dd"], from_right=False)
         ins_dj = _insert(rng, int(_pick(rng, prep.ins["dj"])), prep.R["dj"], prep.bias["dj"], from_right=True)
         cdr3 = v_contrib + ins_vd + d1c + ins_dd + d2c + ins_dj + j_contrib
     else:  # single D (n_D=1; n_D=0 folds in as a fully-trimmed D)
-        d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs, min1=False)
+        d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs)
         ins_vd = _insert(rng, int(_pick(rng, prep.ins["vd"])), prep.R["vd"], prep.bias["vd"], from_right=False)
         ins_dj = _insert(rng, int(_pick(rng, prep.ins["dj"])), prep.R["dj"], prep.bias["dj"], from_right=True)
         cdr3 = v_contrib + ins_vd + d1c + ins_dj + j_contrib
@@ -287,6 +283,9 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
             nt length mean 45.931 vs 45.936) but not sequence by sequence, so a ``seed`` does not
             carry across them. Anything that has to reproduce a previously drawn artifact must stay
             on ``"reference"``.
+            Tandem-D proposals with no supported partner or an empty D contribution are rejected
+            as a whole, matching Pgen scenario weights. This corrects older tandem seeded draws;
+            explicit OLGA single-D reference streams are unchanged.
         threads: ``engine="native"`` only. **Kernel threads**, not worker processes; ``0`` = auto.
             Each draw is seeded from ``(seed, row)``, so the output does not depend on this.
 
@@ -315,8 +314,10 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
     while got < n:
         guard += 1
         if guard > max_guard:
-            raise RuntimeError("generation exceeded attempt budget (productive draws too rare?)")
+            raise RuntimeError("generation exceeded attempt budget (valid/productive draws too rare?)")
         cdr3, v, d, j, d2 = _draw(prep, rng)
+        if not cdr3:
+            continue
         aa = translate(cdr3)
         productive = len(cdr3) % 3 == 0 and "*" not in aa and len(cdr3) > 0
         if productive_only and not productive:

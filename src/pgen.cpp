@@ -2192,7 +2192,7 @@ std::vector<InferNt> infer_nt_batch(const PackedModel& m, const std::vector<std:
 
 namespace {
 
-constexpr int kDrawAttempts = 10000;  // per slot, under `productive_only`
+constexpr int kDrawAttempts = 10000;  // per slot, including unsupported tandem proposals
 
 // splitmix64: seeds a slot's generator from (seed, slot) so a draw is a pure function of both.
 inline uint64_t splitmix64(uint64_t& x) {
@@ -2366,21 +2366,17 @@ void append_seg(const std::vector<int8_t>& cut, int from, int to, std::string& o
     for (int p = from; p < to; ++p) out.push_back("ACGT"[cut[p]]);
 }
 
-// D's contribution under a jointly drawn 5'/3' trim. `min1` re-draws until it is non-empty, which
-// is what a tandem D needs to stay in the Pgen partition; it gives up rather than looping forever.
-int draw_d_seg(Rng& r, const PackedModel& m, const Cat& del, int d, bool min1, std::string& out) {
+// Draw deletions once: a zero-length tandem D rejects the entire proposal, never just this event.
+int draw_d_seg(Rng& r, const PackedModel& m, const Cat& del, int d, std::string& out) {
     const auto& cut = m.cut_d[d];
     const int L = static_cast<int>(cut.size());
-    for (int attempt = 0; attempt < 64; ++attempt) {
-        if (del.empty()) return 0;
-        const int flat = del.pick(r);
-        const int i5 = flat / m.nbins_d3, i3 = flat % m.nbins_d3;
-        const int from = i5, to = L - i3;
-        if (to > from) {
-            append_seg(cut, from, to, out);
-            return to - from;
-        }
-        if (!min1) return 0;
+    if (del.empty()) return 0;
+    const int flat = del.pick(r);
+    const int i5 = flat / m.nbins_d3, i3 = flat % m.nbins_d3;
+    const int from = i5, to = L - i3;
+    if (to > from) {
+        append_seg(cut, from, to, out);
+        return to - from;
     }
     return 0;
 }
@@ -2410,14 +2406,15 @@ Drawn draw_one(Rng& r, const PackedModel& m, const GenPrep& g, std::string& nt) 
     }
 
     const int d = g.d_given_j[out.j].pick(r);
-    const bool tandem = m.dd && !g.n_d.empty() && g.n_d.pick(r) == 1 &&
-                        d >= 0 && !g.d2_given_d1[d].empty();
+    const bool tandem = m.dd && !g.n_d.empty() && g.n_d.pick(r) == 1;
     std::string mid;
     if (tandem) {
+        if (g.d2_given_d1[d].empty()) { nt.clear(); return out; }
         const int d2 = g.d2_given_d1[d].pick(r);
         std::string d1c, d2c;
-        const int l1 = draw_d_seg(r, m, g.del_d[d], d, true, d1c);
-        const int l2 = draw_d_seg(r, m, g.del_d2[d2], d2, true, d2c);
+        const int l1 = draw_d_seg(r, m, g.del_d[d], d, d1c);
+        const int l2 = draw_d_seg(r, m, g.del_d2[d2], d2, d2c);
+        if (!l1 || !l2) { nt.clear(); return out; }
         draw_insert(r, g.ins_vd.pick(r), g.Rcum_vd, g.bcum_vd, false, mid);
         mid += d1c;
         draw_insert(r, g.ins_dd.empty() ? 0 : g.ins_dd.pick(r), g.Rcum_dd, g.bcum_dd, false, mid);
@@ -2427,7 +2424,7 @@ Drawn draw_one(Rng& r, const PackedModel& m, const GenPrep& g, std::string& nt) 
         out.d2 = l2 ? d2 : -1;
     } else {
         std::string d1c;
-        const int l1 = draw_d_seg(r, m, g.del_d[d], d, false, d1c);
+        const int l1 = draw_d_seg(r, m, g.del_d[d], d, d1c);
         draw_insert(r, g.ins_vd.pick(r), g.Rcum_vd, g.bcum_vd, false, mid);
         mid += d1c;
         draw_insert(r, g.ins_dj.pick(r), g.Rcum_dj, g.bcum_dj, true, mid);
@@ -2467,6 +2464,7 @@ GenBatch generate_batch(const PackedModel& m, int n, uint64_t seed, bool product
         One o;
         for (int attempt = 0; attempt < kDrawAttempts; ++attempt) {
             o.genes = draw_one(r, m, g, o.nt);
+            if (o.nt.empty()) continue;
             o.aa = translate_nt(o.nt);
             o.productive = is_productive(o.nt, o.aa);
             if (!productive_only || o.productive) return o;
@@ -2481,9 +2479,9 @@ GenBatch generate_batch(const PackedModel& m, int n, uint64_t seed, bool product
     for (auto* c : {&out.v, &out.d, &out.d2, &out.j}) c->reserve(per.size());
     out.productive.reserve(per.size());
     for (const One& o : per) {
-        if (productive_only && o.nt.empty())
+        if (o.nt.empty())
             throw std::runtime_error("generate_batch: a slot exhausted its attempt budget "
-                                     "(are productive draws this rare?)");
+                                     "(are valid/productive draws this rare?)");
         out.nt.push_back(o.nt);
         out.aa.push_back(o.aa);
         out.v.push_back(o.genes.v);
