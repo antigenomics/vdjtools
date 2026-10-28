@@ -272,6 +272,18 @@ inline bool ok_codon(uint64_t allowed_c, int codon_idx) {
     return (allowed_c >> codon_idx) & 1ULL;
 }
 
+// Necessary per-base constraints prune impossible partial codons before the
+// complete-codon check. Remaining transitions retain their original order.
+unsigned codon_nt_mask(uint64_t codons, int phase) {
+    uint64_t pattern = phase == 0 ? 0xffffULL : phase == 1 ? 0x000f000f000f000fULL
+                                                               : 0x1111111111111111ULL;
+    int step = phase == 0 ? 16 : phase == 1 ? 4 : 1;
+    unsigned mask = 0;
+    for (int nt = 0; nt < 4; ++nt)
+        if (codons & (pattern << (nt * step))) mask |= 1u << nt;
+    return mask;
+}
+
 uint64_t mask_for_aa(char x) {
     uint64_t m = 0;
     for (int t = 0; t < 64; ++t)
@@ -330,6 +342,11 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
                 if (!ok_codon(allowed[c], gv[3 * c] * 16 + gv[3 * c + 1] * 4 + gv[3 * c + 2])) { ok = false; break; }
             }
             if (!ok) continue;
+            // The incomplete germline codon must admit some completion too.
+            int phase = len_v % 3;
+            if (phase == 1 && !(allowed[len_v / 3] & (0xffffULL << (gv[len_v - 1] * 16)))) continue;
+            if (phase == 2 && !(allowed[len_v / 3] &
+                    (0xfULL << (gv[len_v - 2] * 16 + gv[len_v - 1] * 4)))) continue;
             int a = gv[len_v - 1], b = (len_v >= 2) ? gv[len_v - 2] : -1;
             seed[len_v * 25 + sidx(a, b)] += pv * pdv;
             has_seed[len_v] = 1;
@@ -345,13 +362,15 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
             int mm = q + ell - 1;
             bool ce = (mm % 3 == 2);
             uint64_t am = allowed[mm / 3];
+            unsigned candidates = codon_nt_mask(am, mm % 3);
             std::fill(ncur.begin(), ncur.end(), 0.0);
             bool any = false;
             for (int s = 0; s < 25; ++s) {
                 double w = cur[s];
                 if (w == 0.0) continue;
                 int p1 = s / 5 - 1, p2 = s % 5 - 1;
-                for (int nt = 0; nt < 4; ++nt) {
+                for (unsigned todo = candidates; todo; todo &= todo - 1) {
+                    int nt = std::countr_zero(todo);
                     double mult = (ell == 1) ? bias[nt] : R[nt * 4 + p1];
                     if (mult == 0.0) continue;
                     if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
@@ -403,6 +422,10 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
                 }
             }
             if (!ok) continue;
+            int phase = right % 3;
+            if (phase == 1 && !(allowed[right / 3] &
+                    (0x0001000100010001ULL << (gj[idxj] * 4 + gj[idxj + 1])))) continue;
+            if (phase == 2 && !(allowed[right / 3] & (0x1111111111111111ULL << gj[idxj]))) continue;
             int cc = gj[idxj], dd = (len_j >= 2) ? gj[idxj + 1] : -1;
             seed[right * 25 + sidx(cc, dd)] += pdg * pj * pdj;
             has_seed[right] = 1;
@@ -418,13 +441,15 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
             int mm = right - ell;
             bool ce = (mm % 3 == 0);  // codon [mm,mm+1,mm+2] completes now
             uint64_t am = allowed[mm / 3];
+            unsigned candidates = codon_nt_mask(am, mm % 3);
             std::fill(ncur.begin(), ncur.end(), 0.0);
             bool any = false;
             for (int s = 0; s < 25; ++s) {
                 double w = cur[s];
                 if (w == 0.0) continue;
                 int c = s / 5 - 1, d = s % 5 - 1;  // nt[mm+1], nt[mm+2]
-                for (int nt = 0; nt < 4; ++nt) {
+                for (unsigned todo = candidates; todo; todo &= todo - 1) {
+                    int nt = std::countr_zero(todo);
                     double mult = (ell == 1) ? bias[nt] : R[nt * 4 + c];
                     if (mult == 0.0) continue;
                     if (ce && !ok_codon(am, nt * 16 + c * 4 + d)) continue;
@@ -509,6 +534,7 @@ inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt
                        const uint64_t* allowed) {
     bool ce = (mm % 3 == 2);
     uint64_t am = allowed[mm / 3];
+    if (!(codon_nt_mask(am, mm % 3) & (1u << nt))) return false;
     std::fill(ndp.begin(), ndp.end(), 0.0);
     bool any = false;
     for (int s = 0; s < 25; ++s) {
