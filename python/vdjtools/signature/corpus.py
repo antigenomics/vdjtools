@@ -316,26 +316,26 @@ class Corpus:
         """
         path = Path(path).with_suffix(".npz")
         meta = json.loads(path.with_suffix(".json").read_text())
-        z = np.load(path, allow_pickle=False)
         sig, name, vocab = meta["sig"], meta["name"], meta["vocab"]
-        loci = sorted({k.split("/")[0] for k in z.files}, key=_locus_order)
-        fits: dict[str, LocusFit] = {}
-        for loc in loci:
-            cols = [str(c) for c in z[f"{loc}/columns"]]
-            fits[loc] = LocusFit(
-                columns=cols,
-                supports=[L.support_of(c, feature_definition=meta.get("feature_definition")) for c in cols],
-                loc=z[f"{loc}/loc"], scale=z[f"{loc}/scale"],
-                rotation=z[f"{loc}/rotation"].astype(np.float64),
-                eigenvalues=z[f"{loc}/eigenvalues"],
-                pc_loc=z[f"{loc}/pc_loc"], pc_scale=z[f"{loc}/pc_scale"],
-                bounds={p: (z[f"{loc}/bound_lo_{p}"], z[f"{loc}/bound_hi_{p}"])
-                        for p in meta["winsor_ps"] if f"{loc}/bound_lo_{p}" in z.files},
-                pc_bounds={p: (z[f"{loc}/pcbound_lo_{p}"], z[f"{loc}/pcbound_hi_{p}"])
-                           for p in meta["winsor_ps"] if f"{loc}/pcbound_lo_{p}" in z.files},
-                n_obs=z[f"{loc}/n_obs"], n_rows=int(meta["n_rows"][loc]),
-                total_variance=float(z[f"{loc}/total_variance"]) if f"{loc}/total_variance" in z.files else None,
-                pca_offset=z[f"{loc}/pca_offset"] if f"{loc}/pca_offset" in z.files else None)
+        with np.load(path, allow_pickle=False) as z:
+            loci = sorted({k.split("/")[0] for k in z.files}, key=_locus_order)
+            fits: dict[str, LocusFit] = {}
+            for loc in loci:
+                cols = [str(c) for c in z[f"{loc}/columns"]]
+                fits[loc] = LocusFit(
+                    columns=cols,
+                    supports=[L.support_of(c, feature_definition=meta.get("feature_definition")) for c in cols],
+                    loc=z[f"{loc}/loc"], scale=z[f"{loc}/scale"],
+                    rotation=z[f"{loc}/rotation"].astype(np.float64),
+                    eigenvalues=z[f"{loc}/eigenvalues"],
+                    pc_loc=z[f"{loc}/pc_loc"], pc_scale=z[f"{loc}/pc_scale"],
+                    bounds={p: (z[f"{loc}/bound_lo_{p}"], z[f"{loc}/bound_hi_{p}"])
+                            for p in meta["winsor_ps"] if f"{loc}/bound_lo_{p}" in z.files},
+                    pc_bounds={p: (z[f"{loc}/pcbound_lo_{p}"], z[f"{loc}/pcbound_hi_{p}"])
+                               for p in meta["winsor_ps"] if f"{loc}/pcbound_lo_{p}" in z.files},
+                    n_obs=z[f"{loc}/n_obs"], n_rows=int(meta["n_rows"][loc]),
+                    total_variance=float(z[f"{loc}/total_variance"]) if f"{loc}/total_variance" in z.files else None,
+                    pca_offset=z[f"{loc}/pca_offset"] if f"{loc}/pca_offset" in z.files else None)
         out = cls(sig=sig, name=name, vocab=vocab, fits=fits, meta=meta)
         if verify:
             out.verify()
