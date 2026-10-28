@@ -399,6 +399,26 @@ def forbidden_dj_pairs(d_alleles, j_alleles, locus: str) -> set[tuple[str, str]]
     return out
 
 
+def forbidden_tandem_pairs(d_alleles, locus: str) -> set[tuple[str, str]]:
+    """Known impossible D1/D2 pairs, without guessing IGH/TRD genomic ordering.
+
+    One physical D gene cannot be used twice, including through different alleles.
+    TRB additionally has the documented order TRBD1 before TRBD2. Custom loci
+    retain their declared support; their physical gene layout is unknown here.
+    """
+    locus = locus.upper()
+    if locus not in ('IGH', 'TRB', 'TRD'):
+        return set()
+    out = set()
+    for d1 in d_alleles:
+        for d2 in d_alleles:
+            same = d1.split('*')[0] == d2.split('*')[0]
+            n1, n2 = _cluster_number(d1, 'D'), _cluster_number(d2, 'D')
+            if same or (locus == 'TRB' and n1 is not None and n2 is not None and n2 <= n1):
+                out.add((d1,d2))
+    return out
+
+
 def read_fasta(path) -> list[tuple[str, str]]:
     """Read a FASTA into ``(header, sequence)`` pairs, transparently handling ``.gz``.
 

@@ -168,6 +168,8 @@ def pack(model: Model):
         pm.p_nd2 = float(prep.p_nd.get(2, 0.0))
         pm.dd = bool(prep.p_d2_given_d1)
         if pm.dd:
+            pm.tandem_forbidden_dj = [int((d,j) in prep.forbidden_dj) for j in j_alleles for d in d_alleles]
+            pm.tandem_forbidden_dd = [int((d1,d2) in prep.forbidden_dd) for d1 in d_alleles for d2 in d_alleles]
             pm.pd2_given_d1 = [float(prep.p_d2_given_d1.get((d1, d2), 0.0)) for d1 in d_alleles for d2 in d_alleles]
             pm.del_d2 = _del_dense_d_fixed(prep.p_del_d2, di, prep.maxpal["d_5"], prep.maxpal["d_3"], pm.nbins_d5, pm.nbins_d3)
             pm.ins_dd = prep.p_ins["dd"].tolist()

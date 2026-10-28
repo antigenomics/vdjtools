@@ -43,6 +43,8 @@ struct PackedModel {
     bool dd = false;
     double p_nd1 = 1.0, p_nd2 = 0.0;        // P(n_D=1) (0-D folds in via a fully-trimmed D), P(n_D=2)
     std::vector<double> pd2_given_d1;       // [nD*nD] row-major, P(D2|D1)
+    std::vector<uint8_t> tandem_forbidden_dj;  // [nJ*nD], DD-only structural exclusions
+    std::vector<uint8_t> tandem_forbidden_dd;  // [nD*nD], physical-gene reuse / known TRB order
     std::vector<double> del_d2;             // [nD*nbins_d5*nbins_d3], second-D joint 5'/3' deletion
     std::vector<double> ins_dd, R_dd, bias_dd;  // DD insertion junction (same layout as vd/dj)
 
@@ -242,6 +244,8 @@ Counts make_counts(const PackedModel& m);
 // float summation order, which the fixed reduction keeps deterministic per ``nthreads``).
 // ``dd_allowed`` optionally gates the tandem (n_D=2) E-step per read (1 = may be tandem, 0 = single-D
 // only); empty = every read may be tandem. Used to anchor D-D learning to arda's tandem calls.
+// Optional d2masks restrict D2 independently of dmasks (D1). Absent/empty masks mean
+// unrestricted; Python disables dd_allowed for an explicitly empty fourth mask.
 double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int8_t>>& seqs,
                    const std::vector<std::vector<int>>& vmasks,
@@ -249,6 +253,7 @@ double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int>>& dmasks,
                    Counts& counts,
                    int nthreads = 0,
-                   const std::vector<int>& dd_allowed = {});
+                   const std::vector<int>& dd_allowed = {},
+                   const std::vector<std::vector<int>>& d2masks = {});
 
 }  // namespace vdjtools

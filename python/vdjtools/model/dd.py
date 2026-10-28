@@ -69,12 +69,16 @@ def to_dd(model: Model, *, p_nd2: float = 0.05) -> Model:
     from .analyze import gene_marginal
 
     pd = gene_marginal(model, "d")
+    from .reference import forbidden_tandem_pairs
+    forbidden = forbidden_tandem_pairs(d_alleles,model.locus)
     d2_rows = [
-        {"d_allele": d1, "d2_allele": d2, "p": pd.get(d2, 0.0)}
+        {"d_allele": d1, "d2_allele": d2, "p": 0. if (d1,d2) in forbidden else pd.get(d2, 0.0)}
         for d1 in d_alleles
         for d2 in d_alleles
     ]
     t["d2_gene"] = pl.DataFrame(d2_rows)
+    total = pl.col('p').sum().over('d_allele')
+    t['d2_gene'] = t['d2_gene'].with_columns(p=pl.when(total>0).then(pl.col('p')/total).otherwise(0.))
 
     # D2 deletion + DD insertion: copy the single-D / DJ profiles as the initialisation.
     t["d2_del"] = model.tables["d_del"].rename({"d_allele": "d2_allele"})

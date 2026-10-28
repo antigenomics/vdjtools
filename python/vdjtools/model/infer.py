@@ -244,8 +244,8 @@ def _insert_markov(seq: str, R: np.ndarray, bias: np.ndarray, *, from_right: boo
 def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> float:
     """Accumulate one sequence's soft counts into ``counts``; return its Pgen (for log-lik).
 
-    ``mask`` optionally restricts enumeration to a read's aligned genes — ``(v_genes, j_genes,
-    d_genes)`` name lists (e.g. from arda). This is what makes VDJ inference tractable: without it
+    ``mask`` is ``(V,J,D1)`` or ``(V,J,D1,D2)``. Three entries leave D2 unrestricted;
+    an empty fourth entry disables tandem enumeration. This makes VDJ inference tractable: without it
     every V that shares the conserved Cys prefix is a candidate and the D enumeration runs for each.
     ``allow_dd`` gates the tandem (n_D=2) enumeration for this read (arda-anchored D-D learning).
     """
@@ -257,6 +257,10 @@ def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> 
     v_mask = mask[0] if mask else prep.functional_v
     j_mask = mask[1] if mask else prep.functional_j
     d_mask = mask[2] if mask and mask[2] else (prep.functional_d if vdj else None)
+    d2_mask = mask[3] if mask and len(mask)>3 else None
+    if d2_mask is not None:
+        d2_mask = [allele for allele in d2_mask if allele in prep.cut.get('d',{})]
+    allow_dd = allow_dd and d2_mask != []
     v_cands = _v_candidates(prep, s, v_mask)
     j_cands = _j_candidates(prep, s, j_mask)
     for V, pv, v_opts in v_cands:
@@ -276,7 +280,7 @@ def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> 
                             total += _accum_vdj(prep, J, V, nv, nj, mid, base * p1, local, d_mask)
                         p2 = prep.p_nd.get(2, 0.0)
                         if p2 > 0.0 and prep.p_d2_given_d1 and allow_dd:
-                            total += _accum_dd(prep, J, V, nv, nj, mid, base * p2, local, d_mask)
+                            total += _accum_dd(prep, J, V, nv, nj, mid, base * p2, local, d_mask, d2_mask)
                     else:
                         total += _accum_vj(prep, V, J, nv, nj, mid, base, local)
 
@@ -354,7 +358,7 @@ def _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
     return seq_total
 
 
-def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
+def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None, d2_mask=None) -> float:
     """Two-D (tandem) soft-count accumulation: ``mid`` = [insVD] D1 [insDD] D2 [insDJ], each D ≥1 nt.
 
     The reference (naive) enumeration mirroring :func:`~vdjtools.model.pgen._dd_middle`; correctness
@@ -365,9 +369,10 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
     m = len(mid)
     dset = d_mask if d_mask is not None else prep.functional_d
     seq_total = 0.0
+    d2set = d2_mask if d2_mask is not None else prep.functional_d
     for D1 in dset:
         pd1 = prep.p_d_given_j.get((J, D1), 0.0)
-        if pd1 == 0.0:
+        if pd1 == 0.0 or (D1,J) in prep.forbidden_dj:
             continue
         cut1 = prep.cut["d"][D1]
         for i5 in range(len(cut1) + 1):
@@ -389,7 +394,9 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
                     left = base * pd1 * pdel1 * pins_vd[lvd] * mwvd
                     if left <= 0.0:
                         continue
-                    for D2 in dset:
+                    for D2 in d2set:
+                        if (D2,J) in prep.forbidden_dj or (D1,D2) in prep.forbidden_dd:
+                            continue
                         pd2g = prep.p_d2_given_d1.get((D1, D2), 0.0)
                         if pd2g == 0.0:
                             continue
@@ -494,9 +501,16 @@ def _uniform_init(template: Model) -> dict[str, pl.DataFrame]:
     tables = {}
     for name, event in template.manifest.events.items():
         df = template.tables[name].with_columns(p=pl.lit(1.0))
+        if name == 'd_gene':
+            df = _mask_dj(df,template.locus)
+        elif name == 'd2_gene':
+            from .reference import forbidden_tandem_pairs
+            forbidden = forbidden_tandem_pairs(template.genomic['genes_d']['d_allele'],template.locus)
+            key = pl.concat_str('d_allele','d2_allele',separator='|')
+            df = df.with_columns(p=pl.when(key.is_in([a+'|'+b for a,b in forbidden])).then(0.).otherwise(pl.col('p')))
         keys = normalization_keys(event)
         total = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
-        tables[name] = df.with_columns(p=pl.col("p") / total)
+        tables[name] = df.with_columns(p=pl.when(total>0).then(pl.col("p") / total).otherwise(0.))
     return tables
 
 
@@ -595,8 +609,10 @@ def infer(
         tol: Stop when the V-usage total-variation between iterations falls below this.
         init: ``"align"`` (seed gene usage from a best-match vote — the default and fastest),
             ``"uniform"`` (each event uniform on its support), or ``"template"`` (warm start).
-        masks: Optional per-sequence ``(v_genes, j_genes, d_genes)`` name lists (e.g. from
+        masks: Optional per-sequence ``(v_genes, j_genes, d1_genes[, d2_genes])`` name lists (e.g. from
             :func:`arda_masks`) restricting each read's scenario enumeration to its aligned genes.
+            Three-tuples or a fourth ``None`` leave D2 unrestricted. An empty fourth
+            list disables tandem enumeration, including unknown D2 calls.
             **Strongly recommended for VDJ** — without it the E-step enumerates every Cys-sharing
             V × the full D grid per read (tens of s/seq); with it, VDJ inference is tractable.
         single_d: By default a **tandem-D (D-D)** model is learned for the D-bearing loci
@@ -818,7 +834,12 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
     seqs = df[col].to_list()
     masks = None
     if use_calls and v_col in df.columns and j_col in df.columns:
-        masks = gene_masks(template, df[v_col].to_list(), df[j_col].to_list())
+        if 'd2_call' in df.columns:
+            from .data import _build_masks
+            masks = _build_masks(df.with_columns(pl.col(v_col).alias('v_call'),
+                pl.col(j_col).alias('j_call')),template)
+        else:
+            masks = gene_masks(template, df[v_col].to_list(), df[j_col].to_list())
     fn = infer_native if native else infer
     return fn(template, seqs, masks=masks, **kw)
 
@@ -833,7 +854,11 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
 
     calls = annotate(contigs, organism=organism)
     junctions = calls["junction"].to_list()
-    masks = gene_masks(model, calls["v_call"].to_list(), calls["j_call"].to_list())
+    if 'd2_call' in calls.columns:
+        from .data import _build_masks
+        masks = _build_masks(calls,model)
+    else:
+        masks = gene_masks(model, calls["v_call"].to_list(), calls["j_call"].to_list())
     return junctions, masks
 
 
@@ -1336,8 +1361,11 @@ def infer_native(
         vmasks = [[vi[a] for a in mk[0] if a in vi] for mk in masks]
         jmasks = [[ji[a] for a in mk[1] if a in ji] for mk in masks]
         dmasks = [[di[a] for a in (mk[2] or []) if a in di] for mk in masks]
+        d2masks = [[di[a] for a in (mk[3] or []) if a in di] if len(mk)>3 else [] for mk in masks]
+        ddflags = [int((ddflags[i] if ddflags else True) and
+                   (len(mk)<4 or mk[3] is None or bool(d2masks[i]))) for i,mk in enumerate(masks)]
     else:
-        vmasks = jmasks = dmasks = []
+        vmasks = jmasks = dmasks = d2masks = []
 
     report = InferenceReport()
     meta = dict(started=started, max_iter=max_iter, tol=tol, init=init, native=True,
@@ -1345,7 +1373,7 @@ def infer_native(
     for it in range(max_iter):
         pm, _, _ = pack(model)
         counts = make_counts(pm)
-        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags)
+        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags, d2masks)
         # Report the per-sequence MEAN, matching infer() (line ~431) -- estep_batch returns the
         # summed log-likelihood, and appending it raw made infer_native's loglik differ from
         # infer's by a factor of n (the two are documented as "same result"). Denominator is the

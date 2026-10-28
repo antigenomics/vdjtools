@@ -131,6 +131,7 @@ def check_model(model: Model, *, germline: str | pl.DataFrame = "auto", tol: flo
     rows: list[dict] = []
     rows += _check_event_set(model)
     rows += _check_tables(model, tol)
+    rows += _check_tandem_support(model)
     rows += _check_genomic_cross_refs(model)
     rows += _check_germline(model, germline)
 
@@ -142,6 +143,54 @@ def check_model(model: Model, *, germline: str | pl.DataFrame = "auto", tol: flo
             detail = "; ".join(bad["detail"].to_list()[:5])
             raise ValueError(f"model has {bad.height} {raise_on}-level issue(s): {detail}")
     return out
+
+
+def _check_tandem_support(model: Model) -> list[dict]:
+    """Expose forbidden positive tandem paths, excluding unused parents."""
+    from .reference import forbidden_dj_pairs, forbidden_tandem_pairs
+    required = {'n_d':{'n_d','p'},'v_choice':{'v_allele','p'},'j_choice':{'j_allele','p'},
+                'd_gene':{'j_allele','d_allele','p'},'d2_gene':{'d_allele','d2_allele','p'}}
+    if model.chain_type != 'VDJ' or any(name not in model.tables or
+            not columns <= set(model.tables[name].columns) for name,columns in required.items()):
+        return []
+    tables = model.tables
+    p_two = tables['n_d'].filter(pl.col('n_d') == 2)['p'].sum()
+    if not p_two or p_two <= 0:
+        return []
+    functional = {seg:set(frame.filter(pl.col('functional'))[seg+'_allele'])
+                  for seg in ('v','j','d') if (frame := model.genomic.get('genes_'+seg)) is not None}
+    if set(functional) != {'v','j','d'}:
+        return []
+    v_mass = tables['v_choice'].filter(pl.col('v_allele').is_in(functional['v']))['p'].sum()
+    if not v_mass or v_mass <= 0:
+        return []
+    dj = forbidden_dj_pairs(functional['d'],functional['j'],model.locus)
+    dd = forbidden_tandem_pairs(functional['d'],model.locus)
+    if not dj and not dd:
+        return []
+    parents = tables['d_gene'].filter((pl.col('p')>0)&pl.col('d_allele').is_in(functional['d']))
+    parents = parents.join(tables['j_choice'].filter((pl.col('p')>0)&
+        pl.col('j_allele').is_in(functional['j'])).rename({'p':'pj'}),on='j_allele')
+    paths = parents.join(tables['d2_gene'].filter((pl.col('p')>0)&
+        pl.col('d2_allele').is_in(functional['d'])).rename({'p':'pd2'}),on='d_allele')
+    bad = paths.filter(
+        pl.concat_str('d_allele','d2_allele',separator='|').is_in([a+'|'+b for a,b in dd]) |
+        pl.concat_str('d_allele','j_allele',separator='|').is_in([a+'|'+b for a,b in dj]) |
+        pl.concat_str('d2_allele','j_allele',separator='|').is_in([a+'|'+b for a,b in dj]))
+    bad = bad.with_columns(pl.concat_str('d_allele','d2_allele',separator='|').is_in(
+        [a+'|'+b for a,b in dd]).alias('_bad_pair')).sort('_bad_pair',descending=True)
+    # J-dependent raw products can be positive in this factorized model even when
+    # their structural scenario weight is zero; do not reject legitimate J2 tandems
+    # sharing D1 with single-D J1 paths. Impossible D1/D2 pairs are parameter defects.
+    rows = [_issue('error' if (row['d_allele'],row['d2_allele']) in dd else 'warn',
+        'tandem_support','positive factor product on a structurally excluded tandem path',
+        event='d2_gene',allele=row['d_allele']+'|'+row['d2_allele']+'|'+row['j_allele'],
+        value=float(v_mass*p_two*row['p']*row['pj']*row['pd2'])) for row in bad.head(20).iter_rows(named=True)]
+    if bad.height>20:
+        rows.append(_issue('error' if bad['_bad_pair'].any() else 'warn','tandem_support',
+            f'{bad.height-20} further structurally excluded tandem factor product(s)',
+            event='d2_gene',value=float(bad.height-20)))
+    return rows
 
 
 def _check_event_set(model: Model) -> list[dict]:

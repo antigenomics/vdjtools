@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .model import Model
-from .reference import _CODON_TABLE
+from .reference import _CODON_TABLE, forbidden_dj_pairs, forbidden_tandem_pairs
 
 _NT2NUM = {"A": 0, "C": 1, "G": 2, "T": 3}
 _NUM2NT = "ACGT"
@@ -57,6 +57,8 @@ class _Prepared:
     p_nd: dict[int, float] = field(default_factory=lambda: {1: 1.0})   # P(n_D)
     p_d2_given_d1: dict[tuple, float] = field(default_factory=dict)     # {(d1, d2): P(D2|D1)}
     p_del_d2: dict = field(default_factory=dict)                        # {(d2, n5, n3): p}
+    forbidden_dj: set = field(default_factory=set)
+    forbidden_dd: set = field(default_factory=set)
 
 
 def _dinucl_matrix(df) -> np.ndarray:
@@ -135,6 +137,8 @@ def prepare(model: Model) -> _Prepared:
         p_nd=p_nd,
         p_d2_given_d1=p_d2_given_d1,
         p_del_d2=p_del_d2,
+        forbidden_dj=forbidden_dj_pairs(functional('d'),functional('j'),model.locus) if vdj else set(),
+        forbidden_dd=forbidden_tandem_pairs(functional('d'),model.locus) if vdj else set(),
     )
 
 
@@ -295,12 +299,14 @@ def _dd_middle(prep: _Prepared, j: str, middle: str) -> float:
     total = 0.0
     for d1 in prep.functional_d:
         pd1 = prep.p_d_given_j.get((j, d1), 0.0)
-        if pd1 == 0.0:
+        if pd1 == 0.0 or (d1,j) in prep.forbidden_dj:
             continue
         pl1 = d_placements(d1, prep.p_del["d"])
         if not pl1:
             continue
         for d2 in prep.functional_d:
+            if (d2,j) in prep.forbidden_dj or (d1,d2) in prep.forbidden_dd:
+                continue
             pd2 = prep.p_d2_given_d1.get((d1, d2), 0.0)
             if pd2 == 0.0:
                 continue
@@ -525,7 +531,7 @@ def _dd_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
     out = 0.0
     for d1 in prep.functional_d:
         pd1 = prep.p_d_given_j.get((J, d1), 0.0)
-        if pd1 == 0.0:
+        if pd1 == 0.0 or (d1,J) in prep.forbidden_dj:
             continue
         cut1 = prep.cut["d"][d1]
         for i5 in range(len(cut1) + 1):
@@ -544,6 +550,8 @@ def _dd_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
                     if not _d_codons_ok(dc1, pos1, aa):
                         continue
                     for d2 in prep.functional_d:
+                        if (d2,J) in prep.forbidden_dj or (d1,d2) in prep.forbidden_dd:
+                            continue
                         pd2g = prep.p_d2_given_d1.get((d1, d2), 0.0)
                         if pd2g == 0.0:
                             continue

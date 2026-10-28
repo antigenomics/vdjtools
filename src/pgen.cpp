@@ -14,6 +14,13 @@
 namespace vdjtools {
 namespace {
 
+bool tandem_allowed(const PackedModel& m, int j, int d1, int d2) {
+    const int nD = m.nD();
+    return (m.tandem_forbidden_dd.empty() || !m.tandem_forbidden_dd[d1*nD+d2]) &&
+           (m.tandem_forbidden_dj.empty() ||
+            (!m.tandem_forbidden_dj[j*nD+d1] && !m.tandem_forbidden_dj[j*nD+d2]));
+}
+
 struct Opt {
     int len;
     double p;
@@ -147,6 +154,7 @@ double dd_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
         // B[s2]: D2 (>=1 nt) starting at s2 then [insDJ] to the end, weighted by P(D2|D1).
         B.assign(mlen + 1, 0.0);
         for (int d2 : m.func_d) {
+            if (!tandem_allowed(m,j,d1,d2)) continue;
             double pd2 = m.pd2_given_d1[d1 * nD + d2];
             if (pd2 == 0.0) continue;
             const auto& cut2 = m.cut_d[d2];
@@ -769,6 +777,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
                     }
                 }
             for (int d2 : m.func_d) {
+            if (!tandem_allowed(m,j,d1,d2)) continue;
                 double pd2 = m.pd2_given_d1[d1 * nD + d2];
                 if (pd2 == 0.0) continue;
                 const auto& cut2 = m.cut_d[d2];
@@ -1212,7 +1221,7 @@ double accum_vdj(const PackedModel& m, int j, int v, int div, int dij,
 // Python reference _accum_dd exactly). V/J and their trims are constant per (V,J) => the whole DD mass.
 // Returns base*seq_total (the n_D=2 Pgen contribution for this V,J,vop,jop); caller folds it into n_d[2].
 double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
-                const int8_t* mid, int mlen, double base, const std::vector<int>& dm, Counts& c) {
+                const int8_t* mid, int mlen, double base, const std::vector<int>& dm, const std::vector<int>& d2m, Counts& c) {
     int nD = m.nD();
     int ddlen = static_cast<int>(m.ins_dd.size());
     std::vector<double> A(mlen + 1), B(mlen + 1), C(mlen + 1), Dmsg(mlen + 1);
@@ -1241,7 +1250,8 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
             }
         // B[s2]: D2 (>=1 nt) starting at s2 then [insDJ] to the end, weighted by P(D2|D1).
         B.assign(mlen + 1, 0.0);
-        for (int d2 : dm) {
+        for (int d2 : d2m) {
+            if (!tandem_allowed(m,j,d1,d2)) continue;
             double pd2 = m.pd2_given_d1[d1 * nD + d2];
             if (pd2 == 0.0) continue;
             const auto& cut2 = m.cut_d[d2];
@@ -1312,7 +1322,8 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                 }
             }
         // Re-enumerate RIGHT: attribute d2_gene, d2_del(D2), dj_ins, dj_dinucl with weight (right)*Dmsg[s2].
-        for (int d2 : dm) {
+        for (int d2 : d2m) {
+            if (!tandem_allowed(m,j,d1,d2)) continue;
             double pd2 = m.pd2_given_d1[d1 * nD + d2];
             if (pd2 == 0.0) continue;
             const auto& cut2 = m.cut_d[d2];
@@ -1352,12 +1363,15 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
 
 double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                  const std::vector<int>& vmask, const std::vector<int>& jmask,
-                 const std::vector<int>& dmask, Counts& local, bool allow_dd = true) {
+                 const std::vector<int>& dmask, Counts& local, bool allow_dd = true,
+                 const std::vector<int>& d2mask = {}) {
     int N = cdr3.size();
     const int8_t* s = cdr3.data();
     const std::vector<int>& vm = vmask.empty() ? m.func_v : vmask;
     const std::vector<int>& jm = jmask.empty() ? m.func_j : jmask;
     const std::vector<int>& dm = (m.vdj && !dmask.empty()) ? dmask : m.func_d;
+
+    const std::vector<int>& d2m = d2mask.empty() ? m.func_d : d2mask;
 
     struct JC {
         int j;
@@ -1396,7 +1410,7 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                         local.n_d[1] += c1;
                         total += c1;
                         if (m.dd && m.p_nd2 > 0.0 && allow_dd) {  // n_D=2 tandem, weighted by P(n_D=2)
-                            double c2 = accum_dd(m, J.j, v, div, dij, mid, midlen, base * m.p_nd2, dm, local);
+                            double c2 = accum_dd(m, J.j, v, div, dij, mid, midlen, base * m.p_nd2, dm, d2m, local);
                             local.n_d[2] += c2;
                             total += c2;
                         }
@@ -1467,6 +1481,7 @@ double estep_range(const PackedModel& m,
                    const std::vector<std::vector<int>>& jmasks,
                    const std::vector<std::vector<int>>& dmasks,
                    const std::vector<int>& dd_allowed,
+                   const std::vector<std::vector<int>>& d2masks,
                    size_t lo, size_t hi, Counts& acc) {
     Counts local = make_counts(m);
     bool have_masks = !vmasks.empty();
@@ -1478,8 +1493,9 @@ double estep_range(const PackedModel& m,
         const std::vector<int>& vm = have_masks ? vmasks[i] : empty;
         const std::vector<int>& jm = have_masks ? jmasks[i] : empty;
         const std::vector<int>& dm = (have_masks && !dmasks.empty()) ? dmasks[i] : empty;
+        const std::vector<int>& d2m = d2masks.empty() ? empty : d2masks[i];
         bool allow_dd = have_dd_gate ? dd_allowed[i] != 0 : true;
-        double total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd);
+        double total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd, d2m);
         if (total > 0.0) {
             ll += std::log(total);
             add_scaled(acc, local, 1.0 / total);
@@ -1497,11 +1513,17 @@ double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int>>& dmasks,
                    Counts& counts,
                    int nthreads,
-                   const std::vector<int>& dd_allowed) {
+                   const std::vector<int>& dd_allowed,
+                   const std::vector<std::vector<int>>& d2masks) {
     size_t n = seqs.size();
+    if (!d2masks.empty() && d2masks.size() != n)
+        throw std::invalid_argument("d2masks must match the number of sequences");
+    for (const auto& mask : d2masks)
+        for (int d : mask)
+            if (d < 0 || d >= m.nD()) throw std::invalid_argument("invalid D2 mask index");
     if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
     int T = nthreads > 0 ? nthreads : 1;
-    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, 0, n, counts);
+    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, 0, n, counts);
     if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
 
     std::vector<Counts> acc(T);
@@ -1515,7 +1537,7 @@ double estep_batch(const PackedModel& m,
         size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
         if (lo >= hi) break;
         pool.emplace_back([&, t, lo, hi] {
-            try { lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, lo, hi, acc[t]); }
+            try { lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, lo, hi, acc[t]); }
             catch (...) { errors[t] = std::current_exception(); }
         });
     }
@@ -2411,6 +2433,7 @@ Drawn draw_one(Rng& r, const PackedModel& m, const GenPrep& g, std::string& nt) 
     if (tandem) {
         if (g.d2_given_d1[d].empty()) { nt.clear(); return out; }
         const int d2 = g.d2_given_d1[d].pick(r);
+        if (!tandem_allowed(m,out.j,d,d2)) { nt.clear(); return out; }
         std::string d1c, d2c;
         const int l1 = draw_d_seg(r, m, g.del_d[d], d, d1c);
         const int l2 = draw_d_seg(r, m, g.del_d2[d2], d2, d2c);

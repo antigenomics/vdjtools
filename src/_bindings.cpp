@@ -56,6 +56,8 @@ PYBIND11_MODULE(_core, m) {
         .def_readwrite("p_nd1", &PackedModel::p_nd1)
         .def_readwrite("p_nd2", &PackedModel::p_nd2)
         .def_readwrite("pd2_given_d1", &PackedModel::pd2_given_d1)
+        .def_readwrite("tandem_forbidden_dj", &PackedModel::tandem_forbidden_dj)
+        .def_readwrite("tandem_forbidden_dd", &PackedModel::tandem_forbidden_dd)
         .def_readwrite("del_d2", &PackedModel::del_d2)
         .def_readwrite("ins_dd", &PackedModel::ins_dd)
         .def_readwrite("R_dd", &PackedModel::R_dd)
@@ -269,9 +271,11 @@ PYBIND11_MODULE(_core, m) {
     m.def("estep_batch", &vdjtools::estep_batch, py::arg("model"), py::arg("seqs"),
           py::arg("vmasks"), py::arg("jmasks"), py::arg("dmasks"), py::arg("counts"),
           py::arg("threads") = 0, py::arg("dd_allowed") = std::vector<int>{},
+          py::arg("d2masks") = std::vector<std::vector<int>>{},
           py::call_guard<py::gil_scoped_release>(),
           "One EM E-step: accumulate soft counts, return summed log-Pgen. threads=0 -> serial (Python APIs resolve allocation); "
-          "dd_allowed (per-read 0/1, empty=all) gates the n_D=2 tandem E-step.");
+          "dd_allowed (per-read 0/1, empty=all) gates the n_D=2 tandem E-step. "
+          "d2masks optionally restrict D2 separately; absent/empty means unrestricted.");
 
     // --- iNEXT size-based diversity kernel (Phase 2) ---
     py::class_<vdjtools::InextCurve>(m, "InextCurve")

@@ -6,7 +6,7 @@ polars DataFrame. This is the reference sampler; the native port is Phase 1f.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import polars as pl
@@ -46,11 +46,14 @@ class _GenPrep:
     d2_given_d1: dict                                 # d1 -> (d2 alleles, cum) P(D2|D1)
     deld2: dict                                       # d2 -> (idx into pairs, cum)
     deld2_pairs: dict                                 # d2 -> pairs[i]=(n5,n3)
+    forbidden_dj: set = field(default_factory=set)
+    forbidden_dd: set = field(default_factory=set)
 
 
 def prepare_generation(model: Model) -> _GenPrep:
     """Precompute cumulative distributions for fast ancestral sampling."""
     t = model.tables
+    from .reference import forbidden_dj_pairs, forbidden_tandem_pairs
     vdj = model.chain_type == "VDJ"
 
     def cut_map(seg):
@@ -144,6 +147,8 @@ def prepare_generation(model: Model) -> _GenPrep:
         delv=delv, delj=delj, deld=deld, deld_pairs=deld_pairs,
         maxpal=model.manifest.palindrome_max, ins=ins, R=R, bias=bias,
         p_nd=p_nd, d2_given_d1=d2_given_d1, deld2=deld2, deld2_pairs=deld2_pairs,
+        forbidden_dj=forbidden_dj_pairs(ud,uj,model.locus),
+        forbidden_dd=forbidden_tandem_pairs(ud,model.locus),
     )
 
 
@@ -205,6 +210,8 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
         if d2_dist is None or not len(d2_dist[0]):
             return "", v, d, j, d2
         d2 = _pick(rng, d2_dist)  # P(D2 | D1)
+        if (d,j) in prep.forbidden_dj or (d2,j) in prep.forbidden_dj or (d,d2) in prep.forbidden_dd:
+            return "", v, d, j, d2
         d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs)
         d2c = _d_seg(prep, d2, rng, prep.deld2, prep.deld2_pairs)
         if not d1c or not d2c:
