@@ -201,6 +201,14 @@ therefore need larger downloads: the configured NPZ files range from about 1.6 t
 PCs per fitted locus. The wheel carries only **corpora.json**, naming every file with its exact byte
 count and SHA-256. Parameters are GitHub release assets, fetched on first use into
 ``$VDJTOOLS_CORPUS_DIR`` (default ``~/.cache/vdjtools/signature``) and verified against that digest.
+Each indexed pair lives in a subdirectory keyed by its published hashes, so an
+updated reference cannot overwrite a path already used by another process. Cache
+hits verify both files. Writers share a bounded OS lock; a killed writer releases
+ownership, and complete read-only caches need no writer lock. Valid legacy cache
+files are copied into the matching immutable location without a network fetch.
+These guarantees are tested on local filesystems; shared-filesystem lock behavior
+must be verified on the deployment filesystem.
+
 Fetch the named corpus you need; fetching all configured models is a multi-gigabyte download.
 List the complete catalog without downloading anything with ``vdjtools corpus --list``.
 
