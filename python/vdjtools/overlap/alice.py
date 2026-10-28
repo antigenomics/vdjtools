@@ -96,7 +96,7 @@ def _degrees(unique_aa: list[str], expanded_aa: list[str], scope: str, threads: 
 
 
 def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
-          source: str = "olga", scope: str = "1,0,0,1", selection_q: float = DEFAULT_Q,
+          source: str = "learned", scope: str = "1,0,0,1", selection_q: float = DEFAULT_Q,
           min_degree: int = 3, min_count: int = 2, threads: int = 0) -> pl.DataFrame:
     """Per-clonotype neighbourhood enrichment against a V(D)J generation model.
 
@@ -107,11 +107,8 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
         model: A :class:`~vdjtools.model.Model`. ``None`` loads the bundled model for ``locus``.
         locus: Locus to score (e.g. ``"TRB"``). ``None`` infers it from ``v_call``; a sample
             spanning several loci is scored per locus.
-        source: Bundled model source. **Pinned to ``"olga"`` by default and you should leave it
-            there**: the ``"learned"`` models are EM-fit on ~2k clonotypes with no gene-usage
-            pseudocount, so 68 of 89 bundled TRB V alleles have ``P(V) = 0`` (vs 8 for OLGA) —
-            those clonotypes get ``λ = 0`` and come back infinitely significant. Their ball-Pgen
-            scale is also ~16x below OLGA's, which ``Q`` is calibrated against.
+        source: Bundled model source, ``"learned"`` by default. Select ``"olga"`` explicitly
+            to reproduce the historical model and its Pgen scale.
         scope: vdjmatch edit scope defining the neighbourhood (default one substitution).
         selection_q: Thymic-selection factor ``Q``. The default is the paper's average over V–J
             combinations; it is calibrated on OLGA's **TRB** Pgen scale and there is no evidence

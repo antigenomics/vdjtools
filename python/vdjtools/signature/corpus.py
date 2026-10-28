@@ -961,7 +961,7 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
 _RES = Path(__file__).resolve().parent.parent / "resources" / "signature"
 
 
-def model_fingerprint(loci, source: str = "olga") -> dict[str, str]:
+def model_fingerprint(loci, source: str = "learned") -> dict[str, str]:
     """``{locus: "<model source>@<model version>"}`` for the models a synthetic pool is drawn from.
 
     The version is a hash of the **germline the generator will actually draw from** (every allele's
@@ -1420,7 +1420,7 @@ def depth_spread_of(locus: str, depth_spread: "float | str | None" = None) -> fl
     return float(depth_spread)
 
 
-def draw_pool(locus: str, n: int, *, seed: int, source: str = "olga") -> pl.DataFrame:
+def draw_pool(locus: str, n: int, *, seed: int, source: str = "learned") -> pl.DataFrame:
     """``n`` productive rearrangements from the bundled model for one locus.
 
     Measured 2026-09-27, ``generate(load_bundled("IGH"), 50_000, productive_only=True)`` on one
@@ -1737,7 +1737,7 @@ def _workers(n_jobs: int, cap: int) -> int:
 
 def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
                    loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
-                   size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "olga",
+                   size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "learned",
                    n_jobs: int = 1, progress=None, tmp: "Path | None" = None,
                    depth_spread: "float | str | None" = None,
                    cohort: "str | None" = None, feature_definition=None) -> dict:
@@ -1835,7 +1835,7 @@ def _pooled(spans, fn, workers: int, n_samples: int, progress):
 
 
 def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
-                  size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "olga",
+                  size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "learned",
                   progress=None, tmp: "Path | None" = None, n_jobs: int = 1,
                   depth_spread: "float | str | None" = None, cohort: "str | None" = None):
     """Set up the pools in this process and return ``(ordered_loci, draw)``; ``draw(j)`` is sample j.
@@ -1860,7 +1860,7 @@ def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: i
 def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                size: "int | str | None" = None, seed: int = SEED,
                n_components: "int | float" = DEFAULT_COMPONENTS, mode: str = "features",
-               winsor_p: float = 0.01, source: str = "olga", fit_corpus: bool = True,
+               winsor_p: float = 0.01, source: str = "learned", fit_corpus: bool = True,
                progress=None, n_jobs: int = 1, depth_spread: "float | str | None" = None,
                feature_definition=None, solver="full", max_components=128):
     """Build a synthetic corpus, and fit it.

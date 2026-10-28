@@ -155,7 +155,7 @@ def models() -> None:
 def pgen(
     input: Path = typer.Argument(..., help="Table (TSV) or list of CDR3 sequences."),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
-    source: str = typer.Option("olga", help="Built-in model set: olga | learned."),
+    source: str = typer.Option("learned", help="Built-in model set: olga | learned."),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     column: Optional[str] = typer.Option(None, "--column", "-c", help="Sequence column (default: auto-detect / first)."),
     v_col: Optional[str] = typer.Option(None, "--v-col", help="V-allele column to condition on (default: marginalize)."),
@@ -203,7 +203,7 @@ def pgen(
 @app.command()
 def generate(
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
-    source: str = typer.Option("olga", help="Built-in model set: olga | learned."),
+    source: str = typer.Option("learned", help="Built-in model set: olga | learned."),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     n: int = typer.Option(100, "--number", "-n", help="Number of sequences to generate."),
     seed: Optional[int] = typer.Option(None, help="Random seed for reproducible draws."),
@@ -762,7 +762,7 @@ def corpus(
     seed: int = typer.Option(20260927, "--seed", help="Base seed; every draw is a recorded offset."),
     loci: Optional[str] = typer.Option(None, "--loci", help="Comma-separated subset (default: all "
                                                             "seven)."),
-    source: str = typer.Option("olga", "--source", help="Bundled model set: olga | learned | arda."),
+    source: str = typer.Option("learned", "--source", help="Bundled model set: olga | learned | arda."),
     depth_spread: Optional[float] = typer.Option(None, "--depth-spread",
                                                  help="Multiplicative depth range each repertoire's "
                                                       "size is drawn log-uniformly across, around "
@@ -1013,7 +1013,7 @@ def alice(
     sample: Path = typer.Argument(..., help="Clonotype sample file."),
     fmt: str = _FMT, out: Optional[Path] = _OUT,
     locus: Optional[str] = typer.Option(None, "--locus", help="Force one locus (else per-locus)."),
-    source: str = typer.Option("olga", "--source", help="Bundled model source; leave on olga."),
+    source: str = typer.Option("learned", "--source", help="Bundled model source (default: learned); olga retains historical reproduction."),
     scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
     selection_q: float = typer.Option(9.41, "--q", help="Thymic-selection factor Q."),
     min_degree: int = typer.Option(3, "--min-degree", help="Only test clonotypes with >= this "
@@ -1062,7 +1062,7 @@ def _model_arg(spec: str):
         return load_model(path)
     parts = spec.split(":")
     locus = parts[0]
-    source = parts[1] if len(parts) > 1 else "olga"
+    source = parts[1] if len(parts) > 1 else "learned"
     organism = parts[2] if len(parts) > 2 else "human"
     try:
         return load_bundled(locus, source=source, organism=organism)
@@ -1721,7 +1721,7 @@ def sc_pgen(
     out: Optional[Path] = _OUT,
     fmt: str = _SC_FMT,
     locus_pair: str = _SC_PAIR,
-    source: str = typer.Option("olga", "--source", help="Bundled model source: olga | learned."),
+    source: str = typer.Option("learned", "--source", help="Bundled model source: olga | learned."),
     condition_vj: bool = typer.Option(True, "--condition-vj/--no-condition-vj",
                                       help="Condition each chain's Pgen on its V/J call. "
                                            "--no-condition-vj marginalises over all V/J."),

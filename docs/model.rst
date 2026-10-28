@@ -23,6 +23,16 @@ contains the public recombination models, corpus bundles and example sources. It
 dataset card provides selective-download examples. Ordinary bundled-model loading
 continues to use the models installed with vdjtools.
 
+New working-model APIs and CLIs default to ``source="learned"``: native fits
+initialized from ARDA germline scaffolds. The learned catalog covers all seven
+human loci and mouse TRA, TRB, IGH, IGK and IGL. Human bundle keys remain bare
+loci; mouse keys are prefixed ``mouse_``. Missing assets fail explicitly.
+``source="olga"`` and CLI ``--source olga`` retain the human bootstrap models
+for oracle checks and historical reproduction, including ``collapse=False``
+for allele-level comparisons. Legacy ``source="arda"`` paths remain available.
+Existing frozen corpus manifests retain their recorded source and fingerprints;
+the source omitted by older manifests still means OLGA.
+
 
 Custom germline libraries
 -------------------------

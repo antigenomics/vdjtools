@@ -93,7 +93,7 @@ def _warn_if_all_null(values, model, locus, col) -> None:
 def paired_pgen(
     paired: pl.DataFrame,
     *,
-    source: str = "olga",
+    source: str = "learned",
     condition_vj: bool = True,
     resolve_genes: bool = True,
     alpha_locus: str | None = None,

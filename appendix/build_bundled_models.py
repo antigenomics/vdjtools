@@ -2,12 +2,12 @@
 
 For each locus: fetch the FULL non-functional read set (HF isalgo/airr_model_read), arda-map to
 unique clonotypes = (v_call, j_call, junction), and run native EM (D-D by default on the D-bearing
-loci IGH/TRD/TRB) seeded from the OLGA bootstrap model. Saves to
+loci IGH/TRD/TRB) seeded from the ARDA germline scaffold. Saves to
 python/vdjtools/model/_bundled/learned/<locus>/ (parquet marginals + manifest.json + training.json).
 
 The pipeline itself now lives in the library — `vdjtools.model.data.build_model` / `build_all`,
 also reachable as `vdjtools model build` — so this script only supplies the two things specific to
-*rebuilding what ships in the wheel*: the OLGA seed models, and the destination directory. Anything
+*rebuilding what ships in the wheel*: the organism/locus selection and the destination directory. Anything
 that merely wants to train a model should call the library directly.
 
 Non-functional = out-of-frame OR stop-codon, and BOTH are used. The only property the generative
@@ -34,15 +34,8 @@ from pathlib import Path
 
 import polars as pl
 
-from vdjtools.model import data, from_olga
+from vdjtools.model import data
 
-# The OLGA models shipped in THIS repo, not pip olga's: pip ships only 5 human loci (no
-# TRG/TRD) plus mouse, while tests/python/fixtures/olga/default_models carries all 7 human loci.
-# The TRG/TRD marginals originate from mirpy's legacy-v2 branch (commit aeccd75) and are verified
-# byte-identical to what the bundled parquet were built from; olga-pip scores with them fine, so
-# they are a real oracle for those two loci, which pip alone cannot be.
-_REPO_OLGA = Path(__file__).resolve().parent.parent / "tests" / "python" / "fixtures" / "olga" / "default_models"
-OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(_REPO_OLGA)))
 SOURCE = os.environ.get("BUNDLE_SOURCE", "learned")
 DEST = Path("python/vdjtools/model/_bundled") / SOURCE
 # NB the previous default pointed into ANOTHER SESSION's scratchpad and the build silently
@@ -50,22 +43,12 @@ DEST = Path("python/vdjtools/model/_bundled") / SOURCE
 # trained on 870 clonotypes when 32,562 were available. arda.annotate_reads does its own
 # caching under out_dir; there is no second cache layer here any more.
 WORK = Path(os.environ.get("EM_WORK", "/tmp/em_work"))
-LOCI = {"TRA": "human_T_alpha", "TRB": "human_T_beta", "TRG": "human_T_gamma", "TRD": "human_T_delta",
-        "IGH": "human_B_heavy", "IGK": "human_B_kappa", "IGL": "human_B_lambda"}
+LOCI = ("TRA", "TRB", "TRG", "TRD", "IGH", "IGK", "IGL")
+MOUSE_LOCI = ("TRA", "TRB", "IGH", "IGK", "IGL")
 ITERS = int(os.environ.get("EM_ITERS", "15"))          # generous safety cap
 EM_TOL = float(os.environ.get("EM_TOL", "1e-4"))       # stop at relative log-lik improvement < this
 WORKERS = int(os.environ.get("EM_WORKERS", "0")) or None
 THREADS = int(os.environ.get("EM_THREADS", "0"))
-
-
-def seed_model(locus: str, name: str):
-    """The OLGA bootstrap model this locus's EM starts from.
-
-    derive_orf=True: reconstruct the CDR3 germline for ORF alleles OLGA leaves empty (TRBV23-1 is
-    8.6% of real TRB), so EM can learn their usage instead of pinning them to P(V)=0. Safe here --
-    this is an arda-native learned model, not the exact-OLGA Pgen oracle (which keeps derive_orf off).
-    """
-    return from_olga(OLGA / name, locus=locus, derive_orf=True)
 
 
 def training_clones(locus: str, group: str = "human"):
@@ -95,14 +78,16 @@ def training_clones(locus: str, group: str = "human"):
 def main():
     if SOURCE not in ("learned", "arda"):
         raise ValueError("BUNDLE_SOURCE must be learned or arda")
-    groups = os.environ.get("BUILD_GROUPS", "human").split(",")
-    if SOURCE == "learned" and groups != ["human"]:
-        raise ValueError("the learned bundle uses human OLGA templates")
+    groups = os.environ.get("BUILD_GROUPS", "human,mouse").split(",")
     if any(group not in ("human", "mouse") for group in groups):
         raise ValueError("BUILD_GROUPS must select human and/or mouse")
-    DEST.mkdir(parents=True, exist_ok=True)
     want = os.environ.get("LOCI")
-    loci = {k: LOCI[k] for k in want.split(",")} if want else LOCI
+    loci = tuple(want.split(",")) if want else LOCI
+    if set(loci)-set(LOCI):
+        raise ValueError("LOCI must select supported receptor loci")
+    if want and "mouse" in groups and set(loci)-set(MOUSE_LOCI):
+        raise ValueError("mouse bundled training targets are TRA/TRB/IGH/IGK/IGL")
+    DEST.mkdir(parents=True, exist_ok=True)
     # EM_SINGLE_D=1 forces strict single-D; ND_PRIOR adds a Dirichlet single-D pseudocount.
     # GENE_PRIOR keeps every germline-functional V/J allele reachable -- P(V)=0 is an EM absorbing
     # state, so unregularized, human TRB kept 30 of OLGA's 57 V genes having SEEN 54 in the data.
@@ -113,12 +98,14 @@ def main():
     started = time.perf_counter()
     rows = []
     for group in groups:
-        for locus, name in loci.items():
-            key = f"{group}_{locus}" if SOURCE == "arda" else locus
+        for locus in loci:
+            if group == "mouse" and locus not in MOUSE_LOCI:
+                continue
+            key = f"{group}_{locus}" if SOURCE == "arda" or group != "human" else locus
             print(f"[{key}] building {SOURCE} model ...", flush=True)
             model, rep, stats = data.build_model(
                 locus, group=group,
-                template=seed_model(locus, name) if SOURCE == "learned" else None,
+                template=None,  # data.build_model owns the ARDA germline scaffold
                 clones=training_clones(locus, group), threads=THREADS, verbose=True,
                 work_dir=WORK, iters=ITERS, tol=EM_TOL, single_d=single_d,
                 nd_prior=nd_prior, gene_prior=gene_prior)
@@ -130,7 +117,7 @@ def main():
 
     if rows:
         print(f"\n{pl.DataFrame(rows)}")
-    print(f"\ntotal {time.perf_counter() - started:.0f}s for {len(rows)}/{len(loci) * len(groups)} models")
+    print(f"\ntotal {time.perf_counter() - started:.0f}s for {len(rows)} models")
 
 
 if __name__ == "__main__":

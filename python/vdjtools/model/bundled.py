@@ -1,28 +1,11 @@
-"""Precomputed recombination models shipped with vdjtools.
+"""Precomputed models loaded without network access or an OLGA runtime dependency.
 
-Three model sets live under ``vdjtools/model/_bundled/``:
-
-- ``olga`` — imported from OLGA's default models (the exact-Pgen bootstrap; single-D).
-  The seven **human** loci, OLGA's germline namespace. ⚠ OLGA itself also ships five MOUSE models
-  (``mouse_T_alpha``, ``mouse_T_beta``, ``mouse_B_heavy``, ``mouse_B_kappa``, ``mouse_B_lambda``);
-  they are simply not vendored here yet, so this set answers human only. That is a fact about this
-  bundle, not about OLGA.
-- ``learned`` — EM-inferred from real non-functional reads (out-of-frame + stop-codon, HuggingFace), tandem-D on the D-bearing
-  loci (IGH/TRD/TRB). These carry a learned ``P(n_D=2)`` and broader trim/insertion distributions
-  than the synthetic OLGA models. Seven human loci, OLGA's germline namespace.
-- ``arda`` — the same EM inference on the **arda** IMGT allele namespace (:func:`from_arda`
-  scaffold refit by :func:`~vdjtools.model.infer.infer_native`). Nine models: the seven human
-  loci **plus mouse TRA/TRB — the only bundled set carrying a non-human organism today**. Use this
-  one when
-  the rest of your pipeline is arda-annotated, so generated sequences share one allele namespace
-  with your query data instead of needing a name fallback.
-
-``arda`` models are keyed by ``{organism}_{LOCUS}`` on disk; the other two by ``{LOCUS}`` alone.
-:func:`load_bundled` hides that — pass ``organism=`` and it picks the right key.
-
-Each model is a directory of parquet marginal tables + ``manifest.json`` (see :mod:`vdjtools.model`).
-Each ``manifest.json`` records what the model was built from; the builder is
-``appendix/build_bundled_models.py``.
+``learned`` is the working default: native EM fits on ARDA germline scaffolds,
+covering seven human loci and mouse TRA/TRB/IGH/IGK/IGL. Human keys are bare loci;
+mouse keys are ``mouse_{LOCUS}``. ``arda`` retains its legacy organism-prefixed
+paths; its corrected fitted assets remain available explicitly. ``olga`` retains
+the seven human bootstrap models for exact oracle and historical reproduction.
+The installed asset directories define availability; missing fits are never synthesized.
 """
 from __future__ import annotations
 
@@ -34,7 +17,7 @@ from .model import Model
 
 #: The three shipped model sets.
 SOURCES = ("olga", "learned", "arda")
-#: The seven human loci with bundled models (``arda`` adds mouse TRA/TRB).
+#: The seven human receptor loci; learned mouse bundles cover five loci.
 LOCI = ("TRA", "TRB", "TRG", "TRD", "IGH", "IGK", "IGL")
 #: Sets whose directories are keyed ``{organism}_{LOCUS}`` rather than ``{LOCUS}``.
 _ORGANISM_KEYED = ("arda",)
@@ -44,10 +27,12 @@ def _bundled_key(source: str, locus: str, organism: str) -> str:
     """Directory name for one bundled model, per that set's naming scheme."""
     if source in _ORGANISM_KEYED:
         return f"{organism.lower()}_{locus.upper()}"
+    if source == "learned" and organism.lower() == "mouse":
+        return f"mouse_{locus.upper()}"
     if organism.lower() != "human":
         raise ValueError(
             f"vdjtools bundles the {source!r} model set for human only (got "
-            f"organism={organism!r}); use source='arda', which carries mouse TRA and TRB. "
+            f"organism={organism!r}); the learned set carries mouse TRA/TRB/IGH/IGK/IGL. "
             f"⚠ This is a gap in what is VENDORED, not in the upstream set: OLGA ships "
             f"mouse_T_alpha, mouse_T_beta, mouse_B_heavy, mouse_B_kappa and mouse_B_lambda, and "
             f"all five import cleanly through `from_olga`."
@@ -55,18 +40,16 @@ def _bundled_key(source: str, locus: str, organism: str) -> str:
     return locus.upper()
 
 
-def load_bundled(locus: str, source: str = "olga", *, organism: str = "human",
+def load_bundled(locus: str, source: str = "learned", *, organism: str = "human",
                  collapse: bool = True) -> Model:
     """Load a precomputed model shipped with the package (no OLGA/HuggingFace at runtime).
 
     Args:
         locus: One of ``TRA TRB TRG TRD IGH IGK IGL`` (case-insensitive).
-        source: ``"olga"`` (OLGA bootstrap, exact Pgen), ``"learned"`` (EM-inferred from real
-            non-functional reads; tandem-D on IGH/TRD/TRB), or ``"arda"`` (the same EM inference on
-            the **arda IMGT allele namespace**, and the only set VENDORED here for mouse).
-        organism: ``"human"`` (default) or ``"mouse"``. Only the ``arda`` set is VENDORED here
-            with a non-human organism; asking the others for one is an error rather than a silent
-            human model. OLGA's own five mouse models exist upstream — see the module docstring.
+        source: ``"learned"`` (default; EM fits on ARDA references), ``"olga"``
+            (human bootstrap for exact Pgen reproduction), or legacy ``"arda"`` paths.
+        organism: ``"human"`` (default) or ``"mouse"``. The learned mouse catalog covers TRA/TRB/IGH/IGK/IGL.
+            Missing source/species/locus combinations fail rather than using a human model.
         collapse: If ``True`` (default), collapse each gene to a single ``*01`` allele via
             :func:`~vdjtools.model.collapse.collapse_alleles` — the working gene-level resolution,
             in which Pgen also collapses a clonotype's allele to ``*01`` (short-read aligners cannot
@@ -82,9 +65,9 @@ def load_bundled(locus: str, source: str = "olga", *, organism: str = "human",
         FileNotFoundError: If no bundled model exists for ``(source, organism, locus)``.
 
     Example:
-        >>> m = load_bundled("TRB")                                  # olga, human
-        >>> m_arda = load_bundled("TRB", "arda")                     # arda namespace, human
-        >>> m_mouse = load_bundled("TRB", "arda", organism="mouse")  # the only VENDORED mouse set
+        >>> m = load_bundled("TRB")                                  # learned, human
+        >>> m_arda = load_bundled("TRB", "arda")                     # legacy path, human
+        >>> m_mouse = load_bundled("TRB", "arda", organism="mouse")  # legacy mouse path
     """
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
@@ -103,7 +86,8 @@ def load_bundled(locus: str, source: str = "olga", *, organism: str = "human",
 def list_bundled() -> dict[str, list[str]]:
     """Return the available bundled models as ``{source: [key, ...]}``.
 
-    Keys are bare loci for ``olga``/``learned`` and ``{organism}_{LOCUS}`` for ``arda``, matching
+    Keys are bare human loci for ``olga``/``learned``, ``mouse_{LOCUS}`` for learned mouse,
+    and ``{organism}_{LOCUS}`` for ``arda``, matching
     what :func:`load_bundled` accepts for each set.
     """
     out: dict[str, list[str]] = {}
