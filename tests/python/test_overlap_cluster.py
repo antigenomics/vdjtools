@@ -174,3 +174,79 @@ def test_aging_divergence_correlates_with_age():
     ages = np.array([age_by_sample[s] for s in coords["sample"].to_list()])
     r, p = spearmanr(ages, dist_centroid)
     assert r > 0.4 and p < 0.05
+
+
+@pytest.mark.parametrize('metric', ['F', 'F2', 'D', 'jaccard'])
+def test_exact_matrix_batches_keys_instead_of_joining_every_pair(monkeypatch, metric):
+    from vdjtools.overlap import cluster as C
+    samples = _toy_samples()
+    samples['duplicates'] = pl.concat([samples['a'], samples['a'].head(1)])
+    samples['empty'] = samples['a'].clear()
+    samples['null'] = samples['a'].head(1).with_columns(pl.lit(None, pl.String).alias(S.V_CALL))
+    samples['zero'] = samples['a'].with_columns(pl.lit(0).alias(S.COUNT))
+    names = list(samples)
+    aggs = [C._aggregate(df, list(C.DEFAULT_KEY)) for df in samples.values()]
+    expected = np.zeros((len(names), len(names)))
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            _, values = C._overlap_from_agg(aggs[i], aggs[j], list(C.DEFAULT_KEY))
+            expected[i, j] = expected[j, i] = C._TRANSFORM[metric](C._exact_similarity(values, metric))
+
+    def no_pair_join(*args, **kwargs):
+        raise AssertionError('exact matrix must batch the keys, not join every sample pair')
+
+    monkeypatch.setattr(C, '_overlap_from_agg', no_pair_join)
+    got = C.pairwise_distances(samples, metric=metric)
+    assert got['sample'].to_list() == names
+    np.testing.assert_allclose(got.select(names).to_numpy(), expected, rtol=1e-14, atol=1e-14)
+
+
+@pytest.mark.parametrize('metric', ['F', 'F2', 'D', 'jaccard', 'R'])
+@pytest.mark.parametrize('case', ['empty', 'null', 'signed', 'custom-key'])
+def test_exact_matrix_boundary_cases_preserve_pairwise_values(metric, case):
+    from vdjtools.overlap import cluster as C
+    a, b = _toy_samples()['a'], _toy_samples()['b']
+    key = list(C.DEFAULT_KEY)
+    if case == 'empty':
+        a, b = a.clear(), b.clear()
+    elif case == 'null':
+        a = a.with_columns(pl.lit(None, pl.String).alias(S.V_CALL))
+        b = b.with_columns(pl.lit(None, pl.String).alias(S.V_CALL))
+    elif case == 'signed':
+        a = a.with_columns(pl.Series(S.COUNT, [-1, 2, 3, 4]))
+    else:
+        key = [S.JUNCTION_AA]
+        b = b.with_columns(pl.lit(None, pl.String).alias(S.V_CALL))
+    with np.errstate(invalid='ignore'):
+        values = O.overlap_metrics(a, b, key=tuple(key))
+        expected = C._TRANSFORM[metric](C._exact_similarity(values, metric))
+        got = C.pairwise_distances({'a': a, 'b': b}, metric=metric, key=tuple(key), form='long')
+    assert got.select('sample_a', 'sample_b').rows() == [('a', 'a'), ('a', 'b'), ('b', 'a'), ('b', 'b')]
+    np.testing.assert_allclose(got['distance'].to_numpy(), [0, expected, expected, 0],
+                               rtol=1e-14, atol=1e-14, equal_nan=True)
+
+
+def test_pairwise_matrix_rejects_output_larger_than_allocation(monkeypatch):
+    monkeypatch.setattr('vdjtools.cores.available_memory', lambda: 64)
+    with pytest.raises(MemoryError, match='reduce sample count'):
+        O.pairwise_distances(_toy_samples())
+
+
+@pytest.mark.parametrize('n', [0, 1])
+def test_empty_or_single_sample_output_forms(n):
+    samples = dict(list(_toy_samples().items())[:n])
+    assert O.pairwise_distances(samples).shape == (n, n + 1)
+    long = O.pairwise_distances(samples, form='long')
+    assert long.shape == (n * n, 3)
+    if n:
+        assert long['distance'].to_list() == [0.0]
+
+
+@pytest.mark.parametrize('metric', ['similarity_cosine', 'similarity_morisita'])
+def test_delegated_distance_output_preserves_similarity(metric):
+    from vdjtools.overlap import cluster as C
+    a = _sample(['CASSAF', 'CASSCF', 'CASSDF'], [1, 2, 3])
+    b = _sample(['CASSAF', 'CASSCF', 'CASSEF'], [3, 2, 1])
+    similarity = C._delegated_similarity(a, b, metric, C.DEFAULT_KEY, None)
+    got = C.pairwise_distances({'a': a, 'b': b}, metric=metric, form='long')
+    assert got['distance'].to_list() == [0.0, 1 - similarity, 1 - similarity, 0.0]

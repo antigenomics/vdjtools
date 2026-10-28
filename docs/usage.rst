@@ -199,7 +199,7 @@ enormously, and which you want depends on the question.
 Overlap and TCRnet
 ------------------
 
-:mod:`vdjtools.overlap` compares samples. Exact-match overlap is pure polars; fuzzy /
+:mod:`vdjtools.overlap` compares samples. Exact-pair overlap uses Polars; cohort distances also use SciPy sparse products. Fuzzy /
 similarity-aware overlap and TCRnet delegate to the base vdjmatch + seqtree dependencies.
 The ``[overlap]`` extra supplies scikit-learn for sample MDS:
 
@@ -219,6 +219,65 @@ The ``[overlap]`` extra supplies scikit-learn for sample MDS:
 
    # frequency trajectories of the top clonotypes across an ordered series
    overlap.track_clonotypes({"t0": a, "t1": b, "t2": c}, top=50)
+
+
+Exact cohort distances
+^^^^^^^^^^^^^^^^^^^^^^
+
+``pairwise_distances(..., metric="F" | "F2" | "D" | "jaccard")`` aggregates each
+sample once, builds one shared clonotype vocabulary, and evaluates sparse products.
+It does not join every sample pair. This uses existing SciPy kernels, with no new
+native extension or fitted parameters. Pearson ``R`` retains the centered pairwise
+calculation to avoid cancellation in a raw-moment covariance formula. Signed or
+non-finite frequency tables also retain their existing pairwise arithmetic.
+
+For :math:`N` samples and :math:`K` fully specified clonotype keys, let
+:math:`B_{ik}` be one when sample :math:`i` contains key :math:`k`, and zero otherwise.
+Let :math:`W_{ik}` be that key's within-sample read frequency, including an explicit
+zero for a zero-count clonotype. Frequencies retain their original sample totals;
+null-key rows cannot match another sample but still contribute to those totals and
+the sample richness :math:`n_i`. Thus missing calls are not silently matched.
+
+The implementation in ``overlap.cluster._exact_matrix`` computes
+
+.. math::
+
+   C = BB^T,\qquad A = WB^T,\qquad H = \sqrt{W}\sqrt{W}^{\,T},
+
+where the square root is elementwise. Entry :math:`C_{ij}` counts shared keys,
+:math:`A_{ij}` sums sample :math:`i`'s frequencies on those keys, and
+:math:`H_{ij}` sums their geometric mean frequencies. Therefore the similarities are
+
+.. math::
+
+   D_{ij}=\frac{C_{ij}}{n_i n_j},\qquad
+   F_{ij}=\sqrt{A_{ij} A_{ji}},\qquad
+   F2_{ij}=H_{ij},\qquad
+   J_{ij}=\frac{C_{ij}}{n_i+n_j-C_{ij}}.
+
+A zero denominator gives similarity zero. The existing distance transforms remain
+:math:`-\log_{10}(s+10^{-9})` for D/F/F2 and :math:`1-s` for Jaccard, where
+:math:`s` denotes the corresponding similarity. The diagonal is set to zero and
+both output forms preserve sample order.
+
+These are algebraic identities, not new estimators. Floating-point summation order
+can differ. For a sum of :math:`m` nonnegative terms in the normal floating-point
+range, the usual accumulation bound is :math:`\gamma_m=mu/(1-mu)` when
+:math:`mu<1`, with float64 unit roundoff :math:`u=2^{-53}`; products and square roots
+add their own rounding. A similarity perturbation from :math:`x` to :math:`y`
+changes its log distance by at most
+:math:`|x-y|/[\ln(10)(\min(x,y)+10^{-9})]`. Bitwise equality with pairwise joins is
+not promised. Boundary tests cover empty samples, zero counts, duplicate keys,
+null calls, custom keys and signed inputs.
+
+With :math:`P` aggregated sample/key rows, :math:`p_i` fully specified keys in
+sample :math:`i`, and :math:`d_k` samples containing key :math:`k`, expected
+fixed-length-key construction, sparse row sorting and product work is
+:math:`O(P+\sum_i p_i\log(p_i+1)+\sum_k d_k^2+N^2)`. The returned dense distances inherently require
+:math:`O(N^2)` storage; numerical workspace is checked against the available memory
+allocation. Matrix and long-form outputs use native columns rather than constructing
+one Python float or tuple per result cell. Large all-pairs outputs still require
+adequate memory or a smaller sample collection.
 
 Preprocessing
 -------------
