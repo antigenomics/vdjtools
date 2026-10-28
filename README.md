@@ -15,7 +15,7 @@
   <a href="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/antigenomics/vdjtools/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://docs.isalgo.dev/vdjtools/"><img alt="docs" src="https://github.com/antigenomics/vdjtools/actions/workflows/docs.yml/badge.svg"></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue">
-  <img alt="license" src="https://img.shields.io/badge/license-Academic%20Non--Commercial-green">
+  <img alt="license" src="https://img.shields.io/badge/license-Academic%20%26%20Non--Commercial-green">
 </p>
 
 <p align="center"><b>
