@@ -819,3 +819,34 @@ def test_corpus_file_digests_do_not_materialize_whole_artifacts(tmp_path, monkey
                             base_url=source.as_uri(), quiet=True) == downloaded
     with downloaded.open('rb') as stream:
         assert hashlib.sha256(stream.read()).hexdigest() == hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.parametrize('failure', [None, 'verify', 'read'])
+def test_corpus_reader_closes_archive_with_retained_exceptions(tmp_path, monkeypatch, failure):
+    path = C.Corpus('vsig', 'empty', {}, {}).save(tmp_path / 'empty.npz')
+    if failure == 'read':
+        np.savez_compressed(path, **{'TRB/broken': np.array([1])})
+    if failure == 'verify':
+        def reject(_):
+            raise ValueError('verification failed')
+        monkeypatch.setattr(C.Corpus, 'verify', reject)
+    load = np.load
+    streams = []
+
+    def tracked_load(*args, **kwargs):
+        archive = load(*args, **kwargs)
+        streams.append(archive.zip.fp)
+        return archive
+
+    monkeypatch.setattr(np, 'load', tracked_load)
+    if failure:
+        with pytest.raises((ValueError, KeyError)) as retained:
+            C.Corpus.load(path)
+        assert retained.value is not None
+    else:
+        C.Corpus.load(path)
+    try:
+        assert streams and all(stream.closed for stream in streams)
+    finally:
+        for stream in streams:
+            stream.close()
