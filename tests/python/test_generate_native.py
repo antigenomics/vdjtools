@@ -84,6 +84,17 @@ def test_productive_only_returns_exactly_n_productive_draws(trb):
     assert all(len(nt) % 3 == 0 for nt in nat["junction_nt"])
 
 
+@pytest.mark.parametrize('threads', [1, min(2, available_cores())])
+def test_empty_required_categorical_raises_instead_of_crashing(threads):
+    from vdjtools._core import generate_batch
+    from vdjtools.model.native import pack
+
+    packed, _, _ = pack(load_bundled('TRG', 'olga'))
+    packed.del_j = [0.] * len(packed.del_j)
+    with pytest.raises(ValueError, match='empty categorical distribution'):
+        generate_batch(packed, 64, 20261028, True, threads)
+
+
 def test_an_unknown_engine_raises_rather_than_picking_one(trb):
     """A silently-ignored engine name would be the worst of both: a knob that does nothing."""
     with pytest.raises(ValueError, match="engine"):
