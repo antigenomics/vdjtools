@@ -921,6 +921,10 @@ def augment_from_oracle(learned: Model, oracle: Model) -> Model:
     for seg in ("v", "j"):
         acol = f"{seg}_allele"
         choice = tables[f"{seg}_choice"]
+        if seg == "j" and "v_allele" in choice.columns:
+            used_v = set(tables["v_choice"].filter(pl.col("p") > 0)["v_allele"])
+            used_v &= _functional_support(learned, "v")
+            choice = choice.filter(pl.col("v_allele").is_in(list(used_v)))
         used = set(choice.filter(pl.col("p") > 0)[acol]) & _functional_support(learned, seg)
         for name, event in learned.manifest.events.items():
             if normalization_keys(event) != [acol]:

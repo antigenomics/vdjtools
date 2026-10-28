@@ -72,6 +72,26 @@ def test_completion_reapplies_trb_dj_order():
     assert sums['p'].to_list() == pytest.approx([1.] * sums.height)
 
 
+@pytest.mark.parametrize('parent_mass', [0., .5])
+def test_completion_ignores_j_support_under_unused_v_parents(toy_model, parent_mass):
+    from vdjtools.model import Model
+    from vdjtools.model.infer import augment_from_oracle
+    tables = dict(toy_model.tables)
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.when(
+        pl.col('v_allele') == 'TOYV2*01').then(parent_mass).otherwise(pl.col('p')))
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.col('p') / pl.col('p').sum())
+    tables['j_choice'] = tables['j_choice'].with_columns(p=pl.when(
+        pl.col('v_allele') == 'TOYV2*01').then((pl.col('j_allele') == 'TOYJ1*01').cast(pl.Float64))
+        .otherwise((pl.col('j_allele') == 'TOYJ2*01').cast(pl.Float64)))
+    tables['j_5_del'] = tables['j_5_del'].with_columns(p=pl.when(
+        pl.col('j_allele') == 'TOYJ1*01').then(0.).otherwise(pl.col('p')))
+    genomic = {**toy_model.genomic, 'genes_v': toy_model.genomic['genes_v'].with_columns(
+        functional=pl.when(pl.col('v_allele') == 'TOYV2*01').then(False).otherwise(pl.col('functional')))}
+    unused = Model(manifest=toy_model.manifest, tables=tables, genomic=genomic)
+    completed = augment_from_oracle(unused, unused)
+    assert all(completed.tables[name].equals(table) for name, table in unused.tables.items())
+
+
 # --- flat marginal export / import -------------------------------------------------------------
 
 def test_marginals_frame_covers_every_event(toy_model):
