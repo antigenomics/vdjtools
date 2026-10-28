@@ -21,6 +21,77 @@ def _gene_usage(model, seg):
     return out
 
 
+def test_germline_initializer_projects_short_allele_deletions(toy_germline):
+    from vdjtools.model.io import from_germline
+    germline = toy_germline.with_columns(sequence=pl.when(pl.col('allele') == 'TOYV2*01')
+        .then(pl.lit('TGT')).otherwise(pl.col('sequence')))
+    model = from_germline(germline, locus='TOY')
+    assert check_model(model, germline='none').filter(pl.col('severity') == 'error').is_empty()
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_completion_restores_j_deletion_newly_reachable_through_v(toy_model, missing):
+    from vdjtools.model import Model
+    from vdjtools.model.infer import augment_from_oracle
+    tables = dict(toy_model.tables)
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.when(
+        pl.col('v_allele') == 'TOYV2*01').then(0.).otherwise(pl.col('p')))
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.col('p') / pl.col('p').sum())
+    tables['j_choice'] = tables['j_choice'].with_columns(p=pl.when(
+        (pl.col('v_allele') == 'TOYV2*01') | (pl.col('j_allele') == 'TOYJ1*01'))
+        .then(0.).otherwise(pl.col('p')))
+    totals = pl.col('p').sum().over('v_allele')
+    tables['j_choice'] = tables['j_choice'].with_columns(p=pl.when(totals > 0)
+        .then(pl.col('p') / totals).otherwise(0.))
+    deletion = tables['j_5_del'].with_columns(p=pl.when(pl.col('j_allele') == 'TOYJ2*01')
+        .then((pl.col('ndel') == 0).cast(pl.Float64)).otherwise(pl.col('p')))
+    tables['j_5_del'] = (deletion.filter(pl.col('j_allele') != 'TOYJ1*01') if missing else
+        deletion.with_columns(p=pl.when(pl.col('j_allele') == 'TOYJ1*01').then(0.).otherwise(pl.col('p'))))
+    learned = Model(manifest=toy_model.manifest, tables=tables, genomic=toy_model.genomic)
+    done = augment_from_oracle(learned, toy_model)
+    assert done.tables['j_choice'].filter(pl.col('j_allele') == 'TOYJ1*01')['p'].sum() > 0
+    assert done.tables['j_5_del'].sort(['j_allele', 'ndel']).equals(deletion.sort(['j_allele', 'ndel']))
+    assert 'required_conditional' not in check_model(done, germline='none')['check'].to_list()
+    incomplete = Model(manifest=toy_model.manifest, tables={**toy_model.tables,
+        'j_5_del': tables['j_5_del']}, genomic=toy_model.genomic)
+    with pytest.raises(ValueError, match='completion template lacks j_5_del support'):
+        augment_from_oracle(learned, incomplete)
+
+
+def test_completion_reapplies_trb_dj_order():
+    from vdjtools.model.infer import augment_from_oracle
+    model = load_bundled('TRB', 'arda', collapse=False)
+    done = augment_from_oracle(model, model)
+    illegal = ((pl.col('d_allele').str.starts_with('TRBD2')) &
+               pl.col('j_allele').str.starts_with('TRBJ1'))
+    assert model.tables['d_gene'].filter(illegal)['p'].sum() > 0
+    assert done.tables['d_gene'].filter(illegal)['p'].sum() == 0
+    sums = done.tables['d_gene'].group_by('j_allele').agg(pl.col('p').sum())
+    used = done.tables['j_choice'].filter(pl.col('p') > 0)['j_allele']
+    sums = sums.filter(pl.col('j_allele').is_in(used.implode()))
+    assert sums['p'].to_list() == pytest.approx([1.] * sums.height)
+
+
+@pytest.mark.parametrize('parent_mass', [0., .5])
+def test_completion_ignores_j_support_under_unused_v_parents(toy_model, parent_mass):
+    from vdjtools.model import Model
+    from vdjtools.model.infer import augment_from_oracle
+    tables = dict(toy_model.tables)
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.when(
+        pl.col('v_allele') == 'TOYV2*01').then(parent_mass).otherwise(pl.col('p')))
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.col('p') / pl.col('p').sum())
+    tables['j_choice'] = tables['j_choice'].with_columns(p=pl.when(
+        pl.col('v_allele') == 'TOYV2*01').then((pl.col('j_allele') == 'TOYJ1*01').cast(pl.Float64))
+        .otherwise((pl.col('j_allele') == 'TOYJ2*01').cast(pl.Float64)))
+    tables['j_5_del'] = tables['j_5_del'].with_columns(p=pl.when(
+        pl.col('j_allele') == 'TOYJ1*01').then(0.).otherwise(pl.col('p')))
+    genomic = {**toy_model.genomic, 'genes_v': toy_model.genomic['genes_v'].with_columns(
+        functional=pl.when(pl.col('v_allele') == 'TOYV2*01').then(False).otherwise(pl.col('functional')))}
+    unused = Model(manifest=toy_model.manifest, tables=tables, genomic=genomic)
+    completed = augment_from_oracle(unused, unused)
+    assert all(completed.tables[name].equals(table) for name, table in unused.tables.items())
+
+
 # --- flat marginal export / import -------------------------------------------------------------
 
 def test_marginals_frame_covers_every_event(toy_model):

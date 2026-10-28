@@ -28,11 +28,11 @@ from vdjtools.model.score import (
 # Worked out by hand from the toy VJ scaffold (see conftest), per normalization group:
 #   v_choice   3 alleles, one group                     ->  3 - 1 =  2
 #   j_choice   P(J|V): 3 V groups x 2 J alleles         -> 3 * (2 - 1) =  3
-#   v_3_del    3 alleles x ndel -4..13 (18 bins)        -> 3 * (18 - 1) = 51
-#   j_5_del    2 alleles x ndel -4..22 (27 bins)        -> 2 * (27 - 1) = 52
+#   v_3_del    3 alleles x reachable -4..8 (13 bins)    -> 3 * (13 - 1) = 36
+#   j_5_del    reachable -4..17 / -4..11 (22/16 bins)  -> (22 - 1) + (16 - 1) = 36
 #   vj_ins     lengths 0..3, one group                  ->  4 - 1 =  3
 #   vj_dinucl  column-stochastic 4x4, 4 groups          -> 4 * (4 - 1) = 12
-TOY_FREE_PARAMS = 2 + 3 + 51 + 52 + 3 + 12
+TOY_FREE_PARAMS = 2 + 3 + 36 + 36 + 3 + 12
 
 
 def test_free_params_matches_the_hand_count(toy_model):
@@ -51,7 +51,7 @@ def test_structural_zeros_are_not_parameters(toy_model):
     tables = dict(toy_model.tables)
     # Knock out three deletion bins for one allele and renormalize that allele's group.
     t = tables["v_3_del"].with_columns(
-        p=pl.when((pl.col("v_allele") == "TOYV1*01") & (pl.col("ndel") > 10))
+        p=pl.when((pl.col("v_allele") == "TOYV1*01") & (pl.col("ndel") > 5))
         .then(0.0).otherwise(pl.col("p")))
     t = t.with_columns(p=pl.col("p") / pl.col("p").sum().over("v_allele"))
     tables["v_3_del"] = t
@@ -66,9 +66,9 @@ def test_unreachable_conditionals_are_excluded(toy_model):
         p=pl.when(pl.col("v_allele") == "TOYV2*01").then(0.0).otherwise(pl.col("p")))
     tables["v_choice"] = tables["v_choice"].with_columns(p=pl.col("p") / pl.col("p").sum())
     dead = type(toy_model)(manifest=toy_model.manifest, tables=tables, genomic=toy_model.genomic)
-    # TOYV2*01 loses its own v_choice cell (-1), its 18-bin deletion group (-17), and the
+    # TOYV2*01 loses its own v_choice cell (-1), its 13-bin deletion group (-12), and the
     # P(J|V=TOYV2*01) group (-1).
-    assert free_params(dead, reachable_only=True) == TOY_FREE_PARAMS - 1 - 17 - 1
+    assert free_params(dead, reachable_only=True) == TOY_FREE_PARAMS - 1 - 12 - 1
     assert free_params(dead, reachable_only=False) == TOY_FREE_PARAMS - 1
 
 

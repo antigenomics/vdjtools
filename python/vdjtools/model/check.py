@@ -235,6 +235,30 @@ def _check_tables(model: Model, tol: float) -> list[dict]:
                                f"...and {bad.height - 20} further mis-normalized group(s)",
                                event=name, value=float(bad.height - 20)))
         zeros = sums.filter(pl.col("s").abs() <= tol).height
+        if event.kind is EventKind.DELETION and keys in (["v_allele"], ["j_allele"]):
+            allele_col = keys[0]
+            choice = allele_col[0] + "_choice"
+            mass = _choice_mass(model, choice, allele_col)
+            genomic = model.genomic.get("genes_" + allele_col[0])
+            functional = (set(genomic.filter(pl.col("functional"))[allele_col])
+                          if genomic is not None and "functional" in genomic.columns else set(mass))
+            # J|V can be nonzero only under unused V parents; those J alleles are unreachable.
+            if choice == "j_choice" and "v_allele" in model.tables.get(choice, pl.DataFrame()).columns:
+                used_v = [a for a, p in _choice_mass(model, "v_choice", "v_allele").items() if p > 0]
+                genes_v = model.genomic.get("genes_v")
+                if genes_v is not None and "functional" in genes_v.columns:
+                    functional_v = set(genes_v.filter(pl.col("functional"))["v_allele"])
+                    used_v = [a for a in used_v if a in functional_v]
+                reachable = model.tables[choice].filter(pl.col("v_allele").is_in(used_v))
+                mass = dict(reachable.group_by(allele_col).agg(pl.col("p").sum()).iter_rows())
+            conditional = dict(sums.select(allele_col, "s").iter_rows())
+            for allele, parent_mass in mass.items():
+                if allele in functional and parent_mass > 0 and abs(conditional.get(allele, 0.0)) <= tol:
+                    rows.append(_issue("error", "required_conditional",
+                        "positive reachable gene-choice mass has a missing or zero deletion conditional",
+                        event=name, allele=allele, value=float(parent_mass)))
+                    if allele in conditional:
+                        zeros -= 1
         if zeros:
             # Legal: an undefined conditional for a gene that is never used. Worth surfacing --
             # it is also what an absorbing EM state looks like.

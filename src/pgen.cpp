@@ -2230,6 +2230,9 @@ struct Cat {
 
     bool empty() const { return value.empty(); }
     int pick(Rng& r) const {
+        if (empty())
+            throw std::invalid_argument("generate_batch: cannot sample an empty categorical distribution; "
+                                        "model has no positive probability for a required event");
         double u = r.uniform();
         size_t i = static_cast<size_t>(
             std::lower_bound(cum.begin(), cum.end(), u) - cum.begin());

@@ -19,6 +19,32 @@ from vdjtools.model.reference import load_germline, translate
 LOCI = ["TRA", "TRB", "TRG", "TRD", "IGH", "IGK", "IGL"]
 
 
+def test_tandem_collapse_normalizes_over_defined_parent_alleles(toy_model_vdj):
+    from dataclasses import replace
+    from vdjtools.model import Model
+    from vdjtools.model.events import Event, EventKind
+    model = toy_model_vdj
+    tables = dict(model.tables)
+    for name in ('d_gene', 'd_del'):
+        original = tables[name]
+        duplicate = original.with_columns(pl.lit('TOYD1*02').alias('d_allele'))
+        tables[name] = pl.concat([original, duplicate])
+        if name == 'd_gene':
+            tables[name] = tables[name].with_columns(p=pl.col('p') / 2)
+    tables['d2_gene'] = pl.DataFrame({'d_allele': ['TOYD1*01', 'TOYD1*01', 'TOYD1*02', 'TOYD1*02'],
+        'd2_allele': ['TOYD1*01', 'TOYD1*02'] * 2, 'p': [.25, .75, 0., 0.]})
+    genomic = dict(model.genomic)
+    genomic['genes_d'] = pl.concat([genomic['genes_d'], genomic['genes_d'].with_columns(
+        pl.lit('TOYD1*02').alias('d_allele'))])
+    manifest = replace(model.manifest, events={**model.manifest.events,
+        'd2_gene': Event(name='d2_gene', kind=EventKind.GENE_CHOICE, given=('d_gene',))})
+    raw = Model(manifest=manifest, tables=tables, genomic=genomic)
+    before = raw.tables['d2_gene'].clone()
+    collapsed = collapse_alleles(raw)
+    assert raw.tables['d2_gene'].equals(before)
+    assert collapsed.tables['d2_gene']['p'].to_list() == pytest.approx([1.])
+
+
 def _shipped() -> list[tuple[str, str, str]]:
     """Every ``(source, organism, locus)`` actually shipped — ``arda`` alone carries mouse."""
     from vdjtools.model.bundled import list_bundled

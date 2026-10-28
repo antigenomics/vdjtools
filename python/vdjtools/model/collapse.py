@@ -263,7 +263,11 @@ def collapse_alleles(model: Model) -> Model:
                   .group_by(["_gd1", "_gd2"], maintain_order=True).agg(pl.col("pw").sum().alias("p"))            # weighted avg over D1
                   .with_columns(_rep_expr("_gd1").alias("d_allele"),
                                 _rep_expr("_gd2").alias("d2_allele")))
-            new["d2_gene"] = d2.select("d_allele", "d2_allele", "p")
+            # Undefined all-zero allele conditionals contribute no tandem support.
+            # Condition the gene-level distribution on the remaining defined mass.
+            total = pl.col("p").sum().over("d_allele")
+            new["d2_gene"] = d2.select("d_allele", "d2_allele", "p").with_columns(
+                p=pl.when(total > 0).then(pl.col("p") / total).otherwise(0.0))
         if "d2_del" in t:
             # weight by the D2 marginal P(D2) = Σ_D1 P(D2|D1)P(D1)
             pd1 = dmarg.select(pl.col("d_allele").alias("_a"), "p")
