@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <cctype>
@@ -445,18 +446,34 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
 
 // Stitch left dp (state nt[p-1],nt[p-2]) with right rb (state nt[p],nt[p+1]) at boundary p,
 // checking the single codon (if any) that straddles p against its allowed-codon mask.
-double combine_tm(const std::vector<double>& dp, const double* rb, int p, const uint64_t* allowed) {
+double combine_tm(const double* dp, const double* rb, int p, const uint64_t* allowed,
+                  const double* reduced = nullptr, int sole_state = -1,
+                  uint64_t right_terms = 0) {
     if (p % 3 == 0) {  // clean cut — no straddling codon
         double a = 0.0, b = 0.0;
-        for (int s = 0; s < 25; ++s) { a += dp[s]; b += rb[s]; }
+        if (sole_state >= 0) a = dp[sole_state];
+        else for (int s = 0; s < 25; ++s) a += dp[s];
+        if (reduced) b = reduced[0];
+        else for (int s = 0; s < 25; ++s) b += rb[s];
         return a * b;
     }
     if (p % 3 == 1) {  // codon [p-1,p,p+1] = (a,c,d), completes at p+1
         uint64_t am = allowed[(p - 1) / 3];
         double dpA[4] = {0, 0, 0, 0};
-        for (int s = 0; s < 25; ++s)
+        for (int s = sole_state >= 0 ? sole_state : 0;
+             s < (sole_state >= 0 ? sole_state + 1 : 25); ++s)
             if (dp[s] != 0.0) { int a = s / 5 - 1; if (a >= 0) dpA[a] += dp[s]; }
         double tot = 0.0;
+        if (reduced) {
+            // Terms are ordered (right-state, left-base), exactly as below.
+            while (right_terms) {
+                int term = std::countr_zero(right_terms), a = term % 4;
+                if (dpA[a] != 0.0)
+                    tot += dpA[a] * rb[sidx(term / 16, (term / 4) % 4)];
+                right_terms &= right_terms - 1;
+            }
+            return tot;
+        }
         for (int s = 0; s < 25; ++s) {
             double w = rb[s];
             if (w == 0.0) continue;
@@ -470,10 +487,12 @@ double combine_tm(const std::vector<double>& dp, const double* rb, int p, const 
     // p % 3 == 2: codon [p-2,p-1,p] = (b,a,c), completes at p
     uint64_t am = allowed[p / 3];
     double rbC[4] = {0, 0, 0, 0};
-    for (int s = 0; s < 25; ++s)
+    if (reduced) std::copy(reduced, reduced + 4, rbC);
+    else for (int s = 0; s < 25; ++s)
         if (rb[s] != 0.0) { int c = s / 5 - 1; if (c >= 0) rbC[c] += rb[s]; }
     double tot = 0.0;
-    for (int s = 0; s < 25; ++s) {
+    for (int s = sole_state >= 0 ? sole_state : 0;
+         s < (sole_state >= 0 ? sole_state + 1 : 25); ++s) {
         double w = dp[s];
         if (w == 0.0) continue;
         int a = s / 5 - 1, b = s % 5 - 1;
@@ -506,13 +525,63 @@ inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt
 
 double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
     int N = 3 * alen;
-    std::vector<double> Lf, Rb, res;
+    std::vector<double> Lf, Rb, res, reduced((N + 1) * 4);
+    std::vector<uint64_t> right_terms(N + 1);
+    std::vector<double> short_results((N + 1) * 21);
+    std::vector<int> first, last;
     std::vector<char> lf_any, rb_any, live;
     mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);
     double total = 0.0;
     std::vector<double> dp(25), ndp(25);
+    // The first two emitted D bases depend only on Lf and those bases, not on
+    // the D allele/trim. Compute all 4/16 possibilities once for this query.
+    std::vector<double> first_dp((N + 1) * 4 * 25), second_weight((N + 1) * 16);
+    std::vector<char> first_any((N + 1) * 4);
+    std::vector<double> cur(25), ncur(25);
+    for (int pos = 1; pos < N; ++pos) {
+        if (!lf_any[pos]) continue;
+        for (int a = 0; a < 4; ++a) {
+            std::copy_n(&Lf[pos * 25], 25, dp.begin());
+            if (!thread_one(dp, ndp, a, pos, allowed)) continue;
+            first_any[pos * 4 + a] = 1;
+            std::copy(dp.begin(), dp.end(), &first_dp[(pos * 4 + a) * 25]);
+            if (pos + 1 >= N) continue;
+            for (int b = 0; b < 4; ++b) {
+                cur = dp;
+                if (thread_one(cur, ncur, b, pos + 1, allowed))
+                    second_weight[pos * 16 + a * 4 + b] = cur[sidx(b, a)];
+            }
+        }
+    }
     for (int D : m.func_d) {
         mk_right_tm(m, allowed, N, D, j_idx, Rb, rb_any);
+        // Empty, one-base and two-base prefixes recur across cuts of this D.
+        // Their nonnegative boundary probabilities are local to this query/D.
+        std::fill(short_results.begin(), short_results.end(), -1.0);
+        // These reductions depend on (D, boundary), never on the D trim. Preserve
+        // the original state order rather than regrouping products in combine_tm.
+        std::fill(reduced.begin(), reduced.end(), 0.0);
+        std::fill(right_terms.begin(), right_terms.end(), 0);
+        for (int p = 0; p <= N; ++p) {
+            double* r = &reduced[p * 4];
+            if (p % 3 == 0) {
+                for (int s = 0; s < 25; ++s) r[0] += Rb[p * 25 + s];
+            } else if (p % 3 == 1) {
+                for (int s = 0; s < 25; ++s) {
+                    int c = s / 5 - 1, d = s % 5 - 1;
+                    if (Rb[p * 25 + s] == 0.0 || c < 0 || d < 0) continue;
+                    for (int a = 0; a < 4; ++a)
+                        if (ok_codon(allowed[p / 3], a * 16 + c * 4 + d))
+                            right_terms[p] |= uint64_t{1} << (c * 16 + d * 4 + a);
+                }
+            } else if (p % 3 == 2) {
+                for (int s = 0; s < 25; ++s) {
+                    double w = Rb[p * 25 + s];
+                    int c = s / 5 - 1;
+                    if (w != 0.0 && c >= 0) r[c] += w;
+                }
+            }
+        }
         const auto& cutd = m.cut_d[D];
         int Ld = cutd.size();
         const double* del_row = &m.del_d[D * m.nbins_d5 * m.nbins_d3];
@@ -528,39 +597,68 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
             for (int idx3 = 0; idx3 <= hi3; ++idx3)
                 if (del_row[idx5 * m.nbins_d3 + idx3] != 0.0) live[Ld - idx5 - idx3] = 1;
             res.assign((ld_hi + 1) * (N + 1), 0.0);
+            first.assign(ld_hi + 1, N + 1);
+            last.assign(ld_hi + 1, 0);
             for (int pos = 1; pos <= N; ++pos) {
                 if (!lf_any[pos]) continue;
-                for (int s = 0; s < 25; ++s) dp[s] = Lf[pos * 25 + s];
+                const double* weights = &Lf[pos * 25];
+                int sole_state = -1;
                 for (int ld = 0; ld <= ld_hi && pos + ld <= N; ++ld) {
-                    if (ld > 0 && !thread_one(dp, ndp, cutd[idx5 + ld - 1], pos + ld - 1, allowed))
-                        break;  // mass gone; every longer prefix stays 0 and res is pre-zeroed
+                    if (ld > 0) {
+                        int nt = cutd[idx5 + ld - 1], mm = pos + ld - 1;
+                        if (sole_state >= 0) {
+                            int p1 = sole_state / 5 - 1, p2 = sole_state % 5 - 1;
+                            if (mm % 3 == 2 && !ok_codon(allowed[mm / 3], p2 * 16 + p1 * 4 + nt))
+                                break;
+                            double w = dp[sole_state];
+                            sole_state = sidx(nt, p1);
+                            dp[sole_state] = w;
+                        } else if (ld == 1) {
+                            if (!first_any[pos * 4 + nt]) break;
+                            weights = &first_dp[(pos * 4 + nt) * 25];
+                        } else {
+                            double w = second_weight[pos * 16 + cutd[idx5] * 4 + nt];
+                            if (w == 0.0) break;
+                            sole_state = sidx(nt, cutd[idx5]);
+                            dp[sole_state] = w;
+                            weights = dp.data();
+                        }
+                    }
                     int p = pos + ld;
-                    if (live[ld] && rb_any[p])
-                        res[ld * (N + 1) + pos] = combine_tm(dp, &Rb[p * 25], p, allowed);
+                    if (live[ld] && rb_any[p]) {
+                        int key = -1;
+                        if (ld == 0) key = pos * 21;
+                        else if (ld == 1) key = pos * 21 + 1 + cutd[idx5];
+                        else if (ld == 2) key = pos * 21 + 5 + cutd[idx5] * 4 + cutd[idx5 + 1];
+                        double value = key >= 0 ? short_results[key] : -1.0;
+                        if (value < 0.0) {
+                            value = combine_tm(weights, &Rb[p * 25], p, allowed,
+                                               &reduced[p * 4], sole_state, right_terms[p]);
+                            if (key >= 0) short_results[key] = value;
+                        }
+                        res[ld * (N + 1) + pos] = value;
+                        if (value != 0.0) {
+                            first[ld] = std::min(first[ld], pos);
+                            last[ld] = pos;
+                        }
+                    }
                 }
             }
-            // Second pass, in the ORIGINAL (idx3 ascending, pos ascending) order. That is what
-            // keeps `total` bitwise identical rather than merely equal to 1e-16 -- summing
-            // straight out of the walk reassociates, and vsig:pgen:*:frac_atypical is compared
-            // against a frozen pgen_q05 reference where a last-bit move is a data bug.
+            // Retain the original (idx3 ascending, pos ascending) reduction order
+            // so optimized probabilities remain bitwise identical.
             for (int idx3 = 0; idx3 <= hi3; ++idx3) {
                 double pdel = del_row[idx5 * m.nbins_d3 + idx3];
                 if (pdel == 0.0) continue;
                 int ld = Ld - idx5 - idx3;
                 const double* r = &res[ld * (N + 1)];
-                for (int pos = 1; pos <= N - ld; ++pos) total += pdel * r[pos];
+                // Outside this interval every contribution is exactly zero.
+                for (int pos = first[ld]; pos <= last[ld]; ++pos) total += pdel * r[pos];
             }
         }
     }
     return total;
 }
 
-// NOTE: `combine_tm` is the bottleneck now that the D walk shares its prefixes -- unchanged at
-// ~437k calls per 20-aa IGH junction against 588k threading steps. The available win is hoisting
-// its per-boundary reduction (rb -> 4 or 16 numbers, loop-invariant in dp) out to one pass per
-// (D, p), worth roughly another 2x. It is NOT free: that regroups the sum, so Pgen moves in the
-// last ~1e-16 and the bitwise gate on `tests/python/fixtures/pgen_golden.json` has to be relaxed
-// to a tolerance. Its own piece of work, with its own concordance run.
 // Thread a fixed germline block g[0..ld) starting at CDR3 position `start` forward through the
 // codon-constrained state DP (25 states). Returns false if the codon masks kill all mass.
 inline bool thread_fixed(std::vector<double>& dp, std::vector<double>& ndp,
@@ -665,7 +763,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
                             double wgt = pd2 * pdel2;
                             for (int s = 0; s < 25; ++s) dp[s] = Mf[pos2 * 25 + s] * wgt;
                             if (!thread_fixed(dp, ndp, g, ld2, pos2, allowed)) continue;
-                            total += combine_tm(dp, &RbJ[p2 * 25], p2, allowed);
+                            total += combine_tm(dp.data(), &RbJ[p2 * 25], p2, allowed);
                         }
                     }
             }
