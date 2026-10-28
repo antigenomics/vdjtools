@@ -789,8 +789,23 @@ Sample and model-build workers use serial inner numerical kernels. Excessive cou
 Import-time settings also apply to non-signature CLI commands. Existing BLAS pools
 are limited at runtime; their idle OS threads may remain. An already initialized
 multi-thread Polars pool cannot be resized, so outer thread pools require a fresh
-interpreter or ``workers=1``. Sample pools share resources in one interpreter and
-do not change the environment or spawn child processes.
+interpreter or ``workers=1``. The default sample-thread backend shares resources
+in one interpreter and supports closures and deferred readers.
+
+For file-backed, Python-heavy summaries, ``io.map_samples(..., backend="process")``
+uses one contiguous sample span per spawned process. Workers read their own files
+and return reduced results, with one thread per inner numerical kernel. The
+``diversity``, ``spectratype``, ``segment-usage`` and ``overlap`` commands expose the
+same choice as ``--backend process``; ``--threads`` selects the sample-worker budget.
+Process callbacks must be importable/picklable, and Python scripts must guard their
+entry point with ``if __name__ == "__main__":``. Prefer threads for shared models or
+small cohorts where spawn/import cost dominates. Failures propagate; there is no
+silent switch between backends.
+
+.. code-block:: bash
+
+   vdjtools diversity samples/*.tsv --backend process --threads 0 -o diversity.tsv
+
 
 Native worker exceptions are rethrown after joining workers. Thread creation failures
 also join workers already started and raise to Python, rather than terminating the

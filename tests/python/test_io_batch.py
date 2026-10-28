@@ -95,3 +95,40 @@ def test_read_and_map_samples_honour_keep(tmp_path):
     got = dict(vio.batch.map_samples(lambda d: d.columns, [("S1", path)],
                                      keep=("v_identity",)))
     assert "v_identity" in got["S1"]
+
+
+def _sample_budget(frame):
+    from vdjtools.cores import kernel_threads
+    return frame.height, kernel_threads(0), pl.thread_pool_size()
+
+
+def test_process_sample_map_preserves_order_and_bounds_inner_kernels(tmp_path):
+    import pytest
+    from vdjtools.cores import available_cores
+    if available_cores() < 2:
+        pytest.skip('requires two allocated cores')
+    paths = []
+    for i in range(3):
+        path = tmp_path / f'{i}.tsv'
+        path.write_text('v_call\tj_call\tjunction_aa\tduplicate_count\nTRBV1\tTRBJ1\tCASSLF\t3\n')
+        paths.append((str(i), path))
+    expected = [(str(i), (1, 1, 1)) for i in range(3)]
+    assert vio.map_samples(_sample_budget, paths, workers=2, backend='process') == expected
+
+
+def test_sample_map_rejects_unknown_backend():
+    import pytest
+    with pytest.raises(ValueError, match='backend'):
+        vio.map_samples(len, [], backend='typo')
+
+
+def test_process_sample_map_startup_failure_propagates(monkeypatch):
+    import pytest
+    from vdjtools.cores import available_cores
+    if available_cores() < 2:
+        pytest.skip('requires two allocated cores')
+    def broken(*args, **kwargs):
+        raise OSError('cannot start process pool')
+    monkeypatch.setattr('multiprocessing.get_context', broken)
+    with pytest.raises(OSError, match='cannot start'):
+        vio.map_samples(len, [('a', 'a'), ('b', 'b')], workers=2, backend='process')
