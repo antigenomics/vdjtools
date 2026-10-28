@@ -290,7 +290,7 @@ class Corpus:
         # writer change, and the point of the hash is that a file in someone else's environment
         # can be proved to be the one fitted here.
         np.savez_compressed(path, **arrays)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = _file_sha256(path)
         meta = {**self.meta, "sig": self.sig, "name": self.name,
                 "n_rows": {loc: f.n_rows for loc, f in self.fits.items()},
                 "k": self.k,
@@ -316,26 +316,26 @@ class Corpus:
         """
         path = Path(path).with_suffix(".npz")
         meta = json.loads(path.with_suffix(".json").read_text())
-        z = np.load(path, allow_pickle=False)
         sig, name, vocab = meta["sig"], meta["name"], meta["vocab"]
-        loci = sorted({k.split("/")[0] for k in z.files}, key=_locus_order)
-        fits: dict[str, LocusFit] = {}
-        for loc in loci:
-            cols = [str(c) for c in z[f"{loc}/columns"]]
-            fits[loc] = LocusFit(
-                columns=cols,
-                supports=[L.support_of(c, feature_definition=meta.get("feature_definition")) for c in cols],
-                loc=z[f"{loc}/loc"], scale=z[f"{loc}/scale"],
-                rotation=z[f"{loc}/rotation"].astype(np.float64),
-                eigenvalues=z[f"{loc}/eigenvalues"],
-                pc_loc=z[f"{loc}/pc_loc"], pc_scale=z[f"{loc}/pc_scale"],
-                bounds={p: (z[f"{loc}/bound_lo_{p}"], z[f"{loc}/bound_hi_{p}"])
-                        for p in meta["winsor_ps"] if f"{loc}/bound_lo_{p}" in z.files},
-                pc_bounds={p: (z[f"{loc}/pcbound_lo_{p}"], z[f"{loc}/pcbound_hi_{p}"])
-                           for p in meta["winsor_ps"] if f"{loc}/pcbound_lo_{p}" in z.files},
-                n_obs=z[f"{loc}/n_obs"], n_rows=int(meta["n_rows"][loc]),
-                total_variance=float(z[f"{loc}/total_variance"]) if f"{loc}/total_variance" in z.files else None,
-                pca_offset=z[f"{loc}/pca_offset"] if f"{loc}/pca_offset" in z.files else None)
+        with np.load(path, allow_pickle=False) as z:
+            loci = sorted({k.split("/")[0] for k in z.files}, key=_locus_order)
+            fits: dict[str, LocusFit] = {}
+            for loc in loci:
+                cols = [str(c) for c in z[f"{loc}/columns"]]
+                fits[loc] = LocusFit(
+                    columns=cols,
+                    supports=[L.support_of(c, feature_definition=meta.get("feature_definition")) for c in cols],
+                    loc=z[f"{loc}/loc"], scale=z[f"{loc}/scale"],
+                    rotation=z[f"{loc}/rotation"].astype(np.float64),
+                    eigenvalues=z[f"{loc}/eigenvalues"],
+                    pc_loc=z[f"{loc}/pc_loc"], pc_scale=z[f"{loc}/pc_scale"],
+                    bounds={p: (z[f"{loc}/bound_lo_{p}"], z[f"{loc}/bound_hi_{p}"])
+                            for p in meta["winsor_ps"] if f"{loc}/bound_lo_{p}" in z.files},
+                    pc_bounds={p: (z[f"{loc}/pcbound_lo_{p}"], z[f"{loc}/pcbound_hi_{p}"])
+                               for p in meta["winsor_ps"] if f"{loc}/pcbound_lo_{p}" in z.files},
+                    n_obs=z[f"{loc}/n_obs"], n_rows=int(meta["n_rows"][loc]),
+                    total_variance=float(z[f"{loc}/total_variance"]) if f"{loc}/total_variance" in z.files else None,
+                    pca_offset=z[f"{loc}/pca_offset"] if f"{loc}/pca_offset" in z.files else None)
         out = cls(sig=sig, name=name, vocab=vocab, fits=fits, meta=meta)
         if verify:
             out.verify()
@@ -1032,6 +1032,15 @@ def corpora_index(res_dir: Path) -> dict:
     return json.loads(p.read_text())
 
 
+def _file_sha256(path: Path) -> str:
+    """Hash large artifacts with bounded scratch memory, including on Python 3.10."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") -> Path:
     """Fetch one file into ``dest``, verifying its digest before it is visible under that name.
 
@@ -1050,7 +1059,7 @@ def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") 
             with urllib.request.urlopen(url, timeout=60) as r:
                 shutil.copyfileobj(r, f)
             f.close()
-            got = hashlib.sha256(tmp.read_bytes()).hexdigest()
+            got = _file_sha256(tmp)
             if sha256 and got != sha256:
                 raise OSError(f"{url} hashed {got[:12]}, the shipped index expects {sha256[:12]}; refusing "
                               "to cache it. Either the release asset was replaced or the download truncated.")
@@ -1085,7 +1094,7 @@ def fetch_artifact(name: str, *, sig: str, res_dir: Path, repo: str, quiet: bool
         part = entry.get(ext, {})
         target = cache / f"{sig}_{name}.{ext}"
         if target.exists() and (not part.get("sha256")
-                                or hashlib.sha256(target.read_bytes()).hexdigest()
+                                or _file_sha256(target)
                                 == part["sha256"]):
             continue
         url = f"{base}/{sig}_{name}.{ext}"

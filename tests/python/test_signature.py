@@ -784,3 +784,69 @@ def test_download_connection_failure_preserves_existing_artifact(tmp_path, monke
         C._download("test://artifact", target, None, None)
     assert target.read_bytes() == b"existing"
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_corpus_file_digests_do_not_materialize_whole_artifacts(tmp_path, monkeypatch):
+    import hashlib
+    import json
+
+    payload = b'corpus digest regression\n' * 100000
+    source = tmp_path / 'served'
+    source.mkdir()
+    (source / 'vsig_demo.npz').write_bytes(payload)
+    (source / 'vsig_demo.json').write_bytes(b'{}')
+    res = tmp_path / 'resources'
+    res.mkdir()
+    (res / C.CORPORA_INDEX).write_text(json.dumps({'demo': {
+        ext: {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+        for ext, data in [('npz', payload), ('json', b'{}')]
+    }}))
+    monkeypatch.setenv('VDJTOOLS_CORPUS_DIR', str(tmp_path / 'cache'))
+
+    def no_full_read(path):
+        raise AssertionError('digest must not allocate one buffer the size of the artifact')
+
+    monkeypatch.setattr(pathlib.Path, 'read_bytes', no_full_read)
+    saved = C.Corpus('vsig', 'empty', {}, {}).save(tmp_path / 'empty.npz')
+    with saved.open('rb') as stream:
+        expected = hashlib.sha256(stream.read()).hexdigest()
+    assert json.loads(saved.with_suffix('.json').read_text())['content_sha256'] == expected
+    downloaded = C.fetch_artifact('demo', sig='vsig', res_dir=res, repo='x/y',
+                                  base_url=source.as_uri(), quiet=True)
+    # A valid cached artifact is verified again without downloading its now-corrupt source.
+    (source / 'vsig_demo.npz').write_bytes(b'corrupt')
+    assert C.fetch_artifact('demo', sig='vsig', res_dir=res, repo='x/y',
+                            base_url=source.as_uri(), quiet=True) == downloaded
+    with downloaded.open('rb') as stream:
+        assert hashlib.sha256(stream.read()).hexdigest() == hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.parametrize('failure', [None, 'verify', 'read'])
+def test_corpus_reader_closes_archive_with_retained_exceptions(tmp_path, monkeypatch, failure):
+    path = C.Corpus('vsig', 'empty', {}, {}).save(tmp_path / 'empty.npz')
+    if failure == 'read':
+        np.savez_compressed(path, **{'TRB/broken': np.array([1])})
+    if failure == 'verify':
+        def reject(_):
+            raise ValueError('verification failed')
+        monkeypatch.setattr(C.Corpus, 'verify', reject)
+    load = np.load
+    streams = []
+
+    def tracked_load(*args, **kwargs):
+        archive = load(*args, **kwargs)
+        streams.append(archive.zip.fp)
+        return archive
+
+    monkeypatch.setattr(np, 'load', tracked_load)
+    if failure:
+        with pytest.raises((ValueError, KeyError)) as retained:
+            C.Corpus.load(path)
+        assert retained.value is not None
+    else:
+        C.Corpus.load(path)
+    try:
+        assert streams and all(stream.closed for stream in streams)
+    finally:
+        for stream in streams:
+            stream.close()

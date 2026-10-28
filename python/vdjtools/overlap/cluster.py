@@ -8,7 +8,7 @@ hierarchy (hclust).
 An overlap *similarity* is turned into a *distance* with the legacy per-metric
 normalisation (``OverlapMetricNormalization``):
 
-- ``F``, ``F2``, ``D`` (frequency/diversity overlaps, ``(0, 1]``) → ``-log10(x + 1e-9)``;
+- ``F``, ``F2``, ``D`` (frequency/diversity overlaps, ``(0, 1]``) → ``max(0, -log10(x + 1e-9))``;
 - ``R`` (correlation, ``[-1, 1]``) → ``(1 - x) / 2``;
 - ``jaccard`` (similarity index, ``[0, 1]``) → ``1 - x``.
 
@@ -40,9 +40,9 @@ _SKLEARN_HINT = (
 #: The similarity-weighted overlaps (TINA cosine / Morisita) are already in ``[0, 1]``,
 #: so their distance is simply ``1 - similarity``.
 _TRANSFORM = {
-    "F": lambda x: -math.log10(x + 1e-9),
-    "F2": lambda x: -math.log10(x + 1e-9),
-    "D": lambda x: -math.log10(x + 1e-9),
+    "F": lambda x: max(-math.log10(x + 1e-9), 0.0),
+    "F2": lambda x: max(-math.log10(x + 1e-9), 0.0),
+    "D": lambda x: max(-math.log10(x + 1e-9), 0.0),
     "R": lambda x: (1.0 - x) / 2.0,
     "jaccard": lambda x: 1.0 - x,
     "similarity_cosine": lambda x: 1.0 - x,
@@ -84,6 +84,53 @@ def _delegated_similarity(a: pl.DataFrame, b: pl.DataFrame, metric: str,
     return similarity_overlap(a, b, key=key, metric=sub)["similarity"]
 
 
+def _exact_matrix(aggs, key, metric):
+    """Batch exact overlaps through a shared sparse clonotype vocabulary."""
+    from scipy.sparse import csr_matrix
+    from ..cores import require_memory
+
+    n = len(aggs)
+    require_memory(48 * n * n + 64 * sum(a.height for a in aggs),
+                   "exact-overlap numerical workspace (reduce samples or depth)")
+    blocks = pl.concat([a.select(*key, "_freq", "_count").with_columns(pl.lit(i).alias("_sample"))
+                        for i, a in enumerate(aggs)], how="vertical_relaxed").drop_nulls(key)
+    values = blocks["_freq"].to_numpy()
+    if not np.all(np.isfinite(values) & (values >= 0) & (values <= 1)):
+        return None  # Preserve the pairwise arithmetic for signed/non-finite input frequencies.
+    totals = None
+    if metric in {"F", "F2"}:
+        if any(a.schema["_count"] != pl.Int64 for a in aggs):
+            return None
+        totals = np.array([a["_count"].cast(pl.Float64).sum() or 1 for a in aggs])
+        if np.any((totals <= 0) | (totals >= 2**53)):
+            return None  # Keep legacy arithmetic beyond exact float64 integer accumulation.
+    vocab = blocks.select(key).unique(maintain_order=True).with_row_index("_clone")
+    encoded = blocks.join(vocab, on=key)
+    rows, cols = encoded["_sample"].to_numpy(), encoded["_clone"].to_numpy()
+    shape = (n, vocab.height)
+    present = csr_matrix((np.ones(len(rows), dtype=np.int64), (rows, cols)), shape=shape)
+    sizes = np.array([a.height for a in aggs], dtype=float)
+    if metric in {"D", "jaccard"}:
+        shared = (present @ present.T).toarray()
+        denominator = (sizes[:, None] * sizes[None, :] if metric == "D" else
+                       sizes[:, None] + sizes[None, :] - shared)
+        similarity = np.divide(shared, denominator, out=np.zeros(shape=(n, n)),
+                               where=denominator > 0)
+    else:
+        counts = csr_matrix((encoded["_count"].cast(pl.Float64).to_numpy(), (rows, cols)), shape=shape)
+        if metric == "F":
+            mass = (counts @ present.T).toarray() / totals[:, None]
+            similarity = np.sqrt(mass * mass.T)
+        else:
+            counts.data = np.sqrt(counts.data)
+            root_totals = np.sqrt(totals)
+            similarity = (counts @ counts.T).toarray() / (root_totals[:, None] * root_totals[None, :])
+    distance = (1 - similarity if metric == "jaccard" else
+                np.maximum(-np.log10(similarity + 1e-9), 0.0))
+    np.fill_diagonal(distance, 0)
+    return distance
+
+
 def pairwise_distances(samples, metric: str = "F", key=DEFAULT_KEY,
                        scope: str | None = None, form: str = "matrix") -> pl.DataFrame:
     """All-pairs distance matrix over a collection of samples.
@@ -109,24 +156,35 @@ def pairwise_distances(samples, metric: str = "F", key=DEFAULT_KEY,
     """
     if metric not in _TRANSFORM:
         raise ValueError(f"unknown metric {metric!r}; expected one of {sorted(_TRANSFORM)}")
+    if form not in {"matrix", "long"}:
+        raise ValueError(f"form must be 'matrix' or 'long'; got {form!r}")
     named = _named(samples)
     names = [n for n, _ in named]
     n = len(named)
-    dist = np.zeros((n, n), dtype=float)
-    # Aggregate each sample's clonotype key->freq ONCE, then every O(n²) pair is a join over the
-    # pre-aggregated frames. Previously each pair called `overlap_pair`, which re-aggregated (re-hashed)
-    # BOTH frames from scratch, so each sample was collapsed (n-1) times — the dominant cost for a deep
-    # cohort (n≈80). Distances are bitwise-identical (same join + numpy). The fuzzy (scope=) and
-    # similarity_* metrics still delegate to the vdjmatch/seqtree engine per pair.
+    from ..cores import require_memory
+    workspace = (64 if form == "long" else 16) * n * n
+    if form == "long":
+        workspace += 2 * n * sum(len(str(name).encode()) for name in names)
+    require_memory(workspace, "pairwise-distance output (reduce sample count)")
+    # Aggregate once and batch the nonnegative frequency metrics. Pearson keeps its
+    # centered pairwise calculation; raw-moment matrix products can lose its variance.
     if scope is None and metric in _EXACT:
         klist = list(key)
         aggs = [_aggregate(df, klist) for _, df in named]
-        for i in range(n):
-            for j in range(i + 1, n):
-                _, m = _overlap_from_agg(aggs[i], aggs[j], klist)
-                d = _TRANSFORM[metric](_exact_similarity(m, metric))
-                dist[i, j] = dist[j, i] = d
+        # With at most three samples there are at most three joins; avoid a global
+        # vocabulary that regresses a few deep samples.
+        batched = _exact_matrix(aggs, klist, metric) if n > 3 and metric != "R" else None
+        if batched is not None:
+            dist = batched
+        else:
+            dist = np.zeros((n, n), dtype=float)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    _, m = _overlap_from_agg(aggs[i], aggs[j], klist)
+                    d = _TRANSFORM[metric](_exact_similarity(m, metric))
+                    dist[i, j] = dist[j, i] = d
     else:
+        dist = np.zeros((n, n), dtype=float)
         for i in range(n):
             for j in range(i + 1, n):
                 sim = _delegated_similarity(named[i][1], named[j][1], metric, key, scope)
@@ -134,16 +192,12 @@ def pairwise_distances(samples, metric: str = "F", key=DEFAULT_KEY,
                 dist[i, j] = dist[j, i] = d
 
     if form == "long":
-        rows = [(names[i], names[j], float(dist[i, j]))
-                for i in range(n) for j in range(n)]
-        return pl.DataFrame(rows, orient="row",
-                            schema=["sample_a", "sample_b", "distance"])
-    if form == "matrix":
-        data = {"sample": names}
-        for j, name in enumerate(names):
-            data[name] = dist[:, j].tolist()
-        return pl.DataFrame(data)
-    raise ValueError(f"form must be 'matrix' or 'long'; got {form!r}")
+        if not n:
+            return pl.DataFrame(schema=["sample_a", "sample_b", "distance"])
+        return (pl.DataFrame({"sample_a": names})
+                .join(pl.DataFrame({"sample_b": names}), how="cross", maintain_order="left_right")
+                .with_columns(pl.Series("distance", dist.ravel())))
+    return pl.DataFrame({"sample": names, **{name: dist[:, j] for j, name in enumerate(names)}})
 
 
 def _matrix(dist: pl.DataFrame) -> "tuple[list[str], np.ndarray]":

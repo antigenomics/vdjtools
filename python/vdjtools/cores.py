@@ -254,13 +254,21 @@ def numerical_kernels(threads: int = 1):
         yield budget
 
 
-def require_serial_pools() -> None:
-    """Reject an immutable multi-thread Polars pool before launching outer thread workers."""
+def require_serial_pools(*, outer: bool = True) -> None:
+    """Check immutable pool allocation; outer workers additionally require serial kernels."""
     import polars as pl
+
+    pool = pl.thread_pool_size()
+    budget = available_cores()
+    if pool > budget:
+        raise RuntimeError(f"Polars has {pool} threads but the CPU allocation is {budget}; "
+                           "start a fresh process and import vdjtools before Polars")
+    if not outer:
+        return
     from threadpoolctl import threadpool_limits
 
     threadpool_limits(limits=1)
-    if pl.thread_pool_size() > 1:
+    if pool > 1:
         raise RuntimeError("Polars was initialized with multiple threads before vdjtools; "
                            "start a fresh process and import vdjtools before Polars, "
                            "or use workers=1")

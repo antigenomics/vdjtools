@@ -103,9 +103,12 @@ else:
 def test_serial_sample_map_accepts_preinitialized_polars():
     import subprocess
     import sys
-    code = """import polars as pl
+    from vdjtools.cores import available_cores
+    pool = min(4, available_cores())
+    code = """import os
+import polars as pl
 pl.DataFrame({'x':[1]}).select(pl.col('x').sum())
-assert pl.thread_pool_size() == 4
+assert pl.thread_pool_size() == int(os.environ['POLARS_MAX_THREADS'])
 import vdjtools
 from vdjtools.signature.cohort import parallel_rows
 assert parallel_rows([1,2], abs, 1) == [1,2]
@@ -118,7 +121,7 @@ if available_cores() >= 2:
     else:
         raise AssertionError('outer pool accepted multithreaded Polars')
 """
-    env = {**os.environ, 'POLARS_MAX_THREADS': '4'}
+    env = {**os.environ, 'POLARS_MAX_THREADS': str(pool)}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=30)
 
 
@@ -138,3 +141,66 @@ def test_cgroup_mount_mapping_includes_visible_ancestors(v2):
     assert (base / 'pod', v2) in paths
     assert (base, v2) in paths
     assert (base / 'parent' / 'pod', v2) not in paths
+
+
+def test_preinitialized_polars_cannot_exceed_allocation_in_serial_map():
+    import subprocess
+    import sys
+    code = '''import polars as pl
+assert pl.thread_pool_size() == 4
+import vdjtools
+from vdjtools.signature.cohort import parallel_rows
+try:
+    parallel_rows([1], abs, 1)
+except RuntimeError as exc:
+    assert 'Polars' in str(exc) and 'allocation' in str(exc) and 'fresh process' in str(exc)
+else:
+    raise AssertionError('four-thread Polars pool accepted under a two-CPU allocation')
+'''
+    env = {**os.environ, 'POLARS_MAX_THREADS': '4', 'SLURM_CPUS_PER_TASK': '2'}
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=30)
+
+
+def test_serial_map_rechecks_changed_allocation():
+    import subprocess
+    import sys
+    from vdjtools.cores import available_cores
+    if available_cores() < 2:
+        pytest.skip('requires a two-thread pool before reducing the allocation')
+    code = '''import os
+import polars as pl
+assert pl.thread_pool_size() == 2
+import vdjtools
+from vdjtools.signature.cohort import parallel_rows
+os.environ['SLURM_CPUS_PER_TASK'] = '1'
+try:
+    parallel_rows([1], abs, 1)
+except RuntimeError as exc:
+    assert 'allocation' in str(exc)
+else:
+    raise AssertionError('single-worker map ignored the reduced allocation')
+'''
+    env = {**os.environ, 'POLARS_MAX_THREADS': '2', 'SLURM_CPUS_PER_TASK': '2'}
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=30)
+
+
+def test_process_map_can_leave_oversized_parent_polars_pool_idle(tmp_path):
+    import subprocess
+    import sys
+    from vdjtools.cores import available_cores
+    if available_cores() < 2:
+        pytest.skip('requires two allocated process workers')
+    sample = tmp_path / 'sample.tsv'
+    sample.write_text('v_call\tj_call\tjunction_aa\tduplicate_count\nTRBV1\tTRBJ1\tCASSLF\t3\n')
+    script = tmp_path / 'process_map.py'
+    script.write_text('''import sys
+import polars as pl
+if __name__ == '__main__':
+    assert pl.thread_pool_size() == 4
+    import vdjtools
+    from vdjtools.io import map_samples
+    assert map_samples(len, [('a', sys.argv[1]), ('b', sys.argv[1])],
+                       workers=2, backend='process') == [('a', 1), ('b', 1)]
+''')
+    env = {**os.environ, 'POLARS_MAX_THREADS': '4', 'SLURM_CPUS_PER_TASK': '2'}
+    subprocess.run([sys.executable, str(script), str(sample)], env=env, check=True, timeout=30)

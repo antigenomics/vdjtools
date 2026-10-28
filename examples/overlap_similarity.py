@@ -164,7 +164,7 @@ def _(mo):
     ## 2 · All-pairs overlap under each kernel
 
     `pairwise_distances` turns each overlap similarity into a distance:
-    exact/fuzzy **F** → `−log10 F`, similarity cosine → `1 − cos`. The three
+    exact/fuzzy **F** → `max(0, −log10(F + 1e−9))`, similarity cosine → `1 − cos`. The three
     matrices below are the same 15 samples seen through progressively more
     forgiving notions of "shared".
     """)

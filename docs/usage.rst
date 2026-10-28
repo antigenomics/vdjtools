@@ -199,7 +199,7 @@ enormously, and which you want depends on the question.
 Overlap and TCRnet
 ------------------
 
-:mod:`vdjtools.overlap` compares samples. Exact-match overlap is pure polars; fuzzy /
+:mod:`vdjtools.overlap` compares samples. Exact-pair overlap uses Polars; cohort distances also use SciPy sparse products. Fuzzy /
 similarity-aware overlap and TCRnet delegate to the base vdjmatch + seqtree dependencies.
 The ``[overlap]`` extra supplies scikit-learn for sample MDS:
 
@@ -219,6 +219,16 @@ The ``[overlap]`` extra supplies scikit-learn for sample MDS:
 
    # frequency trajectories of the top clonotypes across an ordered series
    overlap.track_clonotypes({"t0": a, "t1": b, "t2": c}, top=50)
+
+
+Exact cohort distances
+^^^^^^^^^^^^^^^^^^^^^^
+
+Use ``pairwise_distances(..., metric="F")`` for a cohort distance matrix, then pass
+that matrix to ``cluster_samples``. F/F2/D/Jaccard use sparse products for larger
+cohorts; up to three samples keep the direct joins. Pearson R keeps its centered
+pairwise calculation. Dense all-pairs results still require quadratic memory.
+See :doc:`overlap-methods` for the identities, numerical behavior and memory bounds.
 
 Preprocessing
 -------------
@@ -489,7 +499,7 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    from vdjtools.model.generate import generate
 
    model = load_bundled("TRB", "olga")           # or "learned" (fit to real repertoires)
-   native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen (matches OLGA to 1e-15)
+   native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)     # + the Hamming-1 ball
    native.pgen_aa_batch(model, seqs, threads=0)   # many sequences, thread-parallel (~11x)
    native.pgen_nt_batch(model, nts, threads=0)    # the nucleotide batch (new in 4.5.0)
@@ -789,7 +799,10 @@ Sample and model-build workers use serial inner numerical kernels. Excessive cou
 Import-time settings also apply to non-signature CLI commands. Existing BLAS pools
 are limited at runtime; their idle OS threads may remain. An already initialized
 multi-thread Polars pool cannot be resized, so outer thread pools require a fresh
-interpreter or ``workers=1``. The default sample-thread backend shares resources
+interpreter or ``workers=1``. A preinitialized Polars pool must still fit the detected
+CPU allocation: sample maps raise if that immutable pool is wider than the allocation,
+including for single-worker workflows. Start a fresh process and import
+vdjtools before Polars in that case. The default sample-thread backend shares resources
 in one interpreter and supports closures and deferred readers.
 
 For file-backed, Python-heavy summaries, ``io.map_samples(..., backend="process")``

@@ -161,9 +161,13 @@ Performance
 -----------
 
 Native Pgen, generation, EM and batched rarefaction kernels are reached through pybind11;
-the surrounding analytics use Python, NumPy and Polars. Amino-acid Pgen agrees with OLGA to 1e-15 on all seven human loci.
+the surrounding analytics use Python, NumPy and Polars. Engine comparisons use identical
+probability tables and raw germlines, with a strict relative tolerance and zero absolute
+tolerance. Imported germline repairs and an OLGA insertion-workspace boundary can change
+comparisons with unmodified OLGA; see :ref:`olga-caveats`.
 
-Single thread, Apple M3, bundled human TRB model:
+Earlier single-thread measurements, Apple M3, bundled human TRB model. The generation
+rows below use the reference sampler; ``--engine native`` selects the newer native sampler:
 
 .. list-table::
    :header-rows: 1
@@ -192,10 +196,26 @@ The productive filter costs 3.6x on TRB and 5.1x on IGH (19,900 raw draws per se
 productive), because out-of-frame and stop-codon draws are discarded and redrawn rather than
 repaired. Quote whichever of the two your pipeline uses.
 
-Batched Pgen over many junctions parallelises over sequences
+Earlier batched Pgen measurements over many junctions showed sequence parallelism
 (:func:`~vdjtools.model.native.pgen_aa_batch`, 11x on 16 cores, and identical to the serial result to the last bit);
 the EM E-step parallelises over reads (6.7x on 8 threads). Memory stays modest: 63 MB resident for
 ``import vdjtools`` plus one model, 123 MB with all seven bundled models loaded.
+
+Release 5.3.0 comparisons on a 16-core Apple Silicon host also include OLGA's warmed
+``FastPgen`` path. Across seven loci, three-repeat single-core medians favored native
+scoring in all 56 tested conditions: short and long amino-acid junctions with exact or
+Hamming-1 scoring, and short and long nucleotide junctions with marginal or V/J-conditioned
+scoring. Short amino-acid batches contained 64 queries per locus (1.71–21.69x faster);
+short nucleotide batches contained 16 queries per locus (1.23–167.11x faster). These are
+batch timing ratios on the tested inputs, not a guarantee for every query or machine.
+Each workload drew 192 productive junctions per locus from unchanged OLGA model parameters
+and selected short or long queries; timings exclude JIT warmup.
+
+On fresh streams of 2,048 junctions per locus, native amino-acid scoring at 16 threads
+was 6.47–10.35x faster than one thread for exact scoring and 9.46–10.82x for Hamming-1
+scoring, with bit-identical outputs at every tested budget (1, 2, 4, 8 and 16).
+File-backed cohort operations also depend on I/O and process startup; see :doc:`usage`
+for choosing the sample-map backend and keeping inner kernels serial.
 
 Citing
 ------
@@ -216,7 +236,8 @@ Choose a documentation path
 * **Complete a task:** :doc:`usage`, :doc:`preprocessing`, :doc:`features`,
   :doc:`signature`, :doc:`model` and :doc:`singlecell` describe analysis workflows.
 * **Understand the method:** :doc:`signature-methods` explains the statistical
-  representation, fitting choices and measured behavior.
+  representation, fitting choices and measured behavior; :doc:`overlap-methods`
+  derives exact cohort distances and their numerical and memory behavior.
 * **Look up an interface:** :doc:`cli`, :doc:`api`, :doc:`channels` and
   :doc:`glossary` define commands, functions, output fields and terminology.
 
@@ -256,6 +277,7 @@ Choose a documentation path
    :maxdepth: 2
 
    signature-methods
+   overlap-methods
 
 .. toctree::
    :hidden:
