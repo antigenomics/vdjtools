@@ -183,7 +183,7 @@ def test_exact_matrix_batches_keys_instead_of_joining_every_pair(monkeypatch, me
     samples['duplicates'] = pl.concat([samples['a'], samples['a'].head(1)])
     samples['empty'] = samples['a'].clear()
     samples['null'] = samples['a'].head(1).with_columns(pl.lit(None, pl.String).alias(S.V_CALL))
-    samples['zero'] = samples['a'].with_columns(pl.lit(0).alias(S.COUNT))
+    samples['zero'] = samples['a'].with_columns(pl.lit(0, pl.Int64).alias(S.COUNT))
     names = list(samples)
     aggs = [C._aggregate(df, list(C.DEFAULT_KEY)) for df in samples.values()]
     expected = np.zeros((len(names), len(names)))
@@ -199,10 +199,11 @@ def test_exact_matrix_batches_keys_instead_of_joining_every_pair(monkeypatch, me
     got = C.pairwise_distances(samples, metric=metric)
     assert got['sample'].to_list() == names
     np.testing.assert_allclose(got.select(names).to_numpy(), expected, rtol=1e-14, atol=1e-14)
+    assert got.equals(C.pairwise_distances(samples, metric=metric))
 
 
 @pytest.mark.parametrize('metric', ['F', 'F2', 'D', 'jaccard', 'R'])
-@pytest.mark.parametrize('case', ['empty', 'null', 'signed', 'custom-key'])
+@pytest.mark.parametrize('case', ['empty', 'null', 'signed', 'custom-key', 'large-counts', 'fractional-counts', 'int32-counts'])
 def test_exact_matrix_boundary_cases_preserve_pairwise_values(metric, case):
     from vdjtools.overlap import cluster as C
     a, b = _toy_samples()['a'], _toy_samples()['b']
@@ -214,15 +215,23 @@ def test_exact_matrix_boundary_cases_preserve_pairwise_values(metric, case):
         b = b.with_columns(pl.lit(None, pl.String).alias(S.V_CALL))
     elif case == 'signed':
         a = a.with_columns(pl.Series(S.COUNT, [-1, 2, 3, 4]))
+    elif case == 'large-counts':
+        a = a.with_columns(pl.Series(S.COUNT, [2**53 + 1, 2, 3, 4]))
+    elif case == 'fractional-counts':
+        a = a.with_columns((pl.col(S.COUNT).cast(pl.Float64) / 2).alias(S.COUNT))
+    elif case == 'int32-counts':
+        a = a.with_columns(pl.col(S.COUNT).cast(pl.Int32))
     else:
         key = [S.JUNCTION_AA]
         b = b.with_columns(pl.lit(None, pl.String).alias(S.V_CALL))
     with np.errstate(invalid='ignore'):
         values = O.overlap_metrics(a, b, key=tuple(key))
         expected = C._TRANSFORM[metric](C._exact_similarity(values, metric))
-        got = C.pairwise_distances({'a': a, 'b': b}, metric=metric, key=tuple(key), form='long')
-    assert got.select('sample_a', 'sample_b').rows() == [('a', 'a'), ('a', 'b'), ('b', 'a'), ('b', 'b')]
-    np.testing.assert_allclose(got['distance'].to_numpy(), [0, expected, expected, 0],
+        samples = {'a': a, 'b': b, 'c': a.clear(), 'd': b.clear()}
+        got = C.pairwise_distances(samples, metric=metric, key=tuple(key), form='long')
+    assert got.select('sample_a', 'sample_b').rows() == [(a, b) for a in samples for b in samples]
+    selected = got.filter(pl.col('sample_a').is_in(['a', 'b']) & pl.col('sample_b').is_in(['a', 'b']))
+    np.testing.assert_allclose(selected['distance'].to_numpy(), [0, expected, expected, 0],
                                rtol=1e-14, atol=1e-14, equal_nan=True)
 
 
@@ -250,3 +259,15 @@ def test_delegated_distance_output_preserves_similarity(metric):
     similarity = C._delegated_similarity(a, b, metric, C.DEFAULT_KEY, None)
     got = C.pairwise_distances({'a': a, 'b': b}, metric=metric, form='long')
     assert got['distance'].to_list() == [0.0, 1 - similarity, 1 - similarity, 0.0]
+
+
+@pytest.mark.parametrize('metric', ['F', 'F2'])
+def test_many_shared_keys_do_not_accumulate_normalized_frequency_roundoff(metric):
+    from vdjtools.overlap import cluster as C
+    depth = 20000
+    samples = {str(i): _sample([f'CASS{k}F' for k in range(i * 10000, i * 10000 + depth)],
+                               np.ones(depth, dtype=np.int64)) for i in range(4)}
+    values = O.overlap_metrics(samples['0'], samples['1'])
+    expected = C._TRANSFORM[metric](values[metric])
+    actual = C.pairwise_distances(samples, metric=metric)['1'][0]
+    np.testing.assert_allclose(actual, expected, rtol=1e-14, atol=0)

@@ -92,12 +92,19 @@ def _exact_matrix(aggs, key, metric):
     n = len(aggs)
     require_memory(48 * n * n + 64 * sum(a.height for a in aggs),
                    "exact-overlap numerical workspace (reduce samples or depth)")
-    blocks = pl.concat([a.select(*key, "_freq").with_columns(pl.lit(i).alias("_sample"))
+    blocks = pl.concat([a.select(*key, "_freq", "_count").with_columns(pl.lit(i).alias("_sample"))
                         for i, a in enumerate(aggs)], how="vertical_relaxed").drop_nulls(key)
     values = blocks["_freq"].to_numpy()
-    if not np.all(np.isfinite(values) & (values >= 0)):
+    if not np.all(np.isfinite(values) & (values >= 0) & (values <= 1)):
         return None  # Preserve the pairwise arithmetic for signed/non-finite input frequencies.
-    vocab = blocks.select(key).unique().with_row_index("_clone")
+    totals = None
+    if metric in {"F", "F2"}:
+        if any(a.schema["_count"] != pl.Int64 for a in aggs):
+            return None
+        totals = np.array([a["_count"].cast(pl.Float64).sum() or 1 for a in aggs])
+        if np.any((totals <= 0) | (totals >= 2**53)):
+            return None  # Keep legacy arithmetic beyond exact float64 integer accumulation.
+    vocab = blocks.select(key).unique(maintain_order=True).with_row_index("_clone")
     encoded = blocks.join(vocab, on=key)
     rows, cols = encoded["_sample"].to_numpy(), encoded["_clone"].to_numpy()
     shape = (n, vocab.height)
@@ -110,13 +117,14 @@ def _exact_matrix(aggs, key, metric):
         similarity = np.divide(shared, denominator, out=np.zeros(shape=(n, n)),
                                where=denominator > 0)
     else:
-        frequencies = csr_matrix((encoded["_freq"].to_numpy(), (rows, cols)), shape=shape)
+        counts = csr_matrix((encoded["_count"].cast(pl.Float64).to_numpy(), (rows, cols)), shape=shape)
         if metric == "F":
-            mass = (frequencies @ present.T).toarray()
+            mass = (counts @ present.T).toarray() / totals[:, None]
             similarity = np.sqrt(mass * mass.T)
         else:
-            frequencies.data = np.sqrt(frequencies.data)
-            similarity = (frequencies @ frequencies.T).toarray()
+            counts.data = np.sqrt(counts.data)
+            root_totals = np.sqrt(totals)
+            similarity = (counts @ counts.T).toarray() / (root_totals[:, None] * root_totals[None, :])
     distance = 1 - similarity if metric == "jaccard" else -np.log10(similarity + 1e-9)
     np.fill_diagonal(distance, 0)
     return distance
@@ -162,7 +170,9 @@ def pairwise_distances(samples, metric: str = "F", key=DEFAULT_KEY,
     if scope is None and metric in _EXACT:
         klist = list(key)
         aggs = [_aggregate(df, klist) for _, df in named]
-        batched = _exact_matrix(aggs, klist, metric) if n > 1 and metric != "R" else None
+        # With at most three samples there are at most three joins; avoid a global
+        # vocabulary that regresses a few deep samples.
+        batched = _exact_matrix(aggs, klist, metric) if n > 3 and metric != "R" else None
         if batched is not None:
             dist = batched
         else:
