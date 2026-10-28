@@ -2144,7 +2144,7 @@ class TablePCA:
         from vdjtools.cores import require_memory
         require_memory(32 * table.height * len(cols) + 16 * min(table.height, len(cols))**2,
                        'sample feature PCA fit')
-        X = table.select(cols).to_numpy(order='c').copy()
+        X = table.select(cols).to_numpy(order='c', writable=True)
         X[~np.isfinite(X)] = np.nan
         fill = np.zeros(len(cols))
         observed = np.isfinite(X).any(axis=0)
@@ -2199,22 +2199,36 @@ class TablePCA:
             parameters = table_pca(raw, n_components, seed=seed)
         return cls(columns, space, *parameters)
 
-    def transform(self, table: pl.DataFrame) -> pl.DataFrame:
-        """Apply this exact rotation; preserve sample IDs and metadata in input order."""
+    def transform(self, table: pl.DataFrame, *, threads: int = 1) -> pl.DataFrame:
+        """Project bounded row blocks; preserve sample IDs and metadata in input order.
+
+        ``threads`` budgets BLAS during application (1 serial, 0 allocated cores).
+        The selected input stays columnar; only a bounded block becomes dense.
+        """
         if _space(table) != self.space:
             raise ValueError('embedding space differs from the fitted rotation')
         selected = set(self.columns)
         if not selected.issubset(table.columns):
             raise ValueError('embedding columns differ from the fitted rotation')
-        from vdjtools.cores import require_memory
-        require_memory(24 * table.height * len(self.columns)
-                       + 8 * table.height * self.components.shape[0], 'sample feature PCA transform')
-        X = table.select(self.columns).to_numpy(order='c')
-        X = np.where(np.isfinite(X), X, self.fill)
-        X -= self.mean
-        X /= self.scale
-        X -= self.center
-        scores = X @ self.components.T
+        from vdjtools.cores import kernel_threads, numerical_kernels, require_memory
+        budget = kernel_threads(threads)
+        # Two dense blocks plus masks/scaling scratch fit in 32 MiB; output is N x rank.
+        rows = max(1, (32 * 1024**2) // (16 * len(self.columns)))
+        dtype = np.result_type(self.components.dtype, self.fill.dtype, np.float64)
+        require_memory(16 * min(rows, table.height) * len(self.columns)
+                       + dtype.itemsize * table.height * self.components.shape[0],
+                       'sample feature PCA transform')
+        scores = np.empty((table.height, self.components.shape[0]), dtype=dtype)
+        features = table.select(self.columns)
+        with numerical_kernels(budget):
+            for i, block in enumerate(features.iter_slices(rows)):
+                X = block.to_numpy(order='c', writable=True).astype(dtype, copy=False)
+                np.copyto(X, self.fill, where=~np.isfinite(X))
+                X -= self.mean
+                X /= self.scale
+                X -= self.center
+                start = i * rows
+                np.matmul(X, self.components.T, out=scores[start:start+block.height])
         metadata = table.select([c for c in table.columns if c not in selected])
         return metadata.hstack(pl.from_numpy(scores, schema=[f'pc{i}' for i in range(scores.shape[1])]))
 
