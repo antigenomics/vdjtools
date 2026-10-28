@@ -8,7 +8,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from vdjtools.model import load_bundled
+from vdjtools.model import load_bundled, list_bundled
 from vdjtools.model.bundled import LOCI
 from vdjtools.model.check import check_model
 from vdjtools.model.model import Model
@@ -53,12 +53,13 @@ def test_required_deletion_conditional_distinguishes_used_and_unused(toy_model, 
     assert 'required_conditional' not in _checks(check_model(unused, germline='none'), 'error')
 
 
-def test_human_arda_tra_reports_selectable_traj14_without_deletion_mass():
-    issues = check_model(load_bundled('TRA', 'arda', collapse=False), germline='none')
-    required = issues.filter((pl.col('check') == 'required_conditional') &
-        (pl.col('event') == 'j_5_del') & (pl.col('allele') == 'TRAJ14*01'))
-    assert required['severity'].to_list() == ['error']
-    assert required['value'][0] > 0
+@pytest.mark.parametrize('source,key', [(source, key) for source, keys in list_bundled().items() for key in keys])
+@pytest.mark.parametrize('collapse', [True, False])
+def test_every_bundled_model_is_healthy(source, key, collapse):
+    organism, locus = key.split('_', 1) if '_' in key else ('human', key)
+    issues = check_model(load_bundled(locus, source, organism=organism, collapse=collapse), germline='none')
+    errors = issues.filter(pl.col('severity') == 'error')
+    assert errors.is_empty(), errors.to_dicts()
 
 
 def test_bundled_trb_has_no_errors():
