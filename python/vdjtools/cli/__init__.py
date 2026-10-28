@@ -71,15 +71,17 @@ def _info(msg: str) -> None:
     typer.secho(msg, fg=typer.colors.GREEN, err=True)
 
 
-def _load_model(model: Optional[str], source: str, model_path: Optional[Path]):
+def _load_model(model: Optional[str], source: str, model_path: Optional[Path], organism: str = 'human'):
     from vdjtools.model import load_bundled, load_model
 
+    if organism not in ('human', 'mouse'):
+        _err('--organism must be human or mouse')
     if model_path is not None:
         return load_model(model_path)
     if model is None:
         _err("give a model: --model <LOCUS> (built-in) or --model-path <DIR>")
     try:
-        return load_bundled(model, source=source)
+        return load_bundled(model, source=source, organism=organism)
     except (ValueError, FileNotFoundError) as e:  # unknown source / locus not bundled
         _err(str(e))
 
@@ -156,6 +158,7 @@ def pgen(
     input: Path = typer.Argument(..., help="Table (TSV) or list of CDR3 sequences."),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
     source: str = typer.Option("learned", help="Built-in model set: olga | learned."),
+    organism: str = typer.Option('human', help='Built-in model organism: human | mouse.'),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     column: Optional[str] = typer.Option(None, "--column", "-c", help="Sequence column (default: auto-detect / first)."),
     v_col: Optional[str] = typer.Option(None, "--v-col", help="V-allele column to condition on (default: marginalize)."),
@@ -175,7 +178,7 @@ def pgen(
 
     if seq_type not in ("auto", "aa", "nt"):
         _err("--type must be auto, aa or nt")
-    m = _load_model(model, source, model_path)
+    m = _load_model(model, source, model_path, organism)
     df, seqcol = _read_seq_table(input, column, no_header)
     seqs = df[seqcol].to_list()
     vs = df[v_col].to_list() if v_col and v_col in df.columns else [None] * len(seqs)
@@ -204,6 +207,7 @@ def pgen(
 def generate(
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
     source: str = typer.Option("learned", help="Built-in model set: olga | learned."),
+    organism: str = typer.Option('human', help='Built-in model organism: human | mouse.'),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     n: int = typer.Option(100, "--number", "-n", help="Number of sequences to generate."),
     seed: Optional[int] = typer.Option(None, help="Random seed for reproducible draws."),
@@ -219,7 +223,7 @@ def generate(
     """
     from vdjtools.model.generate import generate as _generate
 
-    m = _load_model(model, source, model_path)
+    m = _load_model(model, source, model_path, organism)
     _write(_generate(m, n, seed=seed, productive_only=productive, engine=engine, threads=threads), out)
 
 

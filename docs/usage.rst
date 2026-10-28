@@ -766,6 +766,10 @@ Every workflow above has a CLI counterpart; inputs are auto-detected and results
    vdjtools generate -m TRB -n 1000 -o gen.tsv    # (cf. olga-generate_sequences)
    vdjtools pgen seqs.tsv -m TRB -o pgen.tsv      # (cf. olga-compute_pgen)
 
+   # Built-in models default to human; mouse requires an explicit organism.
+   vdjtools generate -m TRA --organism mouse -n 100 -o mouse.tsv
+   vdjtools pgen mouse.tsv -m TRA --organism mouse -o mouse-pgen.tsv
+
    # data: convert any format to the canonical table, and preprocess
    vdjtools convert mixcr.txt.gz -o clones.parquet    # → canonical Parquet (or .tsv)
    vdjtools filter clones.parquet --productive --min-freq 1e-4 -o coding.tsv
