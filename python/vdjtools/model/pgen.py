@@ -32,7 +32,9 @@ _CODON_AA = {
 def _steady_state(R: np.ndarray) -> np.ndarray:
     """Stationary distribution of a column-stochastic Markov matrix ``R[next, prev]``."""
     w, v = np.linalg.eig(R)
-    x = np.real(v[:, np.argmin(np.abs(w - 1.0))])
+    # A stationary vector may have arbitrary sign; roundoff can also give a
+    # zero-probability state a tiny opposite sign. Keep the Perron vector nonnegative.
+    x = np.abs(np.real(v[:, np.argmin(np.abs(w - 1.0))]))
     return x / x.sum()
 
 
