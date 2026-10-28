@@ -290,7 +290,7 @@ class Corpus:
         # writer change, and the point of the hash is that a file in someone else's environment
         # can be proved to be the one fitted here.
         np.savez_compressed(path, **arrays)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = _file_sha256(path)
         meta = {**self.meta, "sig": self.sig, "name": self.name,
                 "n_rows": {loc: f.n_rows for loc, f in self.fits.items()},
                 "k": self.k,
@@ -1032,6 +1032,15 @@ def corpora_index(res_dir: Path) -> dict:
     return json.loads(p.read_text())
 
 
+def _file_sha256(path: Path) -> str:
+    """Hash large artifacts with bounded scratch memory, including on Python 3.10."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") -> Path:
     """Fetch one file into ``dest``, verifying its digest before it is visible under that name.
 
@@ -1050,7 +1059,7 @@ def _download(url: str, dest: Path, sha256: "str | None", nbytes: "int | None") 
             with urllib.request.urlopen(url, timeout=60) as r:
                 shutil.copyfileobj(r, f)
             f.close()
-            got = hashlib.sha256(tmp.read_bytes()).hexdigest()
+            got = _file_sha256(tmp)
             if sha256 and got != sha256:
                 raise OSError(f"{url} hashed {got[:12]}, the shipped index expects {sha256[:12]}; refusing "
                               "to cache it. Either the release asset was replaced or the download truncated.")
@@ -1085,7 +1094,7 @@ def fetch_artifact(name: str, *, sig: str, res_dir: Path, repo: str, quiet: bool
         part = entry.get(ext, {})
         target = cache / f"{sig}_{name}.{ext}"
         if target.exists() and (not part.get("sha256")
-                                or hashlib.sha256(target.read_bytes()).hexdigest()
+                                or _file_sha256(target)
                                 == part["sha256"]):
             continue
         url = f"{base}/{sig}_{name}.{ext}"

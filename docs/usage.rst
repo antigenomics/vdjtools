@@ -499,7 +499,7 @@ inference. Precomputed models for all 7 human loci ship in the wheel:
    from vdjtools.model.generate import generate
 
    model = load_bundled("TRB", "olga")           # or "learned" (fit to real repertoires)
-   native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen (matches OLGA to 1e-15)
+   native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)     # + the Hamming-1 ball
    native.pgen_aa_batch(model, seqs, threads=0)   # many sequences, thread-parallel (~11x)
    native.pgen_nt_batch(model, nts, threads=0)    # the nucleotide batch (new in 4.5.0)
