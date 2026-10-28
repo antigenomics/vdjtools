@@ -199,7 +199,7 @@ enormously, and which you want depends on the question.
 Overlap and TCRnet
 ------------------
 
-:mod:`vdjtools.overlap` compares samples. Exact-match overlap is pure polars; fuzzy /
+:mod:`vdjtools.overlap` compares samples. Exact-pair overlap uses Polars; cohort distances also use SciPy sparse products. Fuzzy /
 similarity-aware overlap and TCRnet delegate to the base vdjmatch + seqtree dependencies.
 The ``[overlap]`` extra supplies scikit-learn for sample MDS:
 
@@ -219,6 +219,16 @@ The ``[overlap]`` extra supplies scikit-learn for sample MDS:
 
    # frequency trajectories of the top clonotypes across an ordered series
    overlap.track_clonotypes({"t0": a, "t1": b, "t2": c}, top=50)
+
+
+Exact cohort distances
+^^^^^^^^^^^^^^^^^^^^^^
+
+Use ``pairwise_distances(..., metric="F")`` for a cohort distance matrix, then pass
+that matrix to ``cluster_samples``. F/F2/D/Jaccard use sparse products for larger
+cohorts; up to three samples keep the direct joins. Pearson R keeps its centered
+pairwise calculation. Dense all-pairs results still require quadratic memory.
+See :doc:`overlap-methods` for the identities, numerical behavior and memory bounds.
 
 Preprocessing
 -------------
