@@ -122,7 +122,7 @@ editable.rebuild = false
 # just the package + compiled _core.
 sdist.exclude = [
     "**/*.md", "!**/README.md", "!README.md",
-    "/tests", "/docs", "/.github", "/setup.sh", "/build", "/examples", "/assets",
+    "/tests", "/docs", "/.github", "/.venv", "/setup.sh", "/build", "/examples", "/assets",
     "/appendix", "/arda-ref.md", "/notebooks", "/scripts",
     # Working notes: internal by design (cluster paths, private dataset names, cohort detail).
     # .gitignore is what actually keeps them out -- both backends build from the VCS file list --
