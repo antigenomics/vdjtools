@@ -111,6 +111,10 @@ still grows with sample count and feature width. Configured randomized corpus fi
 and `TablePCA.fit_features` use sparse rows and bounded statistic chunks; their
 remaining workspace grows with nonzero entries and the requested component count. See
 [CPU/container limits](https://docs.isalgo.dev/vdjtools/usage.html#cpu-container-limits).
+For file-backed Python-heavy summaries, select `--backend process` (or
+`io.map_samples(..., backend="process")`) to use coarse sample batches. The default
+thread backend shares resources and supports closures; process startup can dominate
+small cohorts.
 
 ## Development
 
