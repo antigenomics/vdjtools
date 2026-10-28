@@ -8,7 +8,7 @@ hierarchy (hclust).
 An overlap *similarity* is turned into a *distance* with the legacy per-metric
 normalisation (``OverlapMetricNormalization``):
 
-- ``F``, ``F2``, ``D`` (frequency/diversity overlaps, ``(0, 1]``) → ``-log10(x + 1e-9)``;
+- ``F``, ``F2``, ``D`` (frequency/diversity overlaps, ``(0, 1]``) → ``max(0, -log10(x + 1e-9))``;
 - ``R`` (correlation, ``[-1, 1]``) → ``(1 - x) / 2``;
 - ``jaccard`` (similarity index, ``[0, 1]``) → ``1 - x``.
 
@@ -40,9 +40,9 @@ _SKLEARN_HINT = (
 #: The similarity-weighted overlaps (TINA cosine / Morisita) are already in ``[0, 1]``,
 #: so their distance is simply ``1 - similarity``.
 _TRANSFORM = {
-    "F": lambda x: -math.log10(x + 1e-9),
-    "F2": lambda x: -math.log10(x + 1e-9),
-    "D": lambda x: -math.log10(x + 1e-9),
+    "F": lambda x: max(-math.log10(x + 1e-9), 0.0),
+    "F2": lambda x: max(-math.log10(x + 1e-9), 0.0),
+    "D": lambda x: max(-math.log10(x + 1e-9), 0.0),
     "R": lambda x: (1.0 - x) / 2.0,
     "jaccard": lambda x: 1.0 - x,
     "similarity_cosine": lambda x: 1.0 - x,
@@ -125,7 +125,8 @@ def _exact_matrix(aggs, key, metric):
             counts.data = np.sqrt(counts.data)
             root_totals = np.sqrt(totals)
             similarity = (counts @ counts.T).toarray() / (root_totals[:, None] * root_totals[None, :])
-    distance = 1 - similarity if metric == "jaccard" else -np.log10(similarity + 1e-9)
+    distance = (1 - similarity if metric == "jaccard" else
+                np.maximum(-np.log10(similarity + 1e-9), 0.0))
     np.fill_diagonal(distance, 0)
     return distance
 
