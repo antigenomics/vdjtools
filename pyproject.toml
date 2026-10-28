@@ -23,7 +23,8 @@ classifiers = [
 # (arda-mapper, vdjmatch->seqtree) are promoted from the extras below to base deps as the
 # phases that import them land (model -> arda, overlap -> vdjmatch). Every dep traces to a use.
 dependencies = [
-    "polars>=1.0,<2",
+    # Exact scientific-notation Decimal parsing first shipped in Polars 1.37.
+    "polars>=1.37,<2",
     "numpy",
     "threadpoolctl>=3",  # runtime control for already-initialized BLAS pools
     "scipy",

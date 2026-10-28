@@ -136,9 +136,13 @@ def count_expr(column: str) -> pl.Expr:
     """
     value = pl.col(column).cast(pl.String).str.strip_chars()
     integer = value.str.contains(r"^[+-]?[0-9]+(?:\.0+)?$")
+    decimal = pl.when(integer).then(None).otherwise(value).cast(pl.Decimal(38, 18), strict=False)
+    truncated = pl.when(decimal >= 0).then(decimal.floor()).otherwise(decimal.ceil())
     return pl.when(integer).then(
         value.str.replace(r"\.0+$", "").cast(pl.Int64, strict=False)
-    ).otherwise(pl.col(column).cast(pl.Float64, strict=False).cast(pl.Int64, strict=False))
+    ).otherwise(pl.coalesce(
+        truncated.cast(pl.Int64, strict=False), pl.col(column).cast(pl.Int64, strict=False),
+    ))
 
 
 def normalize(df: pl.DataFrame, *, recompute_freq: bool = False,
