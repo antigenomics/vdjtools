@@ -915,8 +915,30 @@ def augment_from_oracle(learned: Model, oracle: Model) -> Model:
                 p=pl.when(pl.col(acol).is_in(list(proxy))).then(floor).otherwise(pl.col("p")))
         tot = pl.col("p").sum().over(nk) if nk else pl.col("p").sum()
         tables[choice_ev] = tables[choice_ev].with_columns(p=pl.when(tot > 0).then(pl.col("p") / tot).otherwise(0.0))
-    return Model(manifest=learned.manifest, tables=tables, genomic=learned.genomic,
-                 training=learned.training)
+    # Copying V's P(J|V) can make a J reachable before the J pass, which then sees
+    # positive choice mass and skips it. Restore only undefined child groups;
+    # fitted choice probabilities and supported conditionals remain untouched.
+    for seg in ("v", "j"):
+        acol = f"{seg}_allele"
+        choice = tables[f"{seg}_choice"]
+        used = set(choice.filter(pl.col("p") > 0)[acol]) & _functional_support(learned, seg)
+        for name, event in learned.manifest.events.items():
+            if normalization_keys(event) != [acol]:
+                continue
+            child = tables[name]
+            supported = set(child.group_by(acol).agg(pl.col("p").sum())
+                            .filter(pl.col("p") > 0)[acol])
+            missing = used - supported
+            if not missing:
+                continue
+            donor = oracle.tables.get(name, child.clear()).filter(pl.col(acol).is_in(list(missing)))
+            available = set(donor.group_by(acol).agg(pl.col("p").sum())
+                            .filter(pl.col("p") > 0)[acol])
+            if available != missing:
+                raise ValueError(f"completion template lacks {name} support for {sorted(missing - available)}")
+            tables[name] = pl.concat([child.filter(~pl.col(acol).is_in(list(missing))), donor])
+    return enforce_dj_order(Model(manifest=learned.manifest, tables=tables, genomic=learned.genomic,
+                                  training=learned.training))
 
 
 def enforce_dj_order(model: Model) -> Model:
