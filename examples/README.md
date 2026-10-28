@@ -14,6 +14,11 @@ ln -s /path/to/airr_benchmark data_dump/airr_benchmark        # etc. per dataset
 # or drop vdjdb.slim.txt(.gz) in data_dump/ to skip the download.
 ```
 
+Example sources and published models are also available in the
+[`isalgo/vdjtools_models`](https://huggingface.co/datasets/isalgo/vdjtools_models)
+mirror. Select the files you need using the dataset card; notebook input datasets
+remain linked below.
+
 ## `aging.py` — TCR repertoire aging (streaming + iNEXT + overlap)
 
 A [marimo](https://marimo.io) notebook reproducing the classic aging signals of the human

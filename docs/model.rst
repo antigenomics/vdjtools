@@ -15,6 +15,15 @@ generation probability and sampling see :doc:`usage`; for the complete surface s
    :depth: 1
 
 
+Published model downloads
+-------------------------
+
+The `Hugging Face model mirror <https://huggingface.co/datasets/isalgo/vdjtools_models>`_
+contains the public recombination models, corpus bundles and example sources. Its
+dataset card provides selective-download examples. Ordinary bundled-model loading
+continues to use the models installed with vdjtools.
+
+
 Custom germline libraries
 -------------------------
 

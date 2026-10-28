@@ -147,3 +147,7 @@ with optional gene or clustered V context. Existing feature/signature defaults s
 legacy. See [features](https://docs.isalgo.dev/vdjtools/features.html) and
 [corpus fitting](https://docs.isalgo.dev/vdjtools/signature.html) for fit/save/apply
 and the distinction between an available definition and a published rotation.
+
+Public recombination models, corpus bundles and example sources are mirrored on
+[Hugging Face](https://huggingface.co/datasets/isalgo/vdjtools_models).
+The dataset card shows selective downloads; downloading the whole mirror is unnecessary.
