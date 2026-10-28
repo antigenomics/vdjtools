@@ -85,6 +85,7 @@ dependencies = [
     # ourselves would couple our install to seqtree's packaging choices; this states the real
     # requirement. (Same on-demand-reference pattern as arda's IMGT fetch.)
     "huggingface_hub",
+    "filelock",  # cross-process immutable corpus bootstrap
 ]
 
 [project.scripts]
