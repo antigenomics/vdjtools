@@ -34,6 +34,33 @@ def test_toy_vdj_model_is_clean(toy_model_vdj):
     assert issues.filter(pl.col("severity") == "error").is_empty()
 
 
+@pytest.mark.parametrize('missing', [False, True])
+@pytest.mark.parametrize('segment', ['v', 'j'])
+def test_required_deletion_conditional_distinguishes_used_and_unused(toy_model, missing, segment):
+    col, event = segment + '_allele', {'v': 'v_3_del', 'j': 'j_5_del'}[segment]
+    allele = toy_model.tables[event][col][0]
+    deletion = toy_model.tables[event]
+    deletion = (deletion.filter(pl.col(col) != allele) if missing else deletion.with_columns(
+        p=pl.when(pl.col(col) == allele).then(0.).otherwise(pl.col('p'))))
+    broken = _rebuild(toy_model, **{event: deletion})
+    issues = check_model(broken, germline='none')
+    required = issues.filter((pl.col('check') == 'required_conditional') & (pl.col('event') == event))
+    assert required['allele'].to_list() == [allele]
+    assert required['severity'].to_list() == ['error']
+    choice = segment + '_choice'
+    unused = _rebuild(broken, **{choice: broken.tables[choice].with_columns(
+        p=pl.when(pl.col(col) == allele).then(0.).otherwise(pl.col('p')))})
+    assert 'required_conditional' not in _checks(check_model(unused, germline='none'), 'error')
+
+
+def test_human_arda_tra_reports_selectable_traj14_without_deletion_mass():
+    issues = check_model(load_bundled('TRA', 'arda', collapse=False), germline='none')
+    required = issues.filter((pl.col('check') == 'required_conditional') &
+        (pl.col('event') == 'j_5_del') & (pl.col('allele') == 'TRAJ14*01'))
+    assert required['severity'].to_list() == ['error']
+    assert required['value'][0] > 0
+
+
 def test_bundled_trb_has_no_errors():
     """TRB is the workhorse locus; a shipped model must not carry error-level issues."""
     for source in ("olga", "learned"):
