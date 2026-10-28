@@ -104,8 +104,9 @@ rather than only wording.
 
    germline
       The unrearranged V, D, J and C segment sequences a receptor is assembled from. vdjtools
-      uses arda for its native germline reference; the bundled ``olga`` and ``learned`` sets
-      retain OLGA's germline namespace. Mixing germline sources within one model produces
+      uses ARDA as a germline reference provider for its replacement ``learned``
+      models; vdjtools owns their fitting and probability tables. Explicit ``olga``
+      models retain OLGA's germline namespace for oracle and historical comparisons. Mixing germline sources within one model produces
       wrong answers that look plausible.
 
    Hill number

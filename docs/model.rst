@@ -23,10 +23,15 @@ contains the public recombination models, corpus bundles and example sources. It
 dataset card provides selective-download examples. Ordinary bundled-model loading
 continues to use the models installed with vdjtools.
 
-New working-model APIs and CLIs default to ``source="learned"``: native fits
-initialized from ARDA germline scaffolds. The learned catalog covers all seven
-human loci and mouse TRA, TRB, IGH, IGK and IGL. Human bundle keys remain bare
-loci; mouse keys are prefixed ``mouse_``. Missing assets fail explicitly.
+The candidate working-model APIs and CLIs default to ``source="learned"``.
+vdjtools owns model fitting, probability tables, generation and Pgen; ARDA supplies
+the germline reference scaffolds, without OLGA probability-parameter seeding.
+The replacement catalog targets all seven human loci and mouse TRA, TRB, IGH,
+IGK and IGL. Fresh fitted assets and full-catalog validation are release gates;
+these API changes alone do not establish completed training or publication. Human bundle keys remain bare
+loci; mouse keys are prefixed ``mouse_``. Missing assets fail explicitly. Mouse
+TRG/TRD remain unsupported until suitable training sources are available; neither
+missing assets nor species are replaced with a human model.
 ``source="olga"`` and CLI ``--source olga`` retain the human bootstrap models
 for oracle checks and historical reproduction, including ``collapse=False``
 for allele-level comparisons. Legacy ``source="arda"`` paths remain available.
@@ -318,8 +323,9 @@ alleles carry some, most of it small). :func:`~vdjtools.model.check.check_model`
 can see whether a gene you care about is affected.
 
 **What to do about it.** Use the gene-collapsed models — the default — where the effect is absorbed
-by the collapse, or use the ``arda`` set, which is refit from data on arda germline and does not
-inherit the OLGA grid. If you need allele resolution *and* an affected gene, be aware Pgen through it is
+by the collapse. The replacement ``learned`` models are fitted on ARDA germline
+scaffolds rather than the OLGA deletion grid; legacy ``arda`` paths remain explicit
+compatibility choices. If you need allele resolution *and* an affected gene, be aware Pgen through it is
 an underestimate.
 
 Genomically impossible D–J pairs
@@ -355,16 +361,19 @@ OLGA leaves the CDR3-region germline empty for a handful of ORF alleles while st
 usage. They can be drawn by the generator but score ``Pgen = 0``, and human ``TRBV23-1`` — 8.6 % of
 a real TRB repertoire — is one of them. ``check_model`` reports these as ``unscoreable_gene_mass``.
 :func:`~vdjtools.model.io.from_olga` accepts ``derive_orf=True`` to reconstruct the missing germline
-from the full germline and the anchor; the ``learned`` models are built that way, while the ``olga``
-set keeps it off so it stays an exact Pgen oracle.
+from the full germline and the anchor. Historical OLGA-scaffold learned models used
+that option; the replacement learned models use ARDA reference scaffolds directly.
+The explicit ``olga`` set keeps it off so it stays an exact Pgen oracle.
 
 V/J usage is protocol-specific
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Not a defect, but the most common way to get a wrong answer with these models. OLGA's were fit to
 DNA-multiplex data; the ``learned`` set to 5'RACE reads. The two amplify different V genes at very
-different rates — TRBV19 is 3.1 % of OLGA's usage and 37 % of these 5'RACE reads — so neither
-marginal is right for *your* library. The junction model (trims, insertions, dinucleotides) is the
+different rates. An earlier comparison measured TRBV19 usage at 3.1 % in OLGA
+and 37 % in its 5'RACE population; those are historical population-specific
+observations, not validation results for the replacement fits. Neither marginal
+is automatically right for *your* library. The junction model (trims, insertions, dinucleotides) is the
 shared, transferable part. Use :func:`~vdjtools.model.rescale.rescale_usage` before scoring.
 
 Out-of-frame input

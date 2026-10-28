@@ -31,7 +31,10 @@ parts remain GIL limited. Only one coarse task is queued per worker.
 
 **Models.** Wherever a command takes a model, it accepts ``LOCUS``, ``LOCUS:source``,
 ``LOCUS:source:organism``, or a path to a model directory -- for example ``TRB``, ``TRB:learned``,
-``TRB:olga:human``.
+``TRB:olga:human``. An omitted source selects the candidate ``learned`` default;
+``TRB:learned:mouse`` selects its mouse population. ``olga`` is explicit oracle or
+historical reproduction, and legacy ``arda`` paths remain available. Missing fits
+fail explicitly. See :doc:`model` for catalog coverage and the fitted-asset release gate.
 
 Data and pre-processing
 -----------------------

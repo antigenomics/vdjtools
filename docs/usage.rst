@@ -12,7 +12,10 @@ A sample to play with
 
 Real workflows load a repertoire with ``io.read("sample.tsv")`` (see `Loading data`_).
 So this page is runnable with no downloads, the snippet below draws a synthetic counted
-sample straight from a bundled model — every later example reuses ``demo_sample``:
+sample straight from a bundled model — every later example reuses ``demo_sample``.
+This fixed fixture explicitly retains ``olga`` to reproduce the recorded numeric
+examples. New working-model calls default to ``learned``; see :doc:`model` for
+the replacement catalog and its release gate:
 
 .. code-block:: python
 
@@ -491,14 +494,16 @@ Recombination model
 -------------------
 
 :mod:`vdjtools.model` is the native V(D)J engine — generation probability, sampling, and EM
-inference. Precomputed models for all 7 human loci ship in the wheel:
+inference. Working-model calls default to ``learned``. The replacement catalog
+targets seven human loci and mouse TRA/TRB/IGH/IGK/IGL; fitted assets and complete
+validation remain release gates (see :doc:`model`):
 
 .. code-block:: python
 
    from vdjtools.model import load_bundled, native
    from vdjtools.model.generate import generate
 
-   model = load_bundled("TRB", "olga")           # or "learned" (fit to real repertoires)
+   model = load_bundled("TRB")                   # learned working default
    native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)     # + the Hamming-1 ball
    native.pgen_aa_batch(model, seqs, threads=0)   # many sequences, thread-parallel (~11x)
