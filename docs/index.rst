@@ -236,7 +236,8 @@ Choose a documentation path
 * **Complete a task:** :doc:`usage`, :doc:`preprocessing`, :doc:`features`,
   :doc:`signature`, :doc:`model` and :doc:`singlecell` describe analysis workflows.
 * **Understand the method:** :doc:`signature-methods` explains the statistical
-  representation, fitting choices and measured behavior.
+  representation, fitting choices and measured behavior; :doc:`overlap-methods`
+  derives exact cohort distances and their numerical and memory behavior.
 * **Look up an interface:** :doc:`cli`, :doc:`api`, :doc:`channels` and
   :doc:`glossary` define commands, functions, output fields and terminology.
 
@@ -276,6 +277,7 @@ Choose a documentation path
    :maxdepth: 2
 
    signature-methods
+   overlap-methods
 
 .. toctree::
    :hidden:
