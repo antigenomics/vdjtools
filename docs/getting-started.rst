@@ -175,8 +175,9 @@ convergent recombination interesting.
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # and its whole Hamming-1 ball
 
 Models for all seven human loci ship in the wheel, so there is nothing to download and no OLGA
-install. Pgen agrees with OLGA to 1e-15 on every locus, several times faster, and vdjtools adds
-tandem-D support that OLGA and IGoR do not have. You can also fit a model to your own
+install. Native Pgen is checked against OLGA on identical probability tables and raw
+germlines. The :ref:`model guide <olga-caveats>` explains germline repairs and oracle
+workspace differences. vdjtools also supports tandem-D recombination. You can fit a model to your own
 non-productive reads -- see :doc:`model`.
 
 Step 6 -- one vector per repertoire
