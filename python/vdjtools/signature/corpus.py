@@ -1420,22 +1420,19 @@ def depth_spread_of(locus: str, depth_spread: "float | str | None" = None) -> fl
     return float(depth_spread)
 
 
-def draw_pool(locus: str, n: int, *, seed: int, source: str = "learned") -> pl.DataFrame:
-    """``n`` productive rearrangements from the bundled model for one locus.
+def draw_pool(locus: str, n: int, *, seed: int, source: str = "learned",
+              threads: int = 0) -> pl.DataFrame:
+    """Draw productive rearrangements in one batch from one loaded model.
 
-    Measured 2026-09-27, ``generate(load_bundled("IGH"), 50_000, productive_only=True)`` on one
-    core of a 16-core M-series laptop: **4,200 sequences/s**, and identical at 1 and 16 polars
-    threads -- the sampler is a per-sequence Python/numpy loop, so it does not thread. Pool
-    generation is therefore the dominant serial cost of a synthetic build (about 15M sequences at
-    ``size=10,000`` across seven loci); spawned pool workers parallelize the fixed chunks.
-
-    NOTE an earlier docstring here claimed 20,372 seq/s on IGH. That figure is 4.8x the measured
-    rate and it is what made a 77 s stage look like a 16 s one when the build was planned.
+    Learned models use the native sampler and the allocated ``threads`` budget.
+    Explicit OLGA/ARDA sources retain reference-sampler streams for historical
+    reproduction. Native draws are invariant to the number of kernel threads.
     """
     from ..model import load_bundled
     from ..model.generate import generate
 
-    return generate(load_bundled(locus, source), n, seed=seed, productive_only=True)
+    return generate(load_bundled(locus, source), n, seed=seed, productive_only=True,
+                    engine="native" if source == "learned" else "reference", threads=threads)
 
 
 def draw_sizes(nominal: int, n: int, spread: float, rng: np.random.Generator) -> np.ndarray:
@@ -1641,13 +1638,27 @@ def _pool_chunk(args) -> tuple:
 def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path,
                 n_jobs: int = 1, progress=None, depth_spread: "float | str | None" = None,
                 cohort: "str | None" = None) -> dict:
-    """Generate every locus's pool across spawned processes; return ``{locus: [chunk path, ...]}``.
+    """Generate learned pools in one native batch per locus, without a worker pool.
 
-    Chunk seeds and the reference sampler are unchanged. Python sampling is GIL-limited;
-    Each process uses serial numerical kernels and the same fixed chunk seeds.
-    Uncompressed IPC chunks are mapped once and shared by feature workers.
+    Explicit OLGA/ARDA sources keep fixed reference-sampler chunks and seeds.
+    Pool generation finishes before feature extraction starts; only one parallel
+    layer is active. IPC files are transient shared inputs, not reusable caches.
     """
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
+    if source == "learned":
+        # One model load and one native call per locus, with no nested processes.
+        threads = _workers(n_jobs, max((pool_target(loc, size, n_samples,
+                           depth_spread, cohort) for loc in ordered), default=1))
+        out = {}
+        for i, locus in enumerate(ordered):
+            total = pool_target(locus, size, n_samples, depth_spread, cohort)
+            path = Path(tmp) / f"pool_{locus}_000.arrow"
+            draw_pool(locus, total, seed=seed + i * 1_000, source=source,
+                      threads=threads).write_ipc(path, compression="uncompressed")
+            out[locus] = [path]
+            if progress:
+                progress(locus, i + 1, len(ordered))
+        return out
     tasks = []
     for i, locus in enumerate(ordered):
         total = pool_target(locus, size, n_samples, depth_spread, cohort)

@@ -470,7 +470,9 @@ Building a corpus
 The synthetic corpora use **no samples from anybody's cohort**: every receptor is drawn from the
 bundled recombination models.
 
-Pool generation uses spawned worker processes. Feature extraction then runs across worker
+Learned-model pool generation uses one native batch per locus, loading each model once.
+Loci run sequentially with the allocated ``--jobs/-j`` kernel budget, and no process pool.
+Feature extraction then runs across worker
 **threads**, one contiguous block of samples each; ``--jobs/-j``
 sets how many and defaults to every core the process may use (``-j 1`` stays in-process). A sample
 is a pure function of its index -- its generator is seeded from ``(seed, locus, index)`` -- so each
@@ -480,18 +482,20 @@ on Aldan-3 for seven loci at ``--samples 10000 --size 10000`` on 72 cores, took 
 the receptor pools (4,850 s in one process) and about 50 samples/s to featurise them. These are
 historical process timings, not a new measurement of the current implementation.
 
-The reference sampler is Python/GIL-limited within each process. Pool workers use one kernel
-thread each and distribute the fixed, independently seeded chunks across processes. The process
-pool closes before sample extraction starts. An importable entry point with a
-``if __name__ == "__main__":`` guard is required for parallel generation.
+Explicit ``--source olga`` and ``--source arda`` retain the reference sampler, fixed
+chunk seeds and spawned workers for historical reproduction. Only those legacy
+generation paths need an importable entry point with a
+``if __name__ == "__main__":`` guard. New learned-model pools use the native random
+stream; their draws are identical across CPU budgets, but differ from old reference
+streams. Existing corpus artifacts retain their recorded model source and fingerprint.
 Use ``--fetch NAME`` for an existing published corpus.
 
 .. note::
 
-   Two settings, two layers. ``--jobs`` selects generation processes and subsequent sample-map
-   threads; ``POLARS_MAX_THREADS`` and
-   ``OMP_NUM_THREADS`` are **kernel threads**. The builder sets its workers to one kernel thread
-   each, because ``jobs x cores`` threads is how a 15 s stage was once measured at 296 s.
+   ``--jobs`` selects native generation threads (legacy sources: processes), then
+   sample-map threads. Generation finishes before feature extraction starts.
+   Feature workers and legacy generation workers use serial inner kernels,
+   preventing nested oversubscription.
 
 The build is a deterministic function of ``(corpus, loci, samples, size, seed, source)`` and those
 models, and is required to be byte-identical across processes, worker counts and thread counts:
