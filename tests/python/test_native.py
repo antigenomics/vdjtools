@@ -199,3 +199,26 @@ def test_native_aa_matches_python_vdj():
     for r in sorted(generate(m, 60, seed=3, productive_only=True).to_dicts(), key=lambda r: len(r["junction_aa"]))[:3]:
         aa, v, j = r["junction_aa"], r["v_call"], r["j_call"]
         assert np.isclose(native.pgen_aa(m, aa, v, j), py_pgen_aa(prep, aa, v, j), rtol=1e-6, atol=0)
+
+
+def test_long_trd_matches_enumeration_and_zero_padded_oracle(monkeypatch):
+    """OLGA 1.3's terminal insertion bin needs workspace padding on this long query.
+
+    Adding zero bins changes no model probability. The independent nt scenario sum
+    and native DP agree; do not change production probabilities to fit the truncated
+    oracle workspace or hide the difference with an absolute tolerance.
+    """
+    from vdjtools.model import io as model_io
+    with monkeypatch.context() as patch:
+        patch.setattr(model_io, 'repair_anchors', lambda genomic: genomic)
+        model = from_olga(OLGA_MODELS / 'human_T_delta', locus='TRD')
+    oracle = _olga_vdj('human_T_delta')
+    oracle.PinsVD = np.pad(oracle.PinsVD, (0, 3))
+    oracle.PinsDJ = np.pad(oracle.PinsDJ, (0, 3))
+    aa = 'CALGELQVTWTYRGRARPSHHTDKLIF'
+    nt = 'TGTGCTCTTGGGGAACTACAGGTTACCTGGACCTATAGGGGGCGAGCTAGACCGAGCCACCACACCGATAAACTCATCTTT'
+    assert np.isclose(native.pgen_aa(model, aa), oracle.compute_aa_CDR3_pgen(aa), rtol=1e-9, atol=0)
+    assert np.isclose(native.pgen_nt(model, nt), oracle.compute_nt_CDR3_pgen(nt), rtol=1e-9, atol=0)
+    v, j = 'TRDV1*01', 'TRDJ1*01'
+    assert np.isclose(native.pgen_nt(model, nt, v, j), py_pgen_nt(prepare(model), nt, v, j),
+                      rtol=1e-9, atol=0)

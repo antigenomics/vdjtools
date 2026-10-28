@@ -254,6 +254,17 @@ tables, using relative tolerances with zero absolute tolerance. Anchor repairs
 are tested separately. Equality of probability tables alone does not establish
 equality of Pgen after a germline repair.
 
+Insertion-workspace boundary in the oracle
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+OLGA 1.3.0's codon-group iteration can omit the final nonzero insertion-length
+bin for some support lengths. A fixed 27-residue synthetic TRD regression with
+insertion support ending at 40 nucleotides exposes this: native Pgen agrees with independent nucleotide scenario
+enumeration, while unmodified OLGA gives a smaller probability. Adding three zero
+bins to the test-only OLGA workspace restores strict relative agreement without
+changing any probability table. The regression checks this explicitly; production
+scoring and bundled model parameters are unchanged.
+
 Deletion mass on trims that cannot be reached
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
