@@ -51,8 +51,9 @@ def test_the_smallest_constraint_wins_when_several_apply():
         assert available_cores() == 3
 
 
-def test_it_never_returns_zero_even_when_everything_is_unavailable():
+def test_it_never_returns_zero_even_when_everything_is_unavailable(monkeypatch):
     """A zero would make `range(workers)` empty and the cohort silently produce nothing."""
+    monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
     with mock.patch.object(os, "cpu_count", return_value=None), \
          mock.patch.object(os, "process_cpu_count", return_value=None, create=True), \
          mock.patch("vdjtools.cores._cgroup_quota", return_value=None):
