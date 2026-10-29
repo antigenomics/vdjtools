@@ -99,6 +99,7 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
         ValueError: If no germline is found for ``locus`` / ``organism``.
     """
     from arda.cdr3fix import load_anchors  # base dep; imported lazily to keep `import vdjtools` light
+    from arda.alleles import d_germline_metadata
     from arda.paths import vdj_dir
     from arda.refbuild.imgt import read_fasta
 
@@ -127,10 +128,12 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
         )
     d_path = vdj_dir(organism) / "d_germlines.fasta"
     if d_path.exists():
+        d_metadata = d_germline_metadata(organism)
         for header, seq in read_fasta(d_path):
             d_locus, allele = header.split("|", 1)
             if d_locus != locus:
                 continue
+            metadata = d_metadata[(allele, seq)]
             rows.append(
                 {
                     "allele": allele,
@@ -140,7 +143,7 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
                     "cdr3_anchor": -1,
                     "functionality": "",
                     "functional": True,
-                    "status": "ok",
+                    "status": metadata["status"],
                 }
             )
     if not rows:
@@ -173,7 +176,7 @@ def load_full_vj_germline(organism: str = "human") -> dict[tuple[str, str], str]
     from arda.annotate.reference import load_reference
     from arda.refbuild.imgt import read_fasta
 
-    ref = load_reference(organism, "nt")
+    ref = load_reference(organism, "nt", major_only=False)
     scaffolds = dict(read_fasta(ref.target_fasta))
     out: dict[tuple[str, str], str] = {}
     for sid, e in ref.entries.items():

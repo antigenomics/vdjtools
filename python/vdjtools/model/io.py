@@ -657,20 +657,20 @@ def from_arda(locus: str, organism: str = "human", *,
 
     gl = ref.load_germline(locus, organism)
     # A partial reference tail is missing sequence, not a fully known short germline.
-    # ARDA already flags these records and excludes them from its alignment scaffolds.
+    # ARDA flags these records; preliminary alignment may retain them, but complete
+    # emission templates must exclude them.
     if "status" in gl.columns:
         gl = gl.filter(~pl.col("status").fill_null("").is_in(["truncated", "partial"]))
     if gene_level:
+        from arda.alleles import select_major_alleles
+
         issues = ref.validate_germline(gl)
         unusable = issues.filter(pl.col("check").is_in([
             "germline_empty_sequence", "germline_ambiguous", "germline_anchor_frame"]))["allele"]
-        gl = (gl.filter(~pl.col("allele").is_in(unusable.implode()))
-              .with_columns(_allele_number=pl.col("allele").str.split("*").list.get(1, null_on_oob=True)
-                            .cast(pl.UInt32, strict=False).fill_null(2**32-1),
-                            _not_functional=~pl.col("functional"))
-              .sort(["segment", "gene", "_not_functional", "_allele_number", "allele"])
-              .unique(["segment", "gene"], keep="first", maintain_order=True)
-              .drop("_allele_number", "_not_functional"))
+        gl = gl.filter(~pl.col("allele").is_in(unusable.implode()))
+        selected = select_major_alleles(gl["allele"])
+        selected.update(select_major_alleles(gl.filter(pl.col("functional"))["allele"]))
+        gl = gl.filter(pl.col("allele").is_in(list(selected.values())))
     full = ref.arda_full_germline(locus, organism)
     gl = gl.with_columns(
         full_germline=pl.struct(["segment", "allele"]).map_elements(
