@@ -88,6 +88,30 @@ transition. VD/VJ/DD chains start at the V-proximal side; DJ starts at the
 J-proximal side. This independent first-base distribution differs from IGoR's
 boundary-conditioned first transition. Unobserved transition conditionals retain
 their normalized initial rows so combining insertion lengths cannot lose mass.
+
+Joint single/tandem D histories
+--------------------------------
+
+``vdjtools.model.dd.to_history(template)`` explicitly converts a VDJ scaffold to
+schema 3.0. Its ``d_history`` table stores ``j_allele, n_d, d_allele,
+d2_allele, p`` and normalizes the complete history distribution within each J.
+Single-D rows use an empty string for the absent second D. A J with no physical
+tandem path has only single-D mass; D1–D2–J2 remains permitted in TRB.
+
+Single-D deletion profiles allow a fully deleted D. Separate ``d_tandem_del``
+and ``d2_del`` profiles retain at least one nucleotide from each tandem D and
+normalize on that support. This partitions latent histories; different histories
+can still emit the same nucleotide sequence. Pgen sums all of them, and inference
+assigns posterior weights instead of fixing the longest preliminary alignment.
+The native scenario search includes both branches and returns ``d2_call``,
+``d2_start`` and ``d2_end`` for joint-history models. Its scenario tuple API appends
+``d2_call, idx5_2, idx3_2, pos2`` after the existing nine fields; the batch API adds
+the corresponding columns. Legacy models retain their existing output layout.
+
+Entropy contributions weight each branch-specific event by its actual activation
+probability, summed over J and the complete history table. The global D-count
+probabilities are derived summaries, not extra independent factors. Existing
+legacy model tables and assets keep their original representation.
 Scoring, both samplers and saved models share this distribution. Models without
 these events retain the legacy stationary distribution derived from their Markov
 matrix; existing OLGA assets and seeded streams are unchanged.

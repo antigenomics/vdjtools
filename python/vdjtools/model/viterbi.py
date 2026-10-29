@@ -50,13 +50,13 @@ rearrangement has e.g. 8 aa and 25 nt, and no in-frame nt can explain it. Test w
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import product
 
 from .model import Model
 from .pgen import (_CODON_AA, _CODON_TABLE, _NT2NUM, _NUM2NT, _aa_germline_prefix_ok,
                    _d_codons_ok, _j_candidates, _p_insert, _resolve_gene_call, _v_candidates,
-                   _Prepared, pgen_nt, prepare)
+                   _Prepared, _dd_terms, _tandem_pair, pgen_nt, prepare)
 
 __all__ = ["Scenario", "best_scenario", "infer_nt", "infer_nt_bruteforce", "codon_options"]
 
@@ -129,6 +129,9 @@ class Scenario:
     n_candidates: int = 0           # nt sequences actually scored
     truncated: bool = False         # the candidate set hit max_candidates
     runner_up_pgen: float = 0.0     # 2nd-best marginal, for the margin
+    d2_call: str | None = None
+    d2_start: int | None = None
+    d2_end: int | None = None
 
     @property
     def margin(self) -> float:
@@ -180,22 +183,31 @@ def best_scenario(model_or_prep, cdr3_nt: str, v: str | None = None,
                     # single most likely path. This function's contract is one path.
                     if vdj:
                         inner, D, off, dlen = _best_vdj_middle(prep, J, middle)
+                        tandem = (max(_dd_terms(prep, J, middle), key=lambda t: t[0], default=None)
+                                  if prep.joint_history and prep.p_nd.get(2, 0) else None)
+                        D2, off2, dlen2 = None, None, 0
+                        if tandem and tandem[0] * prep.p_nd[2] > inner:
+                            inner, D, off, dlen, D2, off2, dlen2 = tandem
+                            inner *= prep.p_nd[2]
                     else:
                         inner, D, off, dlen = _vj_middle(prep, middle), None, None, 0
+                        D2, off2, dlen2 = None, None, 0
                     if inner == 0.0:
                         continue
                     p = pv * pj * p_dv * p_dj * inner
                     if best is None or p > best[0]:
-                        best = (p, V, J, len_v, len_j, D, off, dlen)
+                        best = (p, V, J, len_v, len_j, D, off, dlen, D2, off2, dlen2)
     if best is None:
         return None
-    p, V, J, len_v, len_j, D, off, dlen = best
+    p, V, J, len_v, len_j, D, off, dlen, D2, off2, dlen2 = best
     d_call = D
     d_start = d_end = None
     if D is not None and off is not None:
         d_start, d_end = len_v + off, len_v + off + dlen
     return Scenario(cdr3_nt=s, v_call=V, j_call=J, v_end=len_v, j_start=len(s) - len_j,
-                    d_call=d_call, d_start=d_start, d_end=d_end, scenario_p=p)
+                    d_call=d_call, d_start=d_start, d_end=d_end, scenario_p=p,
+                    d2_call=D2, d2_start=len_v + off2 if D2 is not None else None,
+                    d2_end=len_v + off2 + dlen2 if D2 is not None else None)
 
 
 def _vj_middle(prep, middle: str) -> float:
@@ -313,10 +325,7 @@ def infer_nt_bruteforce(model: Model, cdr3_aa: str, v: str | None = None, j: str
     sc = best_scenario(prep, best_nt, v, j)
     if sc is None:
         return None
-    return Scenario(cdr3_nt=sc.cdr3_nt, v_call=sc.v_call, j_call=sc.j_call, v_end=sc.v_end,
-                    j_start=sc.j_start, d_call=sc.d_call, d_start=sc.d_start, d_end=sc.d_end,
-                    pgen=best_p, scenario_p=sc.scenario_p, n_candidates=n,
-                    truncated=truncated, runner_up_pgen=second_p)
+    return replace(sc, pgen=best_p, n_candidates=n, truncated=truncated, runner_up_pgen=second_p)
 
 
 def _aa_dp_max(aa: str, template: list[int], specs: list, floor: float = 0.0):
@@ -456,7 +465,7 @@ def _vj_scenarios(prep, N, gv, gj, len_v, len_j):
     yield pins[ins], gv + [-1] * ins + gj, specs
 
 
-def _d_variants(prep, aa: str, N: int):
+def _d_variants(prep, aa: str, N: int, deletions=None):
     """``{D: [(dc, P(delD|D), len, ok_positions)]}`` — every surviving 5'/3' trim of every D.
 
     Built once per call, because it depends on neither V nor J. ``ok_positions`` is the tuple of
@@ -469,13 +478,14 @@ def _d_variants(prep, aa: str, N: int):
     distinct scenarios and this must range over the same set.
     """
     maxdl, maxdr = prep.maxpal["d_5"], prep.maxpal["d_3"]
+    deletions = prep.p_del["d"] if deletions is None else deletions
     out = {}
     for D in prep.functional_d:
         cut = prep.cut["d"][D]
         vs = []
         for idx5 in range(len(cut) + 1):
             for idx3 in range(len(cut) - idx5 + 1):
-                pdel = prep.p_del["d"].get((D, idx5 - maxdl, idx3 - maxdr), 0.0)
+                pdel = deletions.get((D, idx5 - maxdl, idx3 - maxdr), 0.0)
                 if pdel:
                     dc = [_NT2NUM[c] for c in cut[idx5:len(cut) - idx3]]
                     ok = tuple(p for p in range(N - len(dc) + 1) if _d_codons_ok(dc, p, aa))
@@ -530,6 +540,42 @@ def _d_template(prep, N, gv, gj, len_v, len_j, lvd, ldj, pos, dc, ld):
     for p in range(pos + ld, right):
         specs[p] = ("R", R_dj, b_dj, p == pos + ld, p == right - 1)
     return gv + [-1] * lvd + dc + [-1] * ldj + gj, specs
+
+
+def _joint_dd_scenarios(prep, N, J, gv, gj, len_v, len_j, first, second):
+    """Reference tandem layouts; production uses the native transfer-matrix search."""
+    right = N - len_j
+    vd, dd, dj = (prep.p_ins[key] for key in ("vd", "dd", "dj"))
+    for d1, variants1 in first.items():
+        for d2, variants2 in second.items():
+            q = _tandem_pair(prep, J, d1, d2)
+            if not q:
+                continue
+            for dc1, p1, ld1, positions1 in variants1:
+                if not ld1:
+                    continue
+                for pos1 in positions1:
+                    lvd = pos1 - len_v
+                    if not 0 <= lvd < len(vd) or not vd[lvd]:
+                        continue
+                    for dc2, p2, ld2, positions2 in variants2:
+                        if not ld2:
+                            continue
+                        for pos2 in positions2:
+                            ldd, ldj = pos2 - pos1 - ld1, right - pos2 - ld2
+                            if not (0 <= ldd < len(dd) and 0 <= ldj < len(dj)):
+                                continue
+                            w = q * p1 * p2 * vd[lvd] * dd[ldd] * dj[ldj]
+                            if not w:
+                                continue
+                            template = gv + [-1] * lvd + dc1 + [-1] * ldd + dc2 + [-1] * ldj + gj
+                            specs = [None] * N
+                            for lo, hi, key, direction in ((len_v, pos1, "vd", "L"),
+                                                          (pos1 + ld1, pos2, "dd", "L"),
+                                                          (pos2 + ld2, right, "dj", "R")):
+                                for p in range(lo, hi):
+                                    specs[p] = (direction, prep.R[key], prep.bias[key], p == lo, p == hi - 1)
+                            yield w, template, specs, d1, pos1, ld1, d2, pos2, ld2
 
 
 def _chain_bound(prep, key: str) -> list[float]:
@@ -602,7 +648,10 @@ def _scenario_at(cols: dict, i: int, n_aa: int) -> Scenario | None:
                     d_end=int(cols["d_end"][i]) if ld else None,
                     pgen=float(cols["pgen"][i]), scenario_p=float(cols["scenario_p"][i]),
                     n_candidates=int(cols["n_candidates"][i]),
-                    runner_up_pgen=float(cols["runner_up_pgen"][i]))
+                    runner_up_pgen=float(cols["runner_up_pgen"][i]),
+                    d2_call=cols["d2_call"][i] if "d2_call" in cols else None,
+                    d2_start=int(cols["d2_start"][i]) if "d2_call" in cols and cols["d2_call"][i] else None,
+                    d2_end=int(cols["d2_end"][i]) if "d2_call" in cols and cols["d2_call"][i] else None)
 
 
 def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
@@ -684,10 +733,9 @@ def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
         CDR3 encoding ``cdr3_aa`` is explicable under the model.
 
     Note:
-        Tandem-D (``n_D = 2``) scenarios are not enumerated in stage 1. They cannot add candidates —
-        a single D trimmed to zero length already reaches every middle — so they can only reorder
-        them, and the stage-2 ``pgen_nt`` re-scoring includes the tandem-D mass in full. Raise
-        ``n_best`` if a D-D model's ordering matters to you.
+        Joint-history models enumerate both single- and tandem-D paths in stage 1,
+        returning both D spans. Legacy tandem models retain their historical
+        single-D candidate search and full-mixture marginal re-score.
     """
     aa = cdr3_aa.upper()
     if not aa or any(a not in _AA2CODONS for a in aa):
@@ -711,6 +759,11 @@ def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
 
     dvars = _d_variants(prep, aa, N) if vdj else {}
     gap_bound = _gap_bound(prep, N, vdj, dvars)
+    if prep.joint_history and prep.p_nd.get(2, 0):
+        first = _d_variants(prep, aa, N, prep.p_del_d_tandem)
+        second = _d_variants(prep, aa, N, prep.p_del_d2)
+        # ponytail: loose bound only in the Python oracle; native transfer matrices serve production.
+        gap_bound = [1.0] * (N + 1)
     # numpy scalar indexing costs ~10x a list index and this runs 10^5 times per sequence
     pins_vd = prep.p_ins["vd"].tolist() if vdj else None
     pins_dj = prep.p_ins["dj"].tolist() if vdj else None
@@ -750,9 +803,23 @@ def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
                     continue
                 p *= w
                 if p > best.get(nt, (0.0,))[0]:
-                    best[nt] = (p, V, J, len_v, len_j, D, pos, ld)
+                    best[nt] = (p, V, J, len_v, len_j, D, pos, ld, None, None, 0)
                 if p > best_p:
                     best_p, cut = p, p * keep
+            if prep.joint_history and prep.p_nd.get(2, 0):
+                for w_mid, template, specs, D, pos, ld, D2, pos2, ld2 in _joint_dd_scenarios(
+                        prep, N, J, gv, gj, len_v, len_j, first, second):
+                    w = w_out * w_mid
+                    if w <= cut:
+                        continue
+                    p, nt = _aa_dp_max(aa, template, specs, floor=cut / w)
+                    if nt is None:
+                        continue
+                    p *= w
+                    if p > best.get(nt, (0.0,))[0]:
+                        best[nt] = (p, V, J, len_v, len_j, D, pos, ld, D2, pos2, ld2)
+                    if p > best_p:
+                        best_p, cut = p, p * keep
         else:
             for w_mid, template, specs in _vj_scenarios(prep, N, gv, gj, len_v, len_j):
                 w = w_out * w_mid
@@ -763,7 +830,7 @@ def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
                     continue
                 p *= w
                 if p > best.get(nt, (0.0,))[0]:
-                    best[nt] = (p, V, J, len_v, len_j, None, None, 0)
+                    best[nt] = (p, V, J, len_v, len_j, None, None, 0, None, None, 0)
                 if p > best_p:
                     best_p, cut = p, p * keep
     if not best:
@@ -786,11 +853,12 @@ def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
     top = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0]))[:max(1, n_best)]
     rescored = sorted(((score(nt, pin(v, path[1]), pin(j, path[2])), nt, path)
                        for nt, path in top), key=lambda t: (-t[0], t[1]))
-    pgen, best_nt, (sp, V, J, len_v, len_j, D, pos, ld) = rescored[0]
+    pgen, best_nt, (sp, V, J, len_v, len_j, D, pos, ld, D2, pos2, ld2) = rescored[0]
     return Scenario(cdr3_nt=best_nt, v_call=V, j_call=J, v_end=len_v, j_start=N - len_j,
                     d_call=D, d_start=pos if ld else None, d_end=pos + ld if ld else None,
                     pgen=pgen, scenario_p=sp, n_candidates=len(best),
-                    runner_up_pgen=rescored[1][0] if len(rescored) > 1 else 0.0)
+                    runner_up_pgen=rescored[1][0] if len(rescored) > 1 else 0.0,
+                    d2_call=D2, d2_start=pos2, d2_end=pos2 + ld2 if ld2 else None)
 
 
 def infer_nt_batch(model: Model, cdr3_aas, v=None, j=None, *, n_best: int = 8,
@@ -870,6 +938,9 @@ def infer_nt_batch(model: Model, cdr3_aas, v=None, j=None, *, n_best: int = 8,
     # numpy OBJECT arrays, and polars types an object array from its FIRST element -- so a batch
     # whose row 0 declined (or simply has no D) while a later row names one came back `Object` and
     # `cannot cast 'Object' type`. A Python list is typed from the whole column.
+    extra = ({"d2_call": pl.Series(list(cols["d2_call"]), dtype=pl.Utf8),
+              "d2_start": pl.Series(cols["d2_start"], dtype=pl.Int64),
+              "d2_end": pl.Series(cols["d2_end"], dtype=pl.Int64)} if "d2_call" in cols else {})
     df = pl.DataFrame({
         "ok": pl.Series(cols["ok"], dtype=pl.Boolean),
         "cdr3_nt": pl.Series(list(cols["cdr3_nt"]), dtype=pl.Utf8),
@@ -884,9 +955,13 @@ def infer_nt_batch(model: Model, cdr3_aas, v=None, j=None, *, n_best: int = 8,
         "scenario_p": pl.Series(cols["scenario_p"], dtype=pl.Float64),
         "n_candidates": pl.Series(cols["n_candidates"], dtype=pl.Int64),
         "runner_up_pgen": pl.Series(cols["runner_up_pgen"], dtype=pl.Float64),
+        **extra,
     })
     # A zero-length D contributed nothing, so its span is null rather than an empty interval --
     # the same distinction `Scenario` draws. Then every column of a declined row goes null at once.
+    if extra:
+        df = df.with_columns(pl.when(pl.col("d2_call").is_not_null()).then(pl.col(c))
+                             for c in ("d2_start", "d2_end"))
     out = (df
            .with_columns(pl.when(pl.col("d_end") != pl.col("d_start")).then(pl.col(c))
                          for c in ("d_start", "d_end"))

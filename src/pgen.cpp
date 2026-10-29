@@ -21,6 +21,19 @@ bool tandem_allowed(const PackedModel& m, int j, int d1, int d2) {
             (!m.tandem_forbidden_dj[j*nD+d1] && !m.tandem_forbidden_dj[j*nD+d2]));
 }
 
+double tandem_first_weight(const PackedModel& m, int j, int d) {
+    return m.joint_history ? 1.0 : m.pd_given_j[j * m.nD() + d];
+}
+
+double tandem_pair_weight(const PackedModel& m, int j, int d1, int d2) {
+    return m.joint_history ? m.q_tandem[(j * m.nD() + d1) * m.nD() + d2]
+                           : m.pd2_given_d1[d1 * m.nD() + d2];
+}
+
+const std::vector<double>& tandem_first_deletions(const PackedModel& m) {
+    return m.joint_history ? m.del_d_tandem : m.del_d;
+}
+
 struct Opt {
     int len;
     double p;
@@ -131,7 +144,7 @@ double dd_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
     int nD = m.nD();
     std::vector<double> A(mlen + 1), B(mlen + 1);
     for (int d1 : m.func_d) {
-        double pd1 = m.pd_given_j[j * nD + d1];
+        double pd1 = tandem_first_weight(m, j, d1);
         if (pd1 == 0.0) continue;
         const auto& cut1 = m.cut_d[d1];
         int L1 = cut1.size();
@@ -141,7 +154,7 @@ double dd_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
             for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
                 int ld1 = L1 - i5 - i3;
                 if (ld1 < 1) continue;
-                double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                double pdel1 = tandem_first_deletions(m)[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
                 if (pdel1 == 0.0) continue;
                 for (int pos1 = 0; pos1 + ld1 <= mlen; ++pos1) {
                     bool ok = true;
@@ -156,7 +169,7 @@ double dd_middle(const PackedModel& m, int j, const int8_t* mid, int mlen) {
         B.assign(mlen + 1, 0.0);
         for (int d2 : m.func_d) {
             if (!tandem_allowed(m,j,d1,d2)) continue;
-            double pd2 = m.pd2_given_d1[d1 * nD + d2];
+            double pd2 = tandem_pair_weight(m, j, d1, d2);
             if (pd2 == 0.0) continue;
             const auto& cut2 = m.cut_d[d2];
             int L2 = cut2.size();
@@ -757,7 +770,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
         if (m.pj[j] == 0.0) continue;
         mk_right_tm(m, allowed, N, /*D=*/-1, /*j_idx=*/j, RbJ, rb_any);  // insDJ + J, P(J)·P(delJ), no D
         for (int d1 : m.func_d) {
-            double pd1 = m.pd_given_j[j * nD + d1];
+            double pd1 = tandem_first_weight(m, j, d1);
             if (pd1 == 0.0) continue;
             Mf.assign((N + 1) * 25, 0.0);
             const auto& cut1 = m.cut_d[d1];
@@ -766,7 +779,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
                 for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
                     int ld1 = L1 - i5 - i3;
                     if (ld1 < 1) continue;
-                    double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                    double pdel1 = tandem_first_deletions(m)[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
                     if (pdel1 == 0.0) continue;
                     for (int k = 0; k < ld1; ++k) g[k] = cut1[i5 + k];
                     for (int pos1 = 1; pos1 + ld1 < N; ++pos1) {  // leave ≥1 nt for D2 after
@@ -779,7 +792,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
                 }
             for (int d2 : m.func_d) {
             if (!tandem_allowed(m,j,d1,d2)) continue;
-                double pd2 = m.pd2_given_d1[d1 * nD + d2];
+                double pd2 = tandem_pair_weight(m, j, d1, d2);
                 if (pd2 == 0.0) continue;
                 const auto& cut2 = m.cut_d[d2];
                 int L2 = cut2.size();
@@ -1237,6 +1250,7 @@ double accum_vdj(const PackedModel& m, int j, int v, int div, int dij,
                     c.v_choice[v] += w;
                     c.j_choice[j] += w;
                     c.d_gene[j * nD + d] += w;
+                    if (m.joint_history) c.history_single[j * nD + d] += w;
                     c.v_3_del[v * m.nbins_v + div] += w;
                     c.j_5_del[j * m.nbins_j + dij] += w;
                     c.d_del[(d * m.nbins_d5 + idx5) * m.nbins_d3 + idx3] += w;
@@ -1266,7 +1280,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
     std::vector<double> A(mlen + 1), B(mlen + 1), C(mlen + 1), Dmsg(mlen + 1);
     double seq_total = 0.0;
     for (int d1 : dm) {
-        double pd1 = m.pd_given_j[j * nD + d1];
+        double pd1 = tandem_first_weight(m, j, d1);
         if (pd1 == 0.0) continue;
         const auto& cut1 = m.cut_d[d1];
         int L1 = cut1.size();
@@ -1276,7 +1290,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
             for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
                 int ld1 = L1 - i5 - i3;
                 if (ld1 < 1) continue;
-                double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                double pdel1 = tandem_first_deletions(m)[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
                 if (pdel1 == 0.0) continue;
                 for (int pos1 = 0; pos1 + ld1 <= mlen; ++pos1) {
                     int errors;
@@ -1291,7 +1305,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
         B.assign(mlen + 1, 0.0);
         for (int d2 : d2m) {
             if (!tandem_allowed(m,j,d1,d2)) continue;
-            double pd2 = m.pd2_given_d1[d1 * nD + d2];
+            double pd2 = tandem_pair_weight(m, j, d1, d2);
             if (pd2 == 0.0) continue;
             const auto& cut2 = m.cut_d[d2];
             int L2 = cut2.size();
@@ -1343,7 +1357,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
             for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
                 int ld1 = L1 - i5 - i3;
                 if (ld1 < 1) continue;
-                double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                double pdel1 = tandem_first_deletions(m)[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
                 if (pdel1 == 0.0) continue;
                 for (int pos1 = 0; pos1 + ld1 <= mlen; ++pos1) {
                     int e1 = pos1 + ld1;
@@ -1357,7 +1371,8 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                     double bw = base * pd1 * pdel1 * wvd * C[e1] * emission;
                     c.error_mismatches += bw * errors;
                     c.error_nt += bw * ld1;
-                    c.d_del[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3] += bw;
+                    auto& d1counts = m.joint_history ? c.d_tandem_del : c.d_del;
+                    d1counts[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3] += bw;
                     c.ins_vd[pos1] += bw;
                     accum_dinucl(c.dinucl_vd, c.first_vd, mid, 0, pos1, false, bw);
                 }
@@ -1365,7 +1380,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
         // Re-enumerate RIGHT: attribute d2_gene, d2_del(D2), dj_ins, dj_dinucl with weight (right)*Dmsg[s2].
         for (int d2 : d2m) {
             if (!tandem_allowed(m,j,d1,d2)) continue;
-            double pd2 = m.pd2_given_d1[d1 * nD + d2];
+            double pd2 = tandem_pair_weight(m, j, d1, d2);
             if (pd2 == 0.0) continue;
             const auto& cut2 = m.cut_d[d2];
             int L2 = cut2.size();
@@ -1387,6 +1402,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                         c.error_mismatches += bw * errors;
                         c.error_nt += bw * ld2;
                         c.d2_gene[d1 * nD + d2] += bw;
+                        if (m.joint_history) c.history_tandem[(j * nD + d1) * nD + d2] += bw;
                         c.d2_del[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3] += bw;
                         c.ins_dj[mlen - pos2 - ld2] += bw;
                         accum_dinucl(c.dinucl_dj, c.first_dj, mid, pos2 + ld2, mlen, true, bw);
@@ -1474,7 +1490,8 @@ void zero(Counts& c) {
     for (auto* v : {&c.v_choice, &c.j_choice, &c.d_gene, &c.v_3_del, &c.j_5_del, &c.d_del,
                     &c.ins_vd, &c.ins_dj, &c.ins_vj, &c.dinucl_vd, &c.dinucl_dj, &c.dinucl_vj,
                     &c.n_d, &c.d2_gene, &c.d2_del, &c.ins_dd, &c.dinucl_dd,
-                    &c.first_vd, &c.first_dj, &c.first_vj, &c.first_dd}) {
+                    &c.first_vd, &c.first_dj, &c.first_vj, &c.first_dd,
+                    &c.history_single, &c.history_tandem, &c.d_tandem_del}) {
         std::fill(v->begin(), v->end(), 0.0);
     }
 }
@@ -1493,6 +1510,8 @@ void add_scaled(Counts& dst, const Counts& src, double s) {
     go(dst.ins_dd, src.ins_dd); go(dst.dinucl_dd, src.dinucl_dd);
     go(dst.first_vd, src.first_vd); go(dst.first_dj, src.first_dj);
     go(dst.first_vj, src.first_vj); go(dst.first_dd, src.first_dd);
+    go(dst.history_single, src.history_single); go(dst.history_tandem, src.history_tandem);
+    go(dst.d_tandem_del, src.d_tandem_del);
 }
 
 }  // namespace
@@ -1509,12 +1528,17 @@ Counts make_counts(const PackedModel& m) {
         c.j_choice.assign(nJ, 0.0);
         c.d_gene.assign(nJ * nD, 0.0);
         c.d_del.assign(nD * m.nbins_d5 * m.nbins_d3, 0.0);
+        if (m.joint_history) {
+            c.history_single.assign(nJ * nD, 0.0);
+            c.history_tandem.assign(nJ * nD * nD, 0.0);
+            c.d_tandem_del.assign(c.d_del.size(), 0.0);
+        }
         c.ins_vd.assign(m.ins_vd.size(), 0.0);
         c.ins_dj.assign(m.ins_dj.size(), 0.0);
         c.dinucl_vd.assign(16, 0.0);
         c.dinucl_dj.assign(16, 0.0);
         c.n_d.assign(3, 0.0);  // buckets for n_D in {0,1,2}; only 1 and 2 ever accumulate
-        if (m.dd) {
+        if (m.dd || m.joint_history) {
             c.d2_gene.assign(nD * nD, 0.0);
             c.d2_del.assign(nD * m.nbins_d5 * m.nbins_d3, 0.0);
             c.ins_dd.assign(m.ins_dd.size(), 0.0);
@@ -1754,7 +1778,8 @@ void mk_left_max(const PackedModel& m, const uint64_t* allowed, int N, int v_idx
 
 // Max counterpart of mk_right_tm: best DJ insertion + J germline filling [p,N), weighted by
 // P(D|J)P(J)P(delJ). D<0 leaves out the P(D|J) factor (the VJ chain has none).
-void mk_right_max(const PackedModel& m, const uint64_t* allowed, int N, int D, int j_idx, ArgTM& Rt) {
+void mk_right_max(const PackedModel& m, const uint64_t* allowed, int N, int D, int j_idx, ArgTM& Rt,
+                  int d1 = -1) {
     int W = (N + 1) * 25;
     Rt.w.assign(W, 0.0); Rt.gene.assign(W, -1); Rt.len.assign(W, 0);
     const auto& pins = m.ins_dj; const auto& R = m.R_dj; const auto& bias = m.bias_dj;
@@ -1765,7 +1790,8 @@ void mk_right_max(const PackedModel& m, const uint64_t* allowed, int N, int D, i
     for (int j : mask_or_all(j_idx, m.func_j)) {
         double pj = m.pj[j];
         if (pj == 0.0) continue;
-        double pdg = (D < 0) ? 1.0 : m.pd_given_j[j * nD + D];
+        double pdg = d1 >= 0 ? tandem_pair_weight(m, j, d1, D) :
+                     (D < 0 ? 1.0 : m.pd_given_j[j * nD + D]);
         if (pdg == 0.0) continue;               // genomically impossible D-J pair: prune
         const auto& gj = m.cut_j[j];
         int Lj = static_cast<int>(gj.size());
@@ -1943,6 +1969,92 @@ void best_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx
     }
 }
 
+// A forward max-product state carrying the winning V boundary through D and DD blocks.
+struct ForwardMax {
+    std::array<double, 25> w{};
+    std::array<int, 25> gene{}, len{};
+};
+
+bool advance_max(ForwardMax& state, int pos, const uint64_t* allowed, int fixed_nt,
+                 const std::vector<double>* R = nullptr, const std::vector<double>* bias = nullptr) {
+    ForwardMax next;
+    bool any = false;
+    for (int s = 0; s < 25; ++s) {
+        if (state.w[s] == 0.0) continue;
+        int p1 = s / 5 - 1, p2 = s % 5 - 1;
+        for (int nt = fixed_nt < 0 ? 0 : fixed_nt; nt <= (fixed_nt < 0 ? 3 : fixed_nt); ++nt) {
+            if (pos % 3 == 2 && !ok_codon(allowed[pos / 3], p2 * 16 + p1 * 4 + nt)) continue;
+            double mult = bias ? (*bias)[nt] : R ? (*R)[nt * 4 + p1] : 1.0;
+            double w = state.w[s] * mult;
+            int t = sidx(nt, p1);
+            if (w > next.w[t]) {
+                next.w[t] = w; next.gene[t] = state.gene[s]; next.len[t] = state.len[s];
+                any = true;
+            }
+        }
+    }
+    state = next;
+    return any;
+}
+
+void best_joint_dd(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
+                    size_t k, std::vector<AaScenario>& top) {
+    if (!m.joint_history || !m.dd) return;
+    int N = 3 * alen;
+    ArgTM left, right;
+    mk_left_max(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left);
+    for (int d1 : m.func_d) for (int d2 : m.func_d) {
+        mk_right_max(m, allowed, N, d2, j_idx, right, d1);
+        if (std::none_of(right.any.begin(), right.any.end(), [](char a) { return a; })) continue;
+        const auto& c1 = m.cut_d[d1]; const auto& c2 = m.cut_d[d2];
+        int l1 = static_cast<int>(c1.size()), l2 = static_cast<int>(c2.size());
+        for (int i5 = 0; i5 < l1 && i5 < m.nbins_d5; ++i5) {
+            for (int pos1 = 1; pos1 < N; ++pos1) {
+                if (!left.any[pos1]) continue;
+                ForwardMax first;
+                for (int s = 0; s < 25; ++s) {
+                    first.w[s] = left.w[pos1 * 25 + s];
+                    first.gene[s] = left.gene[pos1 * 25 + s]; first.len[s] = left.len[pos1 * 25 + s];
+                }
+                for (int ld1 = 1; ld1 <= l1 - i5 && pos1 + ld1 < N; ++ld1) {
+                    if (!advance_max(first, pos1 + ld1 - 1, allowed, c1[i5 + ld1 - 1])) break;
+                    int i3 = l1 - i5 - ld1;
+                    if (i3 >= m.nbins_d3) continue;
+                    double p1 = m.del_d_tandem[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
+                    if (p1 == 0.0) continue;
+                    ForwardMax gap = first;
+                    for (int ell = 0; ell < static_cast<int>(m.ins_dd.size()) && pos1 + ld1 + ell < N; ++ell) {
+                        int pos2 = pos1 + ld1 + ell;
+                        if (ell && !advance_max(gap, pos2 - 1, allowed, -1,
+                                                ell == 1 ? nullptr : &m.R_dd, ell == 1 ? &m.bias_dd : nullptr)) break;
+                        if (m.ins_dd[ell] == 0.0) continue;
+                        for (int k5 = 0; k5 < l2 && k5 < m.nbins_d5; ++k5) {
+                            ForwardMax second = gap;
+                            for (int ld2 = 1; ld2 <= l2 - k5 && pos2 + ld2 < N; ++ld2) {
+                                if (!advance_max(second, pos2 + ld2 - 1, allowed, c2[k5 + ld2 - 1])) break;
+                                int k3 = l2 - k5 - ld2, end = pos2 + ld2;
+                                if (k3 >= m.nbins_d3 || !right.any[end]) continue;
+                                double p2 = m.del_d2[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3];
+                                if (p2 == 0.0) continue;
+                                int sl = -1, sr = -1;
+                                double w = combine_max(second.w.data(), &right.w[end * 25], end, allowed, sl, sr);
+                                if (w <= 0.0) continue;
+                                AaScenario sc;
+                                sc.w = p1 * p2 * m.ins_dd[ell] * w;
+                                sc.v = second.gene[sl]; sc.len_v = second.len[sl];
+                                sc.j = right.gene[end * 25 + sr]; sc.len_j = right.len[end * 25 + sr];
+                                sc.d = d1; sc.idx5 = i5; sc.idx3 = i3; sc.pos = pos1;
+                                sc.d2 = d2; sc.idx5_2 = k5; sc.idx3_2 = k3; sc.pos2 = pos2;
+                                offer(top, k, sc);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 void best_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
              size_t k, std::vector<AaScenario>& top) {
     int N = 3 * alen;
@@ -2008,7 +2120,10 @@ std::vector<AaScenario> best_aa_scenarios(const PackedModel& m, const std::strin
         allowed[c] = mask_for_aa(aa[c]);
         if (allowed[c] == 0ULL) return top;      // an unknown residue has no codons
     }
-    if (m.vdj) best_vdj(m, allowed.data(), L, v_idx, j_idx, static_cast<size_t>(k), top);
+    if (m.vdj) {
+        best_vdj(m, allowed.data(), L, v_idx, j_idx, static_cast<size_t>(k), top);
+        best_joint_dd(m, allowed.data(), L, v_idx, j_idx, static_cast<size_t>(k), top);
+    }
     else best_vj(m, allowed.data(), L, v_idx, j_idx, static_cast<size_t>(k), top);
     std::sort(top.begin(), top.end(),
               [](const AaScenario& a, const AaScenario& b) { return a.w > b.w; });
@@ -2027,7 +2142,8 @@ AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m, const std::vector<
     for (const auto& one : per) total += one.size();
     AaScenarioBatch out;
     for (auto* c : {&out.row, &out.rank, &out.v, &out.len_v, &out.j, &out.len_j,
-                    &out.d, &out.idx5, &out.idx3, &out.pos}) c->reserve(total);
+                    &out.d, &out.idx5, &out.idx3, &out.pos,
+                    &out.d2, &out.idx5_2, &out.idx3_2, &out.pos2}) c->reserve(total);
     out.w.reserve(total);
     for (size_t i = 0; i < per.size(); ++i) {
         for (size_t r = 0; r < per[i].size(); ++r) {
@@ -2039,6 +2155,8 @@ AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m, const std::vector<
             out.j.push_back(sc.j); out.len_j.push_back(sc.len_j);
             out.d.push_back(sc.d);
             out.idx5.push_back(sc.idx5); out.idx3.push_back(sc.idx3); out.pos.push_back(sc.pos);
+            out.d2.push_back(sc.d2); out.idx5_2.push_back(sc.idx5_2);
+            out.idx3_2.push_back(sc.idx3_2); out.pos2.push_back(sc.pos2);
         }
     }
     return out;
@@ -2059,7 +2177,7 @@ namespace {
 
 constexpr int kMaxNt = 3 * 128;  // CDR3 nucleotides; a longer junction is not a junction
 
-enum : int8_t { kGerm = 0, kLeft = 1, kRight = 2 };
+enum : int8_t { kGerm = 0, kLeft = 1, kRight = 2, kDD = 3 };
 
 // One scenario laid out per CDR3 position: the germline nucleotide, or -1 plus which insertion
 // junction scores the position when it is free. `kLeft` reads 5'->3' (VD, or VJ on a VJ chain),
@@ -2068,6 +2186,7 @@ struct Layout {
     int N = 0;
     int8_t tpl[kMaxNt], kind[kMaxNt], first[kMaxNt], last[kMaxNt];
     const double *Rl = nullptr, *bl = nullptr, *Rr = nullptr, *br = nullptr;
+    const double *Rd = nullptr, *bd = nullptr;
 };
 
 bool layout_of(const PackedModel& m, int N, const AaScenario& sc, Layout& o) {
@@ -2109,7 +2228,18 @@ bool layout_of(const PackedModel& m, int N, const AaScenario& sc, Layout& o) {
     if (sc.pos < sc.len_v || sc.pos + ld > right) return false;   // lvd >= 0 and ldj >= 0
     for (int p = 0; p < ld; ++p) o.tpl[sc.pos + p] = cd[sc.idx5 + p];
     block(sc.len_v, sc.pos, kLeft);
-    block(sc.pos + ld, right, kRight);
+    int dj_start = sc.pos + ld;
+    if (sc.d2 >= 0) {
+        if (sc.d2 >= m.nD()) return false;
+        const auto& cd2 = m.cut_d[sc.d2];
+        int ld2 = static_cast<int>(cd2.size()) - sc.idx5_2 - sc.idx3_2;
+        if (ld <= 0 || ld2 <= 0 || sc.pos2 < dj_start || sc.pos2 + ld2 > right) return false;
+        block(dj_start, sc.pos2, kDD);
+        for (int p = 0; p < ld2; ++p) o.tpl[sc.pos2 + p] = cd2[sc.idx5_2 + p];
+        dj_start = sc.pos2 + ld2;
+        o.Rd = m.R_dd.data(); o.bd = m.bias_dd.data();
+    }
+    block(dj_start, right, kRight);
     o.Rl = m.R_vd.data();
     o.bl = m.bias_vd.data();
     o.Rr = m.R_dj.data();
@@ -2157,6 +2287,8 @@ struct CodonDP {
                     double ww = w[s];
                     if (L.kind[i] == kLeft) {
                         ww *= L.first[i] ? L.bl[nt] : L.Rl[nt * 4 + p1];
+                    } else if (L.kind[i] == kDD) {
+                        ww *= L.first[i] ? L.bd[nt] : L.Rd[nt * 4 + p1];
                     } else if (L.kind[i] == kRight) {
                         if (!L.first[i]) ww *= L.Rr[p1 * 4 + nt];
                         if (L.last[i]) ww *= L.br[nt];
@@ -2287,6 +2419,9 @@ InferNt infer_nt_one(const PackedModel& m, const std::string& aa, const std::vec
     r.d = ld ? sc.d : -1;
     r.d_start = sc.pos;
     r.d_end = sc.pos + ld;
+    r.d2 = sc.d2;
+    r.d2_start = sc.pos2;
+    r.d2_end = sc.d2 >= 0 ? sc.pos2 + static_cast<int>(m.cut_d[sc.d2].size()) - sc.idx5_2 - sc.idx3_2 : 0;
     r.pgen = scored[0].first;
     r.scenario_p = sc.w;
     r.runner_up_pgen = scored.size() > 1 ? scored[1].first : 0.0;
@@ -2378,6 +2513,7 @@ struct GenPrep {
     bool vdj = false;
     Cat v, j_marg;
     std::vector<Cat> j_given_v, d_given_j, del_v, del_j, del_d, del_d2, d2_given_d1;
+    std::vector<Cat> history_by_j, del_d_tandem;
     Cat ins_vd, ins_dj, ins_vj, ins_dd, n_d;
     double Rcum_vd[16], Rcum_dj[16], Rcum_vj[16], Rcum_dd[16];      // [prev*4 + to], cumulative
     double bcum_vd[4], bcum_dj[4], bcum_vj[4], bcum_dd[4];
@@ -2420,6 +2556,15 @@ GenPrep build_gen_prep(const PackedModel& m) {
         for (int j : m.func_j)
             g.d_given_j[j] = make_cat(m.pd_given_j.data() + static_cast<size_t>(j) * m.nD(),
                                       m.nD(), &m.func_d);
+        if (m.joint_history) {
+            g.history_by_j.resize(m.nJ());
+            std::vector<double> weights(m.nD() + m.nD() * m.nD());
+            for (int j : m.func_j) {
+                std::copy_n(m.pd_given_j.data() + j * m.nD(), m.nD(), weights.data());
+                std::copy_n(m.q_tandem.data() + j * m.nD() * m.nD(), m.nD() * m.nD(), weights.data() + m.nD());
+                g.history_by_j[j] = make_cat(weights.data(), static_cast<int>(weights.size()));
+            }
+        }
     } else {
         g.j_given_v.resize(m.nV());
         for (int v : m.func_v)
@@ -2438,6 +2583,11 @@ GenPrep build_gen_prep(const PackedModel& m) {
         for (int d : m.func_d)
             g.del_d[d] = make_cat(m.del_d.data() + static_cast<size_t>(d) * nd, nd);
         if (m.dd) {
+            if (m.joint_history) {
+                g.del_d_tandem.resize(m.nD());
+                for (int d : m.func_d)
+                    g.del_d_tandem[d] = make_cat(m.del_d_tandem.data() + static_cast<size_t>(d) * nd, nd);
+            }
             g.del_d2.resize(m.nD());
             g.d2_given_d1.resize(m.nD());
             for (int d : m.func_d) {
@@ -2528,17 +2678,34 @@ Drawn draw_one(Rng& r, const PackedModel& m, const GenPrep& g, std::string& nt) 
         return out;
     }
 
-    const int d = g.d_given_j[out.j].pick(r);
-    const bool tandem = m.dd && !g.n_d.empty() && g.n_d.pick(r) == 1;
+    int d, d2 = -1;
+    bool tandem;
+    if (m.joint_history) {
+        const int h = g.history_by_j[out.j].pick(r);
+        tandem = h >= m.nD();
+        d = tandem ? (h - m.nD()) / m.nD() : h;
+        if (tandem) d2 = (h - m.nD()) % m.nD();
+    } else {
+        d = g.d_given_j[out.j].pick(r);
+        tandem = m.dd && !g.n_d.empty() && g.n_d.pick(r) == 1;
+    }
     std::string mid;
     if (tandem) {
-        if (g.d2_given_d1[d].empty()) { nt.clear(); return out; }
-        const int d2 = g.d2_given_d1[d].pick(r);
-        if (!tandem_allowed(m,out.j,d,d2)) { nt.clear(); return out; }
+        if (!m.joint_history) {
+            if (g.d2_given_d1[d].empty()) { nt.clear(); return out; }
+            d2 = g.d2_given_d1[d].pick(r);
+        }
+        if (!tandem_allowed(m,out.j,d,d2)) {
+            if (m.joint_history) throw std::invalid_argument("joint history allocates a forbidden path");
+            nt.clear(); return out;
+        }
         std::string d1c, d2c;
-        const int l1 = draw_d_seg(r, m, g.del_d[d], d, d1c);
+        const int l1 = draw_d_seg(r, m, m.joint_history ? g.del_d_tandem[d] : g.del_d[d], d, d1c);
         const int l2 = draw_d_seg(r, m, g.del_d2[d2], d2, d2c);
-        if (!l1 || !l2) { nt.clear(); return out; }
+        if (!l1 || !l2) {
+            if (m.joint_history) throw std::invalid_argument("joint tandem history has an empty D contribution");
+            nt.clear(); return out;
+        }
         draw_insert(r, g.ins_vd.pick(r), g.Rcum_vd, g.bcum_vd, false, mid);
         mid += d1c;
         draw_insert(r, g.ins_dd.empty() ? 0 : g.ins_dd.pick(r), g.Rcum_dd, g.bcum_dd, false, mid);

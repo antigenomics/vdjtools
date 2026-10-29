@@ -56,6 +56,9 @@ PYBIND11_MODULE(_core, m) {
         .def_readwrite("p_nd1", &PackedModel::p_nd1)
         .def_readwrite("p_nd2", &PackedModel::p_nd2)
         .def_readwrite("pd2_given_d1", &PackedModel::pd2_given_d1)
+        .def_readwrite("joint_history", &PackedModel::joint_history)
+        .def_readwrite("q_tandem", &PackedModel::q_tandem)
+        .def_readwrite("del_d_tandem", &PackedModel::del_d_tandem)
         .def_readwrite("tandem_forbidden_dj", &PackedModel::tandem_forbidden_dj)
         .def_readwrite("tandem_forbidden_dd", &PackedModel::tandem_forbidden_dd)
         .def_readwrite("del_d2", &PackedModel::del_d2)
@@ -103,7 +106,11 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("d", &vdjtools::AaScenario::d)
         .def_readonly("idx5", &vdjtools::AaScenario::idx5)
         .def_readonly("idx3", &vdjtools::AaScenario::idx3)
-        .def_readonly("pos", &vdjtools::AaScenario::pos);
+        .def_readonly("pos", &vdjtools::AaScenario::pos)
+        .def_readonly("d2", &vdjtools::AaScenario::d2)
+        .def_readonly("idx5_2", &vdjtools::AaScenario::idx5_2)
+        .def_readonly("idx3_2", &vdjtools::AaScenario::idx3_2)
+        .def_readonly("pos2", &vdjtools::AaScenario::pos2);
     m.def("translate_junctions", &vdjtools::translate_junctions, py::arg("seqs"),
           py::arg("threads") = 0, py::call_guard<py::gil_scoped_release>(),
           "Translate junction nucleotides the legacy-converter way and collapse the non-coding "
@@ -145,6 +152,8 @@ PYBIND11_MODULE(_core, m) {
               out["idx5"] = ints(b.idx5);
               out["idx3"] = ints(b.idx3);
               out["pos"] = ints(b.pos);
+              out["d2"] = ints(b.d2); out["idx5_2"] = ints(b.idx5_2);
+              out["idx3_2"] = ints(b.idx3_2); out["pos2"] = ints(b.pos2);
               return out;
           },
           py::arg("model"), py::arg("seqs"), py::arg("v_idxs") = std::vector<int>{},
@@ -168,6 +177,7 @@ PYBIND11_MODULE(_core, m) {
               std::vector<int8_t> ok(n);
               std::vector<std::string> nt(n);
               std::vector<int> v(n), len_v(n), j(n), len_j(n), d(n), d_start(n), d_end(n), nc(n);
+              std::vector<int> d2(n), d2_start(n), d2_end(n);
               std::vector<double> pgen(n), scen_p(n), runner(n);
               for (size_t i = 0; i < n; ++i) {
                   const auto& r = got[i];
@@ -175,6 +185,7 @@ PYBIND11_MODULE(_core, m) {
                   nt[i] = r.nt;
                   v[i] = r.v; len_v[i] = r.len_v; j[i] = r.j; len_j[i] = r.len_j;
                   d[i] = r.d; d_start[i] = r.d_start; d_end[i] = r.d_end;
+                  d2[i] = r.d2; d2_start[i] = r.d2_start; d2_end[i] = r.d2_end;
                   nc[i] = r.n_candidates;
                   pgen[i] = r.pgen; scen_p[i] = r.scenario_p; runner[i] = r.runner_up_pgen;
               }
@@ -190,6 +201,7 @@ PYBIND11_MODULE(_core, m) {
               out["v"] = ints(v); out["len_v"] = ints(len_v);
               out["j"] = ints(j); out["len_j"] = ints(len_j);
               out["d"] = ints(d); out["d_start"] = ints(d_start); out["d_end"] = ints(d_end);
+              out["d2"] = ints(d2); out["d2_start"] = ints(d2_start); out["d2_end"] = ints(d2_end);
               out["n_candidates"] = ints(nc);
               out["pgen"] = dbls(pgen); out["scenario_p"] = dbls(scen_p);
               out["runner_up_pgen"] = dbls(runner);
@@ -268,6 +280,9 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("first_dj", &Counts::first_dj)
         .def_readonly("first_vj", &Counts::first_vj)
         .def_readonly("first_dd", &Counts::first_dd)
+        .def_readonly("history_single", &Counts::history_single)
+        .def_readonly("history_tandem", &Counts::history_tandem)
+        .def_readonly("d_tandem_del", &Counts::d_tandem_del)
         .def_readonly("n_d", &Counts::n_d)
         .def_readonly("d2_gene", &Counts::d2_gene)
         .def_readonly("d2_del", &Counts::d2_del)

@@ -182,6 +182,12 @@ def pack(model: Model):
         # D-D (tandem) extension — populated only when the model declares it.
         pm.p_nd1 = float(prep.p_nd.get(0, 0.0) + prep.p_nd.get(1, 0.0))
         pm.p_nd2 = float(prep.p_nd.get(2, 0.0))
+        pm.joint_history = prep.joint_history
+        if prep.joint_history:
+            pm.q_tandem = [float(prep.q_tandem.get((j, d1, d2), 0.0))
+                           for j in j_alleles for d1 in d_alleles for d2 in d_alleles]
+            pm.del_d_tandem = _del_dense_d_fixed(prep.p_del_d_tandem, di, prep.maxpal["d_5"],
+                                                prep.maxpal["d_3"], pm.nbins_d5, pm.nbins_d3)
         pm.dd = bool(prep.p_d2_given_d1)
         if pm.dd:
             pm.tandem_forbidden_dj = [int((d,j) in prep.forbidden_dj) for j in j_alleles for d in d_alleles]
@@ -443,6 +449,7 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
         ``w``. ``len_v``/``len_j`` are the nucleotides each germline contributes to the CDR3, so the
         boundaries are ``v_end = len_v`` and ``j_start = 3 * len(cdr3_aa) - len_j``;
         ``idx5``/``idx3`` are the D's 5'/3' trims and ``pos`` where its contribution starts.
+        Joint-history models append ``d2_call, idx5_2, idx3_2, pos2`` to each tuple.
 
         **Empty** only when the DP can explain nothing: a residue outside the genetic code (which
         has no codons), or no rearrangement reachable under the pinned V/J. It is never empty
@@ -472,7 +479,9 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
     ij = {i: a for a, i in ji.items()}
     got = _best(pm, cdr3_aa.upper(), _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"), k)
     return [(s.w, iv[s.v], s.len_v, ij[s.j], s.len_j,
-             d_alleles[s.d] if s.d >= 0 else None, s.idx5, s.idx3, s.pos) for s in got]
+             d_alleles[s.d] if s.d >= 0 else None, s.idx5, s.idx3, s.pos) +
+            ((d_alleles[s.d2] if s.d2 >= 0 else None, s.idx5_2, s.idx3_2, s.pos2)
+             if pm.joint_history else ()) for s in got]
 
 
 def best_aa_scenarios_batch(
@@ -508,6 +517,7 @@ def best_aa_scenarios_batch(
         A :class:`polars.DataFrame` with one row per **scenario**, ordered by ``row`` then ``rank``:
         ``row`` (index into ``cdr3_aas``), ``rank`` (0-based within that row's top-``k``), ``w``,
         ``v_call``, ``len_v``, ``j_call``, ``len_j``, ``d_call``, ``idx5``, ``idx3``, ``pos``.
+        Joint-history models add ``d2_call, idx5_2, idx3_2, pos2`` columns.
         A sequence the DP cannot explain contributes **no rows**, so an absent ``row`` value is how
         a declined query shows up; it is never a silently marginalized scenario.
 
@@ -540,6 +550,9 @@ def best_aa_scenarios_batch(
     names_d = np.array(model.genomic["genes_d"]["d_allele"].to_list()
                        if model.chain_type == "VDJ" else [], dtype=object)
     d = cols["d"]
+    extra = ({"d2_call": np.where(cols["d2"] >= 0, names_d[np.maximum(cols["d2"], 0)], None),
+              "idx5_2": cols["idx5_2"], "idx3_2": cols["idx3_2"], "pos2": cols["pos2"]}
+             if pm.joint_history else {})
     return pl.DataFrame({
         "row": cols["row"], "rank": cols["rank"], "w": cols["w"],
         "v_call": names_v[cols["v"]], "len_v": cols["len_v"],
@@ -547,6 +560,7 @@ def best_aa_scenarios_batch(
         "d_call": (np.where(d >= 0, names_d[np.maximum(d, 0)], None)
                    if names_d.size else np.full(d.shape, None, dtype=object)),
         "idx5": cols["idx5"], "idx3": cols["idx3"], "pos": cols["pos"],
+        **extra,
     })
 
 
@@ -627,4 +641,10 @@ def infer_nt_many(model: Model, cdr3_aas: list, v: list | None = None, j: list |
     cols["d_call"] = (np.where(d >= 0, names_d[np.maximum(d, 0)], None) if names_d.size
                       else np.full(d.shape, None, dtype=object))
     del cols["d"]
+    d2 = cols.pop("d2")
+    if pm.joint_history:
+        cols["d2_call"] = np.where(d2 >= 0, names_d[np.maximum(d2, 0)], None)
+    else:
+        cols.pop("d2_start")
+        cols.pop("d2_end")
     return cols

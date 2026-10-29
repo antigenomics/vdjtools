@@ -34,6 +34,7 @@ _REALIZATION: dict[EventKind, dict[str, pl.DataType]] = {
     EventKind.INS_LENGTH: {"length": pl.Int16},
     EventKind.DINUCLEOTIDE: {"from_nt": pl.UInt8, "to_nt": pl.UInt8},
     EventKind.NUCLEOTIDE: {"nt": pl.UInt8},
+    EventKind.D_HISTORY: {"n_d": pl.UInt8, "d_allele": pl.String, "d2_allele": pl.String},
 }
 
 
@@ -59,7 +60,8 @@ def table_columns(event: Event) -> dict[str, pl.DataType]:
 
 def _given_allele_cols(event: Event) -> list[str]:
     """Column names for the event's parents (each parent is a gene-choice → its allele col)."""
-    return [f"{g.split('_')[0]}_allele" for g in event.given]
+    return [("d2_allele" if event.name == "d2_del" else "d_allele") if g == "d_history"
+            else f"{g.split('_')[0]}_allele" for g in event.given]
 
 
 def normalization_keys(event: Event) -> list[str]:

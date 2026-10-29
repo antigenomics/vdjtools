@@ -23,7 +23,7 @@ import polars as pl
 from .events import EventKind
 from .model import Model
 from .reference import _ISSUE_SCHEMA, _issue
-from .schema import _allele_col, normalization_keys
+from .schema import normalization_keys
 
 #: Allele column -> the genomic frame it must resolve in. Both D events share one germline set.
 _ALLELE_GENOMIC = {"v_allele": "genes_v", "j_allele": "genes_j",
@@ -31,7 +31,8 @@ _ALLELE_GENOMIC = {"v_allele": "genes_v", "j_allele": "genes_j",
 
 #: Deletion event -> the ``palindrome_max`` key(s) bounding its most-negative (palindromic) ndel.
 DELETION_ENDS = {"v_3_del": ("v_3",), "j_5_del": ("j_5",),
-                 "d_del": ("d_5", "d_3"), "d2_del": ("d_5", "d_3")}
+                 "d_del": ("d_5", "d_3"), "d2_del": ("d_5", "d_3"),
+                 "d_tandem_del": ("d_5", "d_3")}
 _DELETION_ENDS = DELETION_ENDS   # back-compat alias
 
 
@@ -52,7 +53,7 @@ def max_reachable_trim(event_name: str, kind, cut_len: int, palindrome_max: dict
     ends = DELETION_ENDS.get(event_name)
     if ends is None or any(e not in palindrome_max for e in ends):
         return None
-    slack = 1 if getattr(kind, "value", kind) == "deletion" else 0
+    slack = 1 if getattr(kind, "value", kind) == "deletion" or event_name == "d_tandem_del" else 0
     return cut_len - sum(palindrome_max[e] for e in ends) - slack
 
 _REQUIRED_EVENTS = {
@@ -61,7 +62,7 @@ _REQUIRED_EVENTS = {
             "vd_ins", "dj_ins", "vd_dinucl", "dj_dinucl"},
 }
 #: Events that only make sense on a VDJ model (a VJ model carrying one is malformed).
-_D_EVENTS = {"d_gene", "d2_gene", "n_d", "d_del", "d2_del", "vd_ins", "dj_ins", "dd_ins",
+_D_EVENTS = {"d_gene", "d2_gene", "n_d", "d_history", "d_tandem_del", "d_del", "d2_del", "vd_ins", "dj_ins", "dd_ins",
              "vd_dinucl", "dj_dinucl", "dd_dinucl"}
 #: The extra events a tandem-D (``n_D = 2``) model must carry.
 _TANDEM_EVENTS = {"d2_gene", "d2_del", "dd_ins", "dd_dinucl"}
@@ -199,7 +200,15 @@ def _check_event_set(model: Model) -> list[dict]:
     events = set(model.manifest.events)
     chain = model.chain_type
 
-    for missing in sorted(_REQUIRED_EVENTS[chain] - events):
+    required = _REQUIRED_EVENTS[chain]
+    if "d_history" in events:
+        required = (required - {"d_gene", "n_d"}) | {"d_history", "d_tandem_del", "d2_del", "dd_ins", "dd_dinucl"}
+        from .dd import validate_history
+        try:
+            validate_history(model)
+        except ValueError as exc:
+            rows.append(_issue("error", "history_support", str(exc), event="d_history"))
+    for missing in sorted(required - events):
         rows.append(_issue("error", "event_set",
                            f"{chain} model is missing the required event {missing!r}", event=missing))
     if chain == "VJ":
@@ -361,7 +370,7 @@ def _check_deletion(model: Model, name, event, df: pl.DataFrame, pal: dict) -> l
     rows: list[dict] = []
     if not event.given:
         return rows
-    parent_allele_col = _allele_col(model.manifest.events[event.given[0]])
+    parent_allele_col = normalization_keys(event)[0]
     frame = _ALLELE_GENOMIC.get(parent_allele_col)
     cuts = _cut_lengths(model, frame) if frame else {}
     if not cuts or parent_allele_col not in df.columns:
@@ -385,6 +394,8 @@ def _check_deletion(model: Model, name, event, df: pl.DataFrame, pal: dict) -> l
     ).filter(pl.col("_cut") > 0)
     used = used.with_columns(_max=pl.col("_cut").map_elements(
         lambda n: max_reachable_trim(name, event.kind, n, pal), return_dtype=pl.Int64))
+    if name == "d2_del" and "d_history" in model.tables:
+        used = used.with_columns(_max=pl.col("_max") - 1)
 
     # Report the FRACTION of each allele's deletion mass that is unreachable, not one row per cell.
     # A shared deletion-bin grid across alleles of different lengths (OLGA's array layout, and the
@@ -464,7 +475,10 @@ def _check_genomic_cross_refs(model: Model) -> list[dict]:
         for col in df.columns:
             if col not in _ALLELE_GENOMIC or col not in known:
                 continue
-            unknown = sorted(set(df[col].to_list()) - known[col])
+            values = set(df[col].to_list())
+            if name == "d_history" and col == "d2_allele":
+                values.discard("")  # explicit absent-D2 marker for nominal single-D histories
+            unknown = sorted(values - known[col])
             for allele in unknown[:10]:
                 rows.append(_issue("error", "allele_not_in_genomic",
                                    f"{allele!r} appears in {name!r} but not in "

@@ -422,8 +422,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     from .. import __version__
 
     model.manifest = replace(model.manifest, builder_version=__version__)
-    nd = (dict(zip(model.tables["n_d"]["n_d"].to_list(), model.tables["n_d"]["p"].to_list()))
-          if "n_d" in model.tables else {})
+    from .dd import d_count_probabilities
+    nd = d_count_probabilities(model)
     stats = {
         "chain": chain, "group": group, "chain_type": base.chain_type,
         "n_clonotypes": clones.height, "n_used": n_all, "p_nd2": nd.get(2),

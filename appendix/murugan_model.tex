@@ -152,12 +152,13 @@ keep \texttt{OLGA} germline to preserve exact-$\Pgen$ fidelity, whereas natively
 \texttt{arda}.
 
 \paragraph{The D-D extension} The schema carries tandem-$D$ ($n_D\!\in\!\{0,1,2\}$)
-rearrangements --- a $D$-count event $P(n_D)$, a second $D$-gene table $P(D_2\!\mid\!D_1)$, a joint
-second-$D$ deletion and a $DD$ insertion --- which \texttt{OLGA}/IGoR cannot represent
+rearrangements, including a second-$D$ deletion and a $DD$ insertion, beyond the
+single-$D$ event graphs used here as \texttt{OLGA}/IGoR references
 (\S\ref{sec:dd}). Real 5$'$-RACE TRD repertoires make this concrete: after collapsing to unique
 clonotypes, \emph{$4.15\%$ of out-of-frame and $3.42\%$ of in-frame $\delta$-chain clonotypes carry two
-aligned $D$ segments}, the signal on which the $n_D\!=\!2$ event is trained; the corresponding tandem
-fraction under any single-$D$ model is structurally zero.
+aligned $D$ segments}. These preliminary annotation fractions are not true tandem
+frequencies: inference reassigns complete histories, including reads with no preliminary
+second-$D$ call. A single-$D$ model has no tandem history by construction.
 
 \section{Nucleotide generation probability}\label{sec:nt}
 
@@ -185,44 +186,59 @@ machine precision.
 
 \section{Tandem-D (D-D) rearrangements}\label{sec:dd}
 
-A tandem-$D$ locus joins \emph{two} $D$ segments in the junction, $V\!-\!D_1\!-\!D_2\!-\!J$, which
-neither \texttt{OLGA} nor IGoR can represent. We add a $D$-count event $P(n_D)$, a second gene factor
-$P(D_2\!\mid\!D_1)$ (whose zeros carry the genomic-order mask), a joint second-$D$ deletion
-$P(\del_{D_2}^{5'},\del_{D_2}^{3'}\!\mid\!D_2)$ and a $DD$ insertion. A two-$D$ scenario has probability
-\begin{equation}\label{eq:pdd}
-  P(r_2)=P(n_D\!=\!2)\,P(V)P(J)\,P(D_1\!\mid\!J)P(D_2\!\mid\!D_1)\;
-    \textstyle\prod_{s\in\{V,J,D_1,D_2\}}\!P(\del_s)\;
-    P_{\ins}(\mathbf m^{VD})P_{\ins}(\mathbf m^{DD})P_{\ins}(\mathbf m^{DJ}),
+A tandem-$D$ locus joins two $D$ segments in the junction,
+$V\!-\!D_1\!-\!D_2\!-\!J$. New joint-history models store
+\begin{equation}\label{eq:dhistory}
+ q_J(n,D_1,D_2)=P(n,D_1,D_2\mid J),\qquad
+ \sum_{(n,D_1,D_2)\in\mathcal S_J}q_J(n,D_1,D_2)=1.
 \end{equation}
-and its CDR3 is $\sigma(r_2)=\hat V\,\mathbf m^{VD}\,\hat D_1\,\mathbf m^{DD}\,\hat D_2\,\mathbf m^{DJ}\,\hat J$.
-The middle factor of Eq.~\eqref{eq:pgennt} becomes a mixture over the $D$-count,
-\begin{equation}\label{eq:ximix}
-  \Xi(\mu)=\bigl[P(n_D\!=\!0)+P(n_D\!=\!1)\bigr]\,\Xi_1(\mu)\;+\;P(n_D\!=\!2)\,\Xi_2(\mu),
-\end{equation}
-where $\Xi_1$ is the single-$D$ sum of Eq.~\eqref{eq:dmiddle} and $\Xi_2$ enumerates two ordered,
-non-overlapping $D$ placements with $VD$, $DD$ and $DJ$ insertions between and around them. Two design
-choices keep the mixture a genuine probability.
+Here $\mathcal S_J$ contains physically permitted histories, $n\in\{1,2\}$,
+and $D_2$ is absent for $n=1$. Thus the single-$D$ probability can vary with $J$;
+there is no independent global $P(n_D)$ factor in this representation.
+TRB permits $D_1$--$D_2$--$J_2$ and single $D_1$--$J_2$ histories.
+A preliminary greedy alignment cannot veto either history.
 
-\begin{proposition}[Disjoint $D$-count partition]\label{prop:dd}
-If every $D$ in a two-$D$ scenario is required to contribute at least one nucleotide
-($\ell_{D_1},\ell_{D_2}\!\ge\!1$), then no CDR3 nucleotide sequence is counted by both $\Xi_1$ and
-$\Xi_2$, and the $n_D\!=\!0$ (D-less) case is exactly the $n_D\!=\!1$ term with a fully-trimmed $D$
-($\ell_D\!=\!0$). Hence Eq.~\eqref{eq:ximix} is a partition of the scenario space and $\Xi$ is normalized
-whenever the event tables are.
+A two-$D$ scenario has probability
+\begin{equation}\label{eq:pdd}
+ \begin{aligned}
+ P(r_2)={}&P(V)P(J)q_J(2,D_1,D_2)P(\del_V\mid V)P(\del_J\mid J)\\
+ &{}\times P(\del_{D_1}\mid D_1,n=2)P(\del_{D_2}\mid D_2,n=2)
+ \prod_{u\in\{VD,DD,DJ\}}P_{\ins}(\mathbf m^u).
+ \end{aligned}
+\end{equation}
+Its junction is $\sigma(r_2)=\hat V\,\mathbf m^{VD}\,\hat D_1\,
+\mathbf m^{DD}\,\hat D_2\,\mathbf m^{DJ}\,\hat J$.
+For $n=1$, use $q_J(1,D_1,\varnothing)$, its separate single-$D$ deletion
+conditional, and omit the $D_2$ and $DD$ factors. Consequently
+\begin{equation}\label{eq:ximix}
+ \Xi(\mu)=\sum_{r:\,\sigma_{\mathrm{middle}}(r)=\mu}
+ q_J(n,D_1,D_2)P(\text{middle trims and insertions}\mid n,D_1,D_2).
+\end{equation}
+
+\begin{proposition}[Disjoint latent histories]\label{prop:dd}
+Both retained $D$ segments in a tandem history have at least one nucleotide.
+Single-$D$ histories allow complete $D$ deletion. These are disjoint sets of
+latent histories, but their emitted nucleotide sequences can overlap.
+Their mixture is normalized when $q_J$ and every reachable conditional are normalized.
 \end{proposition}
 
-\noindent The first clause removes the identifiability trap --- a tandem in which one $D$ is fully
-deleted is indistinguishable from a single $D$ with a longer insertion --- by assigning such realizations
-to $n_D\!=\!1$ alone; the second means the model needs no separate $D$-less insertion table
-($\Xi_1$ already sums the $\ell_D\!=\!0$ placement, which is why the loader's bootstrap $P(n_D)=\delta_1$
-reproduces single-$D$ \texttt{OLGA} $\Pgen$ exactly). The reference implementation of $\Xi_2$ is a direct
-enumeration --- correct but, like the amino-acid sum of \S\ref{sec:aa} before its transfer-matrix
-rewrite, slow; the planned native port will add one $D$ block to the right partial sum $\Pi_R$
-(Eq.~\eqref{eq:rho}), weighted by $P(n_D\!=\!2)$, so that a tandem query costs one extra block-stitch
-rather than a nested placement loop. Until that port and the D-D-aware EM land, the not-yet-tandem paths
-(the native \texttt{\_core}, amino-acid $\Pgen$, generation and inference) refuse a model with
-$P(n_D\!=\!2)>0$ rather than silently returning a single-$D$ result; the $n_D\!=\!2$ event is trained by
-EM on the real TRD clonotypes noted in \S\ref{sec:tables}.
+Requiring nonempty tandem segments is an explicit model convention; it does not
+make the number of $D$ segments identifiable from a sequence. In particular,
+insertions can coincidentally match germline bases. The inference and generation
+kernels use separate normalized single-$D$, tandem-first-$D$ and second-$D$
+deletion tables, so removing fully deleted tandem states does not leak probability.
+EM accumulates posterior counts directly over $\mathcal S_J$, then normalizes within
+$J$. An optional single-$D$ pseudocount is divided uniformly among declared
+single-$D$ history rows within each $J$. Undefined groups retain their initial
+normalized conditional. The reported $D$-count probability is
+$P(n)=\sum_JP(J)\sum_{D_1,D_2}q_J(n,D_1,D_2)$.
+
+Native and reference nucleotide/amino-acid Pgen, generation and E-step kernels
+use these same factors. The native codon-constrained max-product search also
+includes tandem paths and reconstructs both $D$ spans. Legacy models retain their
+existing global $P(n_D)P(D_1\mid J)P(D_2\mid D_1)$ representation and artifact behavior;
+the joint-history schema is an explicit conversion, not a reinterpretation of
+frozen tables.
 
 \section{Amino-acid generation probability by transfer matrix}\label{sec:aa}
 

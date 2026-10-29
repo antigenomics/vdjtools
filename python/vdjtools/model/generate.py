@@ -48,11 +48,17 @@ class _GenPrep:
     deld2_pairs: dict                                 # d2 -> pairs[i]=(n5,n3)
     forbidden_dj: set = field(default_factory=set)
     forbidden_dd: set = field(default_factory=set)
+    history_by_j: dict = field(default_factory=dict)
+    deld_tandem: dict = field(default_factory=dict)
+    deld_tandem_pairs: dict = field(default_factory=dict)
 
 
 def prepare_generation(model: Model) -> _GenPrep:
     """Precompute cumulative distributions for fast ancestral sampling."""
     t = model.tables
+    if "d_history" in t:
+        from .dd import validate_history
+        validate_history(model)
     from .reference import forbidden_dj_pairs, forbidden_tandem_pairs
     vdj = model.chain_type == "VDJ"
 
@@ -74,7 +80,9 @@ def prepare_generation(model: Model) -> _GenPrep:
         return fun & recomb
 
     uv, uj = usable("v"), usable("j")
-    ud = usable("d") if vdj else set()
+    joint = "d_history" in t
+    ud = (set(model.genomic["genes_d"].filter(pl.col("functional"))["d_allele"])
+          if joint else usable("d") if vdj else set())
 
     def _choice(df, allele_col, keep):
         sub = df.filter(df[allele_col].is_in(list(keep)))
@@ -85,10 +93,11 @@ def prepare_generation(model: Model) -> _GenPrep:
     j_marg, j_given_v, d_given_j = None, {}, {}
     if vdj:
         j_marg = _choice(t["j_choice"], "j_allele", uj)
-        for j, sub in t["d_gene"].filter(t["d_gene"]["d_allele"].is_in(list(ud))).group_by("j_allele", maintain_order=True):
-            key = j[0] if isinstance(j, tuple) else j
-            if key in uj:
-                d_given_j[key] = _cum(sub["d_allele"].to_numpy(), sub["p"].to_numpy())
+        if not joint:
+            for j, sub in t["d_gene"].filter(t["d_gene"]["d_allele"].is_in(list(ud))).group_by("j_allele", maintain_order=True):
+                key = j[0] if isinstance(j, tuple) else j
+                if key in uj:
+                    d_given_j[key] = _cum(sub["d_allele"].to_numpy(), sub["p"].to_numpy())
     else:
         jgv = t["j_choice"].filter(t["j_choice"]["j_allele"].is_in(list(uj)))
         for vv, sub in jgv.group_by("v_allele", maintain_order=True):
@@ -134,12 +143,22 @@ def prepare_generation(model: Model) -> _GenPrep:
             key = d1[0] if isinstance(d1, tuple) else d1
             if key in ud:
                 d2_given_d1[key] = _cum(sub["d2_allele"].to_numpy(), sub["p"].to_numpy())
-        for d, sub in t["d2_del"].group_by("d2_allele", maintain_order=True):
+    history_by_j, deld_tandem, deld_tandem_pairs = {}, {}, {}
+    if joint:
+        for j, sub in t["d_history"].group_by("j_allele", maintain_order=True):
+            history_by_j[j[0]] = _cum(np.array(sub.select("n_d", "d_allele", "d2_allele").rows(), dtype=object),
+                                       sub["p"].to_numpy())
+    for name, column, target, pair_target in (
+            ("d2_del", "d2_allele", deld2, deld2_pairs),
+            ("d_tandem_del", "d_allele", deld_tandem, deld_tandem_pairs)):
+        if name not in t:
+            continue
+        for d, sub in t[name].group_by(column, maintain_order=True):
             key = d[0] if isinstance(d, tuple) else d
             pairs = np.stack([sub["ndel5"].to_numpy(), sub["ndel3"].to_numpy()], axis=1)
             idx, cum = _cum(np.arange(len(pairs)), sub["p"].to_numpy())
-            deld2[key] = (idx, cum)
-            deld2_pairs[key] = pairs
+            target[key] = (idx, cum)
+            pair_target[key] = pairs
 
     return _GenPrep(
         chain_type=model.chain_type, v=v, j_marg=j_marg, j_given_v=j_given_v, d_given_j=d_given_j,
@@ -149,6 +168,7 @@ def prepare_generation(model: Model) -> _GenPrep:
         p_nd=p_nd, d2_given_d1=d2_given_d1, deld2=deld2, deld2_pairs=deld2_pairs,
         forbidden_dj=forbidden_dj_pairs(ud,uj,model.locus),
         forbidden_dd=forbidden_tandem_pairs(ud,model.locus),
+        history_by_j=history_by_j, deld_tandem=deld_tandem, deld_tandem_pairs=deld_tandem_pairs,
     )
 
 
@@ -188,7 +208,10 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
     d, d2 = "", ""
     if vdj:
         j = _pick(rng, prep.j_marg)
-        d = _pick(rng, prep.d_given_j[j])
+        if prep.history_by_j:
+            n_d, d, d2 = _pick(rng, prep.history_by_j[j])
+        else:
+            d = _pick(rng, prep.d_given_j[j])
     else:
         j = _pick(rng, prep.j_given_v[v])
 
@@ -204,17 +227,24 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
         ins_vj = _insert(rng, int(_pick(rng, prep.ins["vj"])), prep.R["vj"], prep.bias["vj"], from_right=False)
         return v_contrib + ins_vj + j_contrib, v, d, j, d2
 
-    n_d = int(_pick(rng, prep.p_nd)) if prep.p_nd is not None else 1
+    if not prep.history_by_j:
+        n_d = int(_pick(rng, prep.p_nd)) if prep.p_nd is not None else 1
     d2_dist = prep.d2_given_d1.get(d) if (n_d == 2 and prep.d2_given_d1) else None
     if n_d == 2:
-        if d2_dist is None or not len(d2_dist[0]):
-            return "", v, d, j, d2
-        d2 = _pick(rng, d2_dist)  # P(D2 | D1)
+        if not prep.history_by_j:
+            if d2_dist is None or not len(d2_dist[0]):
+                return "", v, d, j, d2
+            d2 = _pick(rng, d2_dist)  # P(D2 | D1)
         if (d,j) in prep.forbidden_dj or (d2,j) in prep.forbidden_dj or (d,d2) in prep.forbidden_dd:
+            if prep.history_by_j:
+                raise ValueError("joint history allocates probability to a forbidden path")
             return "", v, d, j, d2
-        d1c = _d_seg(prep, d, rng, prep.deld, prep.deld_pairs)
+        d1c = _d_seg(prep, d, rng, prep.deld_tandem if prep.history_by_j else prep.deld,
+                     prep.deld_tandem_pairs if prep.history_by_j else prep.deld_pairs)
         d2c = _d_seg(prep, d2, rng, prep.deld2, prep.deld2_pairs)
         if not d1c or not d2c:
+            if prep.history_by_j:
+                raise ValueError("joint tandem history has an empty D contribution")
             return "", v, d, j, d2
         ins_vd = _insert(rng, int(_pick(rng, prep.ins["vd"])), prep.R["vd"], prep.bias["vd"], from_right=False)
         ins_dd = _insert(rng, int(_pick(rng, prep.ins["dd"])), prep.R["dd"], prep.bias["dd"], from_right=False)

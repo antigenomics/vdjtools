@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from math import log
 
 import numpy as np
 import polars as pl
 
 from .model import Model
-from .pgen import _NT2NUM, _j_candidates, _v_candidates, prepare
+from .pgen import _NT2NUM, _j_candidates, _v_candidates, _tandem_first, _tandem_pair, prepare
 from .schema import normalization_keys, table_columns
 
 
@@ -95,7 +95,8 @@ def _record(report: InferenceReport, model: Model, template: Model, *, started: 
     report.template_source = template.manifest.source
     runs = list((template.training or {}).get("runs", []))
     runs.append(report.to_dict())
-    return Model(manifest=model.manifest, tables=model.tables, genomic=model.genomic,
+    manifest = replace(model.manifest, error_rate=report.error_rate[-1]) if report.error_rate else model.manifest
+    return Model(manifest=manifest, tables=model.tables, genomic=model.genomic,
                  training={"runs": runs})
 
 
@@ -273,8 +274,8 @@ def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> 
     local: dict = defaultdict(float)
     total = 0.0
 
-    v_mask = mask[0] if mask else prep.functional_v
-    j_mask = mask[1] if mask else prep.functional_j
+    v_mask = mask[0] if mask and mask[0] else prep.functional_v
+    j_mask = mask[1] if mask and mask[1] else prep.functional_j
     d_mask = mask[2] if mask and mask[2] else (prep.functional_d if vdj else None)
     d2_mask = mask[3] if mask and len(mask)>3 else None
     if d2_mask is not None:
@@ -364,13 +365,14 @@ def _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
                     seq_total += w
                     local[("v_choice", (V,))] += w
                     local[("j_choice", (J,))] += w
-                    local[("d_gene", (J, D))] += w
+                    local[("d_history", (J, 1, D, "")) if prep.joint_history else ("d_gene", (J, D))] += w
                     local[("v_3_del", (V, nv))] += w
                     local[("j_5_del", (J, nj))] += w
                     local[("d_del", (D, idx5 - maxdl, idx3 - maxdr))] += w
                     local[("vd_ins", (lvd,))] += w
                     local[("dj_ins", (ldj,))] += w
-                    local[("n_d", (1,))] += w  # this scenario has exactly one D
+                    if not prep.joint_history:
+                        local[("n_d", (1,))] += w
                     _accum_first(prep, "vd", ins_vd, False, w, local)
                     _accum_first(prep, "dj", ins_dj, True, w, local)
                     for fr, to in tvd:
@@ -393,13 +395,13 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None, d2_mask=None) -
     seq_total = 0.0
     d2set = d2_mask if d2_mask is not None else prep.functional_d
     for D1 in dset:
-        pd1 = prep.p_d_given_j.get((J, D1), 0.0)
+        pd1 = _tandem_first(prep, J, D1)
         if pd1 == 0.0 or (D1,J) in prep.forbidden_dj:
             continue
         cut1 = prep.cut["d"][D1]
         for i5 in range(len(cut1) + 1):
             for i3 in range(len(cut1) - i5 + 1):
-                pdel1 = prep.p_del["d"].get((D1, i5 - maxdl, i3 - maxdr), 0.0)
+                pdel1 = (prep.p_del_d_tandem if prep.joint_history else prep.p_del["d"]).get((D1, i5 - maxdl, i3 - maxdr), 0.0)
                 if pdel1 == 0.0:
                     continue
                 dc1 = cut1[i5:len(cut1) - i3]
@@ -419,7 +421,7 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None, d2_mask=None) -
                     for D2 in d2set:
                         if (D2,J) in prep.forbidden_dj or (D1,D2) in prep.forbidden_dd:
                             continue
-                        pd2g = prep.p_d2_given_d1.get((D1, D2), 0.0)
+                        pd2g = _tandem_pair(prep, J, D1, D2)
                         if pd2g == 0.0:
                             continue
                         cut2 = prep.cut["d"][D2]
@@ -449,16 +451,21 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None, d2_mask=None) -
                                     seq_total += w
                                     local[("v_choice", (V,))] += w
                                     local[("j_choice", (J,))] += w
-                                    local[("d_gene", (J, D1))] += w
-                                    local[("d2_gene", (D1, D2))] += w
+                                    if prep.joint_history:
+                                        local[("d_history", (J, 2, D1, D2))] += w
+                                    else:
+                                        local[("d_gene", (J, D1))] += w
+                                        local[("d2_gene", (D1, D2))] += w
                                     local[("v_3_del", (V, nv))] += w
                                     local[("j_5_del", (J, nj))] += w
-                                    local[("d_del", (D1, i5 - maxdl, i3 - maxdr))] += w
+                                    local[("d_tandem_del" if prep.joint_history else "d_del",
+                                            (D1, i5 - maxdl, i3 - maxdr))] += w
                                     local[("d2_del", (D2, k5 - maxdl, k3 - maxdr))] += w
                                     local[("vd_ins", (lvd,))] += w
                                     local[("dd_ins", (ldd,))] += w
                                     local[("dj_ins", (ldj,))] += w
-                                    local[("n_d", (2,))] += w  # this scenario has two Ds
+                                    if not prep.joint_history:
+                                        local[("n_d", (2,))] += w
                                     _accum_first(prep, "vd", mid[:pos1], False, w, local)
                                     _accum_first(prep, "dd", ins_dd, False, w, local)
                                     _accum_first(prep, "dj", ins_dj, True, w, local)
@@ -490,6 +497,24 @@ def _retain_unobserved_transitions(template, name, frame):
             .drop("_previous"))
 
 
+def _retain_history_groups(template, name, frame, keys):
+    if "d_history" not in template.tables:
+        return frame
+    values = [c for c in frame.columns if c != "p"]
+    previous = template.tables[name].rename({"p": "_previous"})
+    return (previous.join(frame, on=values, how="left").with_columns(pl.col("p").fill_null(0.0))
+            .with_columns(p=pl.when(pl.col("p").sum().over(keys) > 0)
+                          .then(pl.col("p")).otherwise(pl.col("_previous"))).drop("_previous"))
+
+
+def _single_history_prior(frame, nd_prior):
+    if not nd_prior:
+        return frame
+    singles = (pl.col("n_d") == 1).sum().over("j_allele")
+    return frame.with_columns(p=pl.col("p") + pl.when(pl.col("n_d") == 1)
+                              .then(nd_prior / singles).otherwise(0.0))
+
+
 def _mstep(template: Model, counts: dict, nd_prior: float = 0.0) -> dict[str, pl.DataFrame]:
     if nd_prior and counts.get("n_d"):  # Dirichlet pseudocount on the single-D (n_D=1) bucket
         counts["n_d"][(1,)] += nd_prior
@@ -512,6 +537,10 @@ def _mstep(template: Model, counts: dict, nd_prior: float = 0.0) -> dict[str, pl
               .with_columns(pl.col("p").fill_null(0.0)))
         if event.kind.value == "dinucleotide":
             df = _retain_unobserved_transitions(template, name, df)
+        if name == "d_history":
+            df = _single_history_prior(df, nd_prior)
+        if name in ("d_history", "d_del", "d_tandem_del", "d2_del"):
+            df = _retain_history_groups(template, name, df, normalization_keys(event))
         if name in ("d_gene", "d2_gene"):
             df = _mask_dj(df, template.locus)   # see _mask_dj: a hard genomic fact, not a parameter
         keys = normalization_keys(event)
@@ -543,6 +572,9 @@ def _mask_dj(df: pl.DataFrame, locus: str) -> pl.DataFrame:
 def _uniform_init(template: Model) -> dict[str, pl.DataFrame]:
     tables = {}
     for name, event in template.manifest.events.items():
+        if name == "d_history":
+            tables[name] = template.tables[name]
+            continue
         df = template.tables[name].with_columns(p=pl.lit(1.0))
         if name == 'd_gene':
             df = _mask_dj(df,template.locus)
@@ -554,6 +586,9 @@ def _uniform_init(template: Model) -> dict[str, pl.DataFrame]:
         keys = normalization_keys(event)
         total = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
         tables[name] = df.with_columns(p=pl.when(total>0).then(pl.col("p") / total).otherwise(0.))
+    if "d_history" in tables:
+        from .collapse import _project_onto_germline
+        return _project_onto_germline(tables, template.genomic, template.manifest)
     return tables
 
 
@@ -619,6 +654,15 @@ def _maybe_promote_dd(template: Model, single_d: bool, p_nd2_init: float) -> Mod
     template all leave it unchanged.
     """
     from .dd import has_tandem, to_dd
+    if "d_history" in template.tables:
+        if not single_d:
+            return template
+        history = template.tables["d_history"].with_columns(
+            p=pl.when(pl.col("n_d") == 1).then(pl.col("p")).otherwise(0.0))
+        total = pl.col("p").sum().over("j_allele")
+        history = history.with_columns(p=pl.when(total > 0).then(pl.col("p") / total).otherwise(0.0))
+        return Model(manifest=template.manifest, tables={**template.tables, "d_history": history},
+                     genomic=template.genomic, training=template.training)
     if single_d or template.chain_type != "VDJ" or has_tandem(template):
         return template
     if template.manifest.locus not in DD_DEFAULT_LOCI:
@@ -654,6 +698,7 @@ def infer(
             ``"uniform"`` (each event uniform on its support), or ``"template"`` (warm start).
         masks: Optional per-sequence ``(v_genes, j_genes, d1_genes[, d2_genes])`` name lists (e.g. from
             :func:`arda_masks`) restricting each read's scenario enumeration to its aligned genes.
+            Empty V/J/D1 lists leave that segment unrestricted.
             Three-tuples or a fourth ``None`` leave D2 unrestricted. An empty fourth
             list disables tandem enumeration, including unknown D2 calls.
             **Strongly recommended for VDJ** — without it the E-step enumerates every Cys-sharing
@@ -1096,6 +1141,8 @@ def enforce_dj_order(model: Model) -> Model:
     """
     if model.chain_type != "VDJ" or "d_gene" not in model.tables:
         return model
+    if "d_history" in model.tables:
+        return model.validate()
     tables = dict(model.tables)
     masked = _mask_dj(tables["d_gene"], model.locus)
     tot = pl.col("p").sum().over("j_allele")
@@ -1303,6 +1350,7 @@ def _clip_deletions(block: pl.DataFrame, ev_name: str, event, cut_len: int,
 def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0,
                   gene_prior=0.0) -> dict[str, pl.DataFrame]:
     vdj = template.chain_type == "VDJ"
+    joint = "d_history" in template.tables
     mp = template.manifest.palindrome_max
     nV, nJ, nD = len(v_alleles), len(j_alleles), len(d_alleles)
 
@@ -1363,9 +1411,22 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         t["j_choice"] = gene_choice(pl.DataFrame({"j_allele": j_alleles, "p": list(counts.j_choice)}), "j_allele", "j", [])
         # Zero the genomically impossible D-J pairs BEFORE normalizing, so EM cannot relearn them
         # on the next iteration -- a post-hoc patch would be undone by the very next M-step.
-        t["d_gene"] = norm(_mask_dj(pl.DataFrame({
-            "j_allele": np.repeat(j_alleles, nD), "d_allele": np.tile(d_alleles, nJ),
-            "p": list(counts.d_gene)}), template.locus), ["j_allele"])
+        if joint:
+            vi_d, vi_j = {a: i for i, a in enumerate(d_alleles)}, {a: i for i, a in enumerate(j_alleles)}
+            history = template.tables["d_history"]
+            indices = history.select(
+                pl.col("j_allele").replace_strict(vi_j, return_dtype=pl.Int64).alias("j"),
+                pl.col("d_allele").replace_strict(vi_d, return_dtype=pl.Int64).alias("d1"),
+                pl.col("d2_allele").replace_strict(vi_d, default=0, return_dtype=pl.Int64).alias("d2"))
+            jd = indices["j"].to_numpy() * nD + indices["d1"].to_numpy()
+            values = np.where(history["n_d"].to_numpy() == 1, np.asarray(counts.history_single)[jd],
+                              np.asarray(counts.history_tandem)[jd * nD + indices["d2"].to_numpy()])
+            raw = _single_history_prior(history.with_columns(p=pl.Series("p", values)), nd_prior)
+            t["d_history"] = norm(_retain_history_groups(template, "d_history", raw, ["j_allele"]), ["j_allele"])
+        else:
+            t["d_gene"] = norm(_mask_dj(pl.DataFrame({
+                "j_allele": np.repeat(j_alleles, nD), "d_allele": np.tile(d_alleles, nJ),
+                "p": list(counts.d_gene)}), template.locus), ["j_allele"])
         n5, n3 = nbins["d5"], nbins["d3"]
         t["d_del"] = norm(pl.DataFrame({
             "d_allele": np.repeat(d_alleles, n5 * n3),
@@ -1378,15 +1439,17 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         t["dj_dinucl"] = dinucl(counts.dinucl_dj, "dj_dinucl")
         # n_d learned from the soft counts (indexed by the n_D value): single-D emits only n_D=1 mass
         # -> renormalizes to delta(1) (a no-op); D-D emits n_D=1 and n_D=2 -> learns P(n_D=2).
-        nd = template.tables["n_d"]
-        # Dirichlet/Beta prior: nd_prior pseudocounts added to the single-D (n_D=1) bucket regularize
-        # away the tandem over-attribution of unregularized D-D EM on real data.
-        nd_counts = [float(counts.n_d[int(k)]) + (nd_prior if int(k) == 1 else 0.0) for k in nd["n_d"]]
-        t["n_d"] = norm(nd.with_columns(p=pl.Series("p", nd_counts)), [])
-        if "d2_gene" in template.manifest.events:  # tandem-D model — learn the second-D events too
-            t["d2_gene"] = norm(pl.DataFrame({
-                "d_allele": np.repeat(d_alleles, nD), "d2_allele": np.tile(d_alleles, nD),
-                "p": list(counts.d2_gene)}), ["d_allele"])
+        if not joint:
+            nd = template.tables["n_d"]
+            # Dirichlet/Beta prior: nd_prior pseudocounts added to the single-D (n_D=1) bucket regularize
+            # away the tandem over-attribution of unregularized D-D EM on real data.
+            nd_counts = [float(counts.n_d[int(k)]) + (nd_prior if int(k) == 1 else 0.0) for k in nd["n_d"]]
+            t["n_d"] = norm(nd.with_columns(p=pl.Series("p", nd_counts)), [])
+        if joint or "d2_gene" in template.manifest.events:  # tandem-D model — learn the second-D events too
+            if not joint:
+                t["d2_gene"] = norm(pl.DataFrame({
+                    "d_allele": np.repeat(d_alleles, nD), "d2_allele": np.tile(d_alleles, nD),
+                    "p": list(counts.d2_gene)}), ["d_allele"])
             t["d2_del"] = norm(pl.DataFrame({
                 "d2_allele": np.repeat(d_alleles, n5 * n3),
                 "ndel5": np.tile(np.repeat(np.arange(n5) - mp["d_5"], n3), nD).astype(np.int16),
@@ -1400,6 +1463,15 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
             "p": list(counts.j_choice)}), ["v_allele"])
         t["vj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_vj), dtype=np.int16), "p": list(counts.ins_vj)}), [])
         t["vj_dinucl"] = dinucl(counts.dinucl_vj, "vj_dinucl")
+    if joint:
+        t["d_del"] = t["d_del"].with_columns(p=pl.Series("p", list(counts.d_del)))
+        t["d2_del"] = t["d2_del"].with_columns(p=pl.Series("p", list(counts.d2_del)))
+        raw = t["d_del"].with_columns(p=pl.Series("p", list(counts.d_tandem_del)))
+        t["d_tandem_del"] = raw
+        for name, col in (("d_del", "d_allele"), ("d_tandem_del", "d_allele"), ("d2_del", "d2_allele")):
+            t[name] = norm(_retain_history_groups(template, name, t[name], [col]), [col])
+        if not sum(counts.ins_dd):
+            t["dd_ins"] = template.tables["dd_ins"]
     for junction in (("vd", "dj", "dd") if vdj else ("vj",)):
         event = f"{junction}_first_nt"
         if event not in template.manifest.events:

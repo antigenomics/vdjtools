@@ -98,6 +98,7 @@ def test_training_substitution_likelihood_does_not_change_generation_pgen():
     fitted, report = infer_native(model, [sequence], init="template", max_iter=1, error_rate=0.03)
     assert report.n_scoreable == [1]
     assert report.error_rate == pytest.approx([1 / 12])
+    assert fitted.manifest.error_rate == pytest.approx(1 / 12)
     assert fitted.training["runs"][-1]["error_model"] == "retained-germline-substitution"
     _, resumed = resume(fitted, [sequence], max_iter=1)
     assert resumed.error_rate == pytest.approx([1 / 12])
