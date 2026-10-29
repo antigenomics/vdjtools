@@ -1139,10 +1139,10 @@ def enforce_dj_order(model: Model) -> Model:
     Example:
         >>> fixed = enforce_dj_order(load_bundled("TRB", "learned", collapse=False))
     """
-    if model.chain_type != "VDJ" or "d_gene" not in model.tables:
-        return model
     if "d_history" in model.tables:
         return model.validate()
+    if model.chain_type != "VDJ" or "d_gene" not in model.tables:
+        return model
     tables = dict(model.tables)
     masked = _mask_dj(tables["d_gene"], model.locus)
     tot = pl.col("p").sum().over("j_allele")

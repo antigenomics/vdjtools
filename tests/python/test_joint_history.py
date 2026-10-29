@@ -130,6 +130,7 @@ def test_reference_and_native_joint_history_em_agree():
 
 def test_history_audit_rejects_bad_paths_before_scoring():
     from vdjtools.model.check import check_model
+    from vdjtools.model.infer import enforce_dj_order
     from vdjtools.model import native
     model = history_model()
     check_model(model, germline='none', raise_on='error')
@@ -139,6 +140,8 @@ def test_history_audit_rejects_bad_paths_before_scoring():
     invalid = Model(manifest=model.manifest, tables={**tables, 'd_history': history}, genomic=model.genomic)
     with pytest.raises(ValueError, match='forbidden'):
         invalid.validate()
+    with pytest.raises(ValueError, match='forbidden'):
+        enforce_dj_order(invalid)
     with pytest.raises(ValueError, match='forbidden'):
         native.pgen_nt(invalid, 'TGTAATTC')
 
