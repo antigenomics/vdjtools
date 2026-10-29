@@ -1374,11 +1374,9 @@ def infer_native(
         pm, _, _ = pack(model)
         counts = make_counts(pm)
         ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags, d2masks)
-        # Report the per-sequence MEAN, matching infer() (line ~431) -- estep_batch returns the
-        # summed log-likelihood, and appending it raw made infer_native's loglik differ from
-        # infer's by a factor of n (the two are documented as "same result"). Denominator is the
-        # input read count; n_scoreable is populated so the sum can be recovered if needed.
-        n = len(seqs_enc)
+        # Match infer(): the native sum includes positive-likelihood observations only.
+        # Counting all inputs here silently hid unsupported reads and diluted the mean.
+        n = counts.n_scoreable
         report.loglik.append(ll / n if n else float("-inf"))
         report.n_scoreable.append(n)
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}

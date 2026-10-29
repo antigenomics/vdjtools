@@ -224,6 +224,7 @@ AlignVotes align_init_votes(const PackedModel& m, const std::vector<std::string>
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.
 struct Counts {
+    size_t n_scoreable = 0;  // observations with positive likelihood, independent of soft-count mass
     std::vector<double> v_choice, j_choice, d_gene, v_3_del, j_5_del, d_del;
     std::vector<double> ins_vd, ins_dj, ins_vj, dinucl_vd, dinucl_dj, dinucl_vj;
     // D-D (tandem) soft counts — sized/populated only for a `dd` model. n_d[k] = P(n_D=k) mass

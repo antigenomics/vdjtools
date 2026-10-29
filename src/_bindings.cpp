@@ -249,6 +249,7 @@ PYBIND11_MODULE(_core, m) {
           "distribution, not sequence by sequence.");
 
     py::class_<Counts>(m, "Counts")
+        .def_readonly("n_scoreable", &Counts::n_scoreable)
         .def_readonly("v_choice", &Counts::v_choice)
         .def_readonly("j_choice", &Counts::j_choice)
         .def_readonly("d_gene", &Counts::d_gene)

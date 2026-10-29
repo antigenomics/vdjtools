@@ -58,3 +58,20 @@ def test_exact_repertoire_preserves_zero_insertion_mass_while_greedy_inflates_it
     assert counts.ins_vj == pytest.approx([32.0, 0.0, 32.0])
     greedy_zero = sum(s in (V + J, V[:-2] + J) for s in sequences)
     assert greedy_zero == 33  # posterior zero-insertion mass is 32/64, not greedy 33/64.
+
+
+def test_native_reports_only_positive_likelihood_reads():
+    from vdjtools.model.infer import infer, infer_native
+
+    sequences = [V + J, "A" * (len(V) + len(J))] * 40
+    expected = infer(_ambiguous_model(), sequences, init="template", max_iter=1)[1]
+    for threads in (1, 2):
+        _, report = infer_native(_ambiguous_model(), sequences, init="template",
+                                 max_iter=1, threads=threads)
+        assert report.n_sequences == 80
+        assert report.n_scoreable == expected.n_scoreable == [40]
+        assert report.loglik == pytest.approx(expected.loglik)
+
+    _, report = infer_native(_ambiguous_model(), ["A" * 12], init="template", max_iter=1)
+    assert report.n_scoreable == [0]
+    assert report.loglik == [float("-inf")]

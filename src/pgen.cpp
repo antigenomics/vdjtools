@@ -1499,6 +1499,7 @@ double estep_range(const PackedModel& m,
         if (total > 0.0) {
             ll += std::log(total);
             add_scaled(acc, local, 1.0 / total);
+            ++acc.n_scoreable;
         }
     }
     return ll;
@@ -1544,7 +1545,11 @@ double estep_batch(const PackedModel& m,
     for (auto& th : pool) th.join();
     for (const auto& error : errors) if (error) std::rethrow_exception(error);
     double ll = 0.0;  // reduce in fixed thread order → deterministic for a given nthreads
-    for (int t = 0; t < T; ++t) { ll += lls[t]; add_scaled(counts, acc[t], 1.0); }
+    for (int t = 0; t < T; ++t) {
+        ll += lls[t];
+        add_scaled(counts, acc[t], 1.0);
+        counts.n_scoreable += acc[t].n_scoreable;
+    }
     return ll;
 }
 
