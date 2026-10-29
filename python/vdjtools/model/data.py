@@ -165,14 +165,26 @@ def annotate_reads(
 
 def _with_candidate_sequences(clones: pl.DataFrame) -> pl.DataFrame:
     """Retain coding-strand full reads as candidate proposals, separate from junctions."""
+    from ..io.schema import normalize_nt_frame
+
+    clones = normalize_nt_frame(clones, ["sequence", "junction"])
+    if "candidate_sequences" in clones.columns:
+        candidates = pl.col("candidate_sequences").cast(pl.List(pl.String))
+        bases = pl.element().str.to_uppercase()
+        invalid = candidates.list.eval(
+            bases.str.contains(r"[^ACGTRYSWKMBDHVN]").fill_null(False)).list.any().fill_null(False)
+        if clones.select(invalid.any()).item():
+            raise ValueError("invalid DNA IUPAC nucleotide input")
+        clones = clones.with_columns(candidates.list.eval(
+            bases.str.replace_all(r"[RYSWKMBDHVN]", "A")))
     if "sequence" not in clones.columns:
         return clones
-    seq = pl.col("sequence").cast(pl.String).str.to_uppercase()
+    seq = pl.col("sequence").cast(pl.String)
     if "rev_comp" in clones.columns:
         reverse = pl.col("rev_comp").cast(pl.String).str.to_lowercase().is_in(["t", "true", "1"])
-        complement = dict(zip("ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN"))
+        complement = dict(zip("ACGT", "TGCA"))
         seq = pl.when(reverse).then(seq.str.reverse().str.replace_many(complement)).otherwise(seq)
-    parts = [pl.col("candidate_sequences")] if "candidate_sequences" in clones.columns else []
+    parts = [pl.col("candidate_sequences").fill_null([])] if "candidate_sequences" in clones.columns else []
     return clones.with_columns(pl.concat_list([*parts, seq]).list.eval(
         pl.element().filter(pl.element().is_not_null() & (pl.element().str.len_bytes() > 0)))
         .list.unique().list.sort().alias("candidate_sequences"))
@@ -370,9 +382,9 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
                 work_dir: str | Path = "/tmp/vdjtools_build", cap: int | None = None,
                 iters: int = 15, tol: float = 1e-4, single_d: bool = False,
                 nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0,
-                ambiguous: str | None = "marginalize", verbose: bool = False,
+                ambiguous: str = "A", verbose: bool = False,
                 checkpoint=None, checkpoint_every: int = 1,
-                error_rate: float | None = 0.01, max_observation_states: int = 4096):
+                error_rate: float | None = 0.01):
     """Fetch, annotate and EM-fit a model for one chain — the whole corpus pipeline, end to end.
 
     Args:
@@ -395,10 +407,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         threads: Annotation and E-step kernel threads (``0`` = auto).
         error_rate: Initial retained-germline substitution probability, fitted by EM.
             ``None`` retains exact matching. D/D2 paths remain unrestricted by annotation.
-        ambiguous: ``"marginalize"`` (default) retains IUPAC observations. An explicit
-            A/C/G/T substitutes that base, or ``None`` drops ambiguous rows.
-        max_observation_states: Maximum compatible nucleotide completions per read.
-            An exceeded computation budget raises without dropping observations.
+        ambiguous: Must be ``"A"``: DNA IUPAC sequencing symbols are replaced with A.
 
     Returns:
         ``(model, report, stats)`` — ``stats`` records ``chain, group, chain_type, n_clonotypes,
@@ -435,7 +444,6 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
                               single_d=single_d, nd_prior=nd_prior, error_rate=error_rate,
                               candidate_search=evidence,
-                              max_observation_states=max_observation_states,
                               gene_prior=gene_prior, threads=threads,
                               progress=print_progress(prefix=f"[{chain}] ") if verbose else None,
                               checkpoint=checkpoint, checkpoint_every=checkpoint_every)
@@ -461,7 +469,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     return model, rep, stats
 
 
-def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A", *,
+def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str = "A", *,
                    use_calls: bool = True) -> pl.DataFrame:
     """Keep clonotypes the template can actually score: known V/J **gene**, encodable junction.
 
@@ -474,8 +482,7 @@ def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A", *,
     shipped model. `gene_masks` already maps a call to every model allele of its gene, so the read
     is perfectly usable. Gene-level keeps 32,562 clonotypes and 54 V genes vs 24,980 and 51.
 
-    ``ambiguous="marginalize"`` retains IUPAC observations for exact completion sums;
-    an explicit A/C/G/T requests substitution and None drops ambiguous observations.
+    DNA IUPAC sequencing symbols are always replaced with A; other policies are rejected.
     """
     from .infer import sanitize_junctions
 

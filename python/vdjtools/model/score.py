@@ -191,8 +191,20 @@ def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
         KeyError: If a V/J call does not resolve and ``on_unknown="error"``.
         ValueError: On a mixed nt/aa set under ``kind="auto"``, or a missing sequence column.
     """
+    if kind == "auto" and isinstance(sequences, (pl.DataFrame, pl.LazyFrame)):
+        columns = sequences.columns if isinstance(sequences, pl.DataFrame) else sequences.collect_schema().names()
+        selected = seq_col or next((c for c in (
+            "junction", "junction_nt", "junction_aa", "cdr3_nt", "cdr3_aa", "sequence") if c in columns), None)
+        if selected in ("junction", "junction_nt", "cdr3_nt"):
+            kind = "nt"
+        elif selected in ("junction_aa", "cdr3_aa"):
+            kind = "aa"
     seqs, vs, js = _unpack(sequences, v, j, seq_col, v_col, j_col)
     kind = _resolve_kind(seqs, kind)
+    if kind == "nt":
+        from ..io.schema import normalize_nt
+
+        seqs = [normalize_nt(sequence) for sequence in seqs]
 
     if use_calls:
         v_alleles, v_by_gene = _allele_index(model, "v")

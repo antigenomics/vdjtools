@@ -679,7 +679,9 @@ def pgen_nt(prep: _Prepared, cdr3_nt: str, v: str | None = None, j: str | None =
         Pgen as a float.
     """
     v, j = _resolve_gene_call(prep.cut["v"], v), _resolve_gene_call(prep.cut["j"], j)
-    s = cdr3_nt.upper()
+    from ..io.schema import normalize_nt
+
+    s = normalize_nt(cdr3_nt)
     vdj = prep.chain_type == "VDJ"
     v_cands = _v_candidates(prep, s, [v] if v else prep.functional_v)
     j_cands = _j_candidates(prep, s, [j] if j else prep.functional_j)

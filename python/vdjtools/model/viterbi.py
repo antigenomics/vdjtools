@@ -160,7 +160,9 @@ def best_scenario(model_or_prep, cdr3_nt: str, v: str | None = None,
     is ``None`` for a VJ chain.
     """
     prep = _prep(model_or_prep)
-    s = cdr3_nt.upper()
+    from ..io.schema import normalize_nt
+
+    s = normalize_nt(cdr3_nt)
     v, j = _resolve_gene_call(prep.cut["v"], v), _resolve_gene_call(prep.cut["j"], j)
     vdj = prep.chain_type == "VDJ"
     v_cands = _v_candidates(prep, s, [v] if v else prep.functional_v)

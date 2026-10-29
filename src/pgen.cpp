@@ -1795,27 +1795,7 @@ double estep_range(const PackedModel& m,
         const std::vector<int>& dm = dmasks.empty() ? empty : dmasks[i];
         const std::vector<int>& d2m = d2masks.empty() ? empty : d2masks[i];
         bool allow_dd = have_dd_gate ? dd_allowed[i] != 0 : true;
-        double total;
-        if (std::none_of(seqs[i].begin(), seqs[i].end(), [](int8_t nt) { return nt < 0; })) {
-            total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd, d2m, error_rate);
-        } else {
-            // ponytail: exact completion sum; use a masked HMM if highly ambiguous reads dominate.
-            // Accumulate unnormalized counts for all completions, normalize ONCE per observation.
-            std::vector<int8_t> resolved = seqs[i];
-            auto visit = [&](auto&& self, size_t pos) -> double {
-                while (pos < seqs[i].size() && seqs[i][pos] >= 0) ++pos;
-                if (pos == seqs[i].size())
-                    return estep_one(m, resolved, vm, jm, dm, local, allow_dd, d2m, error_rate);
-                const int mask = -seqs[i][pos];
-                double sum = 0.0;
-                for (int8_t nt = 0; nt < 4; ++nt) if (mask & (1 << nt)) {
-                    resolved[pos] = nt;
-                    sum += self(self, pos + 1);
-                }
-                return sum;
-            };
-            total = visit(visit, 0);
-        }
+        const double total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd, d2m, error_rate);
         if (total > 0.0) {
             ll += std::log(total);
             add_scaled(acc, local, 1.0 / total);
@@ -1835,25 +1815,14 @@ double estep_batch(const PackedModel& m,
                    Counts& counts,
                    int nthreads,
                    const std::vector<int>& dd_allowed,
-                   const std::vector<std::vector<int>>& d2masks, double error_rate,
-                   size_t max_observation_states) {
+                   const std::vector<std::vector<int>>& d2masks, double error_rate) {
     if (!std::isfinite(error_rate) || error_rate < 0.0 || error_rate > 1.0)
         throw std::invalid_argument("error_rate must be finite and between 0 and 1");
     size_t n = seqs.size();
-    if (max_observation_states < 1)
-        throw std::invalid_argument("max_observation_states must be positive");
-    for (const auto& seq : seqs) {
-        size_t states = 1;
-        for (int nt : seq) {
-            if (nt >= 0 && nt < 4) continue;
-            if (nt >= 0 || nt < -15) throw std::invalid_argument("invalid encoded IUPAC observation");
-            const size_t alternatives = std::popcount(static_cast<unsigned>(-nt));
-            if (states > max_observation_states / alternatives)
-                throw std::invalid_argument("IUPAC completion sum exceeds max_observation_states; "
-                                            "increase the explicit computation budget");
-            states *= alternatives;
-        }
-    }
+    for (const auto& seq : seqs)
+        for (int nt : seq)
+            if (nt < 0 || nt >= 4)
+                throw std::invalid_argument("observations must contain ACGT indices 0..3");
     auto validate_masks = [n](const auto& masks, int bound) {
         if (!masks.empty() && masks.size() != n)
             throw std::invalid_argument("gene masks must match the number of sequences");

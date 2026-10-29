@@ -368,8 +368,7 @@ def _with_ambiguous(toy_model, n=60):
 def test_explicit_ambiguous_base_substitution(toy_model):
     """Real reads carry 'N' and the encoder knows only ACGT — substitute, keep the clonotype."""
     with_n = _with_ambiguous(toy_model)
-    with pytest.warns(UserWarning, match="substituting"):
-        fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous="A")
+    fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous="A")
     assert report.n_sequences == with_n.height  # input retained, not necessarily supported
     from vdjtools.model.native import pgen_nt
     assert pgen_nt(toy_model, "TGTACCAGC") == 0.0
@@ -377,20 +376,17 @@ def test_explicit_ambiguous_base_substitution(toy_model):
     fitted.validate()
 
 
-def test_ambiguous_bases_can_be_dropped_instead(toy_model):
+def test_ambiguous_bases_cannot_opt_out_of_a_normalization(toy_model):
     with_n = _with_ambiguous(toy_model)
-    with pytest.warns(UserWarning, match="dropped"):
-        fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous=None)
-    assert report.n_scoreable[0] == with_n.height - 1
-    fitted.validate()
+    with pytest.raises(ValueError, match="ambiguous must be 'A'"):
+        infer_frame(toy_model, with_n, max_iter=1, ambiguous=None)
 
 
 def test_sanitize_junctions_substitutes_every_iupac_code():
     from vdjtools.model.infer import sanitize_junctions
 
     df = pl.DataFrame({"junction": ["acgTN", "ACGRY", "ACGT"]})
-    with pytest.warns(UserWarning, match="substituting"):
-        out = sanitize_junctions(df, "junction")
+    out = sanitize_junctions(df, "junction")
     assert out["junction"].to_list() == ["ACGTA", "ACGAA", "ACGT"]
     with pytest.raises(ValueError, match="ambiguous must be"):
         sanitize_junctions(df, "junction", ambiguous="N")

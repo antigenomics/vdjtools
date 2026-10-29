@@ -11,8 +11,6 @@ from .model import Model
 from .pgen import prepare
 
 _NT2NUM = {"A": 0, "C": 1, "G": 2, "T": 3}
-_OBSERVED = {**_NT2NUM, **{c: -mask for c, mask in
-             zip("RYSWKMBDHVN", (5, 10, 6, 9, 12, 3, 14, 13, 11, 7, 15))}}
 _pack_cache: dict[int, tuple] = {}
 
 
@@ -21,11 +19,10 @@ def _encode(seq: str) -> list[int]:
 
 
 def _encode_observed(seq: str) -> list[int]:
-    """ACGT as native indices; IUPAC alternatives as negative four-bit observation masks."""
-    try:
-        return [_OBSERVED[c] for c in seq.upper()]
-    except KeyError as exc:
-        raise ValueError(f"invalid DNA IUPAC observation symbol {exc.args[0]!r}") from exc
+    """Encode sequencing DNA after mandatory IUPAC-to-A normalization."""
+    from ..io.schema import normalize_nt
+
+    return _encode(normalize_nt(seq))
 
 
 def _gene_idx(idx_of: dict[str, int], name: str | None, kind: str) -> int:
@@ -215,7 +212,7 @@ def pgen_nt(model: Model, cdr3_nt: str, v: str | None = None, j: str | None = No
     from .._core import pgen_nt as _pgen_nt
 
     pm, vi, ji = pack(model)
-    return _pgen_nt(pm, _encode(cdr3_nt.upper()),
+    return _pgen_nt(pm, _encode_observed(cdr3_nt),
                     _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"))
 
 
@@ -412,7 +409,9 @@ def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
     from .._core import pgen_nt_batch as _batch
 
     pm, vi, ji = pack(model)
-    seqs = [s.upper() for s in cdr3_nts]
+    from ..io.schema import normalize_nt
+
+    seqs = [normalize_nt(s) for s in cdr3_nts]
     v_idxs = [_gene_idx(vi, x, "V") for x in v] if v is not None else []
     j_idxs = [_gene_idx(ji, x, "J") for x in j] if j is not None else []
     if v_idxs and len(v_idxs) != len(seqs):

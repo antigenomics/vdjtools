@@ -290,6 +290,7 @@ def translate_junctions(nt, *, threads: int = 0) -> pl.Series:
     C++ would be 1.9x slower. Batch when you hold a column; keep the dict when you hold a codon.
     """
     s = nt if isinstance(nt, pl.Series) else pl.Series("junction_nt", list(nt), dtype=pl.Utf8)
+    s = schema.normalize_nt_frame(s.to_frame(), [s.name])[s.name]
     from .._core import translate_junctions as _native
 
     from ..cores import kernel_threads
@@ -309,6 +310,7 @@ def _finalize(df: pl.DataFrame, *, collapse: bool = True) -> pl.DataFrame:
     if df.height == 0:
         return schema.add_locus(schema.normalize(pl.DataFrame(schema={c: pl.Utf8 for c in
                                 (V_CALL, D_CALL, J_CALL, JUNCTION_AA, JUNCTION_NT)})))
+    df = schema.normalize_nt_frame(df, [JUNCTION_NT])
     df = df.with_columns(pl.col(COUNT).cast(pl.Int64, strict=False))
     if not collapse:
         return schema.add_locus(schema.normalize(df, recompute_freq=True))

@@ -562,21 +562,15 @@ packaged into the wheel; from an installed vdjtools use
 
 .. note::
 
-   Real annotated junctions occasionally carry an ambiguous base, and the recombination model is
-   defined over A/C/G/T. Native training marginalizes DNA IUPAC alternatives by default:
-   likelihoods and unnormalized event counts are summed over compatible nucleotide
-   completions, then normalized once per original observation. This preserves both
-   insertion-transition and substitution uncertainty. ``report.n_ambiguous`` counts
-   observations carrying alternatives. ``max_observation_states`` (default 4096)
-   bounds completions per read; an exceeded budget raises before processing the
-   batch, without dropping or approximating observations. It is recorded in training
-   metadata and restored on resume. Increase the explicit computation budget only
-   after checking the workload. The pure-Python reference requires A/C/G/T input.
-
-   ``ambiguous="A"`` explicitly substitutes that base and warns; ``ambiguous=None``
-   drops ambiguous rows. Substitution treats the replacement as observed and can
-   bias the insertion and error models. For candidate search only, IUPAC alternatives
-   are represented as ``N``; the inference likelihood retains their original masks.
+   Sequencing nucleotide inputs use A/C/G/T only. Standard DNA IUPAC ambiguity
+   symbols are replaced with ``A`` before alignment, clonotype grouping, training
+   and nucleotide scoring. This is a mandatory input rule: ambiguity is not a
+   latent observation alphabet, and no completion enumeration or correction model
+   is used. The compatibility ``ambiguous`` argument accepts only ``"A"``.
+   Other invalid DNA symbols are input errors. Amino-acid inputs and immutable
+   germline references retain their own alphabets. Original raw files and quality
+   strings are preserved; normalization applies to the observations consumed by
+   the library.
 
 
 Command line

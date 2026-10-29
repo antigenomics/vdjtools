@@ -400,13 +400,12 @@ bases; each alternative nucleotide has probability $\epsilon/3$. Inserted bases
 retain their observed Markov emissions without an observation-error channel.
 This scope differs from applying sequencing errors to every generated base.
 Exact generation $\Pgen$ remains the error-free quantity of \S\ref{sec:nt}.
-For an IUPAC observation $y$, let $\mathcal{C}(y)$ be its compatible A/C/G/T
-completions. The observation likelihood is $L(y)=\sum_{z\in\mathcal{C}(y)}L(z)$;
-unnormalized event and error statistics are summed over the same completions
-before dividing by $L(y)$ once. Thus an unknown insertion base contributes
-posterior transition counts rather than a fabricated nucleotide. Native inference
-enforces an explicit per-read completion budget and fails before processing a
-batch that exceeds it, without dropping or approximating observations.
+Sequencing observations are normalized to A/C/G/T before alignment and inference:
+DNA IUPAC ambiguity symbols are replaced by A. They are low-quality input symbols,
+not latent nucleotide alternatives, so inference does not enumerate or marginalize
+compatible completions. This input rule does not alter germline references or
+amino-acid patterns. The substitution channel above applies to ordinary A/C/G/T
+mismatches in the normalized observation.
 The error-rate M-step is
 \begin{equation}
  \epsilon_{\rm new}=
