@@ -1421,6 +1421,225 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
     return base * seq_total;
 }
 
+// Joint histories: sum V/J trims once into insertion endpoint messages, then
+// contract the single/tandem D spans. Backward messages attribute the same
+// unnormalized mass to each realization; estep_range normalizes once per read.
+// Workspace is O(nD*N^2 + nJ*nD*N + nV*N), not the V/J trim cross product.
+double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
+                   const std::vector<int>& vm, const std::vector<int>& jm,
+                   const std::vector<int>& dm, const std::vector<int>& d2m,
+                   Counts& c, bool allow_dd, double rate) {
+    const int N = static_cast<int>(observed.size()), W = N + 1;
+    const int D = m.nD(), J = m.nJ();
+    const size_t cells = static_cast<size_t>(W) * W;
+    const int8_t* seq = observed.data();
+    auto cell = [W](int lo, int hi) { return static_cast<size_t>(lo) * W + hi; };
+    auto ds = [W](int d, int pos) { return static_cast<size_t>(d) * W + pos; };
+    auto js = [W](int j, int pos) { return static_cast<size_t>(j) * W + pos; };
+    auto jds = [D, W](int j, int d, int pos) { return (static_cast<size_t>(j) * D + d) * W + pos; };
+    std::vector<int> first_copies(D, 0), second_copies(D, 0);
+    for (int d : dm) ++first_copies[d];
+    for (int d : d2m) ++second_copies[d];
+    const bool tandem = allow_dd && m.dd && m.p_nd2 > 0.0;
+    auto qs = [&](int j, int d) { return m.p_nd1 * m.pd_given_j[j * D + d] * first_copies[d]; };
+    auto qt = [&](int j, int d1, int d2) {
+        return tandem && tandem_allowed(m, j, d1, d2)
+            ? m.p_nd2 * m.q_tandem[(j * D + d1) * D + d2] * first_copies[d1] * second_copies[d2]
+            : 0.0;
+    };
+    auto insertions = [&](const auto& pins, const auto& R, const auto& bias, bool reverse) {
+        std::vector<double> out(cells, 0.0);
+        for (int lo = 0; lo <= N; ++lo)
+            for (int n = 0; n < static_cast<int>(pins.size()) && lo + n <= N; ++n)
+                out[cell(lo, lo + n)] = p_insert(pins, R, bias, seq, lo, lo + n, reverse);
+        return out;
+    };
+    const auto vd = insertions(m.ins_vd, m.R_vd, m.bias_vd, false);
+    const auto dj = insertions(m.ins_dj, m.R_dj, m.bias_dj, true);
+    const auto dd = tandem ? insertions(m.ins_dd, m.R_dd, m.bias_dd, false) : std::vector<double>{};
+    std::vector<double> vweight(W, 0.0), jweight(static_cast<size_t>(J) * W, 0.0);
+    std::vector<double> left(W, 0.0), right(static_cast<size_t>(J) * W, 0.0);
+    std::vector<double> left_back(W, 0.0), right_back(right.size(), 0.0);
+    std::vector<std::vector<Opt>> vopts(m.nV()), jopts(J);
+    for (int v : vm) {
+        training_options(m, v, seq, N, true, rate, vopts[v]);
+        for (const auto& o : vopts[v]) vweight[o.len] += m.pv[v] * o.p;
+    }
+    for (int j : jm) {
+        training_options(m, j, seq, N, false, rate, jopts[j]);
+        for (const auto& o : jopts[j]) jweight[js(j, N - o.len)] += m.pj[j] * o.p;
+    }
+    for (int start = 0; start <= N; ++start)
+        for (int end = start; end <= N; ++end) {
+            left[end] += vweight[start] * vd[cell(start, end)];
+            for (int j = 0; j < J; ++j)
+                right[js(j, start)] += dj[cell(start, end)] * jweight[js(j, end)];
+        }
+
+    // Each retained D substring has one emission irrespective of its V/J neighbors.
+    // Iterate its deletion states again only when a backward message is available.
+    auto d_spans = [&](const std::vector<double>& deletions, const std::vector<int>& active,
+                        bool nonempty, auto&& visit) {
+        for (int d = 0; d < D; ++d) {
+            if (!active[d]) continue;
+            const auto& cut = m.cut_d[d];
+            const int length = static_cast<int>(cut.size());
+            for (int i5 = 0; i5 <= length && i5 < m.nbins_d5; ++i5)
+                for (int i3 = 0; i3 <= length - i5 && i3 < m.nbins_d3; ++i3) {
+                    const int retained = length - i5 - i3;
+                    const size_t index = (static_cast<size_t>(d) * m.nbins_d5 + i5) * m.nbins_d3 + i3;
+                    if ((nonempty && !retained) || deletions[index] == 0.0) continue;
+                    for (int lo = 0; lo + retained <= N; ++lo) {
+                        int errors;
+                        const double emission = templated_emission(cut.data() + i5, seq + lo, retained, rate, errors);
+                        const double weight = deletions[index] * emission;
+                        if (weight > 0.0) visit(d, index, lo, lo + retained, weight, errors);
+                    }
+                }
+        }
+    };
+    std::vector<double> single_right(static_cast<size_t>(D) * W, 0.0), single_end(single_right.size(), 0.0);
+    for (int j = 0; j < J; ++j) for (int d = 0; d < D; ++d) {
+        const double q = qs(j, d);
+        if (q == 0.0) continue;
+        for (int end = 0; end <= N; ++end) single_right[ds(d, end)] += q * right[js(j, end)];
+    }
+    double single_total = 0.0;
+    d_spans(m.del_d, first_copies, false, [&](int d, size_t index, int lo, int hi, double weight, int errors) {
+        const double backward = single_right[ds(d, hi)];
+        const double mass = left[lo] * weight * backward;
+        single_total += mass;
+        single_end[ds(d, hi)] += left[lo] * weight;
+        left_back[lo] += weight * backward;
+        c.d_del[index] += mass;
+        c.error_mismatches += mass * errors;
+        c.error_nt += mass * (hi - lo);
+    });
+    for (int j = 0; j < J; ++j) for (int d = 0; d < D; ++d) {
+        const double q = qs(j, d);
+        if (q == 0.0) continue;
+        double mass = 0.0;
+        for (int end = 0; end <= N; ++end) {
+            const double backward = q * single_end[ds(d, end)];
+            right_back[js(j, end)] += backward;
+            mass += backward * right[js(j, end)];
+        }
+        c.history_single[j * D + d] += mass;
+        c.d_gene[j * D + d] += mass;
+    }
+
+    double tandem_total = 0.0;
+    if (tandem) {
+        std::vector<double> a(static_cast<size_t>(D) * W, 0.0), bmix(a.size(), 0.0);
+        std::vector<double> context(a.size(), 0.0), forward(a.size(), 0.0);
+        std::vector<double> second(static_cast<size_t>(D) * cells, 0.0), second_back(second.size(), 0.0);
+        std::vector<double> b(static_cast<size_t>(J) * D * W, 0.0), bback(b.size(), 0.0);
+        d_spans(m.del_d_tandem, first_copies, true,
+                [&](int d, size_t, int lo, int hi, double weight, int) { a[ds(d, hi)] += left[lo] * weight; });
+        d_spans(m.del_d2, second_copies, true,
+                [&](int d, size_t, int lo, int hi, double weight, int) { second[d * cells + cell(lo, hi)] += weight; });
+        for (int j = 0; j < J; ++j) for (int d = 0; d < D; ++d)
+            for (int lo = 0; lo <= N; ++lo) for (int hi = lo + 1; hi <= N; ++hi)
+                b[jds(j, d, lo)] += second[d * cells + cell(lo, hi)] * right[js(j, hi)];
+        for (int j = 0; j < J; ++j) for (int d1 = 0; d1 < D; ++d1) for (int d2 = 0; d2 < D; ++d2) {
+            const double q = qt(j, d1, d2);
+            if (q == 0.0) continue;
+            for (int lo = 0; lo <= N; ++lo) bmix[ds(d1, lo)] += q * b[jds(j, d2, lo)];
+        }
+        std::vector<double> dd_back(cells, 0.0);
+        for (int d = 0; d < D; ++d)
+            for (int end = 0; end <= N; ++end) for (int lo = end; lo <= N; ++lo) {
+                const double insertion = dd[cell(end, lo)];
+                if (insertion == 0.0) continue;
+                context[ds(d, end)] += insertion * bmix[ds(d, lo)];
+                forward[ds(d, lo)] += a[ds(d, end)] * insertion;
+                dd_back[cell(end, lo)] += a[ds(d, end)] * bmix[ds(d, lo)];
+            }
+        for (int d = 0; d < D; ++d) for (int end = 0; end <= N; ++end)
+            tandem_total += a[ds(d, end)] * context[ds(d, end)];
+        for (int j = 0; j < J; ++j) for (int d1 = 0; d1 < D; ++d1) for (int d2 = 0; d2 < D; ++d2) {
+            const double q = qt(j, d1, d2);
+            if (q == 0.0) continue;
+            double mass = 0.0;
+            for (int lo = 0; lo <= N; ++lo) {
+                const double backward = q * forward[ds(d1, lo)];
+                bback[jds(j, d2, lo)] += backward;
+                mass += backward * b[jds(j, d2, lo)];
+            }
+            c.history_tandem[(j * D + d1) * D + d2] += mass;
+            c.d_gene[j * D + d1] += mass;
+            c.d2_gene[d1 * D + d2] += mass;
+        }
+        for (int j = 0; j < J; ++j) for (int d = 0; d < D; ++d)
+            for (int lo = 0; lo <= N; ++lo) {
+                const double backward = bback[jds(j, d, lo)];
+                if (backward == 0.0) continue;
+                for (int hi = lo + 1; hi <= N; ++hi) {
+                    const size_t index = d * cells + cell(lo, hi);
+                    second_back[index] += backward * right[js(j, hi)];
+                    right_back[js(j, hi)] += backward * second[index];
+                }
+            }
+        d_spans(m.del_d_tandem, first_copies, true, [&](int d, size_t index, int lo, int hi, double weight, int errors) {
+            const double backward = context[ds(d, hi)];
+            const double mass = left[lo] * weight * backward;
+            left_back[lo] += weight * backward;
+            c.d_tandem_del[index] += mass;
+            c.error_mismatches += mass * errors;
+            c.error_nt += mass * (hi - lo);
+        });
+        d_spans(m.del_d2, second_copies, true, [&](int d, size_t index, int lo, int hi, double weight, int errors) {
+            const double mass = weight * second_back[d * cells + cell(lo, hi)];
+            c.d2_del[index] += mass;
+            c.error_mismatches += mass * errors;
+            c.error_nt += mass * (hi - lo);
+        });
+        for (int lo = 0; lo <= N; ++lo) for (int hi = lo; hi <= N; ++hi) {
+            const double mass = dd[cell(lo, hi)] * dd_back[cell(lo, hi)];
+            if (mass == 0.0) continue;
+            c.ins_dd[hi - lo] += mass;
+            accum_dinucl(c.dinucl_dd, c.first_dd, seq, lo, hi, false, mass);
+        }
+    }
+    c.n_d[1] += single_total;
+    c.n_d[2] += tandem_total;
+
+    std::vector<double> vback(W, 0.0), jback(jweight.size(), 0.0), dj_back(cells, 0.0);
+    for (int lo = 0; lo <= N; ++lo) for (int hi = lo; hi <= N; ++hi) {
+        const double backward = vd[cell(lo, hi)] * left_back[hi];
+        vback[lo] += backward;
+        const double mass = vweight[lo] * backward;
+        if (mass > 0.0) {
+            c.ins_vd[hi - lo] += mass;
+            accum_dinucl(c.dinucl_vd, c.first_vd, seq, lo, hi, false, mass);
+        }
+        for (int j = 0; j < J; ++j) {
+            jback[js(j, hi)] += dj[cell(lo, hi)] * right_back[js(j, lo)];
+            dj_back[cell(lo, hi)] += jweight[js(j, hi)] * right_back[js(j, lo)];
+        }
+        const double right_mass = dj[cell(lo, hi)] * dj_back[cell(lo, hi)];
+        if (right_mass > 0.0) {
+            c.ins_dj[hi - lo] += right_mass;
+            accum_dinucl(c.dinucl_dj, c.first_dj, seq, lo, hi, true, right_mass);
+        }
+    }
+    for (int v : vm) for (const auto& o : vopts[v]) {
+        const double mass = m.pv[v] * o.p * vback[o.len];
+        c.v_choice[v] += mass;
+        c.v_3_del[v * m.nbins_v + m.cut_v[v].size() - o.len] += mass;
+        c.error_mismatches += mass * o.errors;
+        c.error_nt += mass * o.len;
+    }
+    for (int j : jm) for (const auto& o : jopts[j]) {
+        const double mass = m.pj[j] * o.p * jback[js(j, N - o.len)];
+        c.j_choice[j] += mass;
+        c.j_5_del[j * m.nbins_j + m.cut_j[j].size() - o.len] += mass;
+        c.error_mismatches += mass * o.errors;
+        c.error_nt += mass * o.len;
+    }
+    return single_total + tandem_total;
+}
+
 double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                  const std::vector<int>& vmask, const std::vector<int>& jmask,
                  const std::vector<int>& dmask, Counts& local, bool allow_dd = true,
@@ -1432,6 +1651,8 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
     const std::vector<int>& dm = (m.vdj && !dmask.empty()) ? dmask : m.func_d;
 
     const std::vector<int>& d2m = d2mask.empty() ? m.func_d : d2mask;
+
+    if (m.joint_history) return estep_joint(m, cdr3, vm, jm, dm, d2m, local, allow_dd, error_rate);
 
     struct JC {
         int j;
