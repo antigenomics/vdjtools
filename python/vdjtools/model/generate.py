@@ -230,7 +230,7 @@ def _draw(prep: _GenPrep, rng) -> tuple[str, str, str, str, str]:
 
 def _generate_native(model: Model, n: int, seed: int | None, productive_only: bool,
                      threads: int) -> pl.DataFrame:
-    """``engine="native"``: the same Bayes net sampled in C++, ~150-580x the reference.
+    """``engine="native"``: the same Bayes net sampled in one native batch.
 
     Gene indices come back and are named here by fancy-indexing, so naming ``n`` draws stays
     vectorized. ``junction_aa`` is one polars call over the whole column rather than a
@@ -281,7 +281,8 @@ def generate(model: Model, n: int, *, seed: int | None = None, productive_only: 
         engine: ``"reference"`` (default) is the Python ancestral sampler -- the implementation
             every shipped artifact drawn from this function was built with, and the one whose
             ``seed`` stream must not move. ``"native"`` is the same Bayes net in C++, measured at
-            **149-577x** on one core (TRB 25,428 -> 6,196,346 seq/s; IGH with
+            **149-577x** on one core in earlier bundled-model benchmarks (TRB
+            25,428 -> 6,196,346 seq/s; IGH with
             ``productive_only=True`` 4,029 -> 2,325,649), and it is the one to use for corpus-scale
             draws.
 

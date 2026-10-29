@@ -509,14 +509,21 @@ validation remain release gates (see :doc:`model`):
    native.pgen_aa_batch(model, seqs, threads=0)   # many sequences, thread-parallel (~11x)
    native.pgen_nt_batch(model, nts, threads=0)    # the nucleotide batch (new in 4.5.0)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
-   generate(model, 10 ** 6, engine="native")      # 149-577x, its own random stream
+   generate(model, 10 ** 6, engine="native")      # one native batch, its own random stream
 
 .. note::
 
    ``generate`` has two engines. ``engine="reference"`` (the default) is the Python ancestral
-   sampler; ``engine="native"`` is the same Bayes net in C++ and is **149-577x** faster on one core
-   — TRB 25,428 to 6,196,346 sequences per second, and IGH with ``productive_only=True`` 4,029 to
-   2,325,649. Each draw is seeded from ``(seed, row)``, so the output never depends on ``threads``.
+   sampler; ``engine="native"`` samples the same Bayes net in one C++ batch. Earlier bundled-model
+   benchmarks measured **149-577x** speedups on one core: TRB 25,428 to 6,196,346 sequences per
+   second, and IGH with ``productive_only=True`` 4,029 to 2,325,649. Each native draw is seeded
+   from ``(seed, row)``, so its output never depends on ``threads``.
+
+   With fitted, uncollapsed human TRB parameters, one call of 10,000 in-frame, stop-free draws
+   took 7.031 s with the reference engine on one thread, 0.076 s for the first native call on
+   one thread, and 0.036 s for a subsequent native call on 24 threads. The model was loaded once
+   before timing; native preparation was reused for the last call. These timings depend on
+   model parameters and acceptance rates.
 
    The two are **different random streams**. They agree in distribution — TRB V-usage correlation
    0.99766 against a 20,000-draw reference sample, nucleotide length means within 0.036 nt — but
