@@ -155,3 +155,9 @@ and the distinction between an available definition and a published rotation.
 Public recombination models, corpus bundles and example sources are mirrored on
 [Hugging Face](https://huggingface.co/datasets/isalgo/airr_feature_signatures).
 The dataset card shows selective downloads; downloading the whole mirror is unnecessary.
+
+Working model APIs and CLIs default to `isalgo`, targeting seven human loci and
+mouse TRA/TRB/IGH/IGK/IGL. Fresh fitted assets and their validation remain release
+gates; missing models fail explicitly. `olga-legacy` selects frozen OLGA models
+(`olga` is its alias). `learned` and `arda` alias fresh `isalgo`; their previous
+parameter families require a pinned previous release.

@@ -13,8 +13,8 @@ A sample to play with
 Real workflows load a repertoire with ``io.read("sample.tsv")`` (see `Loading data`_).
 So this page is runnable with no downloads, the snippet below draws a synthetic counted
 sample straight from a bundled model — every later example reuses ``demo_sample``.
-This fixed fixture explicitly retains ``olga`` to reproduce the recorded numeric
-examples. New working-model calls default to ``learned``; see :doc:`model` for
+This fixed fixture explicitly retains ``olga-legacy`` to reproduce the recorded numeric
+examples. New working-model calls default to ``isalgo``; see :doc:`model` for
 the replacement catalog and its release gate:
 
 .. code-block:: python
@@ -29,7 +29,7 @@ the replacement catalog and its release gate:
 
    def demo_sample(locus="TRB", clones=2000, reads=20_000, a=1.0, seed=0):
        """A canonical clonotype frame: sequences from a bundled model, clone sizes from a rank law."""
-       seqs = generate(load_bundled(locus, "olga"), clones, seed=seed, productive_only=True)
+       seqs = generate(load_bundled(locus, "olga-legacy"), clones, seed=seed, productive_only=True)
        rng = np.random.default_rng(seed)
        freq = np.arange(1, seqs.height + 1, dtype=float) ** -a      # f_i proportional to i**-a
        counts = rng.multinomial(reads, freq / freq.sum())
@@ -494,7 +494,7 @@ Recombination model
 -------------------
 
 :mod:`vdjtools.model` is the native V(D)J engine — generation probability, sampling, and EM
-inference. Working-model calls default to ``learned``. The replacement catalog
+inference. Working-model calls default to ``isalgo``. The replacement catalog
 targets seven human loci and mouse TRA/TRB/IGH/IGK/IGL; fitted assets and complete
 validation remain release gates (see :doc:`model`):
 
@@ -503,7 +503,7 @@ validation remain release gates (see :doc:`model`):
    from vdjtools.model import load_bundled, native
    from vdjtools.model.generate import generate
 
-   model = load_bundled("TRB")                   # learned working default
+   model = load_bundled("TRB")                   # isalgo working default
    native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)     # + the Hamming-1 ball
    native.pgen_aa_batch(model, seqs, threads=0)   # many sequences, thread-parallel (~11x)
@@ -519,9 +519,10 @@ validation remain release gates (see :doc:`model`):
    second, and IGH with ``productive_only=True`` 4,029 to 2,325,649. Each native draw is seeded
    from ``(seed, row)``, so its output never depends on ``threads``.
 
-   The ``vdjtools generate`` CLI selects native sampling by default for bundled learned models.
-   Explicit legacy sources (``--source olga`` / ``--source arda``) and custom ``--model-path``
-   inputs retain reference sampling. ``--engine`` overrides either policy; ``--threads 0`` uses
+   The ``vdjtools generate`` CLI selects native sampling by default for bundled isalgo models.
+   Explicit ``--source olga-legacy`` (or its ``olga`` alias) and custom ``--model-path``
+   inputs retain reference sampling. ``learned`` and ``arda`` alias isalgo and also use native
+   sampling. ``--engine`` overrides either policy; ``--threads 0`` uses
    the allocated CPU budget for native calls. The library primitive above retains its reference
    default for historical seed reproduction.
 

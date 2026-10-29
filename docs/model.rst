@@ -23,10 +23,10 @@ contains the public recombination models, corpus bundles and example sources. It
 dataset card provides selective-download examples. Ordinary bundled-model loading
 continues to use the models installed with vdjtools.
 
-The candidate working-model APIs and CLIs default to ``source="learned"``.
+The working-model APIs and CLIs default to ``source="isalgo"``.
 vdjtools owns model fitting, probability tables, generation and Pgen; ARDA supplies
 the germline reference scaffolds, without OLGA probability-parameter seeding.
-The supported working-model catalog comprises twelve contexts: all seven human
+The replacement working-model catalog targets twelve contexts: all seven human
 loci and mouse TRA, TRB, IGH, IGK and IGL. Each manifest describes the parameter
 source and reference. Delivery and validation of these twelve parameter sets are
 release gates; API changes alone do not establish completed training or publication.
@@ -37,11 +37,16 @@ No mouse TRG or TRD model is bundled. Acquiring suitable 10X or other public
 training data for these two loci is a separate future project, not a blocker for
 this twelve-context release. Their absence from the bundle does not establish
 that suitable public data do not exist.
-``source="olga"`` and CLI ``--source olga`` retain the human bootstrap models
-for oracle checks and historical reproduction, including ``collapse=False``
-for allele-level comparisons. Legacy ``source="arda"`` paths remain available.
+``source="olga-legacy"`` and CLI ``--source olga-legacy`` retain the frozen human
+bootstrap models for oracle checks and historical reproduction, including
+``collapse=False`` for allele-level comparisons. ``olga`` is an alias of
+``olga-legacy``. Compatibility names ``learned`` and ``arda`` both select fresh
+``isalgo`` fits; reproducing their previous parameter families requires a pinned
+previous release. Old bundled weights are never substituted for a missing isalgo fit.
 Existing frozen corpus manifests retain their recorded source and fingerprints;
-the source omitted by older manifests still means OLGA.
+the source omitted by older manifests still means OLGA. A custom corpus fitted on
+previous ``learned``/``arda`` weights reports a fingerprint mismatch against the
+new aliases; use its matching pinned release for reproduction.
 
 
 Custom germline libraries
@@ -397,9 +402,9 @@ alleles carry some, most of it small). :func:`~vdjtools.model.check.check_model`
 can see whether a gene you care about is affected.
 
 **What to do about it.** Use the gene-collapsed models — the default — where the effect is absorbed
-by the collapse. The replacement ``learned`` models are fitted on ARDA germline
-scaffolds rather than the OLGA deletion grid; legacy ``arda`` paths remain explicit
-compatibility choices. If you need allele resolution *and* an affected gene, be aware Pgen through it is
+by the collapse. The replacement ``isalgo`` models are fitted on ARDA germline
+scaffolds rather than the OLGA deletion grid. ``learned`` and ``arda`` are aliases
+of the new isalgo family; they do not select the old fitted weights. If you need allele resolution *and* an affected gene, be aware Pgen through it is
 an underestimate.
 
 Genomically impossible D–J pairs
@@ -436,14 +441,14 @@ usage. They can be drawn by the generator but score ``Pgen = 0``, and human ``TR
 a real TRB repertoire — is one of them. ``check_model`` reports these as ``unscoreable_gene_mass``.
 :func:`~vdjtools.model.io.from_olga` accepts ``derive_orf=True`` to reconstruct the missing germline
 from the full germline and the anchor. Historical OLGA-scaffold learned models used
-that option; the replacement learned models use ARDA reference scaffolds directly.
+that option; the replacement isalgo models use ARDA reference scaffolds directly.
 The explicit ``olga`` set keeps it off so it stays an exact Pgen oracle.
 
 V/J usage is protocol-specific
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Not a defect, but the most common way to get a wrong answer with these models. OLGA's were fit to
-DNA-multiplex data; the ``learned`` set to 5'RACE reads. The two amplify different V genes at very
+DNA-multiplex data; the historical ``learned`` family used 5'RACE reads. The two amplify different V genes at very
 different rates. An earlier comparison measured TRBV19 usage at 3.1 % in OLGA
 and 37 % in its 5'RACE population; those are historical population-specific
 observations, not validation results for the replacement fits. Neither marginal
@@ -489,7 +494,7 @@ Rescaling V/J usage
 
    from vdjtools.model import rescale_usage
 
-   scored_with = rescale_usage(load_bundled("TRB", "learned"), my_sample)
+   scored_with = rescale_usage(load_bundled("TRB", "isalgo"), my_sample)
 
 V and J usage is **protocol-dependent** and the junction model is not: 5'RACE and DNA-multiplex
 amplify different V genes at very different rates, so neither usage marginal is right in general.
@@ -582,19 +587,19 @@ or as ``LOCUS[:source[:organism]]``:
 
 .. code-block:: bash
 
-   vdjtools model check TRB:learned                       # exits 1 on any error
+   vdjtools model check TRB:isalgo                       # exits 1 on any error
    vdjtools model template --locus TRB -o template/
    vdjtools model learn clones.tsv -t template/ -o fitted/
    vdjtools model log fitted/                              # loglik per iteration
-   vdjtools model entropy TRB:olga --table total
-   vdjtools model diversity TRB:olga -n 5000
-   vdjtools model compare TRB:olga TRB:learned --by gene --dot diff.pdf
-   vdjtools model compare-pgen TRB:olga TRB:learned seqs.tsv --summary
-   vdjtools model loglik seqs.tsv TRB:learned              # loglik, k, AIC, BIC
+   vdjtools model entropy TRB:olga-legacy --table total
+   vdjtools model diversity TRB:olga-legacy -n 5000
+   vdjtools model compare TRB:olga-legacy TRB:isalgo --by gene --dot diff.pdf
+   vdjtools model compare-pgen TRB:olga-legacy TRB:isalgo seqs.tsv --summary
+   vdjtools model loglik seqs.tsv TRB:isalgo              # loglik, k, AIC, BIC
    vdjtools model extend fitted/ --locus TRB -o extended/
-   vdjtools model rescale TRB:learned my_sample.tsv -o rescaled/
-   vdjtools model export TRB:olga --format tsv -o trb_tsv/
-   vdjtools model net TRB:olga --format pdf -o bn.pdf
+   vdjtools model rescale TRB:isalgo my_sample.tsv -o rescaled/
+   vdjtools model export TRB:olga-legacy --format tsv -o trb_tsv/
+   vdjtools model net TRB:olga-legacy --format pdf -o bn.pdf
 
 Options that change a model
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
