@@ -163,6 +163,21 @@ def annotate_reads(
     return pl.read_csv(airr, separator="\t", infer_schema_length=20000)
 
 
+def _with_candidate_sequences(clones: pl.DataFrame) -> pl.DataFrame:
+    """Retain coding-strand full reads as candidate proposals, separate from junctions."""
+    if "sequence" not in clones.columns:
+        return clones
+    seq = pl.col("sequence").cast(pl.String).str.to_uppercase()
+    if "rev_comp" in clones.columns:
+        reverse = pl.col("rev_comp").cast(pl.String).str.to_lowercase().is_in(["t", "true", "1"])
+        complement = dict(zip("ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN"))
+        seq = pl.when(reverse).then(seq.str.reverse().str.replace_many(complement)).otherwise(seq)
+    parts = [pl.col("candidate_sequences")] if "candidate_sequences" in clones.columns else []
+    return clones.with_columns(pl.concat_list([*parts, seq]).list.eval(
+        pl.element().filter(pl.element().is_not_null() & (pl.element().str.len_bytes() > 0)))
+        .list.unique().list.sort().alias("candidate_sequences"))
+
+
 def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False,
                       gene_level: bool = False) -> pl.DataFrame:
     """Collapse an arda clonotype table to unique clonotypes = ``(v_call, j_call, junction)``.
@@ -180,8 +195,10 @@ def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False,
     Returns:
         Deduplicated clonotype frame: ``v_call, j_call, junction, junction_aa, locus, d_call,
         d2_call, count`` (one row per unique clonotype), sorted by descending ``count``.
+        When full reads are available, ``candidate_sequences`` retains their coding-strand
+        union for preliminary gene proposals; junctions remain the EM observations.
     """
-    df = clones
+    df = _with_candidate_sequences(clones)
     if gene_level:
         df = df.with_columns([
             pl.col(c).cast(pl.Utf8).str.split(",")
@@ -199,8 +216,9 @@ def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False,
     ]
     if empty_to_null:
         df = df.with_columns(empty_to_null)
-    count_col = next((c for c in ("duplicate_count", "count") if c in df.columns), None)
-    cnt = pl.col(count_col).cast(pl.Int64, strict=False) if count_col else pl.lit(1)
+    count_cols = [pl.col(c).cast(pl.Int64, strict=False)
+                  for c in ("duplicate_count", "count") if c in df.columns]
+    cnt = pl.coalesce([*count_cols, pl.lit(1, dtype=pl.Int64)]).sum() if count_cols else pl.len().cast(pl.Int64)
     annotations = []
     for c in ("junction_aa", "locus", "d_call", "d2_call"):
         if c not in df.columns:
@@ -211,9 +229,13 @@ def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False,
         else:
             expr = pl.col(c).first()
         annotations.append(expr.alias(c))
+    if "candidate_sequences" in df.columns:
+        annotations.append(pl.col("candidate_sequences").explode(empty_as_null=True).drop_nulls()
+                           .unique().sort().alias("candidate_sequences"))
     out = df.group_by(["v_call", "j_call", "junction"]).agg(
-        *annotations, cnt.sum().alias("count"))
-    return out.sort("count", descending=True)
+        *annotations, cnt.alias("count"))
+    return out.sort(["count", "v_call", "j_call", "junction"],
+                    descending=[True, False, False, False], nulls_last=True)
 
 
 def prepare(
@@ -405,7 +427,10 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     uniq = _filter_for_em(clones, base, ambiguous, use_calls=False)
     n_all = uniq.height
     seqs = [s.upper() for s in uniq["junction"].to_list()]
-    masks, evidence = candidate_masks(seqs, base, organism=organism, threads=threads)
+    uniq = _with_candidate_sequences(uniq)
+    queries = uniq["candidate_sequences"].to_list() if "candidate_sequences" in uniq.columns else None
+    masks, evidence = candidate_masks(seqs, base, organism=organism, threads=threads,
+                                      query_sequences=queries)
 
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
                               single_d=single_d, nd_prior=nd_prior, error_rate=error_rate,

@@ -982,7 +982,12 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
     seqs = df[col].to_list()
     masks = None
     if native and kw.get("error_rate") is not None and use_calls:
-        masks, evidence = candidate_masks(seqs, template, threads=kw.get("threads", 0))
+        from .data import _with_candidate_sequences
+
+        df = _with_candidate_sequences(df)
+        queries = df["candidate_sequences"].to_list() if "candidate_sequences" in df.columns else None
+        masks, evidence = candidate_masks(seqs, template, threads=kw.get("threads", 0),
+                                          query_sequences=queries)
         kw["candidate_search"] = evidence
     elif use_calls and v_col in df.columns and j_col in df.columns:
         if 'd2_call' in df.columns:
@@ -1001,11 +1006,20 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
     The production path for real reads: ``junctions, masks = arda_masks(contigs, template);
     infer_native(template, junctions, masks=masks)``. arda is a base dependency (ships with vdjtools).
     """
-    from .stitch import annotate
+    from arda import annotate_sequences
+    from .data import _with_candidate_sequences
 
-    calls = annotate(contigs, organism=organism)
-    junctions = calls["junction"].to_list()
-    masks, _ = candidate_masks(junctions, model, organism=organism)
+    if not contigs:
+        return [], []
+    calls = pl.DataFrame(annotate_sequences(contigs, seqtype="nt", organism=organism))
+    if "sequence" not in calls.columns:
+        if calls.height != len(contigs):
+            raise ValueError("annotation without sequence must retain one row per input contig")
+        calls = calls.with_columns(pl.Series("sequence", contigs))
+    calls = _with_candidate_sequences(calls)
+    junctions = calls["junction"].fill_null("").to_list()
+    masks, _ = candidate_masks(junctions, model, organism=organism,
+                               query_sequences=calls["candidate_sequences"].to_list())
     return junctions, masks
 
 
@@ -1018,7 +1032,8 @@ def _candidate_identity(sequences, masks) -> str:
 
 
 def candidate_masks(sequences: list[str], model: Model, *, organism: str | None = None,
-                    threads: int = 0, batch_size: int = 10000) -> tuple[list[tuple], dict]:
+                    threads: int = 0, batch_size: int = 10000,
+                    query_sequences: list[list[str]] | None = None) -> tuple[list[tuple], dict]:
     """Batched ARDA V/J proposals for training, expanding each gene to all model templates.
 
     The proposals restrict genes, never deletion boundaries or allele identities.
@@ -1026,12 +1041,17 @@ def candidate_masks(sequences: list[str], model: Model, *, organism: str | None 
     a short local D hit or absent greedy D2 call must not decide the history.
     Returns three-entry masks and explicit candidate-search limits/counts.
     This finite candidate search is an approximation, not exhaustive inference.
+    ``query_sequences`` supplies coding-strand full-read alternatives per observation;
+    all their gene proposals are unioned. Empty alternatives fall back to the junction.
+    These queries never replace the observed junction or determine its boundaries.
     """
     from arda import alignment_candidates
     from ..cores import kernel_threads
 
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
+    if query_sequences is not None and len(query_sequences) != len(sequences):
+        raise ValueError("query_sequences must have one list per observation")
     threads = kernel_threads(threads)
     index = pl.concat([
         model.genomic[f"genes_{seg.lower()}"]
@@ -1040,14 +1060,40 @@ def candidate_masks(sequences: list[str], model: Model, *, organism: str | None 
                 pl.col(f"{seg.lower()}_allele").alias("model_allele"))
         for seg in ("V", "J")
     ]).with_columns(gene=pl.col("model_allele").str.split("*").list.first())
-    v, j = [[] for _ in sequences], [[] for _ in sequences]
+    v, j = [set() for _ in sequences], [set() for _ in sequences]
     evidence = {"batches": [], "d_unrestricted": True,
                 "candidate_ambiguity": "IUPAC alternatives mapped to N for search only",
                 "scope": "V/J gene proposals; all functional model templates per gene"}
-    for lo in range(0, len(sequences), batch_size):
-        unknown = str.maketrans("RYSWKMBDHV", "N" * 10)
-        records = [(str(i), sequences[i].upper().translate(unknown))
-                   for i in range(lo, min(lo + batch_size, len(sequences)))]
+    unknown = str.maketrans("RYSWKMBDHV", "N" * 10)
+    import hashlib
+    import json
+    from itertools import islice
+
+    fallback = 0
+
+    def query_rows():
+        nonlocal fallback
+        for i, sequence in enumerate(sequences):
+            alternatives = query_sequences[i] if query_sequences is not None else None
+            if alternatives is not None and not isinstance(alternatives, list):
+                raise TypeError("query_sequences rows must be lists of sequences or None")
+            alternatives = sorted({s.upper().translate(unknown) for s in (alternatives or []) if s})
+            if not alternatives:
+                alternatives = [sequence.upper().translate(unknown)]
+                fallback += 1
+            yield from ((i, s) for s in alternatives)
+
+    queries = enumerate(query_rows())
+    digest = hashlib.sha256(b"[")
+    query_count = 0
+    while batch := list(islice(queries, batch_size)):
+        owners = {str(q): obs for q, (obs, _) in batch}
+        records = [(str(q), s) for q, (_, s) in batch]
+        for q, row in batch:
+            if q:
+                digest.update(b",")
+            digest.update(json.dumps(row, separators=(",", ":")).encode())
+        query_count += len(batch)
         result = alignment_candidates(records, organism=organism or model.organism,
                                       threads=threads, batch_size=batch_size)
         hits = result["alignments"]
@@ -1060,10 +1106,15 @@ def candidate_masks(sequences: list[str], model: Model, *, organism: str | None 
                   .group_by("sequence_id", "segment")
                   .agg(pl.col("model_allele").unique().sort()))
         for query, segment, alleles in mapped.iter_rows():
-            (v if segment == "V" else j)[int(query)] = alleles
+            (v if segment == "V" else j)[owners[query]].update(alleles)
+    digest.update(b"]")
+    evidence.update(query_scope="coding-strand full-read alternatives; junction fallback when absent",
+                    query_count=query_count, full_read_observations=len(sequences) - fallback,
+                    junction_fallback_observations=fallback,
+                    query_inputs_sha256=digest.hexdigest())
     evidence["unrestricted_v"] = sum(not values for values in v)
     evidence["unrestricted_j"] = sum(not values for values in j)
-    masks = [(a, b, None) for a, b in zip(v, j)]
+    masks = [(sorted(a), sorted(b), None) for a, b in zip(v, j)]
     evidence["input_masks_sha256"] = _candidate_identity(sequences, masks)
     return masks, evidence
 

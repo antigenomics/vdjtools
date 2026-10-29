@@ -676,7 +676,16 @@ fit requires matching sequences and masks; declaring ``candidate_search={}``
 explicitly records a deliberate support change. Candidate omissions can affect
 the fitted model and are a computational approximation.
 
-New ARDA scaffolds exclude reference records marked ``status=truncated``; an
+When full AIRR reads are available, their coding-strand sequences provide the gene
+proposals. All full-read alternatives for a clonotype are retained and unioned;
+they do not replace the observed junction or fix its deletion/insertion boundaries.
+Queries run in bounded batches, with a separate digest and full-read/fallback
+counts. Junction-only inputs explicitly fall back to junction queries. Short
+junctions can lack enough V/J sequence for a proposal; a missing proposal leaves
+that segment unrestricted. Clonotype deduplication preserves read support and
+uses a deterministic order for tied counts.
+
+New ARDA scaffolds exclude records marked ``status=truncated`` or ``partial``; an
 incomplete germline tail is not a complete short allele template.
 ``infer_native(..., threads=N)`` controls the E-step directly; zero uses the available CPU
 allocation. ``build_all(..., workers=N)`` parallelizes builds with one kernel thread each by
