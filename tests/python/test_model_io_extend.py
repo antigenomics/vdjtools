@@ -365,11 +365,11 @@ def _with_ambiguous(toy_model, n=60):
     ])
 
 
-def test_ambiguous_bases_are_substituted_by_default(toy_model):
+def test_explicit_ambiguous_base_substitution(toy_model):
     """Real reads carry 'N' and the encoder knows only ACGT — substitute, keep the clonotype."""
     with_n = _with_ambiguous(toy_model)
     with pytest.warns(UserWarning, match="substituting"):
-        fitted, report = infer_frame(toy_model, with_n, max_iter=1)
+        fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous="A")
     assert report.n_sequences == with_n.height  # input retained, not necessarily supported
     from vdjtools.model.native import pgen_nt
     assert pgen_nt(toy_model, "TGTACCAGC") == 0.0

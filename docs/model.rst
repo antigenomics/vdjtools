@@ -512,11 +512,20 @@ packaged into the wheel; from an installed vdjtools use
 .. note::
 
    Real annotated junctions occasionally carry an ambiguous base, and the recombination model is
-   defined over A/C/G/T only. Both training entry points substitute ``A`` by default and warn with
-   the count (``ambiguous=None`` drops the clonotype instead). Substituting keeps the clonotype —
-   one uncertain position in a junction that is otherwise good evidence — and on these reads it
-   affects ~0.01% of rows. It is a substitution, not a marginalization, so data with many ambiguous
-   positions should use ``ambiguous=None``.
+   defined over A/C/G/T. Native training marginalizes DNA IUPAC alternatives by default:
+   likelihoods and unnormalized event counts are summed over compatible nucleotide
+   completions, then normalized once per original observation. This preserves both
+   insertion-transition and substitution uncertainty. ``report.n_ambiguous`` counts
+   observations carrying alternatives. ``max_observation_states`` (default 4096)
+   bounds completions per read; an exceeded budget raises before processing the
+   batch, without dropping or approximating observations. It is recorded in training
+   metadata and restored on resume. Increase the explicit computation budget only
+   after checking the workload. The pure-Python reference requires A/C/G/T input.
+
+   ``ambiguous="A"`` explicitly substitutes that base and warns; ``ambiguous=None``
+   drops ambiguous rows. Substitution treats the replacement as observed and can
+   bias the insertion and error models. For candidate search only, IUPAC alternatives
+   are represented as ``N``; the inference likelihood retains their original masks.
 
 
 Command line

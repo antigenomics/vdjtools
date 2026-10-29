@@ -3,7 +3,8 @@
 Expectation–Maximization over the recombination Bayes net: the **E-step** enumerates every
 scenario that could produce each observed nt CDR3 (the same enumeration as ``pgen``), weights
 them by the current model, and accumulates *soft counts* per event realization; the **M-step**
-re-normalizes those counts in polars to get the next marginals. Trained on out-of-frame reads,
+re-normalizes those counts in polars to get the next marginals. Fit to nonfunctional reads
+(out-of-frame or stop-bearing),
 it recovers the raw generation model (no productivity conditioning, so no selection bias).
 
 Closed-loop oracle: generate synthetic sequences from a known model, then ``infer`` must recover
@@ -49,6 +50,8 @@ class InferenceReport:
     error_rate: list[float] = field(default_factory=list)  # retained-germline substitution MLE after each M-step
     error_model: str = "exact"
     candidate_search: dict = field(default_factory=dict)
+    n_ambiguous: int = 0
+    max_observation_states: int = 4096
 
     def to_dict(self) -> dict:
         """The report as a JSON-serializable dict (one entry of a model's ``training["runs"]``)."""
@@ -152,6 +155,8 @@ def resume(path, sequences, **kw):
         kw.setdefault("error_rate", runs[-1]["error_rate"][-1])
     if runs and runs[-1].get("candidate_search"):
         kw.setdefault("candidate_search", runs[-1]["candidate_search"])
+    if runs and "max_observation_states" in runs[-1]:
+        kw.setdefault("max_observation_states", runs[-1]["max_observation_states"])
     return infer_native(base, sequences, **kw)
 
 
@@ -651,6 +656,8 @@ def infer(
     started = _time.monotonic()
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
     upper = [s.upper() for s in sequences]
+    if any(set(s) - set("ACGT") for s in upper):
+        raise ValueError("Python inference requires A/C/G/T; use infer_native for IUPAC observations")
     if init == "template":
         tables = template.tables
     elif init == "align":
@@ -752,7 +759,7 @@ _JUNCTION_COLS = ("junction", "junction_nt", "cdr3_nt", "cdr3nt", "sequence")
 
 def sanitize_junctions(df: pl.DataFrame, col: str, *, ambiguous: str | None = "A",
                        where: str = "infer_frame") -> pl.DataFrame:
-    """Make a junction column safe for the native encoder, which knows only A/C/G/T.
+    """Validate IUPAC observations or explicitly replace/drop ambiguous junctions.
 
     Real annotated reads carry the occasional ambiguous base (``N``, or an IUPAC code), and an
     unhandled one surfaces as a ``KeyError`` from deep inside the E-step.
@@ -760,13 +767,11 @@ def sanitize_junctions(df: pl.DataFrame, col: str, *, ambiguous: str | None = "A
     Args:
         df: Clonotype frame.
         col: Junction column.
-        ambiguous: A single base to substitute for every non-ACGT character (default ``"A"``), or
-            ``None`` to drop those clonotypes instead. Substituting is the default because it keeps
-            the clonotype: an ambiguous base is one uncertain position in a junction that is
-            otherwise perfectly good evidence, and on these reads it affects ~0.01% of rows, so
-            dropping costs sample size for no gain in correctness. It is a *substitution*, not a
-            marginalization — the base is treated as read, so a run with many ambiguous positions
-            will bias the insertion model toward the substituted base and should use ``None``.
+        ambiguous: ``"marginalize"`` validates and retains DNA IUPAC observations for
+            native inference. A single A/C/G/T explicitly substitutes that nucleotide;
+            ``None`` drops ambiguous rows. This helper retains its legacy ``"A"`` default;
+            training entry points default to marginalization. Substitution treats the
+            replacement as observed and can bias insertion and error parameters.
         where: Caller name, used in the warning.
 
     Returns:
@@ -774,6 +779,10 @@ def sanitize_junctions(df: pl.DataFrame, col: str, *, ambiguous: str | None = "A
         ``ambiguous is None``.
     """
     df = df.with_columns(pl.col(col).str.to_uppercase())
+    if ambiguous == "marginalize":
+        if df.filter(~pl.col(col).str.contains(r"^[ACGTRYSWKMBDHVN]+$")).height:
+            raise ValueError(f"{where}: invalid DNA IUPAC observation in {col!r}")
+        return df
     bad = df.filter(~pl.col(col).str.contains(r"^[ACGT]+$")).height
     if not bad:
         return df
@@ -783,7 +792,7 @@ def sanitize_junctions(df: pl.DataFrame, col: str, *, ambiguous: str | None = "A
             f"bases (the recombination model is defined over A/C/G/T only)", stacklevel=3)
         return df.filter(pl.col(col).str.contains(r"^[ACGT]+$"))
     if ambiguous not in ("A", "C", "G", "T"):
-        raise ValueError(f"ambiguous must be one of A, C, G, T or None, got {ambiguous!r}")
+        raise ValueError(f"ambiguous must be marginalize, A, C, G, T or None, got {ambiguous!r}")
     warnings.warn(
         f"{where}: {bad} of {df.height} clonotypes have non-ACGT bases in {col!r}; substituting "
         f"{ambiguous!r} (pass ambiguous=None to drop them instead)", stacklevel=3)
@@ -792,7 +801,7 @@ def sanitize_junctions(df: pl.DataFrame, col: str, *, ambiguous: str | None = "A
 
 def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
                 v_col: str = "v_call", j_col: str = "j_call", use_calls: bool = True,
-                native: bool = True, ambiguous: str | None = "A", **kw):
+                native: bool = True, ambiguous: str | None = "marginalize", **kw):
     """Fit a model from a **clonotype frame** — the ergonomic entry point to EM.
 
     Wraps :func:`infer_native` with the two steps every caller otherwise repeats: find the
@@ -812,8 +821,8 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
         use_calls: Build per-read masks from the V/J calls. Turn off only if the frame's calls are
             untrustworthy — inference then enumerates every gene and gets much slower.
         native: Use :func:`infer_native` (default). ``False`` runs the pure-Python :func:`infer`.
-        ambiguous: What to do with a junction holding a non-ACGT base — substitute this base
-            (default ``"A"``), or ``None`` to drop the clonotype. See :func:`sanitize_junctions`.
+        ambiguous: ``"marginalize"`` (default) retains IUPAC alternatives for native EM;
+            an explicit A/C/G/T substitutes that base, or ``None`` drops ambiguous rows.
         **kw: Passed through (``max_iter``, ``tol``, ``init``, ``single_d``, ``nd_prior``,
             ``gene_prior``, ...).
 
@@ -837,6 +846,8 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
             f"no nucleotide junction column in {clones.columns}; pass seq_col=")
     df = clones.filter(pl.col(col).is_not_null() & (pl.col(col).str.len_bytes() > 0))
     df = sanitize_junctions(df, col, ambiguous=ambiguous, where="infer_frame")
+    if not native and df.filter(pl.col(col).str.contains(r"[^ACGT]")).height:
+        raise ValueError("IUPAC marginalization requires native=True")
     if not df.height:
         raise ValueError(f"column {col!r} has no usable sequences")
     seqs = df[col].to_list()
@@ -902,9 +913,12 @@ def candidate_masks(sequences: list[str], model: Model, *, organism: str | None 
     ]).with_columns(gene=pl.col("model_allele").str.split("*").list.first())
     v, j = [[] for _ in sequences], [[] for _ in sequences]
     evidence = {"batches": [], "d_unrestricted": True,
+                "candidate_ambiguity": "IUPAC alternatives mapped to N for search only",
                 "scope": "V/J gene proposals; all functional model templates per gene"}
     for lo in range(0, len(sequences), batch_size):
-        records = [(str(i), sequences[i]) for i in range(lo, min(lo + batch_size, len(sequences)))]
+        unknown = str.maketrans("RYSWKMBDHV", "N" * 10)
+        records = [(str(i), sequences[i].upper().translate(unknown))
+                   for i in range(lo, min(lo + batch_size, len(sequences)))]
         result = alignment_candidates(records, organism=organism or model.organism,
                                       threads=threads, batch_size=batch_size)
         hits = result["alignments"]
@@ -1377,6 +1391,7 @@ def infer_native(
     threads: int = 0,
     error_rate: float | None = None,
     candidate_search: dict | None = None,
+    max_observation_states: int = 4096,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
@@ -1392,6 +1407,11 @@ def infer_native(
     exact-match alignment votes would otherwise make mismatch-only genes unreachable.
     ``candidate_search`` records proposal limits/counts in reports and checkpoints;
     it does not change enumeration independently of ``masks``.
+    DNA IUPAC observations are summed over compatible nucleotide completions,
+    including their insertion/error sufficient statistics. Counts normalize once
+    per observation. ``max_observation_states`` is a per-read computation budget;
+    exceeding it fails before the batch runs, without dropping or approximating
+    observations. Reports record this budget and ``n_ambiguous`` observations.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
     ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior`` / ``gene_prior``).
@@ -1411,17 +1431,19 @@ def infer_native(
     from ..cores import kernel_threads
 
     threads = kernel_threads(threads)
-    from .native import _encode, pack
+    from .native import _encode_observed, pack
 
     started = _time.monotonic()
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
     ddflags = [1 if a else 0 for a in dd_allowed] if dd_allowed is not None else []
 
     upper = [s.upper() for s in sequences]
+    seqs_enc = [_encode_observed(s) for s in upper]
+    n_ambiguous = sum(any(nt < 0 for nt in seq) for seq in seqs_enc)
     if candidate_search and (masks is None or _candidate_identity(upper, masks) != candidate_search.get("input_masks_sha256")):
         raise ValueError("candidate-restricted EM requires the same sequences and masks as recorded evidence; "
                          "pass candidate_search={} explicitly to declare changed support")
-    if error_rate is not None and init == "align":
+    if (error_rate is not None or n_ambiguous) and init == "align":
         init = "uniform"
     if init == "template":
         tables = template.tables
@@ -1437,7 +1459,6 @@ def infer_native(
     vi = {a: i for i, a in enumerate(v_alleles)}
     ji = {a: i for i, a in enumerate(j_alleles)}
     di = {a: i for i, a in enumerate(d_alleles)}
-    seqs_enc = [_encode(s) for s in upper]
     if masks is not None:
         vmasks = [[vi[a] for a in mk[0] if a in vi] for mk in masks]
         jmasks = [[ji[a] for a in mk[1] if a in ji] for mk in masks]
@@ -1449,14 +1470,15 @@ def infer_native(
         vmasks = jmasks = dmasks = d2masks = []
 
     report = InferenceReport(error_model="exact" if error_rate is None else "retained-germline-substitution",
-                             candidate_search=dict(candidate_search or {}))
+                             candidate_search=dict(candidate_search or {}), n_ambiguous=n_ambiguous,
+                             max_observation_states=max_observation_states)
     meta = dict(started=started, max_iter=max_iter, tol=tol, init=init, native=True,
                 n_sequences=len(upper))
     for it in range(max_iter):
         pm, _, _ = pack(model)
         counts = make_counts(pm)
         ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags, d2masks,
-                         0.0 if error_rate is None else error_rate)
+                         0.0 if error_rate is None else error_rate, max_observation_states)
         # Match infer(): the native sum includes positive-likelihood observations only.
         # Counting all inputs here silently hid unsupported reads and diluted the mean.
         n = counts.n_scoreable

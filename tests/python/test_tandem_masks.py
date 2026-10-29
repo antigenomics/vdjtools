@@ -136,8 +136,8 @@ def test_invalid_fourth_mask_disables_tandem_in_both_infer_paths(monkeypatch):
     mask = (['TRDV1*01'],['TRDJ1*01'],['TRDD1*01'],['UNKNOWN'])
     assert _estep_seq(prepare(model),'TGTAAACCCTTT',defaultdict(lambda:defaultdict(float)),mask) == 0
     original = _core.estep_batch
-    def observed(pm,sequences,vs,js,ds,counts,threads,ddflags,d2masks):
+    def observed(pm,sequences,vs,js,ds,counts,threads,ddflags,d2masks,*likelihood_args):
         assert ddflags == [0] and d2masks == [[]]
-        return original(pm,sequences,vs,js,ds,counts,threads,ddflags,d2masks)
+        return original(pm,sequences,vs,js,ds,counts,threads,ddflags,d2masks,*likelihood_args)
     monkeypatch.setattr(_core,'estep_batch',observed)
     infer_native(model,['TGTAAACCCTTT'],masks=[mask],max_iter=1,init='template',threads=1)

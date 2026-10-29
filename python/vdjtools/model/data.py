@@ -348,9 +348,9 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
                 work_dir: str | Path = "/tmp/vdjtools_build", cap: int | None = None,
                 iters: int = 15, tol: float = 1e-4, single_d: bool = False,
                 nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0,
-                ambiguous: str | None = "A", verbose: bool = False,
+                ambiguous: str | None = "marginalize", verbose: bool = False,
                 checkpoint=None, checkpoint_every: int = 1,
-                error_rate: float | None = 0.01):
+                error_rate: float | None = 0.01, max_observation_states: int = 4096):
     """Fetch, annotate and EM-fit a model for one chain — the whole corpus pipeline, end to end.
 
     Args:
@@ -373,9 +373,10 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         threads: Annotation and E-step kernel threads (``0`` = auto).
         error_rate: Initial retained-germline substitution probability, fitted by EM.
             ``None`` retains exact matching. D/D2 paths remain unrestricted by annotation.
-        ambiguous: Substitute this base for any non-ACGT character in a junction (default ``"A"``),
-            or ``None`` to drop those clonotypes. See
-            :func:`~vdjtools.model.infer.sanitize_junctions`.
+        ambiguous: ``"marginalize"`` (default) retains IUPAC observations. An explicit
+            A/C/G/T substitutes that base, or ``None`` drops ambiguous rows.
+        max_observation_states: Maximum compatible nucleotide completions per read.
+            An exceeded computation budget raises without dropping observations.
 
     Returns:
         ``(model, report, stats)`` — ``stats`` records ``chain, group, chain_type, n_clonotypes,
@@ -409,6 +410,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
                               single_d=single_d, nd_prior=nd_prior, error_rate=error_rate,
                               candidate_search=evidence,
+                              max_observation_states=max_observation_states,
                               gene_prior=gene_prior, threads=threads,
                               progress=print_progress(prefix=f"[{chain}] ") if verbose else None,
                               checkpoint=checkpoint, checkpoint_every=checkpoint_every)

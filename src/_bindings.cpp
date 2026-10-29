@@ -276,9 +276,11 @@ PYBIND11_MODULE(_core, m) {
           py::arg("threads") = 0, py::arg("dd_allowed") = std::vector<int>{},
           py::arg("d2masks") = std::vector<std::vector<int>>{},
           py::arg("error_rate") = 0.0,
+          py::arg("max_observation_states") = 4096,
           py::call_guard<py::gil_scoped_release>(),
           "One EM E-step: accumulate soft counts, return summed log-likelihood over scoreable reads. "
           "error_rate enables retained-germline substitution emissions (default 0: exact). "
+          "Negative encoded nucleotides are IUPAC bitmasks, marginalized up to max_observation_states per read. "
           "threads=0 -> serial (Python APIs resolve allocation); "
           "dd_allowed (per-read 0/1, empty=all) gates the n_D=2 tandem E-step. "
           "d2masks optionally restrict D2 separately; absent/empty means unrestricted.");

@@ -250,6 +250,10 @@ Counts make_counts(const PackedModel& m);
 // unrestricted; Python disables dd_allowed for an explicitly empty fourth mask.
 // error_rate>0 enables retained-germline substitution emissions for training only.
 // Counts records posterior mismatches/retained bases and actual scoreable observations.
+// Observation symbols 0..3 are ACGT; negative values are four-bit IUPAC masks.
+// Their compatible completions are summed before per-observation normalization.
+// max_observation_states bounds that exact sum; oversized/invalid inputs raise
+// before any counts are accumulated. This limit never drops or approximates reads.
 double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int8_t>>& seqs,
                    const std::vector<std::vector<int>>& vmasks,
@@ -259,6 +263,7 @@ double estep_batch(const PackedModel& m,
                    int nthreads = 0,
                    const std::vector<int>& dd_allowed = {},
                    const std::vector<std::vector<int>>& d2masks = {},
-                   double error_rate = 0.0);
+                   double error_rate = 0.0,
+                   size_t max_observation_states = 4096);
 
 }  // namespace vdjtools
