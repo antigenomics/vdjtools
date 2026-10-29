@@ -153,5 +153,5 @@ legacy. See [features](https://docs.isalgo.dev/vdjtools/features.html) and
 and the distinction between an available definition and a published rotation.
 
 Public recombination models, corpus bundles and example sources are mirrored on
-[Hugging Face](https://huggingface.co/datasets/isalgo/vdjtools_models).
+[Hugging Face](https://huggingface.co/datasets/isalgo/airr_feature_signatures).
 The dataset card shows selective downloads; downloading the whole mirror is unnecessary.
