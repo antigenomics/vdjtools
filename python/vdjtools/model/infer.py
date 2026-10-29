@@ -769,7 +769,7 @@ def infer(
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
         model = new_model
         # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
-        # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
+        # usage alone: gene usage can settle while trims/insertions/D-D still move.
         rel = _loglik_rel(report.loglik)
         report.gene_tv.append(rel)
         if progress is not None:
@@ -1476,10 +1476,9 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         the data still decides the actual usage. Non-functional alleles (pseudogenes/ORFs) are
         deliberately NOT given mass -- the model cannot score them anyway.
 
-        The prior only protects alleles the data actually ATTRIBUTED reads to (soft count > 0),
-        NOT every functional allele: the E-step commits V-choice to one best-match allele per read,
-        so a functional secondary allele (e.g. TRDV2*03 when arda calls TRDV2*01) gets zero soft
-        count AND zero deletion/insertion counts. Handing it choice mass anyway makes it
+        The prior only protects alleles with positive posterior counts. The E-step sums gene
+        alternatives; an unsupported state can still have zero choice AND zero deletion/insertion
+        counts. Handing it choice mass alone makes it
         selectable by the generative sampler while its deletion distribution is all-zero -> the
         sampler draws it and then has nothing to draw a deletion from (IndexError). Guarding on
         ``p > 0`` keeps every mass-bearing allele conditionally complete, which is what
@@ -1710,7 +1709,7 @@ def infer_native(
         report.n_iter = it + 1
         model = new_model
         # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
-        # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
+        # usage alone: gene usage can settle while trims/insertions/D-D still move.
         rel = _loglik_rel(report.loglik)
         report.gene_tv.append(rel)
         if progress is not None:
@@ -1722,8 +1721,8 @@ def infer_native(
             break
     # Completion pass: EM only keeps genes whose CDR3s were producibly observed, so functional genes
     # arda never saw (or saw but couldn't emit) end at P=0 — yet a user's library may be full of them.
-    # ``template`` is the OLGA oracle (from_olga seed), differing only in D/D-D, so transplant its own
-    # usage + conditionals for every functional gene the learned model is missing. Only in the prior
+    # ``template`` supplies compatible usage and conditionals: the default raw builder uses
+    # an ARDA scaffold; an explicitly supplied OLGA template retains its own parameters. Only in the prior
     # mode (``gene_prior > 0``), i.e. "keep every real gene reachable".
     if gene_prior > 0:
         model = augment_from_oracle(model, template)

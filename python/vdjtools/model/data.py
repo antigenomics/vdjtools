@@ -383,7 +383,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         clones: Skip fetch+annotate and fit these clonotypes instead (an ``EM_DATA_DIR`` parquet,
             a :func:`load_prepared` subset, or your own reads). Preliminary V/J/D calls are
             not constraints; fresh batched ARDA proposals supply the V/J candidate sets.
-        work_dir: Scratch directory for arda's per-read output (it caches there).
+        work_dir: Scratch directory for freshly generated arda per-read output.
         cap: Read cap for annotation. ``None`` uses every read — a subsample is a silent claim that
             the tail does not matter, and the tail is where the rare V genes are.
         iters: EM iteration cap. Convergence is on relative log-likelihood, so this is a safety net.
@@ -474,8 +474,8 @@ def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A", *,
     shipped model. `gene_masks` already maps a call to every model allele of its gene, so the read
     is perfectly usable. Gene-level keeps 32,562 clonotypes and 54 V genes vs 24,980 and 51.
 
-    Ambiguous bases are substituted rather than dropped, matching `infer_frame` -- the two training
-    entry points must not disagree about what counts as usable data.
+    ``ambiguous="marginalize"`` retains IUPAC observations for exact completion sums;
+    an explicit A/C/G/T requests substitution and None drops ambiguous observations.
     """
     from .infer import sanitize_junctions
 
