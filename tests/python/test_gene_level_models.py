@@ -9,11 +9,12 @@ from vdjtools.model.io import from_arda, from_germline
 from vdjtools.model.generate import generate
 
 
-def test_arda_scaffold_excludes_incomplete_germline_templates(monkeypatch, toy_germline):
+@pytest.mark.parametrize('status', ['truncated', 'partial'])
+def test_arda_scaffold_excludes_incomplete_germline_templates(monkeypatch, toy_germline, status):
     complete = toy_germline.with_columns(pl.lit('ok').alias('status'))
     partial = complete.filter(pl.col('allele') == 'TOYV1*01').with_columns(
         pl.lit('TOYV1*99').alias('allele'), pl.lit('TGT').alias('sequence'),
-        pl.lit('truncated').alias('status'))
+        pl.lit(status).alias('status'))
     monkeypatch.setattr(reference, 'load_germline', lambda *a: pl.concat([complete, partial]))
     monkeypatch.setattr(reference, 'arda_full_germline', lambda *a: {})
     for gene_level in (False, True):
