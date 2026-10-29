@@ -250,6 +250,8 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<Counts>(m, "Counts")
         .def_readonly("n_scoreable", &Counts::n_scoreable)
+        .def_readonly("error_mismatches", &Counts::error_mismatches)
+        .def_readonly("error_nt", &Counts::error_nt)
         .def_readonly("v_choice", &Counts::v_choice)
         .def_readonly("j_choice", &Counts::j_choice)
         .def_readonly("d_gene", &Counts::d_gene)
@@ -273,8 +275,11 @@ PYBIND11_MODULE(_core, m) {
           py::arg("vmasks"), py::arg("jmasks"), py::arg("dmasks"), py::arg("counts"),
           py::arg("threads") = 0, py::arg("dd_allowed") = std::vector<int>{},
           py::arg("d2masks") = std::vector<std::vector<int>>{},
+          py::arg("error_rate") = 0.0,
           py::call_guard<py::gil_scoped_release>(),
-          "One EM E-step: accumulate soft counts, return summed log-Pgen. threads=0 -> serial (Python APIs resolve allocation); "
+          "One EM E-step: accumulate soft counts, return summed log-likelihood over scoreable reads. "
+          "error_rate enables retained-germline substitution emissions (default 0: exact). "
+          "threads=0 -> serial (Python APIs resolve allocation); "
           "dd_allowed (per-read 0/1, empty=all) gates the n_D=2 tandem E-step. "
           "d2masks optionally restrict D2 separately; absent/empty means unrestricted.");
 

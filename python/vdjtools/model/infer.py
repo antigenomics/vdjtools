@@ -46,6 +46,8 @@ class InferenceReport:
     elapsed_s: float = 0.0
     finished_at: str = ""
     template_source: str = ""
+    error_rate: list[float] = field(default_factory=list)  # retained-germline substitution MLE after each M-step
+    error_model: str = "exact"
 
     def to_dict(self) -> dict:
         """The report as a JSON-serializable dict (one entry of a model's ``training["runs"]``)."""
@@ -144,6 +146,9 @@ def resume(path, sequences, **kw):
     if not isinstance(path, Model):
         kw.setdefault("checkpoint", path)
     kw["init"] = "template"
+    runs = (base.training or {}).get("runs", [])
+    if runs and runs[-1].get("error_rate"):
+        kw.setdefault("error_rate", runs[-1]["error_rate"][-1])
     return infer_native(base, sequences, **kw)
 
 
@@ -1312,10 +1317,20 @@ def infer_native(
     checkpoint=None,
     checkpoint_every: int = 1,
     threads: int = 0,
+    error_rate: float | None = None,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
     ``threads`` bounds E-step kernel threads; ``0`` uses the available CPU allocation.
+
+    ``error_rate=None`` retains exact matching. A value in [0, 1] enables a fitted
+    retained-germline substitution channel: each match contributes ``1-error_rate``
+    and each mismatch ``error_rate/3``. Inserted bases use their observed Markov
+    emissions without an error channel. The posterior mismatch/templated-base ratio
+    updates the rate after each M-step and is recorded in ``report.error_rate``.
+    This observation likelihood is distinct from exact generation Pgen.
+    In error mode, the default ``init="align"`` uses uniform initialization:
+    exact-match alignment votes would otherwise make mismatch-only genes unreachable.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
     ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior`` / ``gene_prior``).
@@ -1342,6 +1357,8 @@ def infer_native(
     ddflags = [1 if a else 0 for a in dd_allowed] if dd_allowed is not None else []
 
     upper = [s.upper() for s in sequences]
+    if error_rate is not None and init == "align":
+        init = "uniform"
     if init == "template":
         tables = template.tables
     elif init == "align":
@@ -1367,18 +1384,23 @@ def infer_native(
     else:
         vmasks = jmasks = dmasks = d2masks = []
 
-    report = InferenceReport()
+    report = InferenceReport(error_model="exact" if error_rate is None else "retained-germline-substitution")
     meta = dict(started=started, max_iter=max_iter, tol=tol, init=init, native=True,
                 n_sequences=len(upper))
     for it in range(max_iter):
         pm, _, _ = pack(model)
         counts = make_counts(pm)
-        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags, d2masks)
+        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags, d2masks,
+                         0.0 if error_rate is None else error_rate)
         # Match infer(): the native sum includes positive-likelihood observations only.
         # Counting all inputs here silently hid unsupported reads and diluted the mean.
         n = counts.n_scoreable
         report.loglik.append(ll / n if n else float("-inf"))
         report.n_scoreable.append(n)
+        if error_rate is not None:
+            if counts.error_nt > 0:
+                error_rate = min(1.0, max(0.0, counts.error_mismatches / counts.error_nt))
+            report.error_rate.append(error_rate)
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
         new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior, gene_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)

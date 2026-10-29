@@ -370,7 +370,10 @@ def test_ambiguous_bases_are_substituted_by_default(toy_model):
     with_n = _with_ambiguous(toy_model)
     with pytest.warns(UserWarning, match="substituting"):
         fitted, report = infer_frame(toy_model, with_n, max_iter=1)
-    assert report.n_scoreable[0] == with_n.height          # nothing was thrown away
+    assert report.n_sequences == with_n.height  # input retained, not necessarily supported
+    from vdjtools.model.native import pgen_nt
+    assert pgen_nt(toy_model, "TGTACCAGC") == 0.0
+    assert report.n_scoreable[0] == with_n.height - 1
     fitted.validate()
 
 

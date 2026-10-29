@@ -24,6 +24,7 @@ bool tandem_allowed(const PackedModel& m, int j, int d1, int d2) {
 struct Opt {
     int len;
     double p;
+    int errors = 0;
 };
 
 int common_prefix(const std::vector<int8_t>& cut, const int8_t* s, int slen) {
@@ -1140,6 +1141,40 @@ std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
 // ---- EM E-step ----------------------------------------------------------------------------
 namespace {
 
+// Training-only observation channel. Inserted bases retain their observed Markov emissions.
+double templated_emission(const int8_t* germline, const int8_t* observed, int n,
+                         double rate, int& errors) {
+    errors = 0;
+    for (int k = 0; k < n; ++k) {
+        errors += germline[k] != observed[k];
+        if (rate == 0.0 && errors) return 0.0;
+    }
+    if (rate == 0.0) return 1.0;
+    return std::pow(rate / 3.0, errors) * std::pow(1.0 - rate, n - errors);
+}
+
+void training_options(const PackedModel& m, int gene, const int8_t* s, int n,
+                      bool v, double rate, std::vector<Opt>& out) {
+    if (rate == 0.0) {
+        if (v) v_options(m, gene, s, n, out);
+        else j_options(m, gene, s, n, out);
+        return;
+    }
+    out.clear();
+    const auto& cut = v ? m.cut_v[gene] : m.cut_j[gene];
+    const auto& del = v ? m.del_v : m.del_j;
+    const int bins = v ? m.nbins_v : m.nbins_j;
+    const int length = static_cast<int>(cut.size());
+    for (int retained = std::min(length, n); retained >= 1; --retained) {
+        const int index = length - retained;
+        if (index >= bins || del[gene * bins + index] == 0.0) continue;
+        int errors;
+        double emission = templated_emission(cut.data() + (v ? 0 : index),
+                                              s + (v ? 0 : n - retained), retained, rate, errors);
+        if (emission > 0.0) out.push_back({retained, del[gene * bins + index] * emission, errors});
+    }
+}
+
 void accum_dinucl(std::vector<double>& dn, const int8_t* s, int lo, int hi, bool from_right, double w) {
     int n = hi - lo;
     if (from_right) {
@@ -1170,7 +1205,8 @@ double accum_vj(const PackedModel& m, int v, int j, int div, int dij,
 // pin these at atol=1e-12, not bitwise. It runs during model regeneration on Aldan-3, not in the
 // signature hot path.
 double accum_vdj(const PackedModel& m, int j, int v, int div, int dij,
-                 const int8_t* mid, int mlen, double base, const std::vector<int>& dm, Counts& c) {
+                 const int8_t* mid, int mlen, double base, const std::vector<int>& dm, Counts& c,
+                 double error_rate) {
     int nD = m.nD();
     double seq_total = 0.0;
     for (int d : dm) {
@@ -1184,18 +1220,18 @@ double accum_vdj(const PackedModel& m, int j, int v, int div, int dij,
                 if (pdel == 0.0) continue;
                 int ld = L - idx5 - idx3;
                 for (int pos = 0; pos <= mlen - ld; ++pos) {
-                    bool ok = true;
-                    for (int k = 0; k < ld; ++k) {
-                        if (cut[idx5 + k] != mid[pos + k]) { ok = false; break; }
-                    }
-                    if (!ok) continue;
+                    int errors;
+                    double emission = templated_emission(cut.data() + idx5, mid + pos, ld, error_rate, errors);
+                    if (emission == 0.0) continue;
                     int lvd = pos, ldj = mlen - pos - ld;
                     double wvd = p_insert(m.ins_vd, m.R_vd, m.bias_vd, mid, 0, pos, false);
                     if (wvd == 0.0) continue;
                     double wdj = p_insert(m.ins_dj, m.R_dj, m.bias_dj, mid, pos + ld, mlen, true);
-                    double w = base * pdj * pdel * wvd * wdj;
+                    double w = base * pdj * pdel * wvd * wdj * emission;
                     if (w <= 0.0) continue;
                     seq_total += w;
+                    c.error_mismatches += w * errors;
+                    c.error_nt += w * ld;
                     c.v_choice[v] += w;
                     c.j_choice[j] += w;
                     c.d_gene[j * nD + d] += w;
@@ -1221,7 +1257,8 @@ double accum_vdj(const PackedModel& m, int j, int v, int div, int dij,
 // Python reference _accum_dd exactly). V/J and their trims are constant per (V,J) => the whole DD mass.
 // Returns base*seq_total (the n_D=2 Pgen contribution for this V,J,vop,jop); caller folds it into n_d[2].
 double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
-                const int8_t* mid, int mlen, double base, const std::vector<int>& dm, const std::vector<int>& d2m, Counts& c) {
+                const int8_t* mid, int mlen, double base, const std::vector<int>& dm, const std::vector<int>& d2m, Counts& c,
+                double error_rate) {
     int nD = m.nD();
     int ddlen = static_cast<int>(m.ins_dd.size());
     std::vector<double> A(mlen + 1), B(mlen + 1), C(mlen + 1), Dmsg(mlen + 1);
@@ -1240,12 +1277,12 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                 double pdel1 = m.del_d[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
                 if (pdel1 == 0.0) continue;
                 for (int pos1 = 0; pos1 + ld1 <= mlen; ++pos1) {
-                    bool ok = true;
-                    for (int k = 0; k < ld1; ++k)
-                        if (cut1[i5 + k] != mid[pos1 + k]) { ok = false; break; }
-                    if (!ok) continue;
+                    int errors;
+                    double emission = templated_emission(cut1.data() + i5,
+                                                          mid + pos1, ld1, error_rate, errors);
+                    if (emission == 0.0) continue;
                     double wvd = p_insert(m.ins_vd, m.R_vd, m.bias_vd, mid, 0, pos1, false);
-                    if (wvd != 0.0) A[pos1 + ld1] += pd1 * pdel1 * wvd;
+                    if (wvd != 0.0) A[pos1 + ld1] += pd1 * pdel1 * wvd * emission;
                 }
             }
         // B[s2]: D2 (>=1 nt) starting at s2 then [insDJ] to the end, weighted by P(D2|D1).
@@ -1263,12 +1300,12 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                     double pdel2 = m.del_d2[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3];
                     if (pdel2 == 0.0) continue;
                     for (int pos2 = 0; pos2 + ld2 <= mlen; ++pos2) {
-                        bool ok = true;
-                        for (int k = 0; k < ld2; ++k)
-                            if (cut2[k5 + k] != mid[pos2 + k]) { ok = false; break; }
-                        if (!ok) continue;
+                        int errors;
+                        double emission = templated_emission(cut2.data() + k5,
+                                                              mid + pos2, ld2, error_rate, errors);
+                        if (emission == 0.0) continue;
                         double wdj = p_insert(m.ins_dj, m.R_dj, m.bias_dj, mid, pos2 + ld2, mlen, true);
-                        if (wdj != 0.0) B[pos2] += pd2 * pdel2 * wdj;
+                        if (wdj != 0.0) B[pos2] += pd2 * pdel2 * wdj * emission;
                     }
                 }
         }
@@ -1309,13 +1346,15 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                 for (int pos1 = 0; pos1 + ld1 <= mlen; ++pos1) {
                     int e1 = pos1 + ld1;
                     if (C[e1] == 0.0) continue;
-                    bool ok = true;
-                    for (int k = 0; k < ld1; ++k)
-                        if (cut1[i5 + k] != mid[pos1 + k]) { ok = false; break; }
-                    if (!ok) continue;
+                    int errors;
+                    double emission = templated_emission(cut1.data() + i5,
+                                                          mid + pos1, ld1, error_rate, errors);
+                    if (emission == 0.0) continue;
                     double wvd = p_insert(m.ins_vd, m.R_vd, m.bias_vd, mid, 0, pos1, false);
                     if (wvd == 0.0) continue;
-                    double bw = base * pd1 * pdel1 * wvd * C[e1];
+                    double bw = base * pd1 * pdel1 * wvd * C[e1] * emission;
+                    c.error_mismatches += bw * errors;
+                    c.error_nt += bw * ld1;
                     c.d_del[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3] += bw;
                     c.ins_vd[pos1] += bw;
                     accum_dinucl(c.dinucl_vd, mid, 0, pos1, false, bw);
@@ -1336,13 +1375,15 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                     if (pdel2 == 0.0) continue;
                     for (int pos2 = 0; pos2 + ld2 <= mlen; ++pos2) {
                         if (Dmsg[pos2] == 0.0) continue;
-                        bool ok = true;
-                        for (int k = 0; k < ld2; ++k)
-                            if (cut2[k5 + k] != mid[pos2 + k]) { ok = false; break; }
-                        if (!ok) continue;
+                        int errors;
+                        double emission = templated_emission(cut2.data() + k5,
+                                                              mid + pos2, ld2, error_rate, errors);
+                        if (emission == 0.0) continue;
                         double wdj = p_insert(m.ins_dj, m.R_dj, m.bias_dj, mid, pos2 + ld2, mlen, true);
                         if (wdj == 0.0) continue;
-                        double bw = base * pd2 * pdel2 * wdj * Dmsg[pos2];
+                        double bw = base * pd2 * pdel2 * wdj * Dmsg[pos2] * emission;
+                        c.error_mismatches += bw * errors;
+                        c.error_nt += bw * ld2;
                         c.d2_gene[d1 * nD + d2] += bw;
                         c.d2_del[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3] += bw;
                         c.ins_dj[mlen - pos2 - ld2] += bw;
@@ -1364,7 +1405,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
 double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                  const std::vector<int>& vmask, const std::vector<int>& jmask,
                  const std::vector<int>& dmask, Counts& local, bool allow_dd = true,
-                 const std::vector<int>& d2mask = {}) {
+                 const std::vector<int>& d2mask = {}, double error_rate = 0.0) {
     int N = cdr3.size();
     const int8_t* s = cdr3.data();
     const std::vector<int>& vm = vmask.empty() ? m.func_v : vmask;
@@ -1380,7 +1421,7 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
     std::vector<JC> jc;
     std::vector<Opt> tmp;
     for (int j : jm) {
-        j_options(m, j, s, N, tmp);
+        training_options(m, j, s, N, false, error_rate, tmp);
         if (!tmp.empty()) jc.push_back({j, tmp});
     }
     double total = 0.0;
@@ -1388,7 +1429,7 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
     for (int v : vm) {
         double pv = m.pv[v];
         if (pv == 0.0) continue;
-        v_options(m, v, s, N, vo);
+        training_options(m, v, s, N, true, error_rate, vo);
         if (vo.empty()) continue;
         int Lv = m.cut_v[v].size();
         for (const auto& J : jc) {
@@ -1402,19 +1443,23 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                     const int8_t* mid = s + vop.len;
                     double base = pv * pj * vop.p * jop.p;
                     int div = Lv - vop.len, dij = Lj - jop.len;
+                    double mass = 0.0;
                     if (!m.vdj) {
-                        total += accum_vj(m, v, J.j, div, dij, mid, midlen, base, local);
+                        mass += accum_vj(m, v, J.j, div, dij, mid, midlen, base, local);
                     } else {
                         // n_D=1 (0-D folds in via a fully-trimmed D); weighted by P(n_D<=1).
-                        double c1 = accum_vdj(m, J.j, v, div, dij, mid, midlen, base * m.p_nd1, dm, local);
+                        double c1 = accum_vdj(m, J.j, v, div, dij, mid, midlen, base * m.p_nd1, dm, local, error_rate);
                         local.n_d[1] += c1;
-                        total += c1;
+                        mass += c1;
                         if (m.dd && m.p_nd2 > 0.0 && allow_dd) {  // n_D=2 tandem, weighted by P(n_D=2)
-                            double c2 = accum_dd(m, J.j, v, div, dij, mid, midlen, base * m.p_nd2, dm, d2m, local);
+                            double c2 = accum_dd(m, J.j, v, div, dij, mid, midlen, base * m.p_nd2, dm, d2m, local, error_rate);
                             local.n_d[2] += c2;
-                            total += c2;
+                            mass += c2;
                         }
                     }
+                    local.error_mismatches += mass * (vop.errors + jop.errors);
+                    local.error_nt += mass * (vop.len + jop.len);
+                    total += mass;
                 }
             }
         }
@@ -1423,6 +1468,7 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
 }
 
 void zero(Counts& c) {
+    c.error_mismatches = c.error_nt = 0.0;
     for (auto* v : {&c.v_choice, &c.j_choice, &c.d_gene, &c.v_3_del, &c.j_5_del, &c.d_del,
                     &c.ins_vd, &c.ins_dj, &c.ins_vj, &c.dinucl_vd, &c.dinucl_dj, &c.dinucl_vj,
                     &c.n_d, &c.d2_gene, &c.d2_del, &c.ins_dd, &c.dinucl_dd}) {
@@ -1431,6 +1477,8 @@ void zero(Counts& c) {
 }
 
 void add_scaled(Counts& dst, const Counts& src, double s) {
+    dst.error_mismatches += s * src.error_mismatches;
+    dst.error_nt += s * src.error_nt;
     auto go = [s](std::vector<double>& a, const std::vector<double>& b) {
         for (size_t i = 0; i < a.size(); ++i) a[i] += b[i] * s;
     };
@@ -1482,7 +1530,7 @@ double estep_range(const PackedModel& m,
                    const std::vector<std::vector<int>>& dmasks,
                    const std::vector<int>& dd_allowed,
                    const std::vector<std::vector<int>>& d2masks,
-                   size_t lo, size_t hi, Counts& acc) {
+                   size_t lo, size_t hi, Counts& acc, double error_rate) {
     Counts local = make_counts(m);
     bool have_masks = !vmasks.empty();
     bool have_dd_gate = !dd_allowed.empty();
@@ -1495,7 +1543,7 @@ double estep_range(const PackedModel& m,
         const std::vector<int>& dm = (have_masks && !dmasks.empty()) ? dmasks[i] : empty;
         const std::vector<int>& d2m = d2masks.empty() ? empty : d2masks[i];
         bool allow_dd = have_dd_gate ? dd_allowed[i] != 0 : true;
-        double total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd, d2m);
+        double total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd, d2m, error_rate);
         if (total > 0.0) {
             ll += std::log(total);
             add_scaled(acc, local, 1.0 / total);
@@ -1515,7 +1563,9 @@ double estep_batch(const PackedModel& m,
                    Counts& counts,
                    int nthreads,
                    const std::vector<int>& dd_allowed,
-                   const std::vector<std::vector<int>>& d2masks) {
+                   const std::vector<std::vector<int>>& d2masks, double error_rate) {
+    if (!std::isfinite(error_rate) || error_rate < 0.0 || error_rate > 1.0)
+        throw std::invalid_argument("error_rate must be finite and between 0 and 1");
     size_t n = seqs.size();
     if (!d2masks.empty() && d2masks.size() != n)
         throw std::invalid_argument("d2masks must match the number of sequences");
@@ -1524,7 +1574,7 @@ double estep_batch(const PackedModel& m,
             if (d < 0 || d >= m.nD()) throw std::invalid_argument("invalid D2 mask index");
     if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
     int T = nthreads > 0 ? nthreads : 1;
-    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, 0, n, counts);
+    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, 0, n, counts, error_rate);
     if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
 
     std::vector<Counts> acc(T);
@@ -1538,7 +1588,7 @@ double estep_batch(const PackedModel& m,
         size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
         if (lo >= hi) break;
         pool.emplace_back([&, t, lo, hi] {
-            try { lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, lo, hi, acc[t]); }
+            try { lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, lo, hi, acc[t], error_rate); }
             catch (...) { errors[t] = std::current_exception(); }
         });
     }

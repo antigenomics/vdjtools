@@ -111,6 +111,25 @@ Fine-tuning is the same call with a warm start:
 Watching, and surviving, a long fit
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+``infer_native(..., error_rate=0.01)`` enables a fitted substitution likelihood
+on retained germline bases. Each match contributes ``1-error_rate`` and each
+mismatch ``error_rate/3``; insertion bases retain their observed Markov emissions.
+Alternative trims and insertion lengths contribute posterior weights even when
+inserted bases happen to match the germline. This training likelihood is separate
+from exact generation Pgen, which remains error-free. The default ``None`` retains
+the exact-match inference mode.
+In error mode the default alignment initializer uses uniform parameters so an
+exact-match vote cannot give a mismatch-only gene absorbing zero choice mass.
+An explicit ``init="template"`` keeps the supplied model's support.
+
+The error-rate M-step divides posterior expected mismatches by posterior expected
+retained germline bases. ``report.error_rate`` records the updated rate after each
+iteration, and saved training runs declare ``error_model``. ``resume`` restores
+the last fitted rate unless explicitly overridden. ``report.n_scoreable`` counts
+positive-likelihood inputs; subtract it from ``report.n_sequences`` to count
+unsupported inputs. ``report.loglik`` is the mean over scoreable inputs, not a
+finite full-cohort likelihood when unsupported observations remain.
+
 EM on a D-bearing locus runs for a long time — IGH enumerates roughly 1,225 D pairs per read
 against TRB's 9 — and the training log only becomes readable once the fit *returns*, so a slow run
 and a stuck one look identical. Two things fix that:

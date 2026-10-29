@@ -361,16 +361,39 @@ draw $(V,J[,D])$, the deletions, the insertion lengths, then the insertion nucle
 chain, and assemble Eq.~\eqref{eq:concat}. Restricting to functional genes and enforcing $\ell_V,\ell_J\ge1$
 keeps every draw scoreable; sampled V/J-usage and CDR3-length distributions match the model marginals.
 
-\paragraph{Inference} Model parameters are estimated from out-of-frame reads by
-expectation--maximization. The E-step is exactly the scenario sum of \S\ref{sec:nt}: for each read it
-computes the posterior weight $P(r\mid\sigma)=P(r)/\Pgen(\sigma)$ of every compatible scenario and
-accumulates soft counts into arrays laid out like the model tables; optionally the enumeration is
-restricted to the genes \texttt{arda} aligns (an \emph{aligned-gene mask}), which prunes the V/D/J sums
-without changing the fixed point. The M-step renormalizes each event table within its conditioning key ---
-a single \texttt{polars} \texttt{group\_by} --- reproducing the manifest's Bayesian network. On
-\texttt{OLGA}-drawn data this is a closed-loop oracle: EM must recover the generating marginals, giving a
-self-checking target before any real data exists. The E-step inner loop is the second native hot path (the
-first being $\Pgen$); with the aligned-gene mask it makes $VDJ$ inference practical.
+\paragraph{Inference} We estimate model parameters from nonfunctional reads using EM.
+Exact-match inference uses the scenario sum of
+\S\ref{sec:nt}. With the optional retained-germline substitution channel, let
+$m_r$ be the number of mismatches and $g_r$ the number of retained germline bases
+in scenario $r$ for observed sequence $y$. Its joint weight and observation likelihood are
+\begin{equation}
+ w_r=P_\theta(r)(\epsilon/3)^{m_r}(1-\epsilon)^{g_r-m_r},\qquad
+ L(y)=\sum_r w_r,\qquad P(r\mid y)=w_r/L(y).
+\end{equation}
+Here $\epsilon$ is the substitution probability, shared across retained germline
+bases; each alternative nucleotide has probability $\epsilon/3$. Inserted bases
+retain their observed Markov emissions without an observation-error channel.
+This scope differs from applying sequencing errors to every generated base.
+Exact generation $\Pgen$ remains the error-free quantity of \S\ref{sec:nt}.
+The error-rate M-step is
+\begin{equation}
+ \epsilon_{\rm new}=
+ \frac{\sum_y E[m_r\mid y]}{\sum_y E[g_r\mid y]}.
+\end{equation}
+For tandem histories, the forward/backward messages include the emission factors
+for each retained $D$ segment. Posterior mismatch and retained-length statistics
+are attributed in the reconstruction passes, once per segment; the outer $V/J$
+statistics are weighted by the complete history mass. Event tables are normalized
+within their conditioning keys using the same posterior weights.
+
+Preliminary alignment endpoints do not fix recombination boundaries. All supported
+shorter retained segments and corresponding N/P histories must remain in the sum;
+coincidentally matching N bases do not imply zero insertion. Restricting enumeration
+to a candidate gene set is a computational approximation that can change the
+likelihood and fitted parameters if compatible alternatives are omitted. It is not
+an invariance of the EM fixed point. Recorded positive-likelihood observation counts
+exclude unsupported inputs. A mean log-likelihood over that subset must not be
+interpreted as a finite full-cohort likelihood when any observation has zero support.
 
 \section{Model diagnostics: entropy and mutual information}\label{sec:diag}
 
