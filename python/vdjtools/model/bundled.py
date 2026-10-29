@@ -81,7 +81,7 @@ def load_bundled(locus: str, source: str = "learned", *, organism: str = "human"
         )
     with as_file(root) as path:
         m = load_model(path)
-    if source == "learned" and all(g["gene"].n_unique() == g.height for g in m.genomic.values()):
+    if collapse and source == "learned" and all(g["gene"].n_unique() == g.height for g in m.genomic.values()):
         return m  # Already fitted at gene resolution; keep the selected reference allele labels.
     return collapse_alleles(m) if collapse else m
 
