@@ -28,6 +28,18 @@ def test_gene_marginals_normalized(trb):
         assert abs(sum(analyze.gene_marginal(trb, seg).values()) - 1.0) < 1e-6
 
 
+def test_conditional_entropy_conditions_on_defined_support():
+    table = pl.DataFrame({"parent": ["a", "a", "b", "b"],
+                          "child": [0, 1, 0, 1], "p": [0.0, 0.0, 0.5, 0.5]})
+    # Only b defines a child distribution; after conditioning, its weight is one.
+    assert analyze._cond_entropy(table, "parent", {"a": 0.75, "b": 0.25}) == pytest.approx((1.0, 1.0))
+    assert analyze._cond_entropy(table, "parent", {"a": 1.0, "b": 0.0}) == (0.0, 0.0)
+    deletions = table.rename({"parent": "d_allele", "child": "ndel5"}).with_columns(
+        pl.col("ndel5").alias("ndel3"))
+    assert analyze._within_d_deletion_mi(deletions, "d_allele", {"a": 0.75, "b": 0.25}) == pytest.approx(1.0)
+    assert analyze._within_d_deletion_mi(deletions, "d_allele", {"a": 1.0, "b": 0.0}) == 0.0
+
+
 def test_entropy_nonnegative_and_conditioning_reduces(trb):
     ent = analyze.entropy_table(trb)
     assert ent.height == len(trb.manifest.events)

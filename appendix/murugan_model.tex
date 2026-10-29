@@ -383,7 +383,14 @@ marginal entropy $H(X)$ (in bits) and, along each declared edge, the information
   I\bigl(X;\mathrm{Pa}(X)\bigr)=H(X)-H\bigl(X\mid \mathrm{Pa}(X)\bigr),
   \qquad H(X\mid\mathrm{Pa})=\!\!\sum_{\mathrm{pa}}\!P(\mathrm{pa})\,H(X\mid \mathrm{pa}),
 \end{equation}
-where parent marginals are obtained by forward propagation over the network. Rendering the manifest as a
+where parent marginals are obtained by forward propagation over the network. If some parent states
+have an undefined (all-zero) conditional, these diagnostics condition on the remaining defined support:
+with $A=\{\mathrm{pa}:\sum_x P(x\mid\mathrm{pa})>0\}$ and
+$Z=\sum_{\mathrm{pa}\in A}P(\mathrm{pa})$, both the child marginal and the conditional entropy use
+weights $P(\mathrm{pa})/Z$ on $A$. The same convention applies to within-$D$ deletion coupling.
+Entirely undefined events ($Z=0$) report zero marginal mass and zero entropy; no uniform mass is
+imputed. These are summaries on defined event support, including in the scenario-entropy table.
+Rendering the manifest as a
 graph, with nodes annotated by $H(X)$ and edges by $I$, gives a \texttt{bnlearn}-style summary of the
 whole model at a glance (Fig.~\ref{fig:bn}).
 

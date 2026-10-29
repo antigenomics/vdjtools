@@ -53,14 +53,14 @@ def gene_to_allele(model: Model) -> dict[str, str]:
     """Map each V/J **gene** the model carries to a representative allele of that gene.
 
     Real repertoires and every aligner report genes (``TRBV10-3``) while a model is keyed by
-    allele (``TRBV10-3*01``), and :func:`pgen_aa` deliberately raises on a gene name rather than
-    silently marginalising over every allele — that fallback once returned a Pgen 2.38x too high
-    with no error. So the gene has to be resolved to a concrete allele deliberately and visibly.
+    allele (``TRBV10-3*01``). A gene call must resolve to a concrete entry rather than silently
+    marginalising over every gene — that fallback once returned a Pgen 2.38x too high with no error.
 
     The representative is the lowest-numbered allele present, i.e. ``*01`` wherever the model has
     it. Alleles of one gene share the CDR3-region germline in all but rare cases, so this is the
     conventional reading of a gene-level call — but it IS a choice, which is why the functions
-    using it expose ``resolve_genes=False`` to refuse it instead.
+    using it expose ``resolve_genes=False`` to refuse allele selection in multi-allele models.
+    A gene with one model entry always accepts the shared gene and suffix aliases.
 
     Args:
         model: A recombination :class:`Model`.
@@ -216,7 +216,8 @@ def pgen_aa(
         model: A recombination :class:`Model`.
         cdr3_aa: The junction/CDR3 amino-acid sequence (Cys → Phe/Trp inclusive).
         v: V **allele** to condition on (e.g. ``"TRBV9*01"``), or ``None`` to marginalize over all
-            V (V-agnostic). A gene-level name (``"TRBV9"``) or any unknown allele raises
+            V (V-agnostic). Gene and suffix aliases resolve when a gene has one model entry;
+            an unknown gene or an unresolved call in a multi-allele model raises
             :class:`KeyError` — it must not silently degrade to the V-agnostic value.
         j: J allele to condition on (e.g. ``"TRBJ2-3*01"``), or ``None`` to marginalize (as ``v``).
         mismatches: ``0`` for the exact sequence; ``1`` to also sum the Pgen of every
@@ -339,7 +340,8 @@ def pgen_aa_batch(
         cdr3_aas: Junction/CDR3 amino-acid sequences.
         v: Optional per-sequence V **alleles** to condition on (same length as ``cdr3_aas``);
             ``None`` marginalises over all V for every sequence. Individual entries may be
-            ``None``. An unknown or gene-level name raises :class:`KeyError` (see :func:`pgen_aa`).
+            ``None``. Single-entry genes accept gene and suffix aliases; unresolved names raise
+            :class:`KeyError` (see :func:`pgen_aa`).
         j: Optional per-sequence J alleles (as ``v``).
         mismatches: ``0`` for exact Pgen, ``1`` for the Hamming-1 ball (as :func:`pgen_aa`).
         threads: Worker threads; ``0`` = auto (the available CPU allocation).
@@ -417,13 +419,14 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
         model: The recombination model.
         cdr3_aa: CDR3 amino-acid sequence (conserved Cys -> conserved Phe/Trp inclusive).
         v, j: Optional V/J names to condition on. ``None`` marginalizes. A gene-level name is
-            resolved to a representative allele unless ``resolve_genes=False``; a name the model
-            has no gene for raises :class:`KeyError` naming it.
+            resolved to a representative allele. ``resolve_genes=False`` disables allele selection
+            in multi-allele models; single-entry genes always accept aliases. Unknown genes raise
+            :class:`KeyError` naming them.
         k: How many scenarios to return.
         resolve_genes: Resolve a **gene**-level call (``TRBV10-3``) to a representative model
             allele (``TRBV10-3*01``) before the DP — see :func:`gene_to_allele`. Default ``True``,
-            because real V/J calls are gene-level and without it every one of them raises. Set
-            ``False`` to accept exact allele names only.
+            because real V/J calls are gene-level. Set ``False`` to require exact allele names in
+            multi-allele models; a single-representative gene needs no allele selection.
 
     Returns:
         ``[(w, v_allele, len_v, j_allele, len_j, d_allele | None, idx5, idx3, pos)]``, descending by
@@ -437,7 +440,7 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
 
     Raises:
         KeyError: If ``v`` or ``j`` names no gene the model carries (with ``resolve_genes``), or no
-            exact allele (without it).
+            resolvable model entry (without it).
 
     Note:
         This is the argmax of a *probability* model, not an aligner. Measured on 25,000 real human

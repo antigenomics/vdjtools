@@ -29,6 +29,11 @@ from .schema import _allele_col, normalization_keys
 _LOG2 = np.log(2.0)
 
 
+def _normalized_marginal(marg: dict[str, float]) -> dict[str, float]:
+    total = sum(marg.values())
+    return {name: p / total if total > 0 else 0.0 for name, p in marg.items()}
+
+
 def _H(p: np.ndarray) -> float:
     """Shannon entropy (bits) of a probability vector; unnormalized-safe, 0·log0 = 0."""
     p = np.asarray(p, dtype=float)
@@ -43,7 +48,9 @@ def gene_marginal(model: Model, seg: str) -> dict[str, float]:
     """Marginal ``P(seg)`` as {allele: prob}, forward-propagated over the Bayes net.
 
     V is always a root. VDJ J is a root (``P(J)``); VJ J is ``P(J|V)`` marginalized over V.
-    D is ``P(D|J)`` marginalized over J.
+    D is ``P(D|J)`` marginalized over J. Derived marginals condition on defined
+    child support; all-zero conditionals contribute no mass. An entirely undefined
+    event returns zeros, never an invented uniform distribution.
     """
     t = model.tables
     if seg == "v":
@@ -56,19 +63,19 @@ def gene_marginal(model: Model, seg: str) -> dict[str, float]:
         out: dict[str, float] = {}
         for v, j, p in jt.select(["v_allele", "j_allele", "p"]).iter_rows():
             out[j] = out.get(j, 0.0) + pv.get(v, 0.0) * p
-        return out
+        return _normalized_marginal(out)
     if seg == "d":
         pj = gene_marginal(model, "j")
         out = {}
         for j, d, p in t["d_gene"].select(["j_allele", "d_allele", "p"]).iter_rows():
             out[d] = out.get(d, 0.0) + pj.get(j, 0.0) * p
-        return out
+        return _normalized_marginal(out)
     if seg == "d2":  # tandem second D: Σ_d1 P(D1) P(D2|D1)
         pd1 = gene_marginal(model, "d")
         out = {}
         for d1, d2, p in t["d2_gene"].select(["d_allele", "d2_allele", "p"]).iter_rows():
             out[d2] = out.get(d2, 0.0) + pd1.get(d1, 0.0) * p
-        return out
+        return _normalized_marginal(out)
     raise ValueError(seg)
 
 
@@ -92,19 +99,22 @@ def _cond_entropy(df: pl.DataFrame, parent_col: str, pmarg: dict[str, float]) ->
     """Return ``(H_marginal, H_conditional)`` in bits for a table ``P(X | parent)``.
 
     ``X`` is every non-parent, non-``p`` column jointly. ``pmarg`` is the parent's marginal.
+    Both entropies condition on parents whose child distribution is defined (nonzero).
     """
     xcols = [c for c in df.columns if c not in (parent_col, "p")]
     hcond = 0.0
+    defined_mass = 0.0
     for (pv,), grp in df.group_by([parent_col], maintain_order=True):
         w = pmarg.get(pv, 0.0)
-        if w > 0:
+        if w > 0 and grp["p"].sum() > 0:
             hcond += w * _H(grp["p"].to_numpy())
+            defined_mass += w
     marg = (
         df.with_columns(pl.col("p") * pl.col(parent_col).replace_strict(pmarg, default=0.0))
         .group_by(xcols)
         .agg(pl.col("p").sum())
     )
-    return _H(marg["p"].to_numpy()), hcond
+    return _H(marg["p"].to_numpy()), hcond / defined_mass if defined_mass > 0 else 0.0
 
 
 def entropy_table(model: Model) -> pl.DataFrame:
@@ -193,11 +203,12 @@ def mutual_information(model: Model) -> pl.DataFrame:
 
 
 def _within_d_deletion_mi(df: pl.DataFrame, allele_col: str, dmarg: dict[str, float]) -> float:
-    """E_D[ I(delD5; delD3 | D) ] (bits) — 5'/3' trim coupling within a D, averaged over D usage."""
+    """E_D[ I(delD5; delD3 | D) ] (bits), conditional on defined deletion support."""
     total = 0.0
+    defined_mass = 0.0
     for (d,), grp in df.group_by([allele_col], maintain_order=True):
         w = dmarg.get(d, 0.0)
-        if w <= 0:
+        if w <= 0 or grp["p"].sum() <= 0:
             continue
         m5: dict[int, float] = {}
         m3: dict[int, float] = {}
@@ -208,7 +219,8 @@ def _within_d_deletion_mi(df: pl.DataFrame, allele_col: str, dmarg: dict[str, fl
             m3[n3] = m3.get(n3, 0.0) + p
         mi_d = _H(np.fromiter(m5.values(), float)) + _H(np.fromiter(m3.values(), float)) - _H(np.fromiter(cells.values(), float))
         total += w * mi_d
-    return total
+        defined_mass += w
+    return total / defined_mass if defined_mass > 0 else 0.0
 
 
 def total_entropy(model: Model) -> pl.DataFrame:
@@ -218,6 +230,8 @@ def total_entropy(model: Model) -> pl.DataFrame:
     parents, so this frame's ``contribution_bits`` sums to the entropy of one whole recombination
     scenario — the information content of the process, and the basis of the ``2^H`` diversity
     figure in :func:`vdjtools.model.score.diversity`.
+    With undefined conditional groups, contributions summarize each event's defined support;
+    their sum is not the joint entropy of a globally normalized generative distribution.
 
     The insertion regions need care, and this is the only place the accounting is non-obvious.
     :func:`entropy_table` reports a dinucleotide event's **per-step** conditional entropy (a

@@ -46,15 +46,23 @@ def test_a_gene_level_call_is_resolved_rather_than_refused(trb):
         assert all(a[0] >= b[0] for a, b in zip(got, got[1:])), "not ordered by weight"
 
 
-def test_refusing_resolution_is_available_and_actually_refuses(trb):
+def test_single_representative_needs_no_allele_selection(trb):
+    aa, v, j = CASES[0]
+    aliases = gene_to_allele(trb)
+    expected = best_aa_scenarios(trb, aa, aliases[v], aliases[j], resolve_genes=False)
+    assert expected
+    assert best_aa_scenarios(trb, aa, v, j, resolve_genes=False) == expected
+
+
+def test_refusing_resolution_rejects_a_multiallele_gene(toy_model):
     with pytest.raises(KeyError, match="gene name"):
-        best_aa_scenarios(trb, CASES[0][0], CASES[0][1], CASES[0][2], resolve_genes=False)
+        best_aa_scenarios(toy_model, "CAF", "TOYV1", "TOYJ1", resolve_genes=False)
 
 
 def test_an_unknown_call_raises_and_names_it_rather_than_returning_empty(trb):
     """The filed complaint: an empty list with no reason. A naming mismatch must raise, not decline."""
-    with pytest.raises(KeyError, match="TRBV21-1"):
-        best_aa_scenarios(trb, "CASSKSQDEQYF", "TRBV21-1", "TRBJ2-7")
+    with pytest.raises(KeyError, match="TRBV999"):
+        best_aa_scenarios(trb, "CASSKSQDEQYF", "TRBV999", "TRBJ2-7")
 
 
 def test_an_empty_result_means_the_dp_explains_nothing_not_a_naming_problem(trb):
