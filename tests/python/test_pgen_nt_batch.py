@@ -67,11 +67,11 @@ def test_a_wrong_length_call_list_raises(seqs):
         native.pgen_nt_batch(m, nt, v, j[:-1])
 
 
-def test_a_gene_level_call_still_refuses(seqs):
-    """The model is keyed by allele and must not degrade a gene name to the agnostic value."""
+def test_a_gene_level_call_conditions_on_its_representative(seqs):
+    """An unambiguous gene call must retain its conditioned probability."""
     m, nt, v, j = seqs
-    with pytest.raises(KeyError):
-        native.pgen_nt_batch(m, nt, [x.split("*")[0] for x in v], j)
+    assert native.pgen_nt_batch(m, nt, [x.split("*")[0] for x in v], j) == native.pgen_nt_batch(
+        m, nt, v, j)
 
 
 def test_an_empty_batch_is_an_empty_list(seqs):

@@ -109,8 +109,8 @@ def paired_pgen(
         resolve_genes: Resolve a **gene**-level call (``TRBV10-3``) to a representative
             model allele (``TRBV10-3*01``) before scoring -- see
             :func:`vdjtools.model.native.gene_to_allele`.
-            Default ``True``, because CellRanger reports genes and without this every 10x
-            row scores ``None``. Set ``False`` to score only exact allele matches.
+            Default ``True``. Set ``False`` to disable representative selection in multi-allele
+            models. A gene with one model entry always accepts gene and suffix aliases.
         alpha_locus: Locus of the α/light chain (e.g. ``"TRA"``, ``"IGK"``); inferred from
             the ``alpha_v_call`` prefix if ``None``.
         beta_locus: Locus of the β/heavy chain (e.g. ``"TRB"``, ``"IGH"``); inferred from

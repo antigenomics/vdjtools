@@ -56,9 +56,8 @@ def test_no_call_declines_that_side_rather_than_guessing(trb):
 
 
 def test_a_call_the_model_does_not_carry_declines(trb):
-    # `TRBV21-1` is a pseudogene the olga model has no germline for, and `*03` is an allele it
-    # does not carry. A boundary from some other allele's germline would be a guess.
-    got = germline_boundary(trb, [CASES[0][0]] * 2, ["TRBV21-1", "TRBV7-9*03"], ["TRBJ1-5"] * 2)
+    # Unknown genes decline; suffix aliases of a known single-representative gene are valid.
+    got = germline_boundary(trb, [CASES[0][0]] * 2, ["TRBV999", "TRBV999*03"], ["TRBJ1-5"] * 2)
     assert got["v_end"].to_list() == [None, None]
 
 

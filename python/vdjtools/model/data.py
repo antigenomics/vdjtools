@@ -163,7 +163,8 @@ def annotate_reads(
     return pl.read_csv(airr, separator="\t", infer_schema_length=20000)
 
 
-def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False) -> pl.DataFrame:
+def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False,
+                      gene_level: bool = False) -> pl.DataFrame:
     """Collapse an arda clonotype table to unique clonotypes = ``(v_call, j_call, junction)``.
 
     Isotype (``c_call``) is dropped from the key — isotype switching is the same clonotype. Rows are
@@ -174,12 +175,19 @@ def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False) -> 
         clones: An arda clonotype frame (from :func:`annotate_reads`).
         naive_igm_only: Keep only IgM (naive B) clonotypes before collapsing (IGH only; no-op
             elsewhere) — for a naive-repertoire (pre-selection-independent) subset.
+        gene_level: Strip allele suffixes, canonicalize ambiguous gene sets and merge their counts.
 
     Returns:
         Deduplicated clonotype frame: ``v_call, j_call, junction, junction_aa, locus, d_call,
         d2_call, count`` (one row per unique clonotype), sorted by descending ``count``.
     """
     df = clones
+    if gene_level:
+        df = df.with_columns([
+            pl.col(c).cast(pl.Utf8).str.split(",")
+            .list.eval(pl.element().str.strip_chars().str.split("*").list.first())
+            .list.unique().list.sort().list.join(",").alias(c)
+            for c in ("v_call", "j_call", "d_call", "d2_call") if c in df.columns])
     if naive_igm_only and "c_call" in df.columns:
         df = df.filter(pl.col("c_call").fill_null("").str.starts_with("IGHM"))
     df = df.filter(pl.col("junction").is_not_null() & (pl.col("junction").str.len_bytes() > 0))
@@ -191,14 +199,20 @@ def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False) -> 
     ]
     if empty_to_null:
         df = df.with_columns(empty_to_null)
-    cnt = pl.col("duplicate_count").cast(pl.Int64, strict=False) if "duplicate_count" in df.columns else pl.lit(1)
+    count_col = next((c for c in ("duplicate_count", "count") if c in df.columns), None)
+    cnt = pl.col(count_col).cast(pl.Int64, strict=False) if count_col else pl.lit(1)
+    annotations = []
+    for c in ("junction_aa", "locus", "d_call", "d2_call"):
+        if c not in df.columns:
+            expr = pl.lit(None, dtype=pl.Utf8)
+        elif gene_level and c in ("d_call", "d2_call"):
+            expr = (pl.col(c).drop_nulls().str.split(",").explode(empty_as_null=True).drop_nulls()
+                    .unique().sort().str.join(",").replace("", None))
+        else:
+            expr = pl.col(c).first()
+        annotations.append(expr.alias(c))
     out = df.group_by(["v_call", "j_call", "junction"]).agg(
-        pl.col("junction_aa").first(),
-        pl.col("locus").first(),
-        pl.col("d_call").first(),
-        pl.col("d2_call").first(),
-        cnt.sum().alias("count"),
-    )
+        *annotations, cnt.sum().alias("count"))
     return out.sort("count", descending=True)
 
 
@@ -211,6 +225,7 @@ def prepare(
     cap: int | None = None,
     reconstruct: bool = False,
     naive_igm_only: bool = False,
+    gene_level: bool = False,
     threads: int = 0,
     verbose: bool = False,
 ) -> pl.DataFrame:
@@ -220,7 +235,7 @@ def prepare(
         fq, out_dir=out_dir, prefix=f"{group}_{chain}_{label}",
         organism=ORGANISM[group], cap=cap, reconstruct=reconstruct, threads=threads, verbose=verbose,
     )
-    return unique_clonotypes(reads, naive_igm_only=naive_igm_only)
+    return unique_clonotypes(reads, naive_igm_only=naive_igm_only, gene_level=gene_level)
 
 
 #: Directory of the arda-mapped clonotype examples shipped with the source tree.
@@ -374,11 +389,13 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
 
     started = time.perf_counter()
     organism = ORGANISM[group]
-    base = template if template is not None else from_arda(chain, organism)
+    base = template if template is not None else from_arda(chain, organism, gene_level=True)
     if clones is None:
         clones = prepare(group, chain, "nonfunctional", out_dir=work_dir, cap=cap,
-                         threads=threads, verbose=verbose)
+                         threads=threads, verbose=verbose, gene_level=template is None)
 
+    if template is None:
+        clones = unique_clonotypes(clones, gene_level=True)
     uniq = _filter_for_em(clones, base, ambiguous)
     n_all = uniq.height
     seqs = [s.upper() for s in uniq["junction"].to_list()]
@@ -432,9 +449,10 @@ def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A") -> p
 
     vgenes = {a.split("*")[0] for a in base.genomic["genes_v"]["v_allele"].to_list()}
     jgenes = {a.split("*")[0] for a in base.genomic["genes_j"]["j_allele"].to_list()}
-    vg = pl.col("v_call").str.split("*").list.first()
-    jg = pl.col("j_call").str.split("*").list.first()
-    kept = clones.filter(vg.is_in(list(vgenes)) & jg.is_in(list(jgenes)))
+    vg = pl.col("v_call").str.split(",").list.eval(pl.element().str.strip_chars().str.split("*").list.first())
+    jg = pl.col("j_call").str.split(",").list.eval(pl.element().str.strip_chars().str.split("*").list.first())
+    kept = clones.filter((vg.list.set_intersection(list(vgenes)).list.len() > 0) &
+                         (jg.list.set_intersection(list(jgenes)).list.len() > 0))
     return sanitize_junctions(kept, "junction", ambiguous=ambiguous, where="build_model")
 
 

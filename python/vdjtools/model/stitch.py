@@ -11,6 +11,7 @@ from __future__ import annotations
 import polars as pl
 
 from .model import Model
+from .pgen import _resolve_gene_call
 
 
 def _germline_lookup(model: Model, seg: str) -> dict[str, tuple[str, int]]:
@@ -20,6 +21,7 @@ def _germline_lookup(model: Model, seg: str) -> dict[str, tuple[str, int]]:
 
 def _stitch(vg: dict, jg: dict, v: str, j: str, cdr3_nt: str) -> str | None:
     """Core stitch from **prebuilt** V/J germline lookups (so a batch caller builds them once)."""
+    v, j = _resolve_gene_call(vg, v), _resolve_gene_call(jg, j)
     if v not in vg or j not in jg:
         return None
     fv, av = vg[v]

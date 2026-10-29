@@ -19,13 +19,19 @@ def _encode(seq: str) -> list[int]:
 
 
 def _gene_idx(idx_of: dict[str, int], name: str | None, kind: str) -> int:
-    """Resolve a V/J **allele** name to its model index; ``None`` marginalizes (index ``-1``).
+    """Resolve a V/J call to its model index; ``None`` marginalizes (index ``-1``).
+
+    A gene with one model representative accepts bare names and arbitrary allele suffixes.
+    Explicit multi-allele models retain allele resolution.
 
     Raises on an unknown name rather than falling back to ``-1``: ``-1`` means "marginalize over
     every allele", so a silent fallback turns a mis-typed or gene-level call into a *different,
     larger* Pgen with no error — e.g. ``"TRBV9"`` (gene) returned the V/J-agnostic value, 2.38x
     the true ``"TRBV9*01"`` Pgen.
     """
+    from .pgen import _resolve_gene_call
+
+    name = _resolve_gene_call(idx_of, name)
     if not name:
         return -1
     idx = idx_of.get(name)

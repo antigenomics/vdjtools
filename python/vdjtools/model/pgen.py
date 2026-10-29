@@ -590,6 +590,15 @@ def _dd_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
     return out
 
 
+def _resolve_gene_call(alleles, call: str | None) -> str | None:
+    """Ignore the suffix when a gene has exactly one model representative."""
+    if not call or call in alleles:
+        return call
+    gene = call.split("*", 1)[0]
+    matches = [a for a in alleles if a.split("*", 1)[0] == gene]
+    return matches[0] if len(matches) == 1 else call
+
+
 def pgen_aa(prep: _Prepared, cdr3_aa: str, v: str | None = None, j: str | None = None) -> float:
     """Generation probability of an amino-acid CDR3, marginalizing over synonymous codons.
 
@@ -602,6 +611,7 @@ def pgen_aa(prep: _Prepared, cdr3_aa: str, v: str | None = None, j: str | None =
         Pgen as a float. Sums tandem-D (``n_D=2``) scenarios for a D-D model, mixed with the
         single-D term by ``P(n_D)`` — consistent with :func:`pgen_nt`.
     """
+    v, j = _resolve_gene_call(prep.cut["v"], v), _resolve_gene_call(prep.cut["j"], j)
     aa = cdr3_aa.upper()
     if prep.chain_type == "VJ":
         return _pgen_aa_vj(prep, aa, v, j)
@@ -619,6 +629,7 @@ def pgen_nt(prep: _Prepared, cdr3_nt: str, v: str | None = None, j: str | None =
     Returns:
         Pgen as a float.
     """
+    v, j = _resolve_gene_call(prep.cut["v"], v), _resolve_gene_call(prep.cut["j"], j)
     s = cdr3_nt.upper()
     vdj = prep.chain_type == "VDJ"
     v_cands = _v_candidates(prep, s, [v] if v else prep.functional_v)

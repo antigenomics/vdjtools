@@ -64,13 +64,14 @@ def test_the_batch_is_the_per_row_loop_exactly(trb):
                 getattr(ref, f), float) else row[f] == getattr(ref, f), f
 
 
-def test_n_candidates_counts_every_distinct_candidate_not_just_the_rescored_ones(trb):
+def test_n_candidates_counts_every_distinct_candidate_not_just_the_rescored_ones():
     """A multi-allele call pools more candidates than ``n_best``; the count is pre-truncation.
 
     Reporting the re-scored count instead is silent -- every other field stays right -- and it is
     exactly what this batch got wrong first time round.
     """
     aa, v, j = "CASSGRGLNTEAFF", "TRBV19*01,TRBV6-5*01", "TRBJ1-1*01"
+    trb = load_bundled("TRB", "olga")  # This exact candidate-count case uses fixed oracle weights.
     ref = infer_nt(trb, aa, v=v, j=j, n_best=8)
     got = infer_nt_batch(trb, [aa], v=[v], j=[j], n_best=8)
     assert ref.n_candidates > 8, "case no longer pools more than n_best; pick another"

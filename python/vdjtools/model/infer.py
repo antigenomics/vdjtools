@@ -1152,7 +1152,7 @@ def extend_alleles(model: Model, germline: pl.DataFrame, *, weight: float = 1.0)
         seeded = (seeded.join(old_totals, on=[*nk, "_g"], how="left")
                   .with_columns(_new=pl.col("p").sum().over([*nk, "_g"])))
         seeded = seeded.with_columns(
-            p=pl.when((pl.col("_new") > 0) & (pl.col("_old") > 0))
+            p=pl.when((pl.col("_new") > 0) & pl.col("_old").is_not_null())
             .then(pl.col("p") * pl.col("_old") / pl.col("_new"))
             .otherwise(pl.col("p"))
         ).drop(["_g", "_old", "_new"])

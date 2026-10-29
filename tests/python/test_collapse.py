@@ -113,8 +113,8 @@ def test_collapsed_pgen_tracks_the_allele_sum():
 
 
 def test_load_bundled_collapse_flag():
-    full = load_bundled("TRB", "learned", collapse=False)
-    coll = load_bundled("TRB", "learned")              # default True
+    full = load_bundled("TRB", "olga", collapse=False)
+    coll = load_bundled("TRB", "olga")                 # fixed allele-preserving oracle
     assert coll.tables["v_choice"].height < full.tables["v_choice"].height
     assert full.tables["v_choice"].height == 89        # allele resolution retained when asked
     # a query on the collapsed model maps any allele of a gene to its *01 representative

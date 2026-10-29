@@ -445,6 +445,21 @@ Exporting and importing tables
 Building from the read corpus
 -----------------------------
 
+Default raw-read builds select one usable reference allele per V/D/J gene
+**before EM**: ``*01`` when usable, otherwise the lowest-numbered usable allele.
+Empty, ambiguous and misanchored germlines are excluded.
+Allele-only duplicate clonotypes merge with exact read-count sums;
+comma-separated gene ambiguity and distinct duplicated genes are retained.
+An explicit template keeps its declared resolution and event graph.
+
+Prediction accepts a bare gene or any allele suffix when that gene has one model
+representative: ``TRBV9``, ``TRBV9*01`` and ``TRBV9*99`` condition on the same entry.
+Unknown genes raise in native Pgen rather than silently marginalizing over all genes.
+Explicit multi-allele models retain their allele-specific probabilities.
+The training inputs are the original nonfunctional read sets (out of frame or
+carrying a stop codon); a junction-only stop/frame filter does not reproduce
+whole-rearrangement nonfunctionality.
+
 The EM-fitted model sets shipped in the wheel use real 5'RACE reads; ``olga`` is an import.
 The fitting pipeline —
 fetch FASTQ, map with arda, collapse to unique clonotypes, run EM — is

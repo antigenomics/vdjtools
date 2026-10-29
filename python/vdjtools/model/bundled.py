@@ -52,11 +52,10 @@ def load_bundled(locus: str, source: str = "learned", *, organism: str = "human"
         organism: ``"human"`` (default) or ``"mouse"``. The learned mouse catalog covers TRA/TRB/IGH/IGK/IGL.
             No mouse TRG/TRD model is bundled. Their data acquisition is a separate
             future project. Missing combinations fail rather than using a human model.
-        collapse: If ``True`` (default), collapse each gene to a single ``*01`` allele via
-            :func:`~vdjtools.model.collapse.collapse_alleles` — the working gene-level resolution,
-            in which Pgen also collapses a clonotype's allele to ``*01`` (short-read aligners cannot
-            resolve alleles reliably, so the suffix is noise). Pass ``collapse=False`` for full
-            allele resolution, e.g. the exact-OLGA-Pgen fidelity check.
+        collapse: If ``True`` (default), collapse multi-allele models to one ``*01`` entry per
+            gene via :func:`~vdjtools.model.collapse.collapse_alleles`. Already gene-level learned
+            fits retain their selected reference labels and tables. Pass ``collapse=False`` for
+            full allele resolution, e.g. the exact-OLGA-Pgen fidelity check.
 
     Returns:
         The :class:`~vdjtools.model.model.Model`.
@@ -82,6 +81,8 @@ def load_bundled(locus: str, source: str = "learned", *, organism: str = "human"
         )
     with as_file(root) as path:
         m = load_model(path)
+    if source == "learned" and all(g["gene"].n_unique() == g.height for g in m.genomic.values()):
+        return m  # Already fitted at gene resolution; keep the selected reference allele labels.
     return collapse_alleles(m) if collapse else m
 
 

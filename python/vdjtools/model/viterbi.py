@@ -55,7 +55,7 @@ from itertools import product
 
 from .model import Model
 from .pgen import (_CODON_AA, _CODON_TABLE, _NT2NUM, _NUM2NT, _aa_germline_prefix_ok,
-                   _d_codons_ok, _j_candidates, _p_insert, _v_candidates,
+                   _d_codons_ok, _j_candidates, _p_insert, _resolve_gene_call, _v_candidates,
                    _Prepared, pgen_nt, prepare)
 
 __all__ = ["Scenario", "best_scenario", "infer_nt", "infer_nt_bruteforce", "codon_options"]
@@ -158,6 +158,7 @@ def best_scenario(model_or_prep, cdr3_nt: str, v: str | None = None,
     """
     prep = _prep(model_or_prep)
     s = cdr3_nt.upper()
+    v, j = _resolve_gene_call(prep.cut["v"], v), _resolve_gene_call(prep.cut["j"], j)
     vdj = prep.chain_type == "VDJ"
     v_cands = _v_candidates(prep, s, [v] if v else prep.functional_v)
     j_cands = _j_candidates(prep, s, [j] if j else prep.functional_j)
@@ -411,6 +412,7 @@ def _v_aa_options(prep: _Prepared, aa: str, N: int, v):
     """
     out = []
     for V in _mask(v, prep.functional_v):
+        V = _resolve_gene_call(prep.cut["v"], V)
         pv = prep.p_v.get(V, 0.0)
         if pv == 0.0:
             continue
@@ -427,6 +429,7 @@ def _j_aa_options(prep: _Prepared, aa: str, N: int, j):
     """``[(J, len_j, P(delJ|J), gj)]`` — 5' J trims whose germline codons translate to ``aa``."""
     out = []
     for J in _mask(j, prep.functional_j):
+        J = _resolve_gene_call(prep.cut["j"], J)
         cut, maxp = prep.cut["j"][J], prep.maxpal["j_5"]
         for len_j in range(1, min(len(cut), N) + 1):     # J contributes >= 1 nt (matches OLGA)
             idxj = len(cut) - len_j
@@ -664,8 +667,8 @@ def infer_nt(model_or_prep, cdr3_aa: str, v=None, j=None, *,
         model_or_prep: A :class:`~vdjtools.model.model.Model` (native, the normal call) or a
             :func:`pgen.prepare` -d one (the pure-Python reference search).
         cdr3_aa: The CDR3 amino-acid sequence (conserved Cys -> conserved Phe/Trp inclusive).
-        v: V allele, comma-separated alleles, a list, or ``None`` — see above. Allele-keyed, never
-            gene-level: see the ``_gene_idx`` trap.
+        v: V call, comma-separated calls, a list, or ``None`` — see above. Gene and suffix aliases
+            resolve to the model entry when the gene has one representative.
         j: J allele, comma-separated alleles, a list, or ``None``.
         n_best: How many distinct candidates to re-score with the exact marginal Pgen.
         keep: **Reference path only.** Candidates within this factor of the running best survive

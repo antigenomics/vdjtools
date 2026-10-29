@@ -68,11 +68,11 @@ def training_clones(locus: str, group: str = "human"):
             Path(raw_dir) / group / f"{locus}.nonfunctional.fq.gz",
             out_dir=WORK / group / locus, prefix=f"{group}_{locus}",
             organism=data.ORGANISM[group], threads=THREADS, verbose=True)
-        return data.unique_clonotypes(reads)
+        return data.unique_clonotypes(reads, gene_level=True)
     if not data_dir:
         return None
     return data.unique_clonotypes(
-        pl.read_parquet(Path(data_dir) / f"{group}_{locus}_nonfunctional.parquet"))
+        pl.read_parquet(Path(data_dir) / f"{group}_{locus}_nonfunctional.parquet"), gene_level=True)
 
 
 def main():
