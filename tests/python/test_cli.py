@@ -28,7 +28,7 @@ def test_model_commands_forward_organism(tmp_path, monkeypatch, command, organis
         return marker
     monkeypatch.setattr(models, 'load_bundled', load)
     def sample(model, n, **kwargs):
-        assert model is marker and kwargs['engine'] == 'reference'
+        assert model is marker and kwargs['engine'] == 'native'
         return pl.DataFrame({'junction_aa': ['CASSF'] * n})
     monkeypatch.setattr(importlib.import_module('vdjtools.model.generate'), 'generate', sample)
     def score(model, sequences, *args, **kwargs):
@@ -62,6 +62,40 @@ def test_unsupported_mouse_model_is_a_friendly_cli_error(tmp_path, monkeypatch, 
     assert result.exit_code == 1
     assert 'error: ' + message in result.output
     assert isinstance(result.exception, SystemExit)
+
+
+@pytest.mark.parametrize("source,engine,custom,expected_engine", [
+    ("learned", None, False, "native"),
+    ("learned", "reference", False, "reference"),
+    ("learned", "native", False, "native"),
+    ("olga", None, False, "reference"),
+    ("arda", None, False, "reference"),
+    ("olga", "native", False, "native"),
+    ("learned", None, True, "reference"),
+    ("learned", "native", True, "native"),
+])
+def test_generate_cli_engine_policy(tmp_path, toy_model, source, engine, custom, expected_engine):
+    from vdjtools.model import load_bundled
+    from vdjtools.model.generate import generate
+    from vdjtools.model.io import load_model, save_model
+
+    if custom:
+        path = tmp_path / "model"
+        save_model(toy_model, path)
+        model = load_model(path)
+        arguments = ["--model-path", str(path)]
+    else:
+        model = load_bundled("TRG", source)
+        arguments = ["--model", "TRG"]
+        if source != "learned":
+            arguments += ["--source", source]
+    if engine is not None:
+        arguments += ["--engine", engine]
+    out = tmp_path / "draws.parquet"
+    result = runner.invoke(app, ["generate", *arguments, "-n", "64", "--seed", "7", "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    expected = generate(model, 64, seed=7, engine=expected_engine, threads=1)
+    assert pl.read_parquet(out).equals(expected)
 
 
 def test_generate_native_cli_matches_library(tmp_path):

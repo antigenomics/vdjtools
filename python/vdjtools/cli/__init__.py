@@ -206,13 +206,13 @@ def pgen(
 @app.command()
 def generate(
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
-    source: str = typer.Option("learned", help="Built-in model set: olga | learned."),
+    source: str = typer.Option("learned", help="Built-in model set: learned | olga | arda."),
     organism: str = typer.Option('human', help='Built-in model organism: human | mouse.'),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     n: int = typer.Option(100, "--number", "-n", help="Number of sequences to generate."),
     seed: Optional[int] = typer.Option(None, help="Random seed for reproducible draws."),
     productive: bool = typer.Option(False, help="Only keep in-frame, stop-free (productive) rearrangements."),
-    engine: str = typer.Option("reference", help="Sampler: reference preserves historical seeds; native uses a distinct, faster random stream."),
+    engine: Optional[str] = typer.Option(None, help="Sampler: native by default for bundled learned models; reference for legacy sources/custom paths. Explicit reference preserves historical seeds; native uses a distinct random stream."),
     threads: int = typer.Option(0, min=0, help="Native kernel CPU budget; 0 uses allocated cores. Reference sampling is serial."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout)."),
 ) -> None:
@@ -223,6 +223,8 @@ def generate(
     """
     from vdjtools.model.generate import generate as _generate
 
+    if engine is None:
+        engine = "native" if model_path is None and source == "learned" else "reference"
     m = _load_model(model, source, model_path, organism)
     _write(_generate(m, n, seed=seed, productive_only=productive, engine=engine, threads=threads), out)
 

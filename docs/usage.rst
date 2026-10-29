@@ -519,6 +519,12 @@ validation remain release gates (see :doc:`model`):
    second, and IGH with ``productive_only=True`` 4,029 to 2,325,649. Each native draw is seeded
    from ``(seed, row)``, so its output never depends on ``threads``.
 
+   The ``vdjtools generate`` CLI selects native sampling by default for bundled learned models.
+   Explicit legacy sources (``--source olga`` / ``--source arda``) and custom ``--model-path``
+   inputs retain reference sampling. ``--engine`` overrides either policy; ``--threads 0`` uses
+   the allocated CPU budget for native calls. The library primitive above retains its reference
+   default for historical seed reproduction.
+
    With fitted, uncollapsed human TRB parameters, one call of 10,000 in-frame, stop-free draws
    took 7.031 s with the reference engine on one thread, 0.076 s for the first native call on
    one thread, and 0.036 s for a subsequent native call on 24 threads. The model was loaded once
