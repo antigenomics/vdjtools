@@ -109,7 +109,8 @@ def test_the_boundary_does_not_depend_on_the_history_being_the_argmax(trb):
         assert a[col].to_list() == b[col].to_list()
 
 
-def test_a_non_functional_allele_has_no_germline_and_declines(trb):
+def test_a_non_functional_allele_has_no_germline_and_declines():
+    trb = load_bundled("TRB", "olga")
     empty = [r["v_allele"] for r in trb.genomic["genes_v"].iter_rows(named=True)
              if not r["cdr3_segment"]]
     assert empty, "the olga TRB model ships pseudogenes with no CDR3-region germline"
