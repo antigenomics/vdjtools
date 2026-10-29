@@ -497,6 +497,11 @@ Use ``--fetch NAME`` for an existing published corpus.
    Feature workers and legacy generation workers use serial inner kernels,
    preventing nested oversubscription.
 
+New learned/ARDA corpus model identities cover raw probabilities and collapsed germline
+sequences. Changing fitted probabilities invalidates the identity even if the genes stay the
+same. Published OLGA corpus identities retain their historical format and fixed model assets.
+Table row/column order and package version labels do not change the identity.
+
 The build is a deterministic function of ``(corpus, loci, samples, size, seed, source)`` and those
 models, and is required to be byte-identical across processes, worker counts and thread counts:
 

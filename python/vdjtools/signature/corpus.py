@@ -964,9 +964,11 @@ _RES = Path(__file__).resolve().parent.parent / "resources" / "signature"
 def model_fingerprint(loci, source: str = "learned") -> dict[str, str]:
     """``{locus: "<model source>@<model version>"}`` for the models a synthetic pool is drawn from.
 
-    The version is a hash of the **germline the generator will actually draw from** (every allele's
-    CDR3-region cut segment of the collapsed model), not the manifest's declared version string. A
-    declared version does not move when a germline is repaired: correcting ``TRBV4-3*02``'s anchor
+    Learned/ARDA identities hash the raw probability tables and the **germline the generator
+    will actually draw from** (each collapsed allele's CDR3-region cut segment). Historical
+    OLGA identities retain the germline-only format; those fixed probability assets are
+    unchanged and published corpora already carry their identities. A declared version
+    does not move when a germline is repaired: correcting ``TRBV4-3*02``'s anchor
     changed what every TRB pool contains while leaving ``olga:human_T_beta@2.0.0`` identical, so a
     corpus fitted before the repair would have loaded silently against models that no longer produce
     it. The hash cannot miss that.
@@ -988,8 +990,19 @@ def model_fingerprint(loci, source: str = "learned") -> dict[str, str]:
 
     out = {}
     for loc in loci:
-        m = load_bundled(loc, source)
+        m = load_bundled(loc, source, collapse=(source == "olga"))
         h = hashlib.sha256()
+        if source != "olga":
+            from ..model.collapse import collapse_alleles
+
+            h.update(b"parameters-v1\n")
+            for name, table in sorted(m.tables.items()):
+                columns = sorted(table.columns)
+                h.update(f"{name}\n".encode())
+                # Scientific notation preserves tiny EM masses instead of rounding them to zero.
+                h.update(table.select(columns).sort(columns).write_csv(
+                    float_scientific=True, float_precision=17).encode())
+            m = collapse_alleles(m)
         for name in sorted(m.genomic):
             col = f"{name.split('_')[1]}_allele"
             for a, c in sorted(zip(m.genomic[name][col], m.genomic[name]["cut_segment"])):
