@@ -13,7 +13,7 @@ MOUSE_LOCI = ('TRA', 'TRB', 'IGH', 'IGK', 'IGL')
 
 
 def test_canonical_learned_catalog_covers_human_and_mouse():
-    assert set(list_bundled()['learned']) == set(LOCI) | {f'mouse_{locus}' for locus in MOUSE_LOCI}
+    assert set(list_bundled()['isalgo']) == set(LOCI) | {f'mouse_{locus}' for locus in MOUSE_LOCI}
 
 
 @pytest.mark.parametrize('organism,locus', [('human', locus) for locus in LOCI] +
@@ -35,7 +35,7 @@ def test_unbundled_mouse_loci_fail_without_human_fallback(locus):
 
 def test_all_olga_loci_bundled():
     """Every one of the 7 human loci ships an OLGA bootstrap model."""
-    assert set(list_bundled()["olga"]) == set(LOCI)
+    assert set(list_bundled()["olga-legacy"]) == set(LOCI)
 
 
 @pytest.mark.parametrize("locus", LOCI)
@@ -63,11 +63,10 @@ def test_bad_source_and_locus_raise():
 def test_learned_models_load_and_score(locus):
     """The EM-learned models (fit to real out-of-frame reads) load and are usable by the native Pgen.
 
-    D-bearing loci carry an **arda-anchored** tandem-D event with a biologically-plausible
-    ``P(n_D=2)`` (a read may be tandem only where arda called a second D — this counters the
-    identifiability that inflates unregularized D-D EM)."""
+    D-bearing loci carry the joint single/tandem-D event. Preliminary ARDA D calls do not
+    constrain its histories."""
     native = pytest.importorskip("vdjtools.model.native")
-    assert locus in list_bundled()['learned']
+    assert locus in list_bundled()['isalgo']
     m = load_bundled(locus, "learned")
     is_vdj = locus in VDJ
     assert m.chain_type == ("VDJ" if is_vdj else "VJ")
@@ -108,19 +107,15 @@ def test_learned_models_load_and_score(locus):
 
 
 def test_sources_constant():
-    assert SOURCES == ("olga", "learned", "arda")
+    assert SOURCES == ("isalgo", "olga-legacy", "olga", "learned", "arda")
 
 
 # --- the arda-namespace set (organism-keyed; the only one with mouse) -----------------
 
-def test_arda_set_is_reachable_and_covers_mouse():
-    """The 9 shipped arda models load through the public loader, mouse included.
-
-    They were on disk but unreachable before: ``SOURCES`` omitted ``"arda"``, and the loader
-    keyed ``_bundled/<source>/<LOCUS>`` while the arda dirs are ``<organism>_<LOCUS>``.
-    """
-    keys = list_bundled()["arda"]
-    assert set(keys) == {f"human_{loc}" for loc in LOCI} | {"mouse_TRA", "mouse_TRB"}
+def test_arda_alias_reaches_canonical_human_and_mouse_family():
+    """The old source spelling resolves to fresh isalgo fits, including all five mouse loci."""
+    assert set(list_bundled()["isalgo"]) == set(LOCI) | {f"mouse_{loc}" for loc in MOUSE_LOCI}
+    assert "arda" not in list_bundled()
 
 
 @pytest.mark.parametrize("locus", LOCI)
@@ -154,8 +149,7 @@ def test_organism_is_not_silently_ignored_by_a_set_vendored_for_human_only():
         load_bundled("TRB", 'olga', organism="mouse")
     with pytest.raises(ValueError, match="mouse_T_beta"):
         load_bundled("TRB", 'olga', organism="mouse")
-    with pytest.raises(FileNotFoundError, match="available"):
-        load_bundled("IGH", "arda", organism="mouse")     # arda has no mouse IGH
+    assert load_bundled("IGH", "arda", organism="mouse").organism == "mouse"
 
 
 def test_canonical_learned_uses_the_arda_namespace():

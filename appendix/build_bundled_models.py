@@ -3,7 +3,7 @@
 For each locus: fetch the FULL non-functional read set (HF isalgo/airr_model_read), arda-map to
 unique clonotypes = (v_call, j_call, junction), and run native EM (D-D by default on the D-bearing
 loci IGH/TRD/TRB) seeded from the ARDA germline scaffold. Saves to
-python/vdjtools/model/_bundled/learned/<locus>/ (parquet marginals + manifest.json + training.json).
+python/vdjtools/model/_bundled/isalgo/<locus>/ (parquet marginals + manifest.json + training.json).
 
 The pipeline itself now lives in the library — `vdjtools.model.data.build_model` / `build_all`,
 also reachable as `vdjtools model build` — so this script only supplies the two things specific to
@@ -24,7 +24,7 @@ stable). EM_ITERS is a generous safety cap, not the target.
 
 Reproduce (needs arda/mmseqs2 + HF access):  python appendix/build_bundled_models.py
 
-For arda-native models set BUNDLE_SOURCE=arda and BUILD_GROUPS=human,mouse.
+Production builds write BUNDLE_SOURCE=isalgo and BUILD_GROUPS=human,mouse.
 LOCI selects affected loci. RAW_FASTQ_DIR points to a local raw-input mirror with
 <group>/<locus>.nonfunctional.fq.gz; those reads are freshly annotated, without a cap.
 """
@@ -36,12 +36,9 @@ import polars as pl
 
 from vdjtools.model import data
 
-SOURCE = os.environ.get("BUNDLE_SOURCE", "learned")
+SOURCE = os.environ.get("BUNDLE_SOURCE", "isalgo")
 DEST = Path("python/vdjtools/model/_bundled") / SOURCE
-# NB the previous default pointed into ANOTHER SESSION's scratchpad and the build silently
-# reused a truncated arda cache from it -- that is how the shipped TRB model came to be
-# trained on 870 clonotypes when 32,562 were available. arda.annotate_reads does its own
-# caching under out_dir; there is no second cache layer here any more.
+# Work files are rebuilt from raw reads on every production run.
 WORK = Path(os.environ.get("EM_WORK", "/tmp/em_work"))
 LOCI = ("TRA", "TRB", "TRG", "TRD", "IGH", "IGK", "IGL")
 MOUSE_LOCI = ("TRA", "TRB", "IGH", "IGK", "IGL")
@@ -52,32 +49,23 @@ THREADS = int(os.environ.get("EM_THREADS", "0"))
 
 
 def training_clones(locus: str, group: str = "human"):
-    """The clonotypes EM trains on, from the pre-annotated cache when one is staged.
-
-    EM_DATA_DIR: read pre-annotated slim parquet (v/j/d/junction/...) instead of fetching from
-    HuggingFace + re-annotating with arda. This is the Aldan-3 path -- the compute nodes have no
-    mmseqs2 and no outbound HTTPS, so annotation happens once on a workstation and the columns EM
-    needs are staged as compact parquet (~20 MB for all 7 loci vs 1.6 GB of raw arda TSV).
-    """
+    """Freshly annotate raw reads; precomputed training intermediates are forbidden."""
     raw_dir = os.environ.get("RAW_FASTQ_DIR")
     data_dir = os.environ.get("EM_DATA_DIR")
-    if raw_dir and data_dir:
-        raise ValueError("select raw FASTQ inputs or pre-annotated inputs, not both")
+    if data_dir:
+        raise ValueError("production bundled builds require fresh raw inputs; EM_DATA_DIR is not accepted")
     if raw_dir:
         reads = data.annotate_reads(
             Path(raw_dir) / group / f"{locus}.nonfunctional.fq.gz",
             out_dir=WORK / group / locus, prefix=f"{group}_{locus}",
             organism=data.ORGANISM[group], threads=THREADS, verbose=True)
         return data.unique_clonotypes(reads, gene_level=True)
-    if not data_dir:
-        return None
-    return data.unique_clonotypes(
-        pl.read_parquet(Path(data_dir) / f"{group}_{locus}_nonfunctional.parquet"), gene_level=True)
+    return None
 
 
 def main():
-    if SOURCE not in ("learned", "arda"):
-        raise ValueError("BUNDLE_SOURCE must be learned or arda")
+    if SOURCE != "isalgo":
+        raise ValueError("production bundled builds require BUNDLE_SOURCE=isalgo")
     groups = os.environ.get("BUILD_GROUPS", "human,mouse").split(",")
     if any(group not in ("human", "mouse") for group in groups):
         raise ValueError("BUILD_GROUPS must select human and/or mouse")
@@ -101,7 +89,7 @@ def main():
         for locus in loci:
             if group == "mouse" and locus not in MOUSE_LOCI:
                 continue
-            key = f"{group}_{locus}" if SOURCE == "arda" or group != "human" else locus
+            key = f"{group}_{locus}" if group != "human" else locus
             print(f"[{key}] building {SOURCE} model ...", flush=True)
             model, rep, stats = data.build_model(
                 locus, group=group,

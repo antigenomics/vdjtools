@@ -159,26 +159,29 @@ def test_the_retired_d_columns_are_gone():
     assert not hasattr(M, "posterior_d"), "the dominated posterior must not ship"
 
 
-def test_auto_is_a_chain_and_answers_at_least_as_many_rows_as_either_set():
-    """`model_source="auto"` runs OLGA's fit then arda's on what it left, and that is measured.
+def test_auto_routes_to_isalgo_and_matches_compatibility_aliases(monkeypatch, toy_model):
+    """Supported contexts use one isalgo family; aliases cannot restore an old fallback chain."""
+    from vdjtools.model import bundled, junction, native, viterbi
 
-    Neither set dominates: OLGA's is better calibrated and cheaper but declines rows outright (143
-    of 4,000 on human TRA) and has no mouse; arda's answers everything and is thinner -- 36 of its
-    66 human TRB V alleles sit at probability zero. On 4,000 real human rearrangements the chain
-    wins every column: TRB nucleotide-exact 14.40 / 17.32 / 17.32 % and D gene 72.58 / 74.08 /
-    74.35 % for arda / OLGA / the chain.
+    sources = []
+    def load(locus, source, **kw):
+        sources.append(source)
+        return toy_model
 
-    What is pinned here is the structural property that makes that possible -- the chain never
-    answers FEWER rows than a set pinned by name -- not the accuracy numbers, which need the truth
-    set the benchmark uses.
-    """
-    auto = annotate_junctions(*TRB, species="human")                      # the default
-    answered = lambda f: f["cdr3_nt"].is_not_null().sum()                 # noqa: E731
-    for pinned in ("olga", "arda"):
-        one = annotate_junctions(*TRB, species="human", model_source=pinned)
-        assert answered(auto) >= answered(one), (
-            f"the chain answered {answered(auto)} rows, {pinned} alone answered {answered(one)}")
-    assert answered(auto) > 0
+    batches = []
+    def infer(model, sequences, **kw):
+        batches.append(len(sequences))
+        return pl.DataFrame({"cdr3_nt": [None] * len(sequences)}, schema={"cdr3_nt": pl.String})
+
+    monkeypatch.setattr(bundled, "load_bundled", load)
+    monkeypatch.setattr(junction, "_reachable", lambda model: model)
+    monkeypatch.setattr(viterbi, "infer_nt_batch", infer)
+    monkeypatch.setattr(native, "best_aa_scenarios_batch", lambda *a, **kw: pl.DataFrame())
+    results = [annotate_junctions(*TRB, species="human", model_source=source, threads=1)
+               for source in ("auto", "isalgo", "learned", "arda")]
+    assert all(result.equals(results[0]) for result in results[1:])
+    assert sources == ["isalgo", "isalgo", "learned", "arda"]
+    assert batches == [len(TRB[0])] * 4
 
 
 def test_a_pinned_set_that_does_not_exist_is_not_silently_ignored():

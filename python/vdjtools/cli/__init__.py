@@ -157,7 +157,7 @@ def models() -> None:
 def pgen(
     input: Path = typer.Argument(..., help="Table (TSV) or list of CDR3 sequences."),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
-    source: str = typer.Option("learned", help="Built-in model set: olga | learned."),
+    source: str = typer.Option("isalgo", help="Built-in model set: isalgo | olga-legacy."),
     organism: str = typer.Option('human', help='Built-in model organism: human | mouse.'),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     column: Optional[str] = typer.Option(None, "--column", "-c", help="Sequence column (default: auto-detect / first)."),
@@ -206,25 +206,25 @@ def pgen(
 @app.command()
 def generate(
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
-    source: str = typer.Option("learned", help="Built-in model set: learned | olga | arda."),
+    source: str = typer.Option("isalgo", help="Built-in model set: isalgo | olga-legacy."),
     organism: str = typer.Option('human', help='Built-in model organism: human | mouse.'),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     n: int = typer.Option(100, "--number", "-n", help="Number of sequences to generate."),
     seed: Optional[int] = typer.Option(None, help="Random seed for reproducible draws."),
     productive: bool = typer.Option(False, help="Only keep in-frame, stop-free (productive) rearrangements."),
-    engine: Optional[str] = typer.Option(None, help="Sampler: native by default for bundled learned models; reference for legacy sources/custom paths. Explicit reference preserves historical seeds; native uses a distinct random stream."),
+    engine: Optional[str] = typer.Option(None, help="Sampler: native by default for bundled isalgo models; reference for legacy sources/custom paths. Explicit reference preserves historical seeds; native uses a distinct random stream."),
     threads: int = typer.Option(0, min=0, help="Native kernel CPU budget; 0 uses allocated cores. Reference sampling is serial."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout)."),
 ) -> None:
     """Sample recombined sequences from a model — like ``olga-generate_sequences``.
 
     Emits ``junction_nt, junction_aa, v_call, d_call, d2_call, j_call, productive`` (``d2_call`` is the
-    tandem D on the learned D-bearing loci; null otherwise).
+    tandem D on the isalgo D-bearing loci; null otherwise).
     """
     from vdjtools.model.generate import generate as _generate
 
     if engine is None:
-        engine = "native" if model_path is None and source == "learned" else "reference"
+        engine = "native" if model_path is None and source in ("isalgo", "learned", "arda") else "reference"
     m = _load_model(model, source, model_path, organism)
     _write(_generate(m, n, seed=seed, productive_only=productive, engine=engine, threads=threads), out)
 
@@ -768,7 +768,7 @@ def corpus(
     seed: int = typer.Option(20260927, "--seed", help="Base seed; every draw is a recorded offset."),
     loci: Optional[str] = typer.Option(None, "--loci", help="Comma-separated subset (default: all "
                                                             "seven)."),
-    source: str = typer.Option("learned", "--source", help="Bundled model set: olga | learned | arda."),
+    source: str = typer.Option("isalgo", "--source", help="Bundled model set: isalgo | olga-legacy (compatibility: olga | learned | arda)."),
     depth_spread: Optional[float] = typer.Option(None, "--depth-spread",
                                                  help="Multiplicative depth range each repertoire's "
                                                       "size is drawn log-uniformly across, around "
@@ -1019,7 +1019,7 @@ def alice(
     sample: Path = typer.Argument(..., help="Clonotype sample file."),
     fmt: str = _FMT, out: Optional[Path] = _OUT,
     locus: Optional[str] = typer.Option(None, "--locus", help="Force one locus (else per-locus)."),
-    source: str = typer.Option("learned", "--source", help="Bundled model source (default: learned); olga retains historical reproduction."),
+    source: str = typer.Option("isalgo", "--source", help="Bundled model source (default: isalgo); olga-legacy retains historical reproduction."),
     scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
     selection_q: float = typer.Option(9.41, "--q", help="Thymic-selection factor Q."),
     min_degree: int = typer.Option(3, "--min-degree", help="Only test clonotypes with >= this "
@@ -1051,7 +1051,7 @@ model_app = typer.Typer(
     no_args_is_help=True,
     help="Recombination-model workshop: build, learn, check, compare, score, extend.\n\n"
          "A model is named either as a directory, or as LOCUS[:source[:organism]] for a built-in "
-         "(TRB, TRB:learned, TRA:arda:mouse). The single-model commands also accept the "
+         "(TRB, TRB:isalgo, TRA:isalgo:mouse). The single-model commands also accept the "
          "-m/--model + --source + --model-path flags the top-level pgen/generate use.",
 )
 app.add_typer(model_app, name="model")
@@ -1068,7 +1068,7 @@ def _model_arg(spec: str):
         return load_model(path)
     parts = spec.split(":")
     locus = parts[0]
-    source = parts[1] if len(parts) > 1 else "learned"
+    source = parts[1] if len(parts) > 1 else "isalgo"
     organism = parts[2] if len(parts) > 2 else "human"
     try:
         return load_bundled(locus, source=source, organism=organism)
@@ -1727,7 +1727,7 @@ def sc_pgen(
     out: Optional[Path] = _OUT,
     fmt: str = _SC_FMT,
     locus_pair: str = _SC_PAIR,
-    source: str = typer.Option("learned", "--source", help="Bundled model source: olga | learned."),
+    source: str = typer.Option("isalgo", "--source", help="Bundled model source: isalgo | olga-legacy."),
     condition_vj: bool = typer.Option(True, "--condition-vj/--no-condition-vj",
                                       help="Condition each chain's Pgen on its V/J call. "
                                            "--no-condition-vj marginalises over all V/J."),

@@ -171,7 +171,7 @@ def test_gene_level_bundle_preserves_selected_reference_label(tmp_path, monkeypa
     gl = toy_germline.unique('gene', keep='first').with_columns(
         pl.col('allele').str.replace(r'\*01$', '*02'))
     m = from_germline(gl, locus='TOY', ins_max=3)
-    m.save(tmp_path / '_bundled' / 'learned' / 'TOY')
+    m.save(tmp_path / '_bundled' / 'isalgo' / 'TOY')
     monkeypatch.setattr(bundled, 'files', lambda _: tmp_path)
     loaded = bundled.load_bundled('TOY')
     assert loaded.genomic['genes_v'].equals(m.genomic['genes_v'])

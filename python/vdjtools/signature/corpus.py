@@ -961,10 +961,10 @@ def apply(raw: dict[str, float], chan: dict[str, float], corpus: Corpus, *,
 _RES = Path(__file__).resolve().parent.parent / "resources" / "signature"
 
 
-def model_fingerprint(loci, source: str = "learned") -> dict[str, str]:
+def model_fingerprint(loci, source: str = "isalgo") -> dict[str, str]:
     """``{locus: "<model source>@<model version>"}`` for the models a synthetic pool is drawn from.
 
-    Learned/ARDA identities hash the raw probability tables and the **germline the generator
+    Isalgo identities hash the raw probability tables and the **germline the generator
     will actually draw from** (each collapsed allele's CDR3-region cut segment). Historical
     OLGA identities retain the germline-only format; those fixed probability assets are
     unchanged and published corpora already carry their identities. A declared version
@@ -988,11 +988,14 @@ def model_fingerprint(loci, source: str = "learned") -> dict[str, str]:
 
     from ..model import load_bundled
 
+    from ..model.bundled import _source_family
+
+    source = _source_family(source)
     out = {}
     for loc in loci:
-        m = load_bundled(loc, source, collapse=(source == "olga"))
+        m = load_bundled(loc, source, collapse=(source in ("olga", "olga-legacy")))
         h = hashlib.sha256()
-        if source != "olga":
+        if source not in ("olga", "olga-legacy"):
             from ..model.collapse import collapse_alleles
 
             h.update(b"parameters-v1\n")
@@ -1002,7 +1005,8 @@ def model_fingerprint(loci, source: str = "learned") -> dict[str, str]:
                 # Scientific notation preserves tiny EM masses instead of rounding them to zero.
                 h.update(table.select(columns).sort(columns).write_csv(
                     float_scientific=True, float_precision=17).encode())
-            m = collapse_alleles(m)
+            if source != "isalgo" or not all(g["gene"].n_unique() == g.height for g in m.genomic.values()):
+                m = collapse_alleles(m)
         for name in sorted(m.genomic):
             col = f"{name.split('_')[1]}_allele"
             for a, c in sorted(zip(m.genomic[name][col], m.genomic[name]["cut_segment"])):
@@ -1433,19 +1437,23 @@ def depth_spread_of(locus: str, depth_spread: "float | str | None" = None) -> fl
     return float(depth_spread)
 
 
-def draw_pool(locus: str, n: int, *, seed: int, source: str = "learned",
+def draw_pool(locus: str, n: int, *, seed: int, source: str = "isalgo",
               threads: int = 0) -> pl.DataFrame:
     """Draw productive rearrangements in one batch from one loaded model.
 
-    Learned models use the native sampler and the allocated ``threads`` budget.
-    Explicit OLGA/ARDA sources retain reference-sampler streams for historical
+    Isalgo models and their compatibility aliases use the native sampler and
+    the allocated ``threads`` budget.
+    Explicit OLGA legacy sources retain reference-sampler streams for historical
     reproduction. Native draws are invariant to the number of kernel threads.
     """
     from ..model import load_bundled
     from ..model.generate import generate
 
+    from ..model.bundled import _source_family
+
+    source = _source_family(source)
     return generate(load_bundled(locus, source), n, seed=seed, productive_only=True,
-                    engine="native" if source == "learned" else "reference", threads=threads)
+                    engine="native" if source == "isalgo" else "reference", threads=threads)
 
 
 def draw_sizes(nominal: int, n: int, spread: float, rng: np.random.Generator) -> np.ndarray:
@@ -1651,14 +1659,17 @@ def _pool_chunk(args) -> tuple:
 def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path,
                 n_jobs: int = 1, progress=None, depth_spread: "float | str | None" = None,
                 cohort: "str | None" = None) -> dict:
-    """Generate learned pools in one native batch per locus, without a worker pool.
+    """Generate isalgo pools in one native batch per locus, without a worker pool.
 
-    Explicit OLGA/ARDA sources keep fixed reference-sampler chunks and seeds.
+    Explicit OLGA legacy sources keep fixed reference-sampler chunks and seeds.
     Pool generation finishes before feature extraction starts; only one parallel
     layer is active. IPC files are transient shared inputs, not reusable caches.
     """
+    from ..model.bundled import _source_family
+
+    source = _source_family(source)
     ordered = sorted(loci, key=lambda x: L.LOCI.index(x))
-    if source == "learned":
+    if source == "isalgo":
         # One model load and one native call per locus, with no nested processes.
         threads = _workers(n_jobs, max((pool_target(loc, size, n_samples,
                            depth_spread, cohort) for loc in ordered), default=1))
@@ -1761,7 +1772,7 @@ def _workers(n_jobs: int, cap: int) -> int:
 
 def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
                    loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
-                   size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "learned",
+                   size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "isalgo",
                    n_jobs: int = 1, progress=None, tmp: "Path | None" = None,
                    depth_spread: "float | str | None" = None,
                    cohort: "str | None" = None, feature_definition=None) -> dict:
@@ -1859,7 +1870,7 @@ def _pooled(spans, fn, workers: int, n_samples: int, progress):
 
 
 def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
-                  size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "learned",
+                  size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "isalgo",
                   progress=None, tmp: "Path | None" = None, n_jobs: int = 1,
                   depth_spread: "float | str | None" = None, cohort: "str | None" = None):
     """Set up the pools in this process and return ``(ordered_loci, draw)``; ``draw(j)`` is sample j.
@@ -1884,7 +1895,7 @@ def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: i
 def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                size: "int | str | None" = None, seed: int = SEED,
                n_components: "int | float" = DEFAULT_COMPONENTS, mode: str = "features",
-               winsor_p: float = 0.01, source: str = "learned", fit_corpus: bool = True,
+               winsor_p: float = 0.01, source: str = "isalgo", fit_corpus: bool = True,
                progress=None, n_jobs: int = 1, depth_spread: "float | str | None" = None,
                feature_definition=None, solver="full", max_components=128):
     """Build a synthetic corpus, and fit it.
@@ -1905,7 +1916,8 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
         n_components: Components per locus, or a variance fraction.
         mode: Winsorization mode to fit at.
         winsor_p: Percentile for the fitted bounds. All of :data:`WINSOR_PS` are stored.
-        source: Bundled model set -- ``"olga"``, ``"learned"`` or ``"arda"``.
+        source: ``"isalgo"`` (default), ``"olga-legacy"``, or compatibility
+            ``"olga"``, ``"learned"`` and ``"arda"`` selectors.
         fit_corpus: ``False`` returns the raw samples instead of fitting, for scoring a held-out
             draw against a corpus fitted on another.
         progress: Optional ``callable(locus, done, total)``.

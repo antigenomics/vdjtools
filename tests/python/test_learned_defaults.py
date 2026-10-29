@@ -13,7 +13,7 @@ def test_default_loader_routes_catalog(tmp_path, monkeypatch, organism, loci):
     monkeypatch.setattr(bundled, 'load_model', lambda path: paths.append(path) or path)
     for locus in loci:
         key = locus if organism == 'human' else 'mouse_' + locus
-        path = tmp_path / '_bundled' / 'learned' / key
+        path = tmp_path / '_bundled' / 'isalgo' / key
         path.mkdir(parents=True)
         assert bundled.load_bundled(locus, organism=organism, collapse=False) == path
     assert len(paths) == len(loci)
@@ -32,15 +32,15 @@ def test_working_consumer_defaults_and_explicit_cli_oracle(monkeypatch):
 
     for function in (bundled.load_bundled, alice, paired_pgen, corpus.model_fingerprint,
                      corpus.draw_pool, corpus.build_matrices, corpus.sample_stream, corpus.synthesize):
-        assert inspect.signature(function).parameters['source'].default == 'learned'
+        assert inspect.signature(function).parameters['source'].default == 'isalgo'
     for name, function in inspect.getmembers(cli, inspect.isfunction):
         parameter = inspect.signature(function).parameters.get('source')
         if parameter is not None and hasattr(parameter.default, 'default'):
-            assert parameter.default.default == 'learned', name
+            assert parameter.default.default == 'isalgo', name
     calls = []
     monkeypatch.setattr(bundled, 'load_bundled', lambda *args, **kwargs: calls.append((args, kwargs)))
     import vdjtools.model as model
     monkeypatch.setattr(model, 'load_bundled', bundled.load_bundled)
     cli._model_arg('TRB')
     cli._model_arg('TRB:olga')
-    assert [kwargs['source'] for args, kwargs in calls] == ['learned', 'olga']
+    assert [kwargs['source'] for args, kwargs in calls] == ['isalgo', 'olga']

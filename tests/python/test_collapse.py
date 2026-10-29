@@ -46,7 +46,7 @@ def test_tandem_collapse_normalizes_over_defined_parent_alleles(toy_model_vdj):
 
 
 def _shipped() -> list[tuple[str, str, str]]:
-    """Every ``(source, organism, locus)`` actually shipped — ``arda`` alone carries mouse."""
+    """Every ``(source, organism, locus)`` advertised canonically; isalgo carries five mouse contexts."""
     from vdjtools.model.bundled import list_bundled
 
     out = []
@@ -57,7 +57,7 @@ def _shipped() -> list[tuple[str, str, str]]:
     return out
 
 
-#: 23 models: ``olga`` and ``learned`` over 7 human loci, ``arda`` over 7 human + mouse TRA/TRB.
+#: Canonical release catalog: twelve isalgo fits plus seven frozen OLGA models.
 BUNDLED = _shipped()
 
 
@@ -171,12 +171,12 @@ def test_representative_is_the_longest_germline_not_the_most_used():
     Picking by usage alone made the truncated allele the gene's germline (relabelled *01, which was
     doubly misleading) and stranded 25% of the gene's own deletion distribution.
     """
-    raw = load_bundled("IGK", "learned", collapse=False)
+    raw = load_bundled("IGK", "olga-legacy", collapse=False)
     alleles = raw.genomic["genes_v"].filter(pl.col("gene") == "IGKV3-20")
     lengths = {r["v_allele"]: len(r["cut_segment"]) for r in alleles.iter_rows(named=True)}
     assert lengths["IGKV3-20*02"] < lengths["IGKV3-20*01"], "fixture assumption changed"
 
-    c = load_bundled("IGK", "learned", collapse=True)
+    c = load_bundled("IGK", "olga-legacy", collapse=True)
     rep = c.genomic["genes_v"].filter(pl.col("gene") == "IGKV3-20")
     assert rep.height == 1
     assert len(rep["cut_segment"][0]) == max(lengths.values())

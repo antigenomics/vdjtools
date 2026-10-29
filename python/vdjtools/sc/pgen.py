@@ -93,7 +93,7 @@ def _warn_if_all_null(values, model, locus, col) -> None:
 def paired_pgen(
     paired: pl.DataFrame,
     *,
-    source: str = "learned",
+    source: str = "isalgo",
     condition_vj: bool = True,
     resolve_genes: bool = True,
     alpha_locus: str | None = None,
@@ -103,7 +103,8 @@ def paired_pgen(
 
     Args:
         paired: A paired-chain frame (:func:`vdjtools.sc.pair.pair_chains` layout).
-        source: Bundled model set — ``"olga"`` (OLGA-derived) or ``"learned"`` (native EM).
+        source: Bundled model set — ``"isalgo"`` (fresh ARDA-reference fits) or ``"olga-legacy"``
+            (frozen OLGA); historical source names remain explicit compatibility selectors.
         condition_vj: Condition each chain's Pgen on its V/J call. ``False`` marginalises
             over all V/J unconditionally.
         resolve_genes: Resolve a **gene**-level call (``TRBV10-3``) to a representative
