@@ -185,6 +185,24 @@ positive-likelihood inputs; subtract it from ``report.n_sequences`` to count
 unsupported inputs. ``report.loglik`` is the mean over scoreable inputs, not a
 finite full-cohort likelihood when unsupported observations remain.
 
+Native inference uses ``prune_ratio=1e-5`` by default. Set it to ``0`` for exact
+inference; generation Pgen is always exact. Max-product bounds identify the best
+complete scenario and discard disjoint single-D cells or tandem-D bridges only
+when every scenario they contain falls below that ratio. VJ models prune complete
+cells. Retained cells can still contain weaker component histories. Likelihood
+and sufficient statistics use the same retained set; no fixed insertion-length
+or five-base reassignment cutoff is imposed.
+
+This follows the relative-likelihood principle in the
+`IGoR implementation <https://github.com/qmarcou/IGoR/blob/ea42ac8958645103d1c77e5b266a9a969b66cf91/igor_src/Genmodel.cpp>`_,
+while using a global maximum and factorized groups rather than IGoR's dynamic
+traversal. The ratio is **not** a bound on total omitted probability.
+``report.pruned_mass_mean``, ``report.pruned_mass_max`` and
+``report.n_pruned_observations`` record actual omitted mass and affected input
+counts per iteration. These columns also appear in pruned training logs.
+``resume`` restores the recorded ratio unless overridden. Bundled builds expose
+``EM_PRUNE_RATIO``; ``model learn`` and ``model build`` expose ``--prune-ratio``.
+
 EM on a D-bearing locus runs for a long time — IGH enumerates roughly 1,225 D pairs per read
 against TRB's 9 — and the training log only becomes readable once the fit *returns*, so a slow run
 and a stuck one look identical. Two things fix that:

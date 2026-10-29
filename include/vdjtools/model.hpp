@@ -231,6 +231,9 @@ AlignVotes align_init_votes(const PackedModel& m, const std::vector<std::string>
 struct Counts {
     size_t n_scoreable = 0;  // observations with positive likelihood, independent of soft-count mass
     double error_mismatches = 0.0, error_nt = 0.0;  // posterior retained-germline statistics
+    // Per-observation approximation diagnostics, never likelihood-scaled soft counts.
+    double pruned_mass_fraction_sum = 0.0, pruned_mass_fraction_max = 0.0;
+    uint64_t n_pruned_observations = 0;
     std::vector<double> v_choice, j_choice, d_gene, v_3_del, j_5_del, d_del;
     std::vector<double> ins_vd, ins_dj, ins_vj, dinucl_vd, dinucl_dj, dinucl_vj;
     std::vector<double> first_vd, first_dj, first_vj, first_dd;
@@ -249,16 +252,20 @@ Counts make_counts(const PackedModel& m);
 // are gene-index lists restricting enumeration (empty => all functional genes of that segment).
 // ``nthreads`` partitions the reads across worker threads (each with a private accumulator, reduced
 // in a fixed order); 0 = serial (Python APIs resolve allocation). Small batches run single-threaded so their
-// result stays bitwise-identical. The soft counts are exact regardless of thread count (up to the
+// result stays bitwise-identical. With prune_ratio=0 the soft counts are exact (up to the
 // float summation order, which the fixed reduction keeps deterministic per ``nthreads``).
 // ``dd_allowed`` optionally gates the tandem (n_D=2) E-step per read (1 = may be tandem, 0 = single-D
-// only); empty = every read may be tandem. Used to anchor D-D learning to arda's tandem calls.
+// only); empty = every read may be tandem. Explicit caller constraint only; preliminary
+// alignment D calls do not gate the production training path.
 // Optional d2masks restrict D2 independently of dmasks (D1). Absent/empty masks mean
 // unrestricted; Python disables dd_allowed for an explicitly empty fourth mask.
 // error_rate>0 enables retained-germline substitution emissions for training only.
 // Counts records posterior mismatches/retained bases and actual scoreable observations.
 // Sequencing observations contain ACGT indices 0..3 only. Python ingress replaces
 // DNA IUPAC symbols with A; this low-level boundary rejects all other indices.
+// prune_ratio=0 is exact. Otherwise disjoint history cells whose best complete
+// component is below prune_ratio * global best are removed conservatively.
+// This ratio does not bound total omitted mass; Counts records its actual fraction.
 double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int8_t>>& seqs,
                    const std::vector<std::vector<int>>& vmasks,
@@ -268,6 +275,6 @@ double estep_batch(const PackedModel& m,
                    int nthreads = 0,
                    const std::vector<int>& dd_allowed = {},
                    const std::vector<std::vector<int>>& d2masks = {},
-                   double error_rate = 0.0);
+                   double error_rate = 0.0, double prune_ratio = 0.0);
 
 }  // namespace vdjtools

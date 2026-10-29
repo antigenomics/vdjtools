@@ -417,14 +417,35 @@ are attributed in the reconstruction passes, once per segment; the outer $V/J$
 statistics are weighted by the complete history mass. Event tables are normalized
 within their conditioning keys using the same posterior weights.
 
-Preliminary alignment endpoints do not fix recombination boundaries. All supported
-shorter retained segments and corresponding N/P histories must remain in the sum;
+Preliminary alignment endpoints do not fix recombination boundaries. Exact inference retains all supported
+shorter retained segments and corresponding N/P histories in the sum;
 coincidentally matching N bases do not imply zero insertion. Restricting enumeration
 to a candidate gene set is a computational approximation that can change the
 likelihood and fitted parameters if compatible alternatives are omitted. It is not
 an invariance of the EM fixed point. Recorded positive-likelihood observation counts
 exclude unsupported inputs. A mean log-likelihood over that subset must not be
 interpreted as a finite full-cohort likelihood when any observation has zero support.
+
+\paragraph{Bounded native inference} The working inference default is a relative
+scenario cutoff $\rho=10^{-5}$; $\rho=0$ retains exact inference. Let $\mathcal{H}$
+partition complete scenarios into disjoint cells: a single-D gene/deletion/placement
+cell, a tandem-D bridge, or a complete VJ cell. Max-product messages give
+\begin{equation}
+ M_C=\max_{r\in C} w_r,\qquad M=\max_{C\in\mathcal{H}}M_C,\qquad
+ \mathcal{K}_{\rho}=\{C\in\mathcal{H}: M_C\ge\rho M\}.
+\end{equation}
+For $L(y)>0$, the retained likelihood and omitted probability fraction are
+\begin{equation}
+ L_{\rho}(y)=\sum_{C\in\mathcal{K}_{\rho}}\sum_{r\in C}w_r,\qquad
+ \delta_{\rho}(y)=1-\frac{L_{\rho}(y)}{L(y)}.
+\end{equation}
+Every retained event/error count uses that same cell set and normalization
+$L_{\rho}(y)$. Some weak component histories remain within retained cells; this
+preserves factorization. The relative bound follows IGoR's inference principle,
+but these global-max groups differ from its dynamic traversal cutoff. The cutoff
+does not bound total omitted mass: its mean and maximum over scoreable observations
+are recorded per iteration. Generation $\Pgen$ remains exact, and no fixed
+five-nucleotide reassignment limit is used.
 
 \section{Model diagnostics: entropy and mutual information}\label{sec:diag}
 

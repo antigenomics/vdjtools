@@ -1421,6 +1421,61 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
     return base * seq_total;
 }
 
+// Diagnostics describe observation-level omitted probability, not posterior
+// sufficient statistics. Never scale them by the observation likelihood.
+void record_pruning(Counts& c, double retained, double omitted) {
+    const double total = retained + omitted;
+    const double fraction = total > 0.0 ? omitted / total : 0.0;
+    c.pruned_mass_fraction_sum += fraction;
+    c.pruned_mass_fraction_max = std::max(c.pruned_mass_fraction_max, fraction);
+    c.n_pruned_observations += omitted > 0.0;
+}
+
+void merge_pruning(Counts& dst, const Counts& src) {
+    dst.pruned_mass_fraction_sum += src.pruned_mass_fraction_sum;
+    dst.pruned_mass_fraction_max = std::max(dst.pruned_mass_fraction_max, src.pruned_mass_fraction_max);
+    dst.n_pruned_observations += src.n_pruned_observations;
+}
+
+// VJ has no latent D contractions: each V/J trim pair fixes one insertion word.
+// The first pass obtains an actual best complete scenario, without an absolute floor.
+double estep_vj_pruned(const PackedModel& m, const std::vector<int8_t>& observed,
+                       const std::vector<int>& vm, const std::vector<int>& jm,
+                       Counts& c, double rate, double ratio) {
+    const int N = static_cast<int>(observed.size());
+    const int8_t* seq = observed.data();
+    std::vector<std::vector<Opt>> vopts(m.nV()), jopts(m.nJ());
+    for (int v : vm) training_options(m, v, seq, N, true, rate, vopts[v]);
+    for (int j : jm) training_options(m, j, seq, N, false, rate, jopts[j]);
+    auto scenarios = [&](auto&& visit) {
+        for (int v : vm) for (int j : jm) {
+            const double gene = m.pv[v] * m.pjv[v * m.nJ() + j];
+            if (gene == 0.0) continue;
+            for (const auto& vo : vopts[v]) for (const auto& jo : jopts[j]) {
+                if (vo.len + jo.len > N) continue;
+                const double base = gene * vo.p * jo.p;
+                const double insertion = p_insert(m.ins_vj, m.R_vj, m.bias_vj, seq,
+                                                   vo.len, N - jo.len, false);
+                const double mass = base * insertion;
+                if (mass > 0.0) visit(v, j, vo, jo, base, mass);
+            }
+        }
+    };
+    double best = 0.0;
+    scenarios([&](int, int, const Opt&, const Opt&, double, double mass) { best = std::max(best, mass); });
+    const double cutoff = best * ratio;
+    double retained = 0.0, omitted = 0.0;
+    scenarios([&](int v, int j, const Opt& vo, const Opt& jo, double base, double mass) {
+        if (mass < cutoff) { omitted += mass; return; }
+        retained += accum_vj(m, v, j, m.cut_v[v].size() - vo.len, m.cut_j[j].size() - jo.len,
+                              seq + vo.len, N - vo.len - jo.len, base, c);
+        c.error_mismatches += mass * (vo.errors + jo.errors);
+        c.error_nt += mass * (vo.len + jo.len);
+    });
+    record_pruning(c, retained, omitted);
+    return retained;
+}
+
 // Joint histories: sum V/J trims once into insertion endpoint messages, then
 // contract the single/tandem D spans. Backward messages attribute the same
 // unnormalized mass to each realization; estep_range normalizes once per read.
@@ -1428,7 +1483,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
 double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
                    const std::vector<int>& vm, const std::vector<int>& jm,
                    const std::vector<int>& dm, const std::vector<int>& d2m,
-                   Counts& c, bool allow_dd, double rate) {
+                   Counts& c, bool allow_dd, double rate, double prune_ratio) {
     const int N = static_cast<int>(observed.size()), W = N + 1;
     const int D = m.nD(), J = m.nJ();
     const size_t cells = static_cast<size_t>(W) * W;
@@ -1444,7 +1499,9 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
     auto qs = [&](int j, int d) { return m.p_nd1 * m.pd_given_j[j * D + d] * first_copies[d]; };
     auto qt = [&](int j, int d1, int d2) {
         return tandem && tandem_allowed(m, j, d1, d2)
-            ? m.p_nd2 * m.q_tandem[(j * D + d1) * D + d2] * first_copies[d1] * second_copies[d2]
+            ? (m.joint_history ? m.p_nd2 * m.q_tandem[(j * D + d1) * D + d2]
+                               : m.p_nd2 * m.pd_given_j[j * D + d1] * m.pd2_given_d1[d1 * D + d2])
+                * first_copies[d1] * second_copies[d2]
             : 0.0;
     };
     auto insertions = [&](const auto& pins, const auto& R, const auto& bias, bool reverse) {
@@ -1498,6 +1555,71 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
                 }
         }
     };
+    // Complete histories partition into disjoint single-D realization/placement
+    // cells and tandem (D1,end1,start2) bridge cells. Max-product messages bound
+    // every component history in each cell; retained cells keep all components.
+    // Thus this conservative IGoR-style cutoff can retain tiny components, but
+    // cannot discard a scenario at or above ratio * the best complete scenario.
+    // Max messages use mask presence, never duplicate-list multiplicity.
+    std::vector<double> left_max, single_right_max, a_max, bmix_max;
+    double cutoff = 0.0, omitted = 0.0;
+    if (prune_ratio > 0.0) {
+        std::vector<double> vmax(W, 0.0), jmax(static_cast<size_t>(J) * W, 0.0);
+        std::vector<double> right_max(jmax.size(), 0.0);
+        left_max.assign(W, 0.0);
+        single_right_max.assign(static_cast<size_t>(D) * W, 0.0);
+        for (int v : vm) for (const auto& o : vopts[v])
+            vmax[o.len] = std::max(vmax[o.len], m.pv[v] * o.p);
+        for (int j : jm) for (const auto& o : jopts[j])
+            jmax[js(j, N - o.len)] = std::max(jmax[js(j, N - o.len)], m.pj[j] * o.p);
+        for (int lo = 0; lo <= N; ++lo) for (int hi = lo; hi <= N; ++hi) {
+            left_max[hi] = std::max(left_max[hi], vmax[lo] * vd[cell(lo, hi)]);
+            for (int j = 0; j < J; ++j)
+                right_max[js(j, lo)] = std::max(right_max[js(j, lo)], dj[cell(lo, hi)] * jmax[js(j, hi)]);
+        }
+        for (int j = 0; j < J; ++j) for (int d = 0; d < D; ++d) {
+            if (!first_copies[d]) continue;
+            const double q = m.p_nd1 * m.pd_given_j[j * D + d];
+            for (int hi = 0; hi <= N; ++hi)
+                single_right_max[ds(d, hi)] = std::max(single_right_max[ds(d, hi)], q * right_max[js(j, hi)]);
+        }
+        double best = 0.0;
+        d_spans(m.del_d, first_copies, false,
+                [&](int d, size_t, int lo, int hi, double weight, int) {
+                    best = std::max(best, left_max[lo] * weight * single_right_max[ds(d, hi)]);
+                });
+        if (tandem) {
+            a_max.assign(static_cast<size_t>(D) * W, 0.0);
+            bmix_max.assign(a_max.size(), 0.0);
+            std::vector<double> second_max(static_cast<size_t>(D) * cells, 0.0);
+            std::vector<double> bmax(static_cast<size_t>(J) * D * W, 0.0);
+            d_spans(tandem_first_deletions(m), first_copies, true,
+                    [&](int d, size_t, int lo, int hi, double weight, int) {
+                        a_max[ds(d, hi)] = std::max(a_max[ds(d, hi)], left_max[lo] * weight);
+                    });
+            d_spans(m.del_d2, second_copies, true,
+                    [&](int d, size_t, int lo, int hi, double weight, int) {
+                        const size_t idx = d * cells + cell(lo, hi);
+                        second_max[idx] = std::max(second_max[idx], weight);
+                    });
+            for (int j = 0; j < J; ++j) for (int d = 0; d < D; ++d)
+                for (int lo = 0; lo <= N; ++lo) for (int hi = lo + 1; hi <= N; ++hi)
+                    bmax[jds(j, d, lo)] = std::max(bmax[jds(j, d, lo)],
+                        second_max[d * cells + cell(lo, hi)] * right_max[js(j, hi)]);
+            for (int j = 0; j < J; ++j) for (int d1 = 0; d1 < D; ++d1) for (int d2 = 0; d2 < D; ++d2) {
+                if (!first_copies[d1] || !second_copies[d2] || !tandem_allowed(m, j, d1, d2)) continue;
+                const double q = m.joint_history ? m.p_nd2 * m.q_tandem[(j * D + d1) * D + d2]
+                    : m.p_nd2 * m.pd_given_j[j * D + d1] * m.pd2_given_d1[d1 * D + d2];
+                for (int lo = 0; lo <= N; ++lo)
+                    bmix_max[ds(d1, lo)] = std::max(bmix_max[ds(d1, lo)], q * bmax[jds(j, d2, lo)]);
+            }
+            for (int d = 0; d < D; ++d)
+                for (int hi = 0; hi <= N; ++hi) for (int lo = hi; lo <= N; ++lo)
+                    best = std::max(best, a_max[ds(d, hi)] * dd[cell(hi, lo)] * bmix_max[ds(d, lo)]);
+        }
+        cutoff = best * prune_ratio;
+    }
+
     std::vector<double> single_right(static_cast<size_t>(D) * W, 0.0), single_end(single_right.size(), 0.0);
     for (int j = 0; j < J; ++j) for (int d = 0; d < D; ++d) {
         const double q = qs(j, d);
@@ -1508,6 +1630,10 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
     d_spans(m.del_d, first_copies, false, [&](int d, size_t index, int lo, int hi, double weight, int errors) {
         const double backward = single_right[ds(d, hi)];
         const double mass = left[lo] * weight * backward;
+        if (prune_ratio > 0.0 && left_max[lo] * weight * single_right_max[ds(d, hi)] < cutoff) {
+            omitted += mass;
+            return;
+        }
         single_total += mass;
         single_end[ds(d, hi)] += left[lo] * weight;
         left_back[lo] += weight * backward;
@@ -1524,7 +1650,7 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
             right_back[js(j, end)] += backward;
             mass += backward * right[js(j, end)];
         }
-        c.history_single[j * D + d] += mass;
+        if (m.joint_history) c.history_single[j * D + d] += mass;
         c.d_gene[j * D + d] += mass;
     }
 
@@ -1534,7 +1660,7 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
         std::vector<double> context(a.size(), 0.0), forward(a.size(), 0.0);
         std::vector<double> second(static_cast<size_t>(D) * cells, 0.0), second_back(second.size(), 0.0);
         std::vector<double> b(static_cast<size_t>(J) * D * W, 0.0), bback(b.size(), 0.0);
-        d_spans(m.del_d_tandem, first_copies, true,
+        d_spans(tandem_first_deletions(m), first_copies, true,
                 [&](int d, size_t, int lo, int hi, double weight, int) { a[ds(d, hi)] += left[lo] * weight; });
         d_spans(m.del_d2, second_copies, true,
                 [&](int d, size_t, int lo, int hi, double weight, int) { second[d * cells + cell(lo, hi)] += weight; });
@@ -1551,6 +1677,10 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
             for (int end = 0; end <= N; ++end) for (int lo = end; lo <= N; ++lo) {
                 const double insertion = dd[cell(end, lo)];
                 if (insertion == 0.0) continue;
+                if (prune_ratio > 0.0 && a_max[ds(d, end)] * insertion * bmix_max[ds(d, lo)] < cutoff) {
+                    omitted += a[ds(d, end)] * insertion * bmix[ds(d, lo)];
+                    continue;
+                }
                 context[ds(d, end)] += insertion * bmix[ds(d, lo)];
                 forward[ds(d, lo)] += a[ds(d, end)] * insertion;
                 dd_back[cell(end, lo)] += a[ds(d, end)] * bmix[ds(d, lo)];
@@ -1566,7 +1696,7 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
                 bback[jds(j, d2, lo)] += backward;
                 mass += backward * b[jds(j, d2, lo)];
             }
-            c.history_tandem[(j * D + d1) * D + d2] += mass;
+            if (m.joint_history) c.history_tandem[(j * D + d1) * D + d2] += mass;
             c.d_gene[j * D + d1] += mass;
             c.d2_gene[d1 * D + d2] += mass;
         }
@@ -1580,11 +1710,11 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
                     right_back[js(j, hi)] += backward * second[index];
                 }
             }
-        d_spans(m.del_d_tandem, first_copies, true, [&](int d, size_t index, int lo, int hi, double weight, int errors) {
+        d_spans(tandem_first_deletions(m), first_copies, true, [&](int d, size_t index, int lo, int hi, double weight, int errors) {
             const double backward = context[ds(d, hi)];
             const double mass = left[lo] * weight * backward;
             left_back[lo] += weight * backward;
-            c.d_tandem_del[index] += mass;
+            (m.joint_history ? c.d_tandem_del : c.d_del)[index] += mass;
             c.error_mismatches += mass * errors;
             c.error_nt += mass * (hi - lo);
         });
@@ -1637,13 +1767,14 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
         c.error_mismatches += mass * o.errors;
         c.error_nt += mass * o.len;
     }
+    if (prune_ratio > 0.0) record_pruning(c, single_total + tandem_total, omitted);
     return single_total + tandem_total;
 }
 
 double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
                  const std::vector<int>& vmask, const std::vector<int>& jmask,
                  const std::vector<int>& dmask, Counts& local, bool allow_dd = true,
-                 const std::vector<int>& d2mask = {}, double error_rate = 0.0) {
+                 const std::vector<int>& d2mask = {}, double error_rate = 0.0, double prune_ratio = 0.0) {
     int N = cdr3.size();
     const int8_t* s = cdr3.data();
     const std::vector<int>& vm = vmask.empty() ? m.func_v : vmask;
@@ -1652,7 +1783,10 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
 
     const std::vector<int>& d2m = d2mask.empty() ? m.func_d : d2mask;
 
-    if (m.joint_history) return estep_joint(m, cdr3, vm, jm, dm, d2m, local, allow_dd, error_rate);
+    if (!m.vdj && prune_ratio > 0.0)
+        return estep_vj_pruned(m, cdr3, vm, jm, local, error_rate, prune_ratio);
+    if (m.joint_history || prune_ratio > 0.0)
+        return estep_joint(m, cdr3, vm, jm, dm, d2m, local, allow_dd, error_rate, prune_ratio);
 
     struct JC {
         int j;
@@ -1709,6 +1843,8 @@ double estep_one(const PackedModel& m, const std::vector<int8_t>& cdr3,
 
 void zero(Counts& c) {
     c.error_mismatches = c.error_nt = 0.0;
+    c.pruned_mass_fraction_sum = c.pruned_mass_fraction_max = 0.0;
+    c.n_pruned_observations = 0;
     for (auto* v : {&c.v_choice, &c.j_choice, &c.d_gene, &c.v_3_del, &c.j_5_del, &c.d_del,
                     &c.ins_vd, &c.ins_dj, &c.ins_vj, &c.dinucl_vd, &c.dinucl_dj, &c.dinucl_vj,
                     &c.n_d, &c.d2_gene, &c.d2_del, &c.ins_dd, &c.dinucl_dd,
@@ -1783,7 +1919,7 @@ double estep_range(const PackedModel& m,
                    const std::vector<std::vector<int>>& dmasks,
                    const std::vector<int>& dd_allowed,
                    const std::vector<std::vector<int>>& d2masks,
-                   size_t lo, size_t hi, Counts& acc, double error_rate) {
+                   size_t lo, size_t hi, Counts& acc, double error_rate, double prune_ratio) {
     Counts local = make_counts(m);
     bool have_dd_gate = !dd_allowed.empty();
     std::vector<int> empty;
@@ -1795,12 +1931,13 @@ double estep_range(const PackedModel& m,
         const std::vector<int>& dm = dmasks.empty() ? empty : dmasks[i];
         const std::vector<int>& d2m = d2masks.empty() ? empty : d2masks[i];
         bool allow_dd = have_dd_gate ? dd_allowed[i] != 0 : true;
-        const double total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd, d2m, error_rate);
+        const double total = estep_one(m, seqs[i], vm, jm, dm, local, allow_dd, d2m, error_rate, prune_ratio);
         if (total > 0.0) {
             ll += std::log(total);
             add_scaled(acc, local, 1.0 / total);
             ++acc.n_scoreable;
         }
+        merge_pruning(acc, local);
     }
     return ll;
 }
@@ -1815,9 +1952,11 @@ double estep_batch(const PackedModel& m,
                    Counts& counts,
                    int nthreads,
                    const std::vector<int>& dd_allowed,
-                   const std::vector<std::vector<int>>& d2masks, double error_rate) {
+                   const std::vector<std::vector<int>>& d2masks, double error_rate, double prune_ratio) {
     if (!std::isfinite(error_rate) || error_rate < 0.0 || error_rate > 1.0)
         throw std::invalid_argument("error_rate must be finite and between 0 and 1");
+    if (!std::isfinite(prune_ratio) || prune_ratio < 0.0 || prune_ratio >= 1.0)
+        throw std::invalid_argument("prune_ratio must be finite and in [0, 1)");
     size_t n = seqs.size();
     for (const auto& seq : seqs)
         for (int nt : seq)
@@ -1835,7 +1974,7 @@ double estep_batch(const PackedModel& m,
         throw std::invalid_argument("dd_allowed must match the number of sequences");
     if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
     int T = nthreads > 0 ? nthreads : 1;
-    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, 0, n, counts, error_rate);
+    if (n < kEstepThreadMin || T <= 1) return estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, 0, n, counts, error_rate, prune_ratio);
     if (static_cast<size_t>(T) > n) T = static_cast<int>(n);
 
     std::vector<Counts> acc(T);
@@ -1849,7 +1988,7 @@ double estep_batch(const PackedModel& m,
         size_t lo = static_cast<size_t>(t) * chunk, hi = std::min(n, lo + chunk);
         if (lo >= hi) break;
         pool.emplace_back([&, t, lo, hi] {
-            try { lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, lo, hi, acc[t], error_rate); }
+            try { lls[t] = estep_range(m, seqs, vmasks, jmasks, dmasks, dd_allowed, d2masks, lo, hi, acc[t], error_rate, prune_ratio); }
             catch (...) { errors[t] = std::current_exception(); }
         });
     }
@@ -1860,6 +1999,7 @@ double estep_batch(const PackedModel& m,
         ll += lls[t];
         add_scaled(counts, acc[t], 1.0);
         counts.n_scoreable += acc[t].n_scoreable;
+        merge_pruning(counts, acc[t]);
     }
     return ll;
 }

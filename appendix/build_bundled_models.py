@@ -17,10 +17,9 @@ insertion-length model would then happily learn.
 
 No cap, no subsampling: every clonotype surviving the germline filter goes into EM.
 
-Convergence-based EM: stop when the relative log-likelihood improvement falls below EM_TOL
-(whole-model signal — the old V-usage criterion settled in ~2 iters while trims/insertions/n_d were
-still moving, so it was disabled; log-lik is monotone now that the fixes keep the scoreable-read set
-stable). EM_ITERS is a generous safety cap, not the target.
+Convergence-based EM: stop when the relative log-likelihood change falls below EM_TOL
+(whole-model signal, including trims/insertions/n_d). EM_ITERS is a safety cap,
+not the target. The inference cutoff and actual omitted mass are recorded per run.
 
 Reproduce (needs arda/mmseqs2 + HF access):  python appendix/build_bundled_models.py
 
@@ -46,6 +45,7 @@ ITERS = int(os.environ.get("EM_ITERS", "15"))          # generous safety cap
 EM_TOL = float(os.environ.get("EM_TOL", "1e-4"))       # stop at relative log-lik improvement < this
 WORKERS = int(os.environ.get("EM_WORKERS", "0")) or None
 THREADS = int(os.environ.get("EM_THREADS", "0"))
+PRUNE_RATIO = float(os.environ.get("EM_PRUNE_RATIO", "1e-5"))
 
 
 def training_clones(locus: str, group: str = "human"):
@@ -96,7 +96,7 @@ def main():
                 template=None,  # data.build_model owns the ARDA germline scaffold
                 clones=training_clones(locus, group), threads=THREADS, verbose=True,
                 work_dir=WORK, iters=ITERS, tol=EM_TOL, single_d=single_d,
-                nd_prior=nd_prior, gene_prior=gene_prior)
+                nd_prior=nd_prior, gene_prior=gene_prior, prune_ratio=PRUNE_RATIO)
             model.save(DEST / key)
             rows.append(stats)
             print(f"  [{locus}] {stats['n_used']}/{stats['n_clonotypes']} clonotypes, "

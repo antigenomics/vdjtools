@@ -1175,6 +1175,8 @@ def model_learn(
     init: str = typer.Option("align", help="align | uniform | template (template = warm start / fine-tune)."),
     gene_prior: float = typer.Option(1.0, help="Dirichlet pseudocount over functional V/J alleles."),
     nd_prior: float = typer.Option(0.0, help="Pseudocount pushing P(n_D=2) toward 0."),
+    prune_ratio: Optional[float] = typer.Option(None, "--prune-ratio", min=0.0,
+        help="Relative best-scenario cutoff: default 1e-5, or the recorded value on resume; 0 is exact."),
     single_d: bool = typer.Option(False, "--single-d", help="Force a strict single-D model."),
     no_calls: bool = typer.Option(False, "--no-calls", help="Ignore V/J calls (much slower)."),
     verbose: bool = typer.Option(False, "--verbose", "-v",
@@ -1217,6 +1219,15 @@ def model_learn(
         from vdjtools.model.io import from_arda
 
         base = from_arda(locus, organism)
+    pruning = 1e-5 if prune_ratio is None else prune_ratio
+    restored = {}
+    if resume_from is not None:
+        runs = (base.training or {}).get("runs", [])
+        if runs:
+            if prune_ratio is None:
+                pruning = runs[-1].get("prune_ratio", 0.0)
+            if runs[-1].get("error_rate"):
+                restored["error_rate"] = runs[-1]["error_rate"][-1]
     try:
         clones = _read(input, fmt="auto")
     except Exception:  # noqa: BLE001 - fall back to a plain table read
@@ -1226,6 +1237,7 @@ def model_learn(
         m, rep = infer_frame(base, clones, seq_col=column, use_calls=not no_calls,
                              max_iter=max_iter, tol=tol, init=init,
                              gene_prior=gene_prior, nd_prior=nd_prior, single_d=single_d,
+                             prune_ratio=pruning, **restored,
                              progress=print_progress() if verbose else None,
                              checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     except (ValueError, KeyError) as e:
@@ -1244,6 +1256,8 @@ def model_build(
     work_dir: Path = typer.Option(Path("/tmp/vdjtools_build"), help="Scratch dir for arda output."),
     cap: Optional[int] = typer.Option(None, help="Cap reads per chain (default: use every read)."),
     max_iter: int = typer.Option(15, help="EM iteration cap."),
+    prune_ratio: float = typer.Option(1e-5, "--prune-ratio", min=0.0,
+        help="Relative best-scenario cutoff; 0 is exact. Actual omitted mass is recorded."),
     verbose: bool = typer.Option(False, "--verbose", "-v",
                                  help="Stream arda's mapping output and each EM iteration."),
     out: Optional[Path] = _MODEL_OUT,
@@ -1267,7 +1281,7 @@ def model_build(
     res = build_all([c.strip() for c in chains.split(",") if c.strip()],
                     groups=tuple(g.strip() for g in groups.split(",") if g.strip()),
                     workers=workers, out_dir=out, work_dir=work_dir, cap=cap, iters=max_iter,
-                    verbose=verbose)
+                    verbose=verbose, prune_ratio=prune_ratio)
     ok = [r["stats"] for r in res.values() if "stats" in r]
     for key, r in res.items():
         if "error" in r:

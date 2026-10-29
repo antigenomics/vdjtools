@@ -375,7 +375,7 @@ def load_prepared(group: str = "human", chain: str = "TRB", label: str = "nonfun
 #: absorbing state of this EM, so without a Dirichlet pseudocount over the germline's functional
 #: alleles one unlucky iteration deletes a real gene permanently (human TRB kept 30 of 57 V genes
 #: unregularized, having seen 54 in the data).
-BUILD_DEFAULTS = {"iters": 15, "tol": 1e-4, "gene_prior": 1.0, "nd_prior": 0.0}
+BUILD_DEFAULTS = {"iters": 15, "tol": 1e-4, "gene_prior": 1.0, "nd_prior": 0.0, "prune_ratio": 1e-5}
 
 
 def build_model(chain: str, *, group: str = "human", template=None, clones: pl.DataFrame | None = None,
@@ -384,7 +384,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
                 nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0,
                 ambiguous: str = "A", verbose: bool = False,
                 checkpoint=None, checkpoint_every: int = 1,
-                error_rate: float | None = 0.01):
+                error_rate: float | None = 0.01, prune_ratio: float = 1e-5):
     """Fetch, annotate and EM-fit a model for one chain — the whole corpus pipeline, end to end.
 
     Args:
@@ -408,6 +408,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         error_rate: Initial retained-germline substitution probability, fitted by EM.
             ``None`` retains exact matching. D/D2 paths remain unrestricted by annotation.
         ambiguous: Must be ``"A"``: DNA IUPAC sequencing symbols are replaced with A.
+        prune_ratio: Relative best-scenario cutoff; 0 is exact. Actual omitted mass
+            is recorded separately in the training report.
 
     Returns:
         ``(model, report, stats)`` — ``stats`` records ``chain, group, chain_type, n_clonotypes,
@@ -418,6 +420,10 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         >>> model.save("models/TRB")
     """
     import time
+    from math import isfinite
+
+    if not isfinite(prune_ratio) or not 0 <= prune_ratio < 1:
+        raise ValueError("prune_ratio must be finite and between 0 (inclusive) and 1 (exclusive)")
 
     from .infer import candidate_masks, infer_native, print_progress
     from .io import from_arda
@@ -444,6 +450,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
                               single_d=single_d, nd_prior=nd_prior, error_rate=error_rate,
                               candidate_search=evidence,
+                              prune_ratio=prune_ratio,
                               gene_prior=gene_prior, threads=threads,
                               progress=print_progress(prefix=f"[{chain}] ") if verbose else None,
                               checkpoint=checkpoint, checkpoint_every=checkpoint_every)
@@ -465,6 +472,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         "iters": rep.n_iter, "seconds": round(time.perf_counter() - started, 1),
         "n_scoreable": rep.n_scoreable[-1] if rep.n_scoreable else 0,
         "candidate_search": evidence,
+        "prune_ratio": prune_ratio,
     }
     return model, rep, stats
 

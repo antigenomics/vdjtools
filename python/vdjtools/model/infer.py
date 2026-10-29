@@ -50,6 +50,10 @@ class InferenceReport:
     error_model: str = "exact"
     candidate_search: dict = field(default_factory=dict)
     n_ambiguous: int = 0
+    prune_ratio: float = 0.0
+    pruned_mass_mean: list[float] = field(default_factory=list)
+    pruned_mass_max: list[float] = field(default_factory=list)
+    n_pruned_observations: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """The report as a JSON-serializable dict (one entry of a model's ``training["runs"]``)."""
@@ -66,12 +70,19 @@ class InferenceReport:
     def to_frame(self) -> pl.DataFrame:
         """Per-iteration training log: ``iter, loglik, n_scoreable, rel_change``."""
         n = len(self.loglik)
-        return pl.DataFrame({
+        frame = pl.DataFrame({
             "iter": list(range(1, n + 1)),
             "loglik": self.loglik,
             "n_scoreable": (self.n_scoreable + [None] * n)[:n],
             "rel_change": (self.gene_tv + [None] * n)[:n],
         })
+        if self.prune_ratio:
+            frame = frame.with_columns([
+                pl.Series(name, (values + [None] * n)[:n])
+                for name, values in (("pruned_mass_mean", self.pruned_mass_mean),
+                                     ("pruned_mass_max", self.pruned_mass_max),
+                                     ("n_pruned_observations", self.n_pruned_observations))])
+        return frame
 
 
 def _record(report: InferenceReport, model: Model, template: Model, *, started: float,
@@ -154,6 +165,8 @@ def resume(path, sequences, **kw):
         kw.setdefault("error_rate", runs[-1]["error_rate"][-1])
     if runs and runs[-1].get("candidate_search"):
         kw.setdefault("candidate_search", runs[-1]["candidate_search"])
+    if runs:
+        kw.setdefault("prune_ratio", runs[-1].get("prune_ratio", 0.0))
     return infer_native(base, sequences, **kw)
 
 
@@ -205,15 +218,16 @@ def training_frame(obj) -> pl.DataFrame:
         >>> training_frame(m)     # loglik per iteration, ready to plot
     """
     if isinstance(obj, InferenceReport):
-        return obj.to_frame().with_columns(run=pl.lit(0, dtype=pl.Int64)).select(
-            ["run", "iter", "loglik", "n_scoreable", "rel_change"])
+        frame = obj.to_frame().with_columns(run=pl.lit(0, dtype=pl.Int64))
+        return frame.select(["run", *[c for c in frame.columns if c != "run"]])
     runs = (getattr(obj, "training", None) or {}).get("runs", [])
     if not runs:
         return pl.DataFrame(schema={"run": pl.Int64, "iter": pl.Int64, "loglik": pl.Float64,
                                     "n_scoreable": pl.Int64, "rel_change": pl.Float64})
     parts = [InferenceReport.from_dict(r).to_frame().with_columns(run=pl.lit(i, dtype=pl.Int64))
              for i, r in enumerate(runs)]
-    return pl.concat(parts).select(["run", "iter", "loglik", "n_scoreable", "rel_change"])
+    frame = pl.concat(parts, how="diagonal_relaxed")
+    return frame.select(["run", *[c for c in frame.columns if c != "run"]])
 
 
 def _loglik_rel(loglik: list[float]) -> float:
@@ -957,6 +971,9 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
                 pl.col(j_col).alias('j_call')),template)
         else:
             masks = gene_masks(template, df[v_col].to_list(), df[j_col].to_list())
+    if not native and "prune_ratio" in kw:
+        if kw.pop("prune_ratio") != 0:
+            raise ValueError("pure-Python inference is exact; use native=True for pruning")
     fn = infer_native if native else infer
     return fn(template, seqs, masks=masks, **kw)
 
@@ -1569,10 +1586,17 @@ def infer_native(
     threads: int = 0,
     error_rate: float | None = None,
     candidate_search: dict | None = None,
+    prune_ratio: float = 1e-5,
 ) -> tuple[Model, InferenceReport]:
-    """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
+    """EM inference with the native C++ E-step and optional probability-bound pruning.
 
     ``threads`` bounds E-step kernel threads; ``0`` uses the available CPU allocation.
+    ``prune_ratio`` (default 1e-5) discards disjoint history cells whose best
+    complete scenario is below this fraction of the best complete scenario.
+    Cells can retain weaker component histories. This is a conservative factorized
+    analogue of IGoR's relative cutoff, not its traversal order. Set 0 for exact
+    inference. Reports record the actual mean/maximum omitted probability mass;
+    the scenario cutoff does not bound their sum. Generation Pgen stays exact.
 
     ``error_rate=None`` retains exact matching. A value in [0, 1] enables a fitted
     retained-germline substitution channel: each match contributes ``1-error_rate``
@@ -1604,6 +1628,10 @@ def infer_native(
 
     from .._core import estep_batch, make_counts
     from ..cores import kernel_threads
+    from math import isfinite
+
+    if not isfinite(prune_ratio) or not 0 <= prune_ratio < 1:
+        raise ValueError("prune_ratio must be finite and between 0 (inclusive) and 1 (exclusive)")
 
     threads = kernel_threads(threads)
     from .native import _encode_observed, pack
@@ -1648,19 +1676,23 @@ def infer_native(
         vmasks = jmasks = dmasks = d2masks = []
 
     report = InferenceReport(error_model="exact" if error_rate is None else "retained-germline-substitution",
-                             candidate_search=dict(candidate_search or {}), n_ambiguous=n_ambiguous)
+                             candidate_search=dict(candidate_search or {}), n_ambiguous=n_ambiguous,
+                             prune_ratio=prune_ratio)
     meta = dict(started=started, max_iter=max_iter, tol=tol, init=init, native=True,
                 n_sequences=len(upper))
     for it in range(max_iter):
         pm, _, _ = pack(model)
         counts = make_counts(pm)
         ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags, d2masks,
-                         0.0 if error_rate is None else error_rate)
+                         0.0 if error_rate is None else error_rate, prune_ratio)
         # Match infer(): the native sum includes positive-likelihood observations only.
         # Counting all inputs here silently hid unsupported reads and diluted the mean.
         n = counts.n_scoreable
         report.loglik.append(ll / n if n else float("-inf"))
         report.n_scoreable.append(n)
+        report.pruned_mass_mean.append(counts.pruned_mass_fraction_sum / n if n else 0.0)
+        report.pruned_mass_max.append(counts.pruned_mass_fraction_max)
+        report.n_pruned_observations.append(counts.n_pruned_observations)
         if error_rate is not None:
             if counts.error_nt > 0:
                 error_rate = min(1.0, max(0.0, counts.error_mismatches / counts.error_nt))
@@ -1670,7 +1702,7 @@ def infer_native(
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
         report.n_iter = it + 1
         model = new_model
-        # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
+        # Converge on relative whole-model log-likelihood change, not V
         # usage alone: gene usage can settle while trims/insertions/D-D still move.
         rel = _loglik_rel(report.loglik)
         report.gene_tv.append(rel)
