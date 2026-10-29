@@ -628,7 +628,7 @@ def from_germline(germline: pl.DataFrame, *, locus: str, organism: str = "custom
 
 def from_arda(locus: str, organism: str = "human", *,
               palindrome_max: dict[str, int] | None = None, ins_max: int = 40,
-              gene_level: bool = False) -> Model:
+              gene_level: bool = True) -> Model:
     """Build a recombination :class:`Model` whose gene set + germline come from **arda**.
 
     A thin wrapper over :func:`from_germline` that sources the germline library from arda — the
@@ -641,8 +641,9 @@ def from_arda(locus: str, organism: str = "human", *,
         organism: e.g. ``"human"``, ``"mouse"``.
         palindrome_max: Max palindromic nt per trimmable end (default matches OLGA human).
         ins_max: Maximum N-region insertion length in the placeholder tables.
-        gene_level: Select one usable germline per gene before constructing tables: ``*01``
-            when available, otherwise the lowest-numbered allele. Used by raw-read model training.
+        gene_level: Select one usable major germline per gene (the default): prefer a functional
+            ``*01``, otherwise the lowest-numbered usable functional allele. Set False to retain
+            the explicit allele-level reference for diagnostics.
 
     Returns:
         A validated :class:`Model` (VDJ if arda has D germline for the locus, else VJ).
@@ -665,9 +666,11 @@ def from_arda(locus: str, organism: str = "human", *,
             "germline_empty_sequence", "germline_ambiguous", "germline_anchor_frame"]))["allele"]
         gl = (gl.filter(~pl.col("allele").is_in(unusable.implode()))
               .with_columns(_allele_number=pl.col("allele").str.split("*").list.get(1, null_on_oob=True)
-                            .cast(pl.UInt32, strict=False).fill_null(2**32-1))
-              .sort(["segment", "gene", "_allele_number", "allele"])
-              .unique(["segment", "gene"], keep="first", maintain_order=True).drop("_allele_number"))
+                            .cast(pl.UInt32, strict=False).fill_null(2**32-1),
+                            _not_functional=~pl.col("functional"))
+              .sort(["segment", "gene", "_not_functional", "_allele_number", "allele"])
+              .unique(["segment", "gene"], keep="first", maintain_order=True)
+              .drop("_allele_number", "_not_functional"))
     full = ref.arda_full_germline(locus, organism)
     gl = gl.with_columns(
         full_germline=pl.struct(["segment", "allele"]).map_elements(

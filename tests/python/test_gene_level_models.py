@@ -154,11 +154,14 @@ def test_supported_gene_scaffolds(organism, locus):
     invalid = reference.validate_germline(gl).filter(pl.col('check').is_in(
         ['germline_empty_sequence', 'germline_ambiguous', 'germline_anchor_frame']))['allele']
     usable = gl.filter(~pl.col('allele').is_in(invalid.implode()) &
-                       (pl.col('status').fill_null('') != 'truncated'))
+                       ~pl.col('status').fill_null('').is_in(['truncated', 'partial']))
     for seg, frame in m.genomic.items():
         assert frame['gene'].n_unique() == frame.height
         for gene, allele in frame.select('gene', seg.replace('genes_', '')+'_allele').iter_rows():
-            options = usable.filter(pl.col('gene') == gene)['allele'].to_list()
+            choices = usable.filter(pl.col('gene') == gene)
+            if choices['functional'].any():
+                choices = choices.filter(pl.col('functional'))
+            options = choices['allele'].to_list()
             assert allele == min(options, key=lambda a: (int(a.split('*')[1]), a))
 
 
@@ -186,3 +189,61 @@ def test_raw_prepare_merges_gene_calls_without_losing_d_alternatives(monkeypatch
     assert out['count'].to_list() == [8]
     assert out['d_call'].to_list() == ['TOYD1,TOYD2']
     assert out['d2_call'].to_list() == ['TOYD3']
+
+
+def test_inference_masks_convert_suffixes_and_keep_gene_ambiguity(monkeypatch, toy_germline):
+    from vdjtools.model.infer import infer, infer_native
+    monkeypatch.setattr(reference, 'load_germline', lambda *a: toy_germline)
+    monkeypatch.setattr(reference, 'arda_full_germline', lambda *a: {})
+    model = from_arda('TOY', gene_level=True, ins_max=3)
+    sequences = ['TGTGCCAGCTTT', 'TGTGCTTCCTTT']
+    aliases = [(['TOYV1*99', 'TOYV2*99', 'TOYV1*02'], ['TOYJ1*99'], None)] * 2
+    majors = [(['TOYV1*01', 'TOYV2*01'], ['TOYJ1*01'], None)] * 2
+    for fit in (infer, infer_native):
+        kwargs = {'threads': 1} if fit is infer_native else {}
+        _, expected = fit(model, sequences, masks=majors, max_iter=1, init='template', **kwargs)
+        _, actual = fit(model, sequences, masks=aliases, max_iter=1, init='template', **kwargs)
+        assert actual.n_scoreable == expected.n_scoreable == [2]
+        assert actual.loglik == pytest.approx(expected.loglik)
+
+
+def test_unknown_mask_gene_cannot_turn_into_unrestricted_inference(monkeypatch, toy_germline):
+    from vdjtools.model.infer import infer, infer_native
+    monkeypatch.setattr(reference, 'load_germline', lambda *a: toy_germline)
+    monkeypatch.setattr(reference, 'arda_full_germline', lambda *a: {})
+    model = from_arda('TOY', gene_level=True)
+    for fit in (infer, infer_native):
+        with pytest.raises(KeyError, match='UNKNOWN'):
+            fit(model, ['TGTGCCAGATTT'], masks=[(['UNKNOWN*01'], [], None)], max_iter=1)
+
+
+def test_major_is_default_and_functional_fallback_is_not_lost(monkeypatch, toy_germline):
+    gl = toy_germline.with_columns(functional=pl.col('allele') != 'TOYV1*01')
+    monkeypatch.setattr(reference, 'load_germline', lambda *a: gl)
+    monkeypatch.setattr(reference, 'arda_full_germline', lambda *a: {})
+    model = from_arda('TOY', ins_max=0)
+    assert model.genomic['genes_v']['v_allele'].to_list() == ['TOYV1*02', 'TOYV2*01']
+    all_alleles = from_arda('TOY', gene_level=False, ins_max=0)
+    assert all_alleles.genomic['genes_v'].height == 3
+    sequence = 'TGTGCCAGTAACTATGGCTATACCTTT'
+    assert native.pgen_nt(model, sequence, 'TOYV1*01', 'TOYJ1*99') == native.pgen_nt(
+        model, sequence, 'TOYV1*02', 'TOYJ1*01') > 0
+
+
+def test_d_mask_aliases_preserve_none_and_empty_second_d(toy_model_vdj):
+    from vdjtools.model.infer import _canonical_masks
+    masks = [([], [], ['TOYD1*99'], ['TOYD1*07']), ([], [], None, []), ([], [], None, None)]
+    assert _canonical_masks(toy_model_vdj, masks, 3) == [
+        ([], [], ['TOYD1*01'], ['TOYD1*01']), ([], [], None, []), ([], [], None, None)]
+
+
+@pytest.mark.parametrize('single_d', [False, True])
+def test_new_arda_fit_uses_normalized_joint_histories(single_d):
+    from vdjtools.model.dd import d_count_probabilities
+    from vdjtools.model.infer import _maybe_promote_dd
+    model = _maybe_promote_dd(from_arda('TRB'), single_d, 0.02)
+    assert 'd_history' in model.tables and 'd_gene' not in model.tables
+    model.validate()
+    probabilities = d_count_probabilities(model)
+    assert sum(probabilities.values()) == pytest.approx(1)
+    assert (probabilities.get(2, 0) == 0) is single_d

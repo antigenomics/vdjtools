@@ -50,6 +50,15 @@ Custom germline libraries
 :func:`~vdjtools.model.io.from_germline` builds a model scaffold from **any** V(D)J library — your
 own FASTA, a population-specific reference, or arda's. ``from_arda`` is a thin wrapper over it.
 
+``from_arda`` defaults to one major allele per gene: a usable functional ``*01``
+when present, otherwise the lowest-numbered usable functional allele. Explicit
+``gene_level=False`` retains the allele-level reference for diagnostics. Alternative
+genes remain distinct candidates. Inference masks and generation-probability calls
+resolve allele suffixes to the model's major representative, including a fallback
+such as ``*02``. Repeated aliases do not add probability mass; unknown genes raise
+instead of silently turning into an unrestricted search. Generated calls use the
+same major names as the model's germline tables.
+
 ``load_germline`` preserves every locus membership declared by arda's anchor table.
 Shared ``TRAV…/DV…`` alleles therefore occur in both TRA and TRD libraries; an
 allele's single compatibility ``Anchor.locus`` label does not restrict membership.
@@ -93,7 +102,8 @@ Joint single/tandem D histories
 --------------------------------
 
 ``vdjtools.model.dd.to_history(template)`` explicitly converts a VDJ scaffold to
-schema 3.0. Its ``d_history`` table stores ``j_allele, n_d, d_allele,
+schema 3.0; inference applies this automatically to new ARDA VDJ scaffolds.
+Its ``d_history`` table stores ``j_allele, n_d, d_allele,
 d2_allele, p`` and normalizes the complete history distribution within each J.
 Single-D rows use an empty string for the absent second D. A J with no physical
 tandem path has only single-D mass; D1–D2–J2 remains permitted in TRB.

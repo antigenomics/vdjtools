@@ -650,10 +650,10 @@ DD_DEFAULT_LOCI = frozenset({"TRB", "TRD", "IGH"})
 def _maybe_promote_dd(template: Model, single_d: bool, p_nd2_init: float) -> Model:
     """Promote a single-D VDJ template to a tandem-D model by default (unless ``single_d``).
 
-    D-D is the default for the D-bearing loci; ``single_d=True``, a VJ locus, or an already-tandem
-    template all leave it unchanged.
+    New ARDA scaffolds use normalized joint histories. Explicit legacy tandem
+    models retain their event graph; ``single_d`` disables their tandem branch.
     """
-    from .dd import has_tandem, to_dd
+    from .dd import has_tandem, to_dd, to_history
     if "d_history" in template.tables:
         if not single_d:
             return template
@@ -663,6 +663,10 @@ def _maybe_promote_dd(template: Model, single_d: bool, p_nd2_init: float) -> Mod
         history = history.with_columns(p=pl.when(total > 0).then(pl.col("p") / total).otherwise(0.0))
         return Model(manifest=template.manifest, tables={**template.tables, "d_history": history},
                      genomic=template.genomic, training=template.training)
+    if (template.chain_type == 'VDJ' and template.locus in DD_DEFAULT_LOCI
+            and template.manifest.source.startswith('arda:')
+            and 'vd_first_nt' in template.tables and 'd2_gene' not in template.tables):
+        return to_history(template, p_nd2=0.0 if single_d else p_nd2_init)
     if single_d or template.chain_type != "VDJ" or has_tandem(template):
         return template
     if template.manifest.locus not in DD_DEFAULT_LOCI:
@@ -704,14 +708,13 @@ def infer(
             **Strongly recommended for VDJ** — without it the E-step enumerates every Cys-sharing
             V × the full D grid per read (tens of s/seq); with it, VDJ inference is tractable.
         single_d: By default a **tandem-D (D-D)** model is learned for the D-bearing loci
-            (IGH/TRD/TRB): a single-D template is promoted with :func:`~vdjtools.model.dd.to_dd`
-            (seeding ``P(n_D=2)=p_nd2_init``) and EM learns the true ``P(n_D=2)``. Set ``True`` to
-            keep a strict single-D model. No effect on VJ loci or an already-tandem template.
+            (IGH/TRD/TRB). New ARDA scaffolds use J-conditioned joint histories;
+            legacy single-D templates use :func:`~vdjtools.model.dd.to_dd`.
+            Set True to keep strict single-D support. VJ loci are unaffected.
         p_nd2_init: Initial ``P(n_D=2)`` seed when promoting to D-D (ignored if ``single_d``).
         dd_allowed: Optional per-read booleans gating the tandem (``n_D=2``) E-step — a read may be
-            tandem only where ``dd_allowed[i]`` is true (e.g. reads arda flags with a ``d2_call``).
-            Anchors D-D learning to alignment-detected tandems, countering the tandem-vs-long-insertion
-            identifiability that inflates unregularized ``P(n_D=2)`` on real data. ``None`` = all reads.
+            tandem only where ``dd_allowed[i]`` is true. None allows every read.
+            Preliminary or absent D2 annotations are not grounds for disabling a history.
         nd_prior: Dirichlet/Beta pseudocount added to the single-D (``n_D=1``) soft count each M-step,
             regularizing ``P(n_D=2)`` toward 0. Both anchors combine.
         progress: Optional ``callable(iteration, loglik, rel_change, n_scoreable)`` invoked after
@@ -730,6 +733,7 @@ def infer(
 
     started = _time.monotonic()
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
+    masks = _canonical_masks(template, masks, len(sequences))
     upper = [s.upper() for s in sequences]
     if any(set(s) - set("ACGT") for s in upper):
         raise ValueError("Python inference requires A/C/G/T; use infer_native for IUPAC observations")
@@ -826,6 +830,56 @@ def gene_masks(model: Model, v_calls: list[str], j_calls: list[str]) -> list[tup
     """
     va, ja = _gene_to_alleles(model, "v"), _gene_to_alleles(model, "j")
     return [(call_alleles(va, v), call_alleles(ja, j), None) for v, j in zip(v_calls, j_calls)]
+
+
+def _canonical_masks(model: Model, masks: list | None, n_sequences: int) -> list | None:
+    """Resolve major-allele aliases without losing alternatives between genes.
+
+    A real empty V/J/D1 set means unrestricted enumeration. An unknown name must
+    raise instead of being dropped into that empty-set sentinel. Empty D2 disables
+    tandem histories, whereas None leaves D2 unrestricted.
+    """
+    if masks is None:
+        return None
+    if len(masks) != n_sequences:
+        raise ValueError('masks must have the same length as sequences')
+    indexes = {seg: _gene_to_alleles(model, seg) for seg in ('v', 'j')}
+    indexes['d'] = _gene_to_alleles(model, 'd') if model.chain_type == 'VDJ' else {}
+    known = {seg: {a for values in index.values() for a in values} for seg, index in indexes.items()}
+
+    def resolve(names, seg):
+        if names is None:
+            return None
+        index = indexes[seg]
+        result = []
+        for call in ([names] if isinstance(names, str) else names):
+            if not isinstance(call, str):
+                raise TypeError('mask allele names must be strings')
+            for name in call.split(','):
+                name = name.strip()
+                if not name:
+                    continue
+                matches = index.get(name.split('*', 1)[0], [])
+                if name in known[seg]:
+                    result.append(name)
+                elif len(matches) == 1:
+                    result.extend(matches)
+                elif name in index:  # explicit multi-allele legacy gene: retain every template
+                    result.extend(index[name])
+                else:
+                    raise KeyError(f'{seg.upper()} mask name {name!r} is not in the model')
+        return list(dict.fromkeys(result))
+
+    result = []
+    for mask in masks:
+        if mask is None:
+            result.append(([], [], None))
+            continue
+        if len(mask) not in (3, 4):
+            raise ValueError('each mask must contain V, J, D1 and optionally D2')
+        canonical = (resolve(mask[0], 'v') or [], resolve(mask[1], 'j') or [], resolve(mask[2], 'd'))
+        result.append(canonical + (resolve(mask[3], 'd'),) if len(mask) == 4 else canonical)
+    return result
 
 
 #: Columns `infer_frame` will look for as the nucleotide junction, in preference order.
@@ -1545,6 +1599,7 @@ def infer_native(
 
     started = _time.monotonic()
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
+    masks = _canonical_masks(template, masks, len(sequences))
     ddflags = [1 if a else 0 for a in dd_allowed] if dd_allowed is not None else []
 
     upper = [s.upper() for s in sequences]
