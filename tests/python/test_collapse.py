@@ -211,10 +211,10 @@ def _anchor_frame_aa(cdr3_segment: str) -> str:
 #: * ``TRAJ35*01`` — arda records ``anchor_nt=25``/``templated_aa=IGFGNVLHC`` with ``status=ok``:
 #:   human TRAJ35's anchor sits past the FGxG motif, so the templated region ends on a Cys. IMGT
 #:   still calls the allele F.
-#: * ``IGHJ6*02`` — OLGA's namespace only (``olga``/``learned``). OLGA ships the CDR3-region
+#: * ``IGHJ6*02`` — the frozen ``olga-legacy`` family only. OLGA ships the CDR3-region
 #:   germline 1 nt shorter than arda's 32-nt ``ATTACTACTACTACTACGGTATGGACGTCTGG``, cutting the
 #:   Trp118 codon in half; arda's own IGHJ6*02 templates ``YYYYYGMDVW`` and passes.
-_TERMINAL_ANCHOR_EXCEPTIONS = {"TRAJ35*01", "IGHJ6*02"}
+_TERMINAL_ANCHOR_EXCEPTIONS = {"TRAJ35*01"}
 
 
 @pytest.mark.parametrize("source,organism,locus", BUNDLED)
@@ -239,16 +239,17 @@ def test_bundled_j_germline_templates_a_terminal_anchor_residue(source, organism
     status = dict(zip(ref["allele"].to_list(), ref["status"].to_list()))
     usable = {a for a in func if func[a] == "F" and status[a] == "ok"}
 
+    exceptions = _TERMINAL_ANCHOR_EXCEPTIONS | ({"IGHJ6*02"} if source == "olga-legacy" else set())
     checked, bad = 0, []
     for r in m.genomic["genes_j"].iter_rows(named=True):
         gene, seq = r["gene"], r["cdr3_segment"] or ""
         if collapse:
             required = any(a.split("*")[0] == gene for a in usable)
-            exempt = all(a in _TERMINAL_ANCHOR_EXCEPTIONS
+            exempt = all(a in exceptions
                          for a in usable if a.split("*")[0] == gene)
         else:
             required = r["j_allele"] in usable
-            exempt = r["j_allele"] in _TERMINAL_ANCHOR_EXCEPTIONS
+            exempt = r["j_allele"] in exceptions
         if not seq or not required or exempt:
             continue
         checked += 1
@@ -321,23 +322,13 @@ def test_bundled_cdr3_germline_sits_on_the_documented_side_of_the_anchor(source,
 
 
 def test_the_learned_set_is_never_a_mix_of_builders():
-    """The seven `learned` loci must all report the **same** builder version.
-
-    A germline defect lives in the builder, so "which build is this from" should be a lookup rather
-    than a posterior comparison against a reference fit. The dangerous state is a *partial*
-    regeneration, where half the set silently answers a different question from the other half —
-    this caught exactly that (4 loci at ``3.9.2``, 3 at ``""``) when an all-loci rebuild was
-    interrupted midway.
-
-    Deliberately **not** asserting that every model carries a stamp. Only regenerating the shipped
-    set could satisfy that, so it would encode "always rebuild" as policy — and the models are
-    regenerated when a germline actually changes, not to populate a metadata field.
-    """
-    stamped = {locus: load_bundled(locus, "learned", collapse=False).manifest.builder_version
-               for locus in LOCI}
-    assert len(set(stamped.values())) == 1, (
-        f"learned set has mixed builder versions: {stamped} — regenerate all seven loci together, "
-        f'never a subset. ("" is not missing data: it means the model predates 3.9.2.)')
+    """All twelve fresh fits carry one nonempty builder version, including mouse."""
+    contexts = [("human", locus) for locus in LOCI] + [
+        ("mouse", locus) for locus in ("TRA", "TRB", "IGH", "IGK", "IGL")]
+    stamped = {(organism, locus): load_bundled(locus, "isalgo", organism=organism,
+                 collapse=False).manifest.builder_version for organism, locus in contexts}
+    assert all(stamped.values()), f"fresh isalgo models lack builder stamps: {stamped}"
+    assert len(set(stamped.values())) == 1, f"isalgo set has mixed builder versions: {stamped}"
 
 
 def test_trbj2_7_is_not_a_silent_zero():

@@ -113,6 +113,13 @@ d2_allele, p`` and normalizes the complete history distribution within each J.
 Single-D rows use an empty string for the absent second D. A J with no physical
 tandem path has only single-D mass; D1–D2–J2 remains permitted in TRB.
 
+Multiple-D incorporation is a normal, abundant feature of TRD; there is no universal
+10% upper bound shared with TRB or IGH. See the
+`Chudakov-last-author 2023 conference abstract <https://doi.org/10.1055/s-0043-1768549>`_
+and the `cross-species primary study <https://pubmed.ncbi.nlm.nih.gov/42358008/>`_.
+Validation checks history normalization, genomic support and generation/Pgen
+consistency instead of forcing the fitted TRD tandem probability below that ceiling.
+
 Single-D deletion profiles allow a fully deleted D. Separate ``d_tandem_del``
 and ``d2_del`` profiles retain at least one nucleotide from each tandem D and
 normalize on that support. This partitions latent histories; different histories

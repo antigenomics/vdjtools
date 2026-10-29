@@ -70,7 +70,7 @@ def test_learned_models_load_and_score(locus):
     m = load_bundled(locus, "learned")
     is_vdj = locus in VDJ
     assert m.chain_type == ("VDJ" if is_vdj else "VJ")
-    assert ("d2_gene" in m.tables) == is_vdj  # D-loci carry the tandem-D event; VJ do not
+    assert ("d_history" in m.tables) == is_vdj  # fresh D-bearing fits use joint histories
 
     # V support must not have collapsed onto one gene: the shipped-broken TRB put 48.5% of all V
     # mass on TRBV19 with TRBV20-1 (the most-used human TRBV) at exactly 0. A gene-fraction bound
@@ -96,10 +96,14 @@ def test_learned_models_load_and_score(locus):
     assert orphan.height == 0, f"{locus}: {orphan.height} choosable V alleles have no deletion mass"
 
     if is_vdj:
-        p2 = dict(zip(m.tables["n_d"]["n_d"].to_list(), m.tables["n_d"]["p"].to_list())).get(2, 0.0)
-        # Lower bound too: an anchored D-D EM that regressed to a no-op would learn identically
-        # zero tandem mass on every locus, and `< 0.1` alone would not catch it.
-        assert 0.0 < p2 < 0.1, f"{locus}: P(n_D=2)={p2} (0 = D-D EM collapsed; >=0.1 = unregularized)"
+        from vdjtools.model.dd import d_count_probabilities
+        probabilities = d_count_probabilities(m)
+        assert sum(probabilities.values()) == pytest.approx(1.0)
+        p2 = probabilities.get(2, 0.0)
+        # Both histories must remain supported. A universal 10% ceiling came from
+        # greedy-D2 anchoring and is biologically invalid for TRD; the joint
+        # history is normalized within J, then marginalized with P(J).
+        assert 0.0 < p2 < 1.0, f"{locus}: single/tandem branch collapsed: P(n_D=2)={p2}"
 
     # Generate a real batch (not 5) so a rare choosable-but-unsamplable allele is actually hit.
     df = __import__("vdjtools.model.generate", fromlist=["generate"]).generate(m, 200, seed=0)
