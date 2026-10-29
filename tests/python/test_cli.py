@@ -98,15 +98,19 @@ def test_generate_cli_engine_policy(tmp_path, toy_model, source, engine, custom,
     assert pl.read_parquet(out).equals(expected)
 
 
-def test_generate_native_cli_matches_library(tmp_path):
+@pytest.mark.parametrize('organism,locus',
+                         [('human', locus) for locus in ('TRA', 'TRB', 'TRG', 'TRD', 'IGH', 'IGK', 'IGL')]
+                         + [('mouse', locus) for locus in ('TRA', 'TRB', 'IGH', 'IGK', 'IGL')])
+def test_generate_native_cli_matches_library(tmp_path, organism, locus):
     from vdjtools.model import load_bundled
     from vdjtools.model.generate import generate
 
     out = tmp_path / "native.parquet"
-    result = runner.invoke(app, ["generate", "-m", "TRB", "-n", "64", "--seed", "7",
+    result = runner.invoke(app, ["generate", "-m", locus, "--organism", organism,
+                                 "-n", "64", "--seed", "7",
                                  "--engine", "native", "--threads", "1", "-o", str(out)])
     assert result.exit_code == 0, result.output
-    assert pl.read_parquet(out).equals(generate(load_bundled("TRB"), 64, seed=7,
+    assert pl.read_parquet(out).equals(generate(load_bundled(locus, organism=organism), 64, seed=7,
                                                engine="native", threads=1))
 
 
