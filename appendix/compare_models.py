@@ -1,67 +1,46 @@
-"""Three-way model comparison: OLGA (pip) vs OLGA-in-vdjtools vs the EM-learned model.  2026-07-17
+"""Independent productive-input software validation of isalgo and frozen OLGA models.
 
-Three questions, deliberately kept apart -- conflating them is how a broken model ships next to a
-correct one and looks like its peer.
+Fresh functional reads are outside the all-nonfunctional fitting inputs. They are
+selection-shaped observations, not unbiased recombination heldout likelihood.
+The accepted protocol remains first20000 raw reads, then first N_CMP=300 eligible
+unique junctions. No annotation/parquet cache or unproven OOF holdout is used.
 
-1. CORRECTNESS (must be exact). `vdjtools`'s native Pgen on the bundled `olga` model must equal
-   the `olga` pip package's own Pgen to machine precision, on the same model files. This is an
-   invariant, not a metric: any deviation is a bug in our DP. OLGA is the oracle here.
-
-2. THE JUNCTION MODEL (the real comparison). Trims, insertion lengths, insertion dinucleotides,
-   D usage, n_D -- the events that describe how a junction is BUILT. These are what the HF
-   out-of-frame reads are good for, and where `learned` and `olga` can be meaningfully compared:
-   both are estimates of the same physical recombination machinery, so large divergence is a
-   finding either way.
-
-3. V/J USAGE (NOT a defect when it differs). P(V) and P(J|V) are PROTOCOL-DEPENDENT: the HF
-   reads are 5'RACE, OLGA's model was fit to DNA multiplex (Adaptive). The two amplify different
-   V's at different rates, so the usage marginals SHOULD disagree and neither is "wrong" -- e.g.
-   TRBV19 is 37% of these functional reads vs OLGA's 3.1%. The usable content here is that every
-   V/J combination is represented, so J|V and the junction model are learnable; the usage itself
-   is meant to be rescaled to whatever protocol the user's own sample came from
-   (`vdjtools.model.rescale_usage`). What IS a defect is a real gene at P(V)=0 -- that makes Pgen
-   exactly 0 for every clonotype using it, silently, and no correlation summary would show it.
-   Reported per GENE, not per allele: the arda allele split (TRBV19*03 vs *01) is mismapping-level
-   noise on 151bp reads, so allele-resolution usage is not a meaningful quantity from this data.
-
-Reproduce (needs the [oracle] extra + HF access to isalgo/airr_model_read):
-
-    python appendix/compare_models.py                 # TRB
-    LOCI=TRB,TRA python appendix/compare_models.py
+BUILD_GROUPS=human,mouse selects species; LOCI optionally restricts loci.
+RAW_FASTQ_DIR points to the existing raw mirror (<group>/<locus>.functional.fq.gz).
+VDJTOOLS_BUNDLE_ROOT selects the bundle parent containing isalgo/<context>.
+VDJTOOLS_OLGA_MODELS overrides human oracle fixtures; VDJTOOLS_MOUSE_OLGA_MODELS
+optionally overrides OLGA-pip's mouse default_models. EM_THREADS bounds native work.
+Without RAW_FASTQ_DIR, the existing authorized data.fetch_fastq route is used.
+EM_WORK optionally selects the parent of fresh temporary annotation directories.
 """
+import json
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
+import olga
 import olga.generation_probability as ogp
 import olga.load_model as olm
 import polars as pl
 
 from vdjtools.model import Model, data, native
+from vdjtools.model.io import from_olga
 from vdjtools.model.schema import normalization_keys
 
-# Load the models from THIS REPO's tree, not via bundled.load_bundled. load_bundled resolves
-# through the installed package, which under an editable install can point at a different
-# checkout entirely -- so a freshly rebuilt model would be written here and silently NOT read
-# back, and the comparison would report the old model's numbers as the new one's. The builder
-# writes to this same relative path; keep the two in agreement.
-BUNDLED = Path("python/vdjtools/model/_bundled")
-# The OLGA models shipped in THIS repo, not pip olga's: pip ships only 5 human loci (no
-# TRG/TRD) plus mouse, while tests/python/fixtures/olga/default_models carries all 7 human loci.
-# The TRG/TRD marginals originate from mirpy's legacy-v2 branch (commit aeccd75) and are verified
-# byte-identical to what the bundled parquet were built from; olga-pip scores with them fine, so
-# they are a real oracle for those two loci, which pip alone cannot be.
-_REPO_OLGA = Path(__file__).resolve().parent.parent / "tests" / "python" / "fixtures" / "olga" / "default_models"
+BUNDLED = Path(os.environ.get("VDJTOOLS_BUNDLE_ROOT", "python/vdjtools/model/_bundled"))
+# TRG/TRD fixtures originate from mirpy legacy-v2 commit aeccd75 and were verified
+# byte-identical to the files used to build the frozen bundled OLGA parquet.
+_REPO_OLGA = Path(__file__).resolve().parent.parent / "tests/python/fixtures/olga/default_models"
 OLGA = Path(os.environ.get("VDJTOOLS_OLGA_MODELS", str(_REPO_OLGA)))
+MOUSE_OLGA = Path(os.environ.get("VDJTOOLS_MOUSE_OLGA_MODELS", str(Path(olga.__file__).parent / "default_models")))
 WORK = Path(os.environ.get("EM_WORK", "/tmp/em_work"))
-# All 7 human loci. TRG/TRD are only reachable because OLGA above resolves to the repo's own
-# fixtures rather than pip olga's 5-locus set -- olga-pip itself scores with them fine, it just
-# does not ship them.
-LOCI = {"TRA": ("human_T_alpha", "VJ"), "TRB": ("human_T_beta", "VDJ"),
-        "TRG": ("human_T_gamma", "VJ"), "TRD": ("human_T_delta", "VDJ"),
-        "IGH": ("human_B_heavy", "VDJ"), "IGK": ("human_B_kappa", "VJ"),
-        "IGL": ("human_B_lambda", "VJ")}
 N = int(os.environ.get("N_CMP", "300"))
+THREADS = int(os.environ.get("EM_THREADS", "0"))
+LOCI = {"TRA": ("T_alpha", "VJ"), "TRB": ("T_beta", "VDJ"),
+        "TRG": ("T_gamma", "VJ"), "TRD": ("T_delta", "VDJ"),
+        "IGH": ("B_heavy", "VDJ"), "IGK": ("B_kappa", "VJ"), "IGL": ("B_lambda", "VJ")}
+CONTEXTS = {"human": tuple(LOCI), "mouse": ("TRA", "TRB", "IGH", "IGK", "IGL")}
 
 
 def olga_pgen_model(sub: Path, chain: str):
@@ -127,109 +106,149 @@ def v_support(model) -> dict:
             "top_v": top["g"][0], "top_p": float(top["p"][0])}
 
 
-def held_out_loglik(model, seqs: list[str], v_calls: list[str], j_calls: list[str]) -> tuple:
-    """Mean log10 Pgen over held-out out-of-frame junctions, and how many score exactly 0.
+def _gene_conditioned_pgens(model, seqs, v_calls, j_calls, *, threads=THREADS):
+    """Sum disjoint explicit gene/allele states; unknown-only calls have zero support."""
+    from vdjtools.model.infer import _gene_to_alleles, call_alleles
 
-    A Pgen of 0 is not a small number -- it is the model asserting the sequence is impossible.
-    Those are excluded from the mean (log10(0) = -inf) and counted separately, because that count
-    IS the finding when a model has collapsed V support.
+    if not len(seqs) == len(v_calls) == len(j_calls):
+        raise ValueError("sequences and V/J calls must have equal lengths")
+    vi, ji = _gene_to_alleles(model, "v"), _gene_to_alleles(model, "j")
+    expanded, vs, js, owners = [], [], [], []
+    for i, (sequence, v, j) in enumerate(zip(seqs, v_calls, j_calls)):
+        for vv in call_alleles(vi, v):
+            for jj in call_alleles(ji, j):
+                expanded.append(sequence.upper())
+                vs.append(vv)
+                js.append(jj)
+                owners.append(i)
+    result = np.zeros(len(seqs), dtype=float)
+    if expanded:
+        scores = np.asarray(native.pgen_nt_batch(model, expanded, vs, js, threads=threads))
+        np.add.at(result, owners, scores)
+    return result
+
+
+def held_out_loglik(model, seqs, v_calls, j_calls):
+    """Compatibility helper: positive-only log10 mean, zero count and total count.
+
+    This function does not establish provenance or independence of supplied observations.
     """
-    from vdjtools.model.infer import _gene_to_alleles
-    va, ja = _gene_to_alleles(model, "v"), _gene_to_alleles(model, "j")
-    out = []
-    for s, v, j in zip(seqs, v_calls, j_calls):
-        vs, js = va.get(v.split("*")[0], []), ja.get(j.split("*")[0], [])
-        if not vs or not js:
-            out.append(0.0)
-            continue
-        tot = 0.0
-        for vv in vs:
-            for jj in js:
-                tot += native.pgen_nt(model, s.upper(), vv, jj)
-        out.append(tot)
-    a = np.array(out)
-    nz = a > 0
-    return float(np.mean(np.log10(a[nz]))) if nz.any() else float("nan"), int((~nz).sum()), len(a)
+    summary = _pgen_summary(_gene_conditioned_pgens(model, seqs, v_calls, j_calls))
+    return summary["mean_log10_positive"], summary["zero"], summary["total"]
 
 
-def run(locus: str, name: str, chain: str) -> None:
-    print(f"\n{'='*78}\n{locus}\n{'='*78}", flush=True)
-    m_olga = Model.load(BUNDLED / "olga" / locus)
-    m_learn = Model.load(BUNDLED / "learned" / locus)
-    print(f"  olga    <- {BUNDLED / 'olga' / locus}")
-    print(f"  learned <- {BUNDLED / 'learned' / locus}")
-    opg = olga_pgen_model(OLGA / name, chain)
+def _pgen_summary(values):
+    values = np.asarray(values, dtype=float)
+    if not np.isfinite(values).all() or (values < 0).any() or (values > 1 + 1e-9).any():
+        raise ValueError("invalid Pgen values")
+    positive = values > 0
+    total, nonzero = len(values), int(positive.sum())
+    positive_mean = float(np.log10(values[positive]).mean()) if nonzero else None
+    return dict(total=total, positive=nonzero, zero=total - nonzero,
+                mean_pgen=float(values.mean()) if total else None,
+                mean_log10_positive=positive_mean,
+                mean_log10_all=positive_mean if nonzero == total else None,
+                mean_log10_all_is_negative_infinity=bool(total and nonzero < total))
 
-    # ---- test sequences: real held-out FUNCTIONAL junctions (what a user actually scores) ----
-    fq_reads = WORK / f"{locus}_functional_reads.parquet"
-    if fq_reads.exists():
-        reads = pl.read_parquet(fq_reads)
-    else:
-        reads = data.annotate_reads(data.fetch_fastq("human", locus, "functional"), out_dir=str(WORK),
-                                    prefix=f"human_{locus}_functional", organism="human", cap=20000)
-        reads.write_parquet(fq_reads)
-    uniq = data.unique_clonotypes(reads).filter(
-        pl.col("junction").str.to_uppercase().str.contains(r"^[ACGT]+$")
-        & ((pl.col("junction").str.len_bytes() % 3) == 0))
-    test = uniq.head(N)
-    seqs = [s.upper() for s in test["junction"].to_list()]
 
-    # ---- 1. CORRECTNESS: vdjtools-on-olga-model MUST equal olga-pip ----
-    ours = np.array([native.pgen_nt(m_olga, s, None, None) for s in seqs])
-    theirs = np.array([opg.compute_nt_CDR3_pgen(s) for s in seqs])
-    both = (ours > 0) & (theirs > 0)
-    rel = np.abs(ours[both] - theirs[both]) / theirs[both]
-    r = np.corrcoef(np.log10(ours[both]), np.log10(theirs[both]))[0, 1]
-    print(f"[1] CORRECTNESS  vdjtools(olga model) vs olga-pip, {both.sum()}/{len(seqs)} both>0")
-    print(f"    r(log10 Pgen) = {r:.10f}    max rel err = {rel.max():.3e}"
-          f"    -> {'EXACT' if rel.max() < 1e-9 else 'MISMATCH — BUG'}")
+def functional_queries(group, locus):
+    """Fresh accepted functional-input protocol; no read identifiers leave this helper."""
+    if N < 1:
+        raise ValueError("N_CMP must be positive")
+    raw_dir = os.environ.get("RAW_FASTQ_DIR")
+    raw = Path(raw_dir) / group / f"{locus}.functional.fq.gz" if raw_dir else data.fetch_fastq(group, locus, "functional")
+    WORK.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=f"validate-{group}-{locus}-", dir=WORK) as scratch:
+        reads = data.annotate_reads(raw, out_dir=scratch, prefix=f"{group}_{locus}_functional",
+                                    organism=group, cap=20000, threads=THREADS)
+        uniq = data.unique_clonotypes(reads).filter(
+            pl.col("junction").str.to_uppercase().str.contains(r"^[ACGT]+$")
+            & ((pl.col("junction").str.len_bytes() % 3) == 0))
+        test = uniq.head(N)
+        if not test.height:
+            raise ValueError(f"no eligible functional junctions for {group}/{locus}")
+        counts = dict(raw_read_cap=20000, annotated_reads=reads.height,
+                      eligible_clonotypes=uniq.height, requested_clonotypes=N, selected_clonotypes=test.height)
+        return (test["junction"].str.to_uppercase().to_list(), test["v_call"].to_list(),
+                test["j_call"].to_list(), counts)
 
-    # ---- 2. THE JUNCTION MODEL: where learned and olga are genuinely comparable ----
-    print("\n[2] JUNCTION MODEL — mean per-parent total-variation distance, learned vs olga")
-    print("    (these describe how a junction is BUILT; both models estimate the same machinery)")
-    print("    TV is in [0,1]: 0 = identical, 1 = disjoint. Conditional events are averaged over")
-    print("    their conditioning value, and ONLY over parents where BOTH models have mass --")
-    print("    a parent OLGA never uses is a usage difference (section 3), not a junction one.")
-    print(f"    {'event':14s} {'mean TV':>8s} {'n parents':>10s} {'H(olga)':>9s} {'H(learned)':>11s}")
+
+def run(locus: str, group: str = "human") -> dict:
+    name, chain = LOCI[locus]
+    oracle_path = (OLGA if group == "human" else MOUSE_OLGA) / f"{group}_{name}"
+    key = locus if group == "human" else f"mouse_{locus}"
+    # Each model retains its own reference; ARDA and OLGA germlines are never mixed.
+    m_olga = (Model.load(BUNDLED / "olga" / locus) if group == "human" else
+              from_olga(oracle_path, locus=locus, organism=group))
+    baseline = "olga-legacy" if group == "human" else "olga-pip-import"
+    m_isalgo = Model.load(BUNDLED / "isalgo" / key)
+    opg = olga_pgen_model(oracle_path, chain)
+    seqs, v_calls, j_calls, counts = functional_queries(group, locus)
+    print(f"\n{group}/{locus}: independent selected productive inputs; {counts}", flush=True)
+    ours = np.asarray(native.pgen_nt_batch(m_olga, seqs, threads=THREADS))
+    theirs = np.asarray([opg.compute_nt_CDR3_pgen(sequence) for sequence in seqs])
+    # Include every zero in the oracle assertion; filtering both-positive vectors hides defects.
+    np.testing.assert_allclose(ours, theirs, rtol=1e-9, atol=0,
+                               err_msg=f"{group}/{locus}: exact OLGA oracle mismatch")
+    both_positive = (ours > 0) & (theirs > 0)
+    positive_ours, positive_theirs = np.log10(ours[both_positive]), np.log10(theirs[both_positive])
+    correlation = (float(np.corrcoef(positive_ours, positive_theirs)[0, 1])
+                   if both_positive.sum() >= 2 and np.ptp(positive_ours) > 0 and np.ptp(positive_theirs) > 0
+                   else None)
+    max_relative_error = (float(np.max(np.abs(ours[both_positive] - theirs[both_positive]) /
+                                       theirs[both_positive])) if both_positive.any() else None)
+    oracle_summary = dict(total=len(seqs), both_positive=int(both_positive.sum()),
+                          max_relative_error_both_positive=max_relative_error,
+                          log10_correlation_both_positive=correlation, ours_zero=int((ours == 0).sum()),
+                          oracle_zero=int((theirs == 0).sum()), rtol=1e-9, atol=0,
+                          all_values_agree=True)
+    print(f"ORACLE full-vector agreement: {oracle_summary}")
+    tv_rows = []
+    print("COMMON EVENTS: descriptive per-parent TV; only parents with mass in both models")
     for ev in ("v_3_del", "j_5_del", "d_del", "vd_ins", "dj_ins", "vd_dinucl", "dj_dinucl",
                "d_gene", "j_choice", "vj_ins", "vj_dinucl"):
-        if ev not in m_olga.tables or ev not in m_learn.tables:
+        if ev not in m_olga.tables or ev not in m_isalgo.tables:
             continue
-        a, b = m_olga.tables[ev], m_learn.tables[ev]
-        event = m_olga.manifest.events[ev]
-        parents = list(normalization_keys(event))
+        a, b = m_olga.tables[ev], m_isalgo.tables[ev]
+        parents = list(normalization_keys(m_olga.manifest.events[ev]))
         tvs = _per_parent_tv(a, b, parents)
         if not tvs:
             continue
-        ha, hb = _entropy(a["p"].to_numpy()), _entropy(b["p"].to_numpy())
-        print(f"    {ev:14s} {np.mean(tvs):>8.4f} {len(tvs):>10d} {ha:>9.3f} {hb:>11.3f}")
-
-    # ---- 3. V/J USAGE: protocol-dependent, reported per GENE ----
-    print("\n[3] V-GENE USAGE — protocol-dependent (5'RACE here vs DNA-multiplex for OLGA).")
-    print("    Divergence is EXPECTED and is rescaled per-sample; P(V)=0 on a real gene is NOT.")
-    print(f"    {'model':10s} {'V genes':>9s} {'nonzero':>8s} {'top gene':>12s} {'top mass':>9s}")
-    for lbl, mm in (("olga", m_olga), ("learned", m_learn)):
-        s = v_support(mm)
-        print(f"    {lbl:10s} {s['n_g']:>9d} {s['n_g_nonzero']:>8d} {s['top_v']:>12s} {s['top_p']:>9.4f}")
-
-    oof_p = WORK / f"{locus}_oof_heldout.parquet"
-    if oof_p.exists():
-        oof = pl.read_parquet(oof_p)
-        print(f"\n[4] HELD-OUT LOG-LIKELIHOOD on {oof.height:,} out-of-frame junctions the EM never saw")
-        print("    NB this is confounded by (3): the learned model has this protocol's V usage and")
-        print("    the held-out set is from the same protocol, so it is favoured on usage alone.")
-        print(f"    {'model':10s} {'mean log10 Pgen':>16s} {'Pgen==0':>9s} {'n':>7s}")
-        for lbl, mm in (("olga", m_olga), ("learned", m_learn)):
-            ll, nz, n = held_out_loglik(mm, oof["junction"].to_list(), oof["v_call"].to_list(),
-                                        oof["j_call"].to_list())
-            print(f"    {lbl:10s} {ll:>16.4f} {nz:>9d} {n:>7d}")
+        row = dict(event=ev, mean_tv=float(np.mean(tvs)), n_parents=len(tvs),
+                   entropy_olga=_entropy(a["p"].to_numpy()), entropy_isalgo=_entropy(b["p"].to_numpy()))
+        tv_rows.append(row)
+        print(row)
+    usage = {label: v_support(model) for label, model in ((baseline, m_olga), ("isalgo", m_isalgo))}
+    print(f"V GENE USAGE: descriptive, protocol-dependent: {usage}")
+    pgens = {}
+    for label, model in ((baseline, m_olga), ("isalgo", m_isalgo)):
+        pgens[label] = _pgen_summary(_gene_conditioned_pgens(model, seqs, v_calls, j_calls))
+        print(f"PRODUCTIVE-INPUT GENE-CALL PGEN {label}: {pgens[label]}")
+    insertion_zero = {
+        label: {event: float(table.filter(pl.col("length") == 0)["p"].sum())
+                for event, table in model.tables.items()
+                if event in ("vj_ins", "vd_ins", "dj_ins", "dd_ins")}
+        for label, model in ((baseline, m_olga), ("isalgo", m_isalgo))}
+    print(f"INSERTION LENGTH P(N=0), conditional on using each event: {insertion_zero}")
+    return dict(group=group, locus=locus, population="independent selected productive inputs",
+                baseline=baseline, queries=counts, oracle=oracle_summary, common_event_tv=tv_rows,
+                v_usage=usage, pgen=pgens, insertion_zero=insertion_zero)
 
 
-def main() -> None:
-    want = os.environ.get("LOCI", "TRB")
-    for locus in want.split(","):
-        name, chain = LOCI[locus]
-        run(locus, name, chain)
+def main():
+    groups = os.environ.get("BUILD_GROUPS", "human,mouse").split(",")
+    if any(group not in CONTEXTS for group in groups):
+        raise ValueError("BUILD_GROUPS must select human and/or mouse")
+    want = os.environ.get("LOCI")
+    if want and set(want.split(",")) - set(LOCI):
+        raise ValueError("LOCI contains an unknown locus")
+    reports = []
+    for group in groups:
+        loci = tuple(want.split(",")) if want else CONTEXTS[group]
+        if set(loci) - set(CONTEXTS[group]):
+            raise ValueError(f"requested loci are unsupported for {group}")
+        reports.extend(run(locus, group) for locus in loci)
+    print(json.dumps(dict(contexts=reports), allow_nan=False), flush=True)
 
 
 if __name__ == "__main__":
