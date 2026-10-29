@@ -650,6 +650,10 @@ def from_arda(locus: str, organism: str = "human", *,
     from . import reference as ref
 
     gl = ref.load_germline(locus, organism)
+    # A partial reference tail is missing sequence, not a fully known short germline.
+    # ARDA already flags these records and excludes them from its alignment scaffolds.
+    if "status" in gl.columns:
+        gl = gl.filter(pl.col("status").fill_null("") != "truncated")
     if gene_level:
         issues = ref.validate_germline(gl)
         unusable = issues.filter(pl.col("check").is_in([

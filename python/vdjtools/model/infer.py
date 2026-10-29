@@ -48,6 +48,7 @@ class InferenceReport:
     template_source: str = ""
     error_rate: list[float] = field(default_factory=list)  # retained-germline substitution MLE after each M-step
     error_model: str = "exact"
+    candidate_search: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """The report as a JSON-serializable dict (one entry of a model's ``training["runs"]``)."""
@@ -149,6 +150,8 @@ def resume(path, sequences, **kw):
     runs = (base.training or {}).get("runs", [])
     if runs and runs[-1].get("error_rate"):
         kw.setdefault("error_rate", runs[-1]["error_rate"][-1])
+    if runs and runs[-1].get("candidate_search"):
+        kw.setdefault("candidate_search", runs[-1]["candidate_search"])
     return infer_native(base, sequences, **kw)
 
 
@@ -838,7 +841,10 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
         raise ValueError(f"column {col!r} has no usable sequences")
     seqs = df[col].to_list()
     masks = None
-    if use_calls and v_col in df.columns and j_col in df.columns:
+    if native and kw.get("error_rate") is not None and use_calls:
+        masks, evidence = candidate_masks(seqs, template, threads=kw.get("threads", 0))
+        kw["candidate_search"] = evidence
+    elif use_calls and v_col in df.columns and j_col in df.columns:
         if 'd2_call' in df.columns:
             from .data import _build_masks
             masks = _build_masks(df.with_columns(pl.col(v_col).alias('v_call'),
@@ -850,7 +856,7 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
 
 
 def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> tuple[list[str], list[tuple]]:
-    """Annotate nt contigs with arda and build ``(junctions, masks)`` for masked :func:`infer`.
+    """Extract junctions and fresh ARDA candidate masks for probabilistic training.
 
     The production path for real reads: ``junctions, masks = arda_masks(contigs, template);
     infer_native(template, junctions, masks=masks)``. arda is a base dependency (ships with vdjtools).
@@ -859,12 +865,64 @@ def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> 
 
     calls = annotate(contigs, organism=organism)
     junctions = calls["junction"].to_list()
-    if 'd2_call' in calls.columns:
-        from .data import _build_masks
-        masks = _build_masks(calls,model)
-    else:
-        masks = gene_masks(model, calls["v_call"].to_list(), calls["j_call"].to_list())
+    masks, _ = candidate_masks(junctions, model, organism=organism)
     return junctions, masks
+
+
+def _candidate_identity(sequences, masks) -> str:
+    import hashlib
+    import json
+
+    payload = json.dumps(([s.upper() for s in sequences], masks), separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def candidate_masks(sequences: list[str], model: Model, *, organism: str | None = None,
+                    threads: int = 0, batch_size: int = 10000) -> tuple[list[tuple], dict]:
+    """Batched ARDA V/J proposals for training, expanding each gene to all model templates.
+
+    The proposals restrict genes, never deletion boundaries or allele identities.
+    Missing proposals leave that segment unrestricted. D/D2 remain unrestricted:
+    a short local D hit or absent greedy D2 call must not decide the history.
+    Returns three-entry masks and explicit candidate-search limits/counts.
+    This finite candidate search is an approximation, not exhaustive inference.
+    """
+    from arda import alignment_candidates
+    from ..cores import kernel_threads
+
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    threads = kernel_threads(threads)
+    index = pl.concat([
+        model.genomic[f"genes_{seg.lower()}"]
+        .filter(pl.col("functional"))
+        .select(pl.lit(seg).alias("segment"),
+                pl.col(f"{seg.lower()}_allele").alias("model_allele"))
+        for seg in ("V", "J")
+    ]).with_columns(gene=pl.col("model_allele").str.split("*").list.first())
+    v, j = [[] for _ in sequences], [[] for _ in sequences]
+    evidence = {"batches": [], "d_unrestricted": True,
+                "scope": "V/J gene proposals; all functional model templates per gene"}
+    for lo in range(0, len(sequences), batch_size):
+        records = [(str(i), sequences[i]) for i in range(lo, min(lo + batch_size, len(sequences)))]
+        result = alignment_candidates(records, organism=organism or model.organism,
+                                      threads=threads, batch_size=batch_size)
+        hits = result["alignments"]
+        evidence["batches"].append({"n_queries": len(records), "n_hits": hits.height,
+                                    "limits": result["limits"]})
+        mapped = (hits.filter(pl.col("segment").is_in(["V", "J"]))
+                  .select("sequence_id", "segment", "alleles").explode("alleles", empty_as_null=True)
+                  .with_columns(gene=pl.col("alleles").str.split("*").list.first())
+                  .join(index, on=["segment", "gene"], how="inner")
+                  .group_by("sequence_id", "segment")
+                  .agg(pl.col("model_allele").unique().sort()))
+        for query, segment, alleles in mapped.iter_rows():
+            (v if segment == "V" else j)[int(query)] = alleles
+    evidence["unrestricted_v"] = sum(not values for values in v)
+    evidence["unrestricted_j"] = sum(not values for values in j)
+    masks = [(a, b, None) for a, b in zip(v, j)]
+    evidence["input_masks_sha256"] = _candidate_identity(sequences, masks)
+    return masks, evidence
 
 
 # --------------------------------------------------------------------------------------------
@@ -1318,6 +1376,7 @@ def infer_native(
     checkpoint_every: int = 1,
     threads: int = 0,
     error_rate: float | None = None,
+    candidate_search: dict | None = None,
 ) -> tuple[Model, InferenceReport]:
     """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
 
@@ -1331,6 +1390,8 @@ def infer_native(
     This observation likelihood is distinct from exact generation Pgen.
     In error mode, the default ``init="align"`` uses uniform initialization:
     exact-match alignment votes would otherwise make mismatch-only genes unreachable.
+    ``candidate_search`` records proposal limits/counts in reports and checkpoints;
+    it does not change enumeration independently of ``masks``.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
     ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior`` / ``gene_prior``).
@@ -1357,6 +1418,9 @@ def infer_native(
     ddflags = [1 if a else 0 for a in dd_allowed] if dd_allowed is not None else []
 
     upper = [s.upper() for s in sequences]
+    if candidate_search and (masks is None or _candidate_identity(upper, masks) != candidate_search.get("input_masks_sha256")):
+        raise ValueError("candidate-restricted EM requires the same sequences and masks as recorded evidence; "
+                         "pass candidate_search={} explicitly to declare changed support")
     if error_rate is not None and init == "align":
         init = "uniform"
     if init == "template":
@@ -1384,7 +1448,8 @@ def infer_native(
     else:
         vmasks = jmasks = dmasks = d2masks = []
 
-    report = InferenceReport(error_model="exact" if error_rate is None else "retained-germline-substitution")
+    report = InferenceReport(error_model="exact" if error_rate is None else "retained-germline-substitution",
+                             candidate_search=dict(candidate_search or {}))
     meta = dict(started=started, max_iter=max_iter, tol=tol, init=init, native=True,
                 n_sequences=len(upper))
     for it in range(max_iter):

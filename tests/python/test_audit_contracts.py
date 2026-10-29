@@ -81,11 +81,14 @@ def test_build_model_forwards_threads_to_annotation_and_em(monkeypatch):
         seen.append(("em", kw["threads"]))
         return model, InferenceReport()
     monkeypatch.setattr(data, "prepare", prepare)
-    monkeypatch.setattr(data, "_filter_for_em", lambda *a: frame)
-    monkeypatch.setattr(data, "_build_masks", lambda *a: None)
+    monkeypatch.setattr(data, "_filter_for_em", lambda *a, **kw: frame)
+    def candidates(*args, **kw):
+        seen.append(("candidates", kw["threads"]))
+        return [], {}
+    monkeypatch.setattr(infer, "candidate_masks", candidates)
     monkeypatch.setattr(infer, "infer_native", fit)
     data.build_model("TRA", template=model, threads=3)
-    assert seen == [("annotation", 3), ("em", 3)]
+    assert seen == [("annotation", 3), ("candidates", 3), ("em", 3)]
 
 
 def test_native_pack_does_not_retain_an_unbounded_model_history():

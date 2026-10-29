@@ -86,6 +86,10 @@ Learning from your own sequences
 
 :func:`~vdjtools.model.infer.infer_frame` takes a clonotype frame, finds the junction column, and
 builds the per-read V/J masks that make EM tractable on a D-bearing locus.
+With ``error_rate`` enabled it uses fresh batched ARDA proposals instead of the
+frame's preliminary gene assignments. Proposed genes expand to every functional
+model allele; missing V/J proposals leave that segment unrestricted. D and D2
+remain unrestricted by annotation, including when no second D was called.
 
 .. code-block:: python
 
@@ -607,7 +611,18 @@ affect; ``vdjtools model <sub> --help`` remains authoritative for defaults.
 Resource budgets and annotation fields
 --------------------------------------
 
-``build_model(..., threads=N)`` forwards the budget to annotation and the native E-step.
+``build_model(..., threads=N)`` forwards the budget to annotation, batched ARDA
+candidate search and the native E-step. It fits a retained-germline substitution
+rate by default (initially 0.01), and retains junctions regardless of preliminary
+V/J calls. ``candidate_masks`` returns enumeration proposals plus explicit search
+limits, missing-proposal fallback counts and a sequence/mask identity hash. These
+are recorded in training reports and checkpoints. Resuming a candidate-restricted
+fit requires matching sequences and masks; declaring ``candidate_search={}``
+explicitly records a deliberate support change. Candidate omissions can affect
+the fitted model and are a computational approximation.
+
+New ARDA scaffolds exclude reference records marked ``status=truncated``; an
+incomplete germline tail is not a complete short allele template.
 ``infer_native(..., threads=N)`` controls the E-step directly; zero uses the available CPU
 allocation. ``build_all(..., workers=N)`` parallelizes builds with one kernel thread each by
 default. An explicit ``threads`` override is honored, so account for both layers when choosing it.

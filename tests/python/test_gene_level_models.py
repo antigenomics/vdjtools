@@ -9,6 +9,18 @@ from vdjtools.model.io import from_arda, from_germline
 from vdjtools.model.generate import generate
 
 
+def test_arda_scaffold_excludes_incomplete_germline_templates(monkeypatch, toy_germline):
+    complete = toy_germline.with_columns(pl.lit('ok').alias('status'))
+    partial = complete.filter(pl.col('allele') == 'TOYV1*01').with_columns(
+        pl.lit('TOYV1*99').alias('allele'), pl.lit('TGT').alias('sequence'),
+        pl.lit('truncated').alias('status'))
+    monkeypatch.setattr(reference, 'load_germline', lambda *a: pl.concat([complete, partial]))
+    monkeypatch.setattr(reference, 'arda_full_germline', lambda *a: {})
+    for gene_level in (False, True):
+        model = from_arda('TOY', gene_level=gene_level)
+        assert 'TOYV1*99' not in model.genomic['genes_v']['v_allele'].to_list()
+
+
 def test_gene_level_scaffold_prefers_01_then_lowest_usable(monkeypatch, toy_germline):
     gl = toy_germline.with_columns(pl.when(pl.col('allele') == 'TOYV2*01')
                                   .then(pl.lit('TOYV2*03')).otherwise(pl.col('allele')).alias('allele'))
@@ -49,6 +61,8 @@ def test_default_raw_builder_fits_gene_level_once(monkeypatch, toy_germline):
         return model, infer.InferenceReport()
     monkeypatch.setattr(io, 'from_arda', scaffold)
     monkeypatch.setattr(infer, 'infer_native', fit)
+    monkeypatch.setattr(infer, 'candidate_masks', lambda *a, **kw:
+                        ([(['TOYV1*01'], ['TOYJ1*01'], None)], {}))
     frame = pl.DataFrame({'v_call': ['TOYV1*01', 'TOYV1*99'], 'j_call': ['TOYJ1*01', 'TOYJ1*77'],
                           'junction': ['TGTGCATTT']*2, 'junction_aa': ['CAF']*2,
                           'locus': ['TOY']*2, 'd_call': [None]*2, 'd2_call': [None]*2})
@@ -138,7 +152,8 @@ def test_supported_gene_scaffolds(organism, locus):
     gl = reference.load_germline(locus, organism)
     invalid = reference.validate_germline(gl).filter(pl.col('check').is_in(
         ['germline_empty_sequence', 'germline_ambiguous', 'germline_anchor_frame']))['allele']
-    usable = gl.filter(~pl.col('allele').is_in(invalid.implode()))
+    usable = gl.filter(~pl.col('allele').is_in(invalid.implode()) &
+                       (pl.col('status').fill_null('') != 'truncated'))
     for seg, frame in m.genomic.items():
         assert frame['gene'].n_unique() == frame.height
         for gene, allele in frame.select('gene', seg.replace('genes_', '')+'_allele').iter_rows():

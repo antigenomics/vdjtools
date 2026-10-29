@@ -349,7 +349,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
                 iters: int = 15, tol: float = 1e-4, single_d: bool = False,
                 nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0,
                 ambiguous: str | None = "A", verbose: bool = False,
-                checkpoint=None, checkpoint_every: int = 1):
+                checkpoint=None, checkpoint_every: int = 1,
+                error_rate: float | None = 0.01):
     """Fetch, annotate and EM-fit a model for one chain — the whole corpus pipeline, end to end.
 
     Args:
@@ -358,8 +359,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         template: Model supplying the gene set, germline and event graph. Defaults to
             :func:`~vdjtools.model.io.from_arda` for the chain and the group's organism.
         clones: Skip fetch+annotate and fit these clonotypes instead (an ``EM_DATA_DIR`` parquet,
-            a :func:`load_prepared` subset, or your own reads). Must carry ``junction``,
-            ``v_call``, ``j_call`` and, for a D locus, ``d_call``/``d2_call``.
+            a :func:`load_prepared` subset, or your own reads). Preliminary V/J/D calls are
+            not constraints; fresh batched ARDA proposals supply the V/J candidate sets.
         work_dir: Scratch directory for arda's per-read output (it caches there).
         cap: Read cap for annotation. ``None`` uses every read — a subsample is a silent claim that
             the tail does not matter, and the tail is where the rare V genes are.
@@ -370,6 +371,8 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         gene_prior: Dirichlet pseudocount over the germline's functional V/J alleles — see
             :data:`BUILD_DEFAULTS`.
         threads: Annotation and E-step kernel threads (``0`` = auto).
+        error_rate: Initial retained-germline substitution probability, fitted by EM.
+            ``None`` retains exact matching. D/D2 paths remain unrestricted by annotation.
         ambiguous: Substitute this base for any non-ACGT character in a junction (default ``"A"``),
             or ``None`` to drop those clonotypes. See
             :func:`~vdjtools.model.infer.sanitize_junctions`.
@@ -384,7 +387,7 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     """
     import time
 
-    from .infer import infer_native, print_progress
+    from .infer import candidate_masks, infer_native, print_progress
     from .io import from_arda
 
     started = time.perf_counter()
@@ -395,20 +398,17 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
                          threads=threads, verbose=verbose, gene_level=template is None)
 
     if template is None:
+        clones = clones.with_columns([pl.lit(None, dtype=pl.String).alias(c)
+                                      for c in ("v_call", "j_call") if c not in clones.columns])
         clones = unique_clonotypes(clones, gene_level=True)
-    uniq = _filter_for_em(clones, base, ambiguous)
+    uniq = _filter_for_em(clones, base, ambiguous, use_calls=False)
     n_all = uniq.height
     seqs = [s.upper() for s in uniq["junction"].to_list()]
-    masks = _build_masks(uniq, base)
-    # Tandem D anchored to arda: a read may be n_D=2 only where arda called a second D. This
-    # counters the tandem-vs-long-insertion identifiability that inflates unregularized D-D EM
-    # (TRB drifts to P(n_D=2) ~ 0.28).
-    dd_allowed = None
-    if base.chain_type == "VDJ" and not single_d and "d2_call" in uniq.columns:
-        dd_allowed = [bool(mask[3]) for mask in masks]
+    masks, evidence = candidate_masks(seqs, base, organism=organism, threads=threads)
 
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
-                              single_d=single_d, dd_allowed=dd_allowed, nd_prior=nd_prior,
+                              single_d=single_d, nd_prior=nd_prior, error_rate=error_rate,
+                              candidate_search=evidence,
                               gene_prior=gene_prior, threads=threads,
                               progress=print_progress(prefix=f"[{chain}] ") if verbose else None,
                               checkpoint=checkpoint, checkpoint_every=checkpoint_every)
@@ -428,14 +428,19 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         "loglik_first": rep.loglik[0] if rep.loglik else None,
         "loglik_last": rep.loglik[-1] if rep.loglik else None,
         "iters": rep.n_iter, "seconds": round(time.perf_counter() - started, 1),
+        "n_scoreable": rep.n_scoreable[-1] if rep.n_scoreable else 0,
+        "candidate_search": evidence,
     }
     return model, rep, stats
 
 
-def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A") -> pl.DataFrame:
+def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A", *,
+                   use_calls: bool = True) -> pl.DataFrame:
     """Keep clonotypes the template can actually score: known V/J **gene**, encodable junction.
 
-    Filter on GENE, not allele. arda and a bootstrap model resolve alleles differently -- arda
+    ``use_calls=False`` (the corpus builder) retains junctions regardless of preliminary
+    V/J assignments; fresh candidate search supplies the enumeration proposals.
+    With explicit call filtering, filter on GENE, not allele. arda and a bootstrap model resolve alleles differently -- arda
     calls TRBV20-1*07, which OLGA's 89-allele index does not contain -- so an allele-level
     membership test deletes the WHOLE gene before `gene_masks` ever sees it. Measured on human TRB:
     TRBV20-1, the most-used human TRBV, went to zero training clonotypes and hence P(V)=0 in the
@@ -447,6 +452,10 @@ def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A") -> p
     """
     from .infer import sanitize_junctions
 
+    if not use_calls:
+        kept = clones.filter(pl.col("junction").is_not_null() &
+                             (pl.col("junction").str.len_bytes() > 0))
+        return sanitize_junctions(kept, "junction", ambiguous=ambiguous, where="build_model")
     vgenes = {a.split("*")[0] for a in base.genomic["genes_v"]["v_allele"].to_list()}
     jgenes = {a.split("*")[0] for a in base.genomic["genes_j"]["j_allele"].to_list()}
     vg = pl.col("v_call").str.split(",").list.eval(pl.element().str.strip_chars().str.split("*").list.first())
