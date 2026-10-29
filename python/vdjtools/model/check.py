@@ -317,6 +317,14 @@ def _check_tables(model: Model, tol: float) -> list[dict]:
 
         if event.kind is EventKind.DINUCLEOTIDE:
             rows += _check_dinucl(name, df)
+        elif event.kind is EventKind.NUCLEOTIDE:
+            if sorted(df["nt"].to_list()) != [0, 1, 2, 3]:
+                rows.append(_issue("error", "nucleotide_complete", "first-base table needs exactly nt=0,1,2,3",
+                                   event=name))
+            insertion = model.tables.get(name.replace("_first_nt", "_ins"))
+            if insertion is not None and insertion.filter(pl.col("length") > 0)["p"].sum() > tol and df["p"].sum() <= tol:
+                rows.append(_issue("error", "required_conditional", "nonempty insertions require first-base mass",
+                                   event=name))
         elif event.kind in (EventKind.DELETION, EventKind.DELETION_2D):
             rows += _check_deletion(model, name, event, df, pal)
         elif event.kind is EventKind.INS_LENGTH:

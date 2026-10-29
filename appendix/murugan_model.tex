@@ -103,9 +103,17 @@ length distribution and a first-order Markov chain:
 \begin{equation}\label{eq:ins}
   P_{\ins}(\mathbf{m}) = P_{\ins}(\ell)\; b(m_1)\prod_{i=2}^{\ell} R(m_i\mid m_{i-1}),
 \end{equation}
-with $b$ the first-nucleotide (stationary) bias and $R$ the $4\times4$ dinucleotide transition matrix.
-Following IGoR/\texttt{OLGA}, the $VD$ chain is read $5'\!\to\!3'$ and the $DJ$ chain $3'\!\to\!5'$, so
-$b_{DJ}$ biases the $J$-proximal insertion nucleotide.
+with $b$ the first-nucleotide distribution and $R$ the $4\times4$ transition matrix.
+For zero insertion length, only the length factor contributes. New scaffolds fit
+$b$ independently, counting the first base of every nonempty insertion, including
+length-one insertions with no transition. Unobserved transition conditionals
+retain their normalized initial rows; zeroing them would lose probability mass
+when first bases and insertion lengths recombine independently. Models without
+explicit first-base events retain the legacy stationary-$R$ convention.
+The $VD$ chain is read $5'\!\to\!3'$ and the $DJ$ chain $3'\!\to\!5'$, so $b_{DJ}$
+describes the $J$-proximal insertion nucleotide. This independent first-base
+distribution differs from IGoR's first transition conditioned on the adjacent
+retained germline nucleotide.
 
 \paragraph{Generation probability} The quantity of interest is the probability of an \emph{observed}
 CDR3, obtained by summing over every scenario that could have produced it,
@@ -122,9 +130,10 @@ and \S\ref{sec:aa} evaluate them by dynamic programming.
 
 \texttt{vdjtools} stores a model as a directory of long-format \texttt{polars} parquet tables plus a
 \texttt{manifest.json} that names each event and lists its conditioning parents --- the edges of the
-Bayesian network of Eq.~\eqref{eq:pvdj}. Changing a locus's conditioning (e.g.\ $P(D\mid J)$ versus a
-richer $P(D\mid V,J)$) is therefore a one-line manifest edit, not a format change, and a $VJ$ locus is
-simply the same schema with the $D$-tables and second insertion absent. Each table holds the
+Bayesian network of Eq.~\eqref{eq:pvdj}. The engine implements the declared supported
+factorizations; changing parents alone does not implement a richer dependency
+such as $P(D\mid V,J)$, which also requires compatible packing, inference and
+sampling. A $VJ$ locus omits the $D$ tables and second insertion. Each table holds the
 distribution of one event, normalized within its conditioning key by a single \texttt{polars}
 \texttt{group\_by} --- which is exactly the M-step of \S\ref{sec:em}. Two conventions matter for the
 $\Pgen$ recursions.

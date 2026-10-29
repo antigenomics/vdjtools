@@ -23,6 +23,7 @@ def test_unknown_v_or_insert_bases_preserve_both_histories(rate):
         assert counts.n_scoreable == 80
         assert counts.ins_vj == pytest.approx([40, 0, 40])
         assert counts.dinucl_vj == pytest.approx([2.5] * 16)
+        assert counts.first_vj == pytest.approx([10] * 4)
         assert counts.error_mismatches == pytest.approx(80 * rate)
         assert counts.error_nt == pytest.approx(80 * 11)
 

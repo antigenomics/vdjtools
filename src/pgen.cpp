@@ -1175,8 +1175,10 @@ void training_options(const PackedModel& m, int gene, const int8_t* s, int n,
     }
 }
 
-void accum_dinucl(std::vector<double>& dn, const int8_t* s, int lo, int hi, bool from_right, double w) {
+void accum_dinucl(std::vector<double>& dn, std::vector<double>& first,
+                  const int8_t* s, int lo, int hi, bool from_right, double w) {
     int n = hi - lo;
+    if (n > 0) first[s[from_right ? hi - 1 : lo]] += w;
     if (from_right) {
         for (int k = n - 2; k >= 0; --k) dn[s[lo + k] * 4 + s[lo + k + 1]] += w;
     } else {
@@ -1195,7 +1197,7 @@ double accum_vj(const PackedModel& m, int v, int j, int div, int dij,
     c.v_3_del[v * m.nbins_v + div] += w;
     c.j_5_del[j * m.nbins_j + dij] += w;
     c.ins_vj[L] += w;
-    accum_dinucl(c.dinucl_vj, mid, 0, L, false, w);
+    accum_dinucl(c.dinucl_vj, c.first_vj, mid, 0, L, false, w);
     return w;
 }
 
@@ -1240,8 +1242,8 @@ double accum_vdj(const PackedModel& m, int j, int v, int div, int dij,
                     c.d_del[(d * m.nbins_d5 + idx5) * m.nbins_d3 + idx3] += w;
                     c.ins_vd[lvd] += w;
                     c.ins_dj[ldj] += w;
-                    accum_dinucl(c.dinucl_vd, mid, 0, pos, false, w);
-                    accum_dinucl(c.dinucl_dj, mid, pos + ld, mlen, true, w);
+                    accum_dinucl(c.dinucl_vd, c.first_vd, mid, 0, pos, false, w);
+                    accum_dinucl(c.dinucl_dj, c.first_dj, mid, pos + ld, mlen, true, w);
                 }
             }
         }
@@ -1328,7 +1330,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                     Dmsg[s2] += A[e1] * wdd;
                     double bw = base * comb;
                     c.ins_dd[len] += bw;
-                    accum_dinucl(c.dinucl_dd, mid, e1, s2, false, bw);
+                    accum_dinucl(c.dinucl_dd, c.first_dd, mid, e1, s2, false, bw);
                 }
                 if (s2 >= e1 + 1) markov *= m.R_dd[mid[s2] * 4 + mid[s2 - 1]];
             }
@@ -1357,7 +1359,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                     c.error_nt += bw * ld1;
                     c.d_del[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3] += bw;
                     c.ins_vd[pos1] += bw;
-                    accum_dinucl(c.dinucl_vd, mid, 0, pos1, false, bw);
+                    accum_dinucl(c.dinucl_vd, c.first_vd, mid, 0, pos1, false, bw);
                 }
             }
         // Re-enumerate RIGHT: attribute d2_gene, d2_del(D2), dj_ins, dj_dinucl with weight (right)*Dmsg[s2].
@@ -1387,7 +1389,7 @@ double accum_dd(const PackedModel& m, int j, int v, int div, int dij,
                         c.d2_gene[d1 * nD + d2] += bw;
                         c.d2_del[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3] += bw;
                         c.ins_dj[mlen - pos2 - ld2] += bw;
-                        accum_dinucl(c.dinucl_dj, mid, pos2 + ld2, mlen, true, bw);
+                        accum_dinucl(c.dinucl_dj, c.first_dj, mid, pos2 + ld2, mlen, true, bw);
                     }
                 }
         }
@@ -1471,7 +1473,8 @@ void zero(Counts& c) {
     c.error_mismatches = c.error_nt = 0.0;
     for (auto* v : {&c.v_choice, &c.j_choice, &c.d_gene, &c.v_3_del, &c.j_5_del, &c.d_del,
                     &c.ins_vd, &c.ins_dj, &c.ins_vj, &c.dinucl_vd, &c.dinucl_dj, &c.dinucl_vj,
-                    &c.n_d, &c.d2_gene, &c.d2_del, &c.ins_dd, &c.dinucl_dd}) {
+                    &c.n_d, &c.d2_gene, &c.d2_del, &c.ins_dd, &c.dinucl_dd,
+                    &c.first_vd, &c.first_dj, &c.first_vj, &c.first_dd}) {
         std::fill(v->begin(), v->end(), 0.0);
     }
 }
@@ -1488,12 +1491,16 @@ void add_scaled(Counts& dst, const Counts& src, double s) {
     go(dst.dinucl_vd, src.dinucl_vd); go(dst.dinucl_dj, src.dinucl_dj); go(dst.dinucl_vj, src.dinucl_vj);
     go(dst.n_d, src.n_d); go(dst.d2_gene, src.d2_gene); go(dst.d2_del, src.d2_del);
     go(dst.ins_dd, src.ins_dd); go(dst.dinucl_dd, src.dinucl_dd);
+    go(dst.first_vd, src.first_vd); go(dst.first_dj, src.first_dj);
+    go(dst.first_vj, src.first_vj); go(dst.first_dd, src.first_dd);
 }
 
 }  // namespace
 
 Counts make_counts(const PackedModel& m) {
     Counts c;
+    c.first_vd.assign(4, 0.0); c.first_dj.assign(4, 0.0);
+    c.first_vj.assign(4, 0.0); c.first_dd.assign(4, 0.0);
     int nV = m.nV(), nJ = m.nJ(), nD = m.nD();
     c.v_choice.assign(nV, 0.0);
     c.v_3_del.assign(nV * m.nbins_v, 0.0);

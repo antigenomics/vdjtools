@@ -38,6 +38,22 @@ def _steady_state(R: np.ndarray) -> np.ndarray:
     return x / x.sum()
 
 
+def _insertion_bias(model, junction, R) -> np.ndarray:
+    name = f"{junction}_first_nt"
+    tables = model.tables
+    event = model.manifest.events.get(name)
+    if event is None:
+        if name in tables:
+            raise ValueError(f"{name} table must be declared in the model manifest")
+        return _steady_state(R)
+    if event.kind.value != "nucleotide" or name not in tables:
+        raise ValueError(f"{name} requires a declared nucleotide event and its table")
+    first = tables[name].sort("nt")
+    if first["nt"].to_list() != [0, 1, 2, 3]:
+        raise ValueError(f"{name} must contain nucleotide codes 0,1,2,3 exactly once")
+    return first["p"].to_numpy()
+
+
 @dataclass(slots=True)
 class _Prepared:
     """Model unpacked into plain dicts/arrays for the Pgen sum (built once, reused)."""
@@ -54,13 +70,14 @@ class _Prepared:
     maxpal: dict[str, int]                  # "v_3"/"j_5"/"d_5"/"d_3" -> palindrome max
     p_ins: dict[str, np.ndarray]            # "vd"/"dj"/"vj"/"dd" -> P(length)
     R: dict[str, np.ndarray]                # "vd"/"dj"/"vj"/"dd" -> 4×4 Markov
-    bias: dict[str, np.ndarray]             # "vd"/"dj"/"vj"/"dd" -> steady-state first-nt bias
+    bias: dict[str, np.ndarray]             # fitted first-nt distribution, or legacy steady-state bias
     # D-D (tandem) extension — populated only when the model declares an ``n_d`` mass at 2.
     p_nd: dict[int, float] = field(default_factory=lambda: {1: 1.0})   # P(n_D)
     p_d2_given_d1: dict[tuple, float] = field(default_factory=dict)     # {(d1, d2): P(D2|D1)}
     p_del_d2: dict = field(default_factory=dict)                        # {(d2, n5, n3): p}
     forbidden_dj: set = field(default_factory=set)
     forbidden_dd: set = field(default_factory=set)
+    explicit_first_nt: set[str] = field(default_factory=set)
 
 
 def _dinucl_matrix(df) -> np.ndarray:
@@ -108,7 +125,7 @@ def prepare(model: Model) -> _Prepared:
     for junc in juncs:
         p_ins[junc] = t[f"{junc}_ins"].sort("length")["p"].to_numpy()
         R[junc] = _dinucl_matrix(t[f"{junc}_dinucl"])
-        bias[junc] = _steady_state(R[junc])
+        bias[junc] = _insertion_bias(model, junc, R[junc])
 
     # D-D tables — present only when the model declares the tandem extension.
     p_nd = {int(n): float(p) for n, p in t["n_d"].select(["n_d", "p"]).iter_rows()} if "n_d" in t else {1: 1.0}
@@ -136,6 +153,7 @@ def prepare(model: Model) -> _Prepared:
         p_ins=p_ins,
         R=R,
         bias=bias,
+        explicit_first_nt={junction for junction in juncs if f"{junction}_first_nt" in t},
         p_nd=p_nd,
         p_d2_given_d1=p_d2_given_d1,
         p_del_d2=p_del_d2,

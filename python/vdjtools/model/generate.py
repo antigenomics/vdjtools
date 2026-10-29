@@ -12,7 +12,7 @@ import numpy as np
 import polars as pl
 
 from .model import Model
-from .pgen import _dinucl_matrix, _steady_state
+from .pgen import _dinucl_matrix, _insertion_bias
 from .reference import translate
 
 _NT = "ACGT"
@@ -122,7 +122,7 @@ def prepare_generation(model: Model) -> _GenPrep:
         it = t[f"{junc}_ins"].sort("length")
         ins[junc] = _cum(it["length"].to_numpy(), it["p"].to_numpy())
         R[junc] = _dinucl_matrix(t[f"{junc}_dinucl"])
-        bias[junc] = _steady_state(R[junc])
+        bias[junc] = _insertion_bias(model, junc, R[junc])
 
     # D-D (tandem) generation structures — only when the model declares them.
     p_nd, d2_given_d1, deld2, deld2_pairs = None, {}, {}, {}

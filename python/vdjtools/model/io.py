@@ -612,7 +612,12 @@ def from_germline(germline: pl.DataFrame, *, locus: str, organism: str = "custom
         }
         genomic = {"genes_v": genes_v, "genes_j": genes_j}
 
+    for junction in (("vd", "dj") if chain_type == "VDJ" else ("vj",)):
+        name = f"{junction}_first_nt"
+        tables[name] = pl.DataFrame({"nt": np.arange(4, dtype=np.uint8), "p": np.full(4, 0.25)})
+        events[name] = Event(name, EventKind.NUCLEOTIDE)
     manifest = Manifest(locus=locus, organism=organism, chain_type=chain_type, events=events,
+                        model_version="2.1.0",
                         palindrome_max={k: int(v) for k, v in pal.items()},
                         source=source or f"germline:{locus}")
     from .collapse import _project_onto_germline
@@ -680,7 +685,7 @@ def from_arda(locus: str, organism: str = "human", *,
 
 #: Every realization column any event kind can contribute, in a stable display order.
 _REALIZATION_COLS = ("v_allele", "j_allele", "d_allele", "d2_allele",
-                     "n_d", "ndel", "ndel5", "ndel3", "length", "from_nt", "to_nt")
+                     "n_d", "ndel", "ndel5", "ndel3", "length", "from_nt", "to_nt", "nt")
 
 
 def marginals_frame(model: Model) -> pl.DataFrame:

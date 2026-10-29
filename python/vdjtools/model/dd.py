@@ -17,11 +17,12 @@ With ``p_nd2 = 0`` the model is generatively identical to its single-D input.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import polars as pl
 
 from .events import Event, EventKind
 from .model import Model
-from .schema import Manifest
 
 
 def has_tandem(model: Model) -> bool:
@@ -91,11 +92,11 @@ def to_dd(model: Model, *, p_nd2: float = 0.05) -> Model:
     events["d2_del"] = Event("d2_del", EventKind.DELETION_2D, ("d2_gene",))
     events["dd_ins"] = Event("dd_ins", EventKind.INS_LENGTH)
     events["dd_dinucl"] = Event("dd_dinucl", EventKind.DINUCLEOTIDE)
+    if "dj_first_nt" in model.tables:
+        t["dd_first_nt"] = model.tables["dj_first_nt"]
+        events["dd_first_nt"] = Event("dd_first_nt", EventKind.NUCLEOTIDE)
 
-    manifest = Manifest(
-        locus=model.manifest.locus,
-        organism=model.manifest.organism,
-        chain_type="VDJ",
+    manifest = replace(model.manifest,
         events=events,
         # D2 draws from the same D germline as D1, so it reuses the D palindrome maxima (d_5/d_3);
         # the enumeration reads those for both Ds — no separate d2_5/d2_3 keys.

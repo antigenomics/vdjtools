@@ -254,6 +254,12 @@ def _insert_markov(seq: str, R: np.ndarray, bias: np.ndarray, *, from_right: boo
     return w, trans
 
 
+def _accum_first(prep, junction, sequence, from_right, weight, local):
+    if sequence and junction in prep.explicit_first_nt:
+        nt = _NT2NUM[sequence[-1] if from_right else sequence[0]]
+        local[(f"{junction}_first_nt", (nt,))] += weight
+
+
 def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> float:
     """Accumulate one sequence's soft counts into ``counts``; return its Pgen (for log-lik).
 
@@ -318,6 +324,7 @@ def _accum_vj(prep, V, J, nv, nj, mid, base, local) -> float:
     local[("v_3_del", (V, nv))] += w
     local[("j_5_del", (J, nj))] += w
     local[("vj_ins", (L,))] += w
+    _accum_first(prep, "vj", mid, False, w, local)
     for fr, to in trans:
         local[("vj_dinucl", (fr, to))] += w
     return w
@@ -364,6 +371,8 @@ def _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
                     local[("vd_ins", (lvd,))] += w
                     local[("dj_ins", (ldj,))] += w
                     local[("n_d", (1,))] += w  # this scenario has exactly one D
+                    _accum_first(prep, "vd", ins_vd, False, w, local)
+                    _accum_first(prep, "dj", ins_dj, True, w, local)
                     for fr, to in tvd:
                         local[("vd_dinucl", (fr, to))] += w
                     for fr, to in tdj:
@@ -450,6 +459,9 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None, d2_mask=None) -
                                     local[("dd_ins", (ldd,))] += w
                                     local[("dj_ins", (ldj,))] += w
                                     local[("n_d", (2,))] += w  # this scenario has two Ds
+                                    _accum_first(prep, "vd", mid[:pos1], False, w, local)
+                                    _accum_first(prep, "dd", ins_dd, False, w, local)
+                                    _accum_first(prep, "dj", ins_dj, True, w, local)
                                     for fr, to in tvd:
                                         local[("vd_dinucl", (fr, to))] += w
                                     for fr, to in tdd:
@@ -464,6 +476,18 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None, d2_mask=None) -
 # for a D-D model it learns P(n_D=2) from the tandem soft counts.
 def _fit_events(manifest) -> list[str]:
     return list(manifest.events)
+
+
+def _retain_unobserved_transitions(template, name, frame):
+    if name.replace("_dinucl", "_first_nt") not in template.manifest.events:
+        return frame
+    # No transition evidence leaves this conditional unidentified; retain a normalized
+    # initial row rather than losing generation mass under a different insertion length.
+    previous = template.tables[name].rename({"p": "_previous"})
+    return (frame.join(previous, on=["from_nt", "to_nt"], how="left")
+            .with_columns(p=pl.when(pl.col("p").sum().over("from_nt") > 0)
+                          .then(pl.col("p")).otherwise(pl.col("_previous")))
+            .drop("_previous"))
 
 
 def _mstep(template: Model, counts: dict, nd_prior: float = 0.0) -> dict[str, pl.DataFrame]:
@@ -482,11 +506,17 @@ def _mstep(template: Model, counts: dict, nd_prior: float = 0.0) -> dict[str, pl
                 data[c].append(val)
             data["p"].append(cnt)
         df = pl.DataFrame(data, schema=table_columns(event))
+        # Preserve declared support: dense insertion arrays use row position as length.
+        # Keeping only observed length=1 would turn it into index0 in prepare().
+        df = (template.tables[name].select(value_cols).join(df, on=value_cols, how="left")
+              .with_columns(pl.col("p").fill_null(0.0)))
+        if event.kind.value == "dinucleotide":
+            df = _retain_unobserved_transitions(template, name, df)
         if name in ("d_gene", "d2_gene"):
             df = _mask_dj(df, template.locus)   # see _mask_dj: a hard genomic fact, not a parameter
         keys = normalization_keys(event)
         total = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
-        tables[name] = df.with_columns(p=pl.col("p") / total)
+        tables[name] = df.with_columns(p=pl.when(total > 0).then(pl.col("p") / total).otherwise(0.0))
     return tables
 
 
@@ -1319,10 +1349,11 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         ndel = np.tile(np.arange(nb) - maxpal, len(alleles))
         return norm(pl.DataFrame({col: a, "ndel": ndel.astype(np.int16), "p": list(arr)}), [col])
 
-    def dinucl(arr):
+    def dinucl(arr, name):
         i = np.arange(16)  # arr index i = to*4 + from
-        return norm(pl.DataFrame({"from_nt": (i % 4).astype(np.uint8), "to_nt": (i // 4).astype(np.uint8),
-                                  "p": list(arr)}), ["from_nt"])
+        frame = pl.DataFrame({"from_nt": (i % 4).astype(np.uint8), "to_nt": (i // 4).astype(np.uint8),
+                              "p": list(arr)})
+        return norm(_retain_unobserved_transitions(template, name, frame), ["from_nt"])
 
     t = {}
     t["v_choice"] = gene_choice(pl.DataFrame({"v_allele": v_alleles, "p": list(counts.v_choice)}), "v_allele", "v", [])
@@ -1343,8 +1374,8 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
             "p": list(counts.d_del)}), ["d_allele"])
         t["vd_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_vd), dtype=np.int16), "p": list(counts.ins_vd)}), [])
         t["dj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dj), dtype=np.int16), "p": list(counts.ins_dj)}), [])
-        t["vd_dinucl"] = dinucl(counts.dinucl_vd)
-        t["dj_dinucl"] = dinucl(counts.dinucl_dj)
+        t["vd_dinucl"] = dinucl(counts.dinucl_vd, "vd_dinucl")
+        t["dj_dinucl"] = dinucl(counts.dinucl_dj, "dj_dinucl")
         # n_d learned from the soft counts (indexed by the n_D value): single-D emits only n_D=1 mass
         # -> renormalizes to delta(1) (a no-op); D-D emits n_D=1 and n_D=2 -> learns P(n_D=2).
         nd = template.tables["n_d"]
@@ -1362,13 +1393,20 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
                 "ndel3": np.tile(np.arange(n3) - mp["d_3"], n5 * nD).astype(np.int16),
                 "p": list(counts.d2_del)}), ["d2_allele"])
             t["dd_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dd), dtype=np.int16), "p": list(counts.ins_dd)}), [])
-            t["dd_dinucl"] = dinucl(counts.dinucl_dd)
+            t["dd_dinucl"] = dinucl(counts.dinucl_dd, "dd_dinucl")
     else:
         t["j_choice"] = norm(pl.DataFrame({
             "v_allele": np.repeat(v_alleles, nJ), "j_allele": np.tile(j_alleles, nV),
             "p": list(counts.j_choice)}), ["v_allele"])
         t["vj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_vj), dtype=np.int16), "p": list(counts.ins_vj)}), [])
-        t["vj_dinucl"] = dinucl(counts.dinucl_vj)
+        t["vj_dinucl"] = dinucl(counts.dinucl_vj, "vj_dinucl")
+    for junction in (("vd", "dj", "dd") if vdj else ("vj",)):
+        event = f"{junction}_first_nt"
+        if event not in template.manifest.events:
+            continue
+        values = getattr(counts, f"first_{junction}")
+        t[event] = (norm(pl.DataFrame({"nt": np.arange(4, dtype=np.uint8), "p": list(values)}), [])
+                    if sum(values) > 0 else template.tables[event])
     return t
 
 

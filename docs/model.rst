@@ -80,6 +80,18 @@ The marginals of a fresh template are placeholders. Their support ranges **bound
 learn**, which is why ``ins_max`` is a parameter: a model whose insertion support stops at 40 can
 never learn a 45-nt N-region.
 
+New germline scaffolds use model schema 2.1 and explicit ``*_first_nt`` tables:
+four rows ``nt, p`` for A/C/G/T coded 0/1/2/3. EM learns the first nucleotide of
+each nonempty insertion separately from subsequent Markov transitions. A one-base
+insertion therefore contributes first-base evidence even though it has no
+transition. VD/VJ/DD chains start at the V-proximal side; DJ starts at the
+J-proximal side. This independent first-base distribution differs from IGoR's
+boundary-conditioned first transition. Unobserved transition conditionals retain
+their normalized initial rows so combining insertion lengths cannot lose mass.
+Scoring, both samplers and saved models share this distribution. Models without
+these events retain the legacy stationary distribution derived from their Markov
+matrix; existing OLGA assets and seeded streams are unchanged.
+
 
 Learning from your own sequences
 --------------------------------

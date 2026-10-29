@@ -154,7 +154,7 @@ def entropy_table(model: Model) -> pl.DataFrame:
             h, hc = _cond_entropy(df, pcol, gene_marginal(model, given[0].split("_")[0]))
             realiz = ["ndel"] if ev.kind.value == "deletion" else ["ndel5", "ndel3"]
             add(name, h, hc, df.select(realiz).n_unique())  # distinct deletion states, not rows
-        elif ev.kind.value == "ins_length":
+        elif ev.kind.value in ("ins_length", "nucleotide"):
             h = _H(df["p"].to_numpy())
             add(name, h, h, df.height)
         elif ev.kind.value == "dinucleotide":
@@ -236,10 +236,10 @@ def total_entropy(model: Model) -> pl.DataFrame:
     The insertion regions need care, and this is the only place the accounting is non-obvious.
     :func:`entropy_table` reports a dinucleotide event's **per-step** conditional entropy (a
     composition summary, independent of how long the N-region is). Its contribution to the scenario
-    is that per-step entropy times the expected number of steps, so the dinucleotide row here is
-    ``E[length] · H_step`` using its paired ``*_ins`` event's mean length. The first inserted base
-    is treated as drawn from the chain's stationary distribution rather than the model's separate
-    first-base bias — the standard decomposition, and worth a fraction of a bit at most.
+    for explicit-first models separates ``P(length>0) H(first)`` from transitions.
+    Transition contributions propagate the first-base distribution along the chain,
+    weighted by the probability that each transition exists. Models without a
+    separate first-base event retain the legacy ``E[length] · H_step`` convention.
 
     Args:
         model: The model to measure.
@@ -259,10 +259,25 @@ def total_entropy(model: Model) -> pl.DataFrame:
         if kind == "dinucleotide":
             ins = name.replace("_dinucl", "_ins")
             t = model.tables.get(ins)
+            first_name = name.replace("_dinucl", "_first_nt")
+            if first_name in model.tables and t is not None:
+                R = _dinucl_R(model.tables[name])
+                pi = model.tables[first_name].sort("nt")["p"].to_numpy()
+                h = np.array([_H(R[:, previous]) for previous in range(4)])
+                lengths, probs = t["length"].to_numpy(), t["p"].to_numpy()
+                bits = 0.0
+                for step in range(1, int(lengths.max(initial=0))):
+                    bits += float(probs[lengths > step].sum() * (pi @ h))
+                    pi = R @ pi
+                rows.append({"event": name, "kind": kind, "contribution_bits": round(bits, 6)})
+                continue
             mean_len = 0.0
             if t is not None:
                 mean_len = float((t["length"].cast(pl.Float64) * t["p"]).sum())
             bits = bits * mean_len
+        elif kind == "nucleotide":
+            t = model.tables.get(name.replace("_first_nt", "_ins"))
+            bits *= float(t.filter(pl.col("length") > 0)["p"].sum()) if t is not None else 0.0
         rows.append({"event": name, "kind": kind, "contribution_bits": round(bits, 6)})
     return pl.DataFrame(rows, schema={"event": pl.Utf8, "kind": pl.Utf8,
                                       "contribution_bits": pl.Float64})
@@ -272,7 +287,7 @@ def total_entropy(model: Model) -> pl.DataFrame:
 
 _KIND_COLOR = {
     "gene_choice": "#cfe8ff", "n_d": "#ffd6a5", "deletion": "#d7f0d7",
-    "deletion_2d": "#d7f0d7", "ins_length": "#f0e0ff", "dinucleotide": "#f0e0ff",
+    "deletion_2d": "#d7f0d7", "ins_length": "#f0e0ff", "dinucleotide": "#f0e0ff", "nucleotide": "#f0e0ff",
 }
 
 
