@@ -380,21 +380,49 @@ folded into $\Pi_R$, we keep $\Psi^D$ purely $J$/$DJ$ and slide a short explicit
 is what generalizes to the tandem-$D$ event.
 \end{remark}
 
-\paragraph{Tandem transfer matrices} For the two-D branch, the native engine
-builds the V/VD left matrix once and loops explicitly over J.
-For each J it builds a D-independent right matrix containing $P(J)$, J trimming
-and the DJ insertion factors.
-For each first D, threading all supported nonempty first-D trims through the
-left matrix and extending every supported DD insertion produces an intermediate
-matrix indexed by its boundary and codon state.
-Each second-D template and nonempty trim is then threaded through this matrix
-and contracted with the J-specific right matrix, weighted by
-$q_J(2,D_1,D_2)$ and the second-D deletion probability.
-The first-D deletion weight enters the intermediate matrix; the joint history
-weight enters the second-D contraction exactly once.
-Forbidden complete histories contribute zero before contraction.
-This preserves the codon-state recurrence while retaining J-dependent D-pair
-ambiguity; it does not factor $q_J$ into independent D choices.
+\paragraph{Exact tandem contraction}
+Let $N$ be the junction nucleotide length, $S=25$ the codon-state count,
+$D$ the number of functional D templates, and $J$ the number of selected J
+alleles. The native engine builds the V/VD left matrix once.
+For each first D template $d$, it sums all supported nonempty retained-D
+histories ending at each boundary/state and extends that sum through the DD
+insertion recurrence. Call the resulting matrix $M_d$.
+This matrix contains the first-D deletion weight but no J-dependent history
+weight. For each J allele $j$, $R_j$ contains $P(J=j)$, J trimming and DJ
+insertion factors. Let $H_{jde}$ denote the joint tandem-history weight for
+first D $d$ and second D $e$, or the legacy product
+$P(d\mid j)P(e\mid d)$. Forbidden complete histories have $H_{jde}=0$.
+
+For fixed second D $e$, let $C_e(A,B)$ mean threading every supported nonempty
+trim of $e$ through left message $A$, multiplying by its second-D deletion
+probability, and stitching with right message $B$ using
+Eq.~\eqref{eq:stitch}. This operation is bilinear, so the tandem branch is
+\begin{align}
+ T &= \sum_{d,e} C_e\!\left(M_d,\sum_j H_{jde}R_j\right)
+    = \sum_{j,e} C_e\!\left(\sum_d H_{jde}M_d,R_j\right).
+\end{align}
+The global tandem-mixture weight, when present, multiplies $T$ exactly once
+in the caller. The implementation chooses the first expression when $D\le J$
+and the second otherwise. Thus it performs at most
+$\min(D^2,JD)$ second-D bridge walks, rather than $JD^2$, and computes each
+$M_d$ only once. Mixing messages costs $O(JD^2NS)$ in the dense worst case;
+zero history weights are skipped. Message storage is $O((J+D)NS)$ in the
+second form and $O(JNS)$ in the first, excluding the existing fixed-size
+codon-state scratch.
+
+Both D roles share a prefix walk over placements and 5-prime trims. Successive
+retained lengths extend the same prefix instead of rethreading each 3-prime
+trim from its beginning. A zero codon-compatible message terminates every
+longer prefix exactly. After two fixed bases, the message has only one possible
+codon state, so subsequent fixed bases use a scalar state transition.
+All nonzero deletion weights remain; a prefix shorter than the first supported
+length still propagates because it can lead to a longer supported fragment.
+Each D retains at least one nucleotide and J retains at least one nucleotide.
+No minimum retained-D length beyond this model convention, probability cutoff,
+or renormalization is used. Linearity proves equivalence in exact arithmetic;
+changing nonnegative reduction order can change floating-point rounding.
+Native singleton-codon NT masks, AA masks, degenerate masks and Hamming-1 calls
+use this same kernel. The single-D and frozen OLGA paths remain unchanged.
 
 \section{Correctness checks and recorded benchmark}\label{sec:bench}
 

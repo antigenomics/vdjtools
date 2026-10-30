@@ -708,15 +708,6 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
     return total;
 }
 
-// Thread a fixed germline block g[0..ld) starting at CDR3 position `start` forward through the
-// codon-constrained state DP (25 states). Returns false if the codon masks kill all mass.
-inline bool thread_fixed(std::vector<double>& dp, std::vector<double>& ndp,
-                         const int8_t* g, int ld, int start, const uint64_t* allowed) {
-    for (int k = 0; k < ld; ++k)
-        if (!thread_one(dp, ndp, g[k], start + k, allowed)) return false;
-    return true;
-}
-
 // From a seed state `dp0` at boundary q0, extend forward through an insertion block (pins/R/bias,
 // read 5'->3' like VD), accumulating Pins·bias·markov (codon-constrained) into Mf[q*25+s] for
 // q in [q0, N]. Same recurrence as mk_left_tm's insertion loop but seeded from an arbitrary state.
@@ -751,77 +742,133 @@ void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64
     }
 }
 
-// Tandem (n_D=2) aa Pgen middle: V+insVD (Lf, reused) → D1 → insDD (Mf) → D2 → insDJ+J (Rb per J).
-// P(D1|J) couples D1 to J, so J is looped explicitly (few J on the D-bearing loci) and its P(J),
-// P(delJ), insDJ+J go into a D-less right DP; P(D1|J)·P(D2|D1) apply at the D placements. Matches
-// the pure-Python `_dd_aa_middle` reference (which matches Σ nt over synonymous codons) exactly.
-double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
-    int N = 3 * alen, nD = m.nD();
-    std::vector<double> Lf, RbJ, Mf, seeds, dp(25), ndp(25);
-    std::vector<char> lf_any, rb_any;
-    mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);  // V + insVD, once
-    int8_t g[128];
-    double total = 0.0;
-    for (int j : mask_or_all(j_idx, m.func_j)) {
-        if (m.pj[j] == 0.0) continue;
-        mk_right_tm(m, allowed, N, /*D=*/-1, /*j_idx=*/j, RbJ, rb_any);  // insDJ + J, P(J)·P(delJ), no D
-        for (int d1 : m.func_d) {
-            double pd1 = tandem_first_weight(m, j, d1);
-            if (pd1 == 0.0) continue;
-            Mf.assign((N + 1) * 25, 0.0);
-            seeds.assign((N + 1) * 25, 0.0);
-            const auto& cut1 = m.cut_d[d1];
-            int L1 = cut1.size();
-            for (int i5 = 0; i5 <= L1 && i5 < m.nbins_d5; ++i5)
-                for (int i3 = 0; i3 <= L1 - i5 && i3 < m.nbins_d3; ++i3) {
-                    int ld1 = L1 - i5 - i3;
-                    if (ld1 < 1) continue;
-                    double pdel1 = tandem_first_deletions(m)[(d1 * m.nbins_d5 + i5) * m.nbins_d3 + i3];
-                    if (pdel1 == 0.0) continue;
-                    for (int k = 0; k < ld1; ++k) g[k] = cut1[i5 + k];
-                    for (int pos1 = 1; pos1 + ld1 < N; ++pos1) {  // leave ≥1 nt for D2 after
-                        if (!lf_any[pos1]) continue;
-                        double wgt = pd1 * pdel1;
-                        for (int s = 0; s < 25; ++s) dp[s] = Lf[pos1 * 25 + s] * wgt;
-                        if (!thread_fixed(dp, ndp, g, ld1, pos1, allowed)) continue;
-                        for (int s = 0; s < 25; ++s)
-                            seeds[(pos1 + ld1) * 25 + s] += dp[s];
-                    }
+// Walk every live retained D prefix once per (5-prime trim, placement).
+// After two fixed bases the 25-state message has exactly one possible state.
+template<class Emit>
+void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletions,
+                const std::vector<double>& left, int end, const uint64_t* allowed, Emit emit) {
+    const auto& cut = m.cut_d[d];
+    const int L = cut.size();
+    const double* row = deletions.data() + d * m.nbins_d5 * m.nbins_d3;
+    std::vector<double> dp(25), ndp(25);
+    for (int i5 = 0; i5 < L && i5 < m.nbins_d5; ++i5) {
+        int longest = 0;
+        for (int i3 = 0; i3 < m.nbins_d3 && i3 < L - i5; ++i3)
+            if (row[i5 * m.nbins_d3 + i3] != 0.0) {
+                longest = L - i5 - i3;
+                break;
+            }
+        if (!longest) continue;
+        for (int pos = 1; pos < end; ++pos) {
+            const double* seed = left.data() + pos * 25;
+            if (std::none_of(seed, seed + 25, [](double w) { return w != 0.0; })) continue;
+            std::copy_n(seed, 25, dp.begin());
+            int sole = -1;
+            for (int len = 1; len <= longest && pos + len <= end; ++len) {
+                const int nt = cut[i5 + len - 1], mm = pos + len - 1;
+                if (sole < 0) {
+                    if (!thread_one(dp, ndp, nt, mm, allowed)) break;
+                    if (len == 2) sole = sidx(nt, cut[i5]);
+                } else {
+                    const int p1 = sole / 5 - 1, p2 = sole % 5 - 1;
+                    if (!(codon_nt_mask(allowed[mm / 3], mm % 3) & (1u << nt)) ||
+                        (mm % 3 == 2 && !ok_codon(allowed[mm / 3], p2 * 16 + p1 * 4 + nt))) break;
+                    const double w = dp[sole];
+                    sole = sidx(nt, p1);
+                    // Clear the old state: the callback may inspect the whole message.
+                    std::fill(dp.begin(), dp.end(), 0.0);
+                    dp[sole] = w;
                 }
-            // The insertion recurrence is linear in its boundary state. Sum all
-            // D1 histories ending at a boundary before extending that state once.
-            for (int q = 1; q < N; ++q) {
-                const double* seed = &seeds[q * 25];
-                if (std::none_of(seed, seed + 25, [](double w) { return w != 0.0; })) continue;
-                std::copy_n(seed, 25, dp.begin());
-                extend_ins_into(dp, q, N, allowed, m.ins_dd, m.R_dd, m.bias_dd, Mf);
+                const int i3 = L - i5 - len;
+                if (i3 >= m.nbins_d3) continue;
+                const double weight = row[i5 * m.nbins_d3 + i3];
+                if (weight != 0.0) emit(pos + len, dp, weight, sole);
             }
-            for (int d2 : m.func_d) {
-            if (!tandem_allowed(m,j,d1,d2)) continue;
-                double pd2 = tandem_pair_weight(m, j, d1, d2);
-                if (pd2 == 0.0) continue;
-                const auto& cut2 = m.cut_d[d2];
-                int L2 = cut2.size();
-                for (int k5 = 0; k5 <= L2 && k5 < m.nbins_d5; ++k5)
-                    for (int k3 = 0; k3 <= L2 - k5 && k3 < m.nbins_d3; ++k3) {
-                        int ld2 = L2 - k5 - k3;
-                        if (ld2 < 1) continue;
-                        double pdel2 = m.del_d2[(d2 * m.nbins_d5 + k5) * m.nbins_d3 + k3];
-                        if (pdel2 == 0.0) continue;
-                        for (int k = 0; k < ld2; ++k) g[k] = cut2[k5 + k];
-                        for (int pos2 = 1; pos2 + ld2 <= N; ++pos2) {
-                            int p2 = pos2 + ld2;
-                            if (!rb_any[p2]) continue;
-                            bool anyq = false;
-                            for (int s = 0; s < 25; ++s) if (Mf[pos2 * 25 + s] != 0.0) { anyq = true; break; }
-                            if (!anyq) continue;
-                            double wgt = pd2 * pdel2;
-                            for (int s = 0; s < 25; ++s) dp[s] = Mf[pos2 * 25 + s] * wgt;
-                            if (!thread_fixed(dp, ndp, g, ld2, pos2, allowed)) continue;
-                            total += combine_tm(dp.data(), &RbJ[p2 * 25], p2, allowed);
-                        }
-                    }
+        }
+    }
+}
+
+// D1->DD messages do not depend on J. Mix J-dependent history weights into
+// the right message before walking D2; linearity preserves every history.
+double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
+    const int N = 3 * alen, width = (N + 1) * 25;
+    std::vector<double> Lf, Rb, Mf(width), seeds(width), dp(25);
+    std::vector<char> lf_any, rb_any;
+    mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);
+    const auto js = mask_or_all(j_idx, m.func_j);
+    std::vector<std::vector<double>> rights(js.size());
+    for (size_t k = 0; k < js.size(); ++k)
+        if (m.pj[js[k]] != 0.0)
+            mk_right_tm(m, allowed, N, -1, js[k], rights[k], rb_any);
+    double total = 0.0;
+    const bool mix_left = js.size() < m.func_d.size();
+    std::vector<std::vector<double>> middles(mix_left ? m.nD() : 0);
+    for (int d1 : m.func_d) {
+        bool active = false;
+        for (int j : js)
+            for (int d2 : m.func_d)
+                if (m.pj[j] != 0.0 && tandem_allowed(m, j, d1, d2) &&
+                    tandem_first_weight(m, j, d1) * tandem_pair_weight(m, j, d1, d2) != 0.0)
+                    active = true;
+        if (!active) continue;
+        std::fill(seeds.begin(), seeds.end(), 0.0);
+        d_prefixes(m, d1, tandem_first_deletions(m), Lf, N - 2, allowed,
+            [&](int q, const std::vector<double>& state, double w, int sole) {
+                if (sole >= 0) seeds[q * 25 + sole] += w * state[sole];
+                else for (int s = 0; s < 25; ++s) seeds[q * 25 + s] += w * state[s];
+            });
+        std::fill(Mf.begin(), Mf.end(), 0.0);
+        for (int q = 1; q < N - 1; ++q) {
+            const double* seed = seeds.data() + q * 25;
+            if (std::none_of(seed, seed + 25, [](double w) { return w != 0.0; })) continue;
+            std::copy_n(seed, 25, dp.begin());
+            extend_ins_into(dp, q, N - 2, allowed, m.ins_dd, m.R_dd, m.bias_dd, Mf);
+        }
+        if (mix_left) {
+            middles[d1] = Mf;
+            continue;
+        }
+        for (int d2 : m.func_d) {
+            Rb.assign(width, 0.0);
+            bool live = false;
+            for (size_t k = 0; k < js.size(); ++k) {
+                const int j = js[k];
+                if (rights[k].empty() || !tandem_allowed(m, j, d1, d2)) continue;
+                const double w = tandem_first_weight(m, j, d1) * tandem_pair_weight(m, j, d1, d2);
+                if (w == 0.0) continue;
+                live = true;
+                for (int i = 0; i < width; ++i) Rb[i] += w * rights[k][i];
             }
+            if (!live) continue;
+            d_prefixes(m, d2, m.del_d2, Mf, N - 1, allowed,
+                [&](int q, const std::vector<double>& state, double w, int sole) {
+                    total += w * combine_tm(state.data(), Rb.data() + q * 25, q, allowed,
+                                             nullptr, sole);
+                });
+        }
+    }
+    // With many D genes (IGH), mix D1 histories on the left instead. This
+    // requires J*D2 prefix walks rather than D1*D2 walks. Both contractions
+    // sum the same nonnegative bilinear form; choose only by model dimensions.
+    if (mix_left) for (size_t k = 0; k < js.size(); ++k) {
+        if (rights[k].empty()) continue;
+        const int j = js[k];
+        for (int d2 : m.func_d) {
+            std::fill(Mf.begin(), Mf.end(), 0.0);
+            bool live = false;
+            for (int d1 : m.func_d) {
+                if (middles[d1].empty() || !tandem_allowed(m, j, d1, d2)) continue;
+                const double w = tandem_first_weight(m, j, d1) * tandem_pair_weight(m, j, d1, d2);
+                if (w == 0.0) continue;
+                live = true;
+                for (int i = 0; i < width; ++i) Mf[i] += w * middles[d1][i];
+            }
+            if (!live) continue;
+            d_prefixes(m, d2, m.del_d2, Mf, N - 1, allowed,
+                [&](int q, const std::vector<double>& state, double w, int sole) {
+                    total += w * combine_tm(state.data(), rights[k].data() + q * 25, q, allowed,
+                                             nullptr, sole);
+                });
         }
     }
     return total;
