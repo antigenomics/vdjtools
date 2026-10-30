@@ -85,15 +85,17 @@ def test_the_batch_is_the_per_row_loop_exactly(trb):
     j = [c[2] for c in CASES] * 40
     got = best_aa_scenarios_batch(trb, aa, v, j, k=4)
     assert got.columns == ["row", "rank", "w", "v_call", "len_v", "j_call", "len_j",
-                           "d_call", "idx5", "idx3", "pos"]
+                           "d_call", "idx5", "idx3", "pos", "d2_call", "idx5_2", "idx3_2", "pos2"]
     for i in (0, 1, 2, 77):
         ref = best_aa_scenarios(trb, aa[i], v[i], j[i], 4)
         rows = got.filter(pl.col("row") == i).sort("rank")
         assert rows.height == len(ref)
-        for r, (w, va, lv, ja, lj, da, i5, i3, pos) in zip(rows.iter_rows(named=True), ref):
+        for r, (w, va, lv, ja, lj, da, i5, i3, pos, d2, k5, k3, pos2) in zip(rows.iter_rows(named=True), ref):
             assert r["w"] == w and r["v_call"] == va and r["len_v"] == lv
             assert r["j_call"] == ja and r["len_j"] == lj and r["d_call"] == da
             assert (r["idx5"], r["idx3"], r["pos"]) == (i5, i3, pos)
+            assert (r["d2_call"], r["idx5_2"], r["idx3_2"], r["pos2"]) == (d2, k5, k3, pos2)
+    assert got.schema['d2_call'] == pl.String
 
 
 def test_the_batch_result_does_not_depend_on_the_thread_count(trb):

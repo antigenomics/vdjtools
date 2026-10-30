@@ -59,8 +59,12 @@ def test_completion_restores_j_deletion_newly_reachable_through_v(toy_model, mis
 
 
 def test_completion_reapplies_trb_dj_order():
+    from vdjtools.model import Model, from_arda
     from vdjtools.model.infer import augment_from_oracle
-    model = load_bundled('TRB', 'arda', collapse=False)
+    template = from_arda('TRB')  # Legacy factorization; fresh fitted bundles use joint histories.
+    tables = dict(template.tables)
+    tables['d_gene'] = tables['d_gene'].with_columns(p=pl.lit(1. / template.genomic['genes_d'].height))
+    model = Model(manifest=template.manifest, tables=tables, genomic=template.genomic)
     done = augment_from_oracle(model, model)
     illegal = ((pl.col('d_allele').str.starts_with('TRBD2')) &
                pl.col('j_allele').str.starts_with('TRBJ1'))

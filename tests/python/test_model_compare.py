@@ -1,6 +1,8 @@
 """Comparing two models: per-event divergence, usage, the comparison graph, and total entropy."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 import polars as pl
 import pytest
 
@@ -137,7 +139,10 @@ def test_total_entropy_sums_the_conditional_entropies(toy_model):
 
 
 def test_dinucleotide_contribution_scales_with_insertion_length(toy_model):
-    """An N-region contributes per-step entropy times its expected length, not per-step alone."""
+    """Legacy stationary-bias models charge each base; explicit first-base events are separate."""
+    toy_model = Model(manifest=replace(toy_model.manifest, events={
+        k: e for k, e in toy_model.manifest.events.items() if k != 'vj_first_nt'}),
+        tables={k: t for k, t in toy_model.tables.items() if k != 'vj_first_nt'}, genomic=toy_model.genomic)
     base = total_entropy(toy_model)
     step = entropy_table(toy_model).filter(
         pl.col("event") == "vj_dinucl")["H_cond_bits"][0]

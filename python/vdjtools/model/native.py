@@ -404,7 +404,8 @@ def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
 
     Raises:
         KeyError: If any ``v``/``j`` entry names no allele the model carries.
-        ValueError: If ``v``/``j`` has the wrong length, or a sequence has a non-ACGT base.
+        ValueError: If ``v``/``j`` has the wrong length, or input contains symbols outside
+            DNA IUPAC. Sequencing IUPAC symbols normalize to A before encoding.
     """
     from .._core import pgen_nt_batch as _batch
 
@@ -560,7 +561,8 @@ def best_aa_scenarios_batch(
                    if names_d.size else np.full(d.shape, None, dtype=object)),
         "idx5": cols["idx5"], "idx3": cols["idx3"], "pos": cols["pos"],
         **extra,
-    })
+    }, schema_overrides={"v_call": pl.String, "j_call": pl.String, "d_call": pl.String,
+                         **({"d2_call": pl.String} if pm.joint_history else {})})
 
 
 def _alts(spec, alias: dict, idx_of: dict, kind: str) -> list[int]:

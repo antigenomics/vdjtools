@@ -32,16 +32,13 @@ def test_shared_germline_membership(organism, legacy_anchors, monkeypatch):
     ('human', 'TRAV38-2/DV8*01'), ('mouse', 'TRAV13-4/DV7*01'),
 ])
 def test_shared_allele_reaches_template_and_bundle(organism, allele):
-    # Compare the archival allele-level bundle vocabulary explicitly; the default is major-only.
+    # The library exposes all alleles; working bundles retain the major reference per gene.
     template = from_arda('TRA', organism, gene_level=False)
     bundled = load_bundled('TRA', 'arda', organism=organism, collapse=False)
     for model in (template, bundled):
         assert allele in model.genomic['genes_v']['v_allele']
-    current = set(template.genomic['genes_v']['v_allele'])
-    archived = set(bundled.genomic['genes_v']['v_allele'])
-    assert current <= archived
-    # Historical bundles retain partial records; current emission scaffolds reject them.
-    incomplete = set(load_germline('TRA', organism).filter(
-        pl.col('status').is_in(['truncated', 'partial']))['allele'])
-    assert archived - current <= incomplete
+    major = from_arda('TRA', organism)
+    expected = set(major.genomic['genes_v']['v_allele'])
+    actual = set(bundled.genomic['genes_v']['v_allele'])
+    assert actual == expected <= set(template.genomic['genes_v']['v_allele'])
     assert bundled.tables['v_choice'].filter(pl.col('v_allele') == allele)['p'].item() > 0

@@ -46,16 +46,16 @@ def test_the_thread_count_does_not_change_the_answer(seqs):
         assert native.pgen_nt_batch(m, nt, v, j, threads=threads) == base, threads
 
 
-def test_a_non_acgt_base_raises_rather_than_scoring_zero(seqs):
-    """A silent 0 is indistinguishable from a real answer, so it has to be an error.
-
-    ``pgen_nt`` raises ``KeyError`` from its own encoding table; the batch encodes in C++ and
-    raises ``ValueError`` naming the offending row. Both refuse; neither invents a number.
-    """
+def test_iupac_normalizes_to_a_but_invalid_sequencing_symbols_raise(seqs):
+    """Scalar and batch obey the mandatory sequencing policy before native encoding."""
     m, nt, v, j = seqs
     bad = list(nt)
     bad[3] = bad[3][:-1] + "N"
-    with pytest.raises(ValueError, match="non-ACGT"):
+    expected = list(nt)
+    expected[3] = expected[3][:-1] + 'A'
+    assert native.pgen_nt_batch(m, bad, v, j) == native.pgen_nt_batch(m, expected, v, j)
+    bad[3] = bad[3][:-1] + '!'
+    with pytest.raises(ValueError, match="invalid DNA IUPAC"):
         native.pgen_nt_batch(m, bad, v, j)
 
 

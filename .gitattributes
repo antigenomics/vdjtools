@@ -1,0 +1,2 @@
+# Bundled model identities must survive Windows checkout without newline conversion.
+python/vdjtools/model/_bundled/** -text

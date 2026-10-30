@@ -97,9 +97,11 @@ def translate(seq: str) -> str:
     (stop → ``*``); an out-of-frame sequence is padded in the middle with ``?`` and translated
     inward from both ends, leaving the untranslatable middle codon(s) lower-cased (later
     collapsed to ``_`` by :func:`to_unified_cdr3aa`).
+    Sequencing DNA IUPAC symbols normalize to A before the internal padding is added.
     """
     if not seq:
         return ""
+    seq = schema.normalize_nt(seq)
     oof = len(seq) % 3
     if oof:
         mid = len(seq) // 2

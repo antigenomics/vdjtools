@@ -29,7 +29,7 @@ MODES = [("CASSQDLNTEAFF", "TRBV4-3*01", "TRBJ1-1*01"),               # pinned
          ("CASSPRTGELFF", None, None)]                                # both marginalized
 
 FIELDS = ("cdr3_nt", "v_call", "j_call", "v_end", "j_start", "d_call", "d_start", "d_end",
-          "pgen", "scenario_p", "n_candidates", "runner_up_pgen")
+          "pgen", "scenario_p", "n_candidates", "runner_up_pgen", "d2_call", "d2_start", "d2_end")
 
 # Not `Scenario` fields and not from the DP: the boundary a germline alignment supports, appended
 # after every history column. `test_germline_boundary.py` owns them.

@@ -96,8 +96,11 @@ def test_alice_counts_nucleotide_clonotypes_not_amino_acids():
     # genuine neighbours (they are different T-cell clones), and convergent recombination is
     # exactly the signal. Two nt variants of each aa must double the degree.
     aa = ["".join(list("CASSXPGELFFYT")[:4] + [r] + list("CASSXPGELFFYT")[5:]) for r in "ACDEF"]
-    one = _sample(aa, nt=[f"TGT{i:09d}" for i in range(len(aa))])
-    two = _sample(aa + aa, nt=[f"TGT{i:09d}" for i in range(2 * len(aa))])
+    # Distinct valid DNA labels; numerical placeholders are invalid sequencing input.
+    nt = ['TGT' + ''.join('ACGT'[(i >> shift) & 3] for shift in (4, 2, 0))
+          for i in range(2 * len(aa))]
+    one = _sample(aa, nt=nt[:len(aa)])
+    two = _sample(aa + aa, nt=nt)
     d1 = O.alice(one, locus="TRB")["n_neighbors"].max()
     d2 = O.alice(two, locus="TRB")["n_neighbors"].max()
     assert d2 == 2 * d1
