@@ -893,6 +893,14 @@ and locus-specific. Unsupported zero-mass sequences require an explicit coverage
 audit. All-singleton data do not identify a positive estimate. This effective
 constant does not establish a sequence-specific thymic survival probability.
 
+``vdjtools calibrate-selection CONTROL --locus TRB --max-events 1000000 --seed 42
+--threads 40 --out factor.json`` samples up to one million eligible receptor
+incidence events without replacement before computing exact Pgen. Sampling uses
+NT incidence summed over synonymous variants, never sequencing read abundance.
+The report records population and sampled event totals, seed and unsupported
+model mass; the fitted exposure is the sampled total. Omit ``--max-events`` for
+the full pool. The same seed and control produce the same sample.
+
 
 ALICE exposure convention
 -------------------------

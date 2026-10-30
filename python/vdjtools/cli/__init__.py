@@ -1826,6 +1826,8 @@ def calibrate_selection(
     source: str = typer.Option("isalgo", "--source"),
     event_weight: str = typer.Option("incidence", "--event-weight"),
     sequence_column: str = typer.Option("cdr3aa", "--sequence-column"),
+    max_events: Optional[int] = typer.Option(None, "--max-events", min=1, help="Sample at most this many receptor events before Pgen."),
+    seed: int = typer.Option(42, "--seed", help="Reproducible event-sampling seed."),
     threads: int = typer.Option(0, "--threads"),
 ):
     """Estimate a model-specific effective selection factor from receptor events."""
@@ -1849,10 +1851,11 @@ def calibrate_selection(
     directory = "olga" if family == "olga-legacy" else family
     model_root = Path(str(files("vdjtools.model") / "_bundled" / directory / _bundled_key(source, locus, species)))
     model_hashes = {str(p.relative_to(model_root)): digest(p) for p in sorted(model_root.rglob("*")) if p.is_file()}
-    counts, audit = control_event_counts(control, sequence_column=sequence_column, weight_column=event_weight)
+    counts, audit = control_event_counts(control, sequence_column=sequence_column, weight_column=event_weight, max_events=max_events, seed=seed)
     typer.echo(f"Loaded {counts.height} junctions / {audit['retained_events']} events", err=True)
     model = load_bundled(locus, source, organism=species, collapse=False)
     pgen = np.asarray(native.pgen_aa_batch(model, counts["junction_aa"].to_list(), mismatches=0, threads=threads))
+    typer.echo(f"Pgen complete for {len(pgen)} junctions; elapsed {time.monotonic()-started:.3f} s", err=True)
     supported = np.isfinite(pgen) & (pgen > 0)
     if not np.all(np.isfinite(pgen) & (pgen >= 0) & (pgen <= 1)):
         raise ValueError("invalid model probabilities")

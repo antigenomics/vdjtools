@@ -41,10 +41,11 @@ def test_calibration_cli_records_model_and_event_units(tmp_path):
     control = tmp_path / "control.tsv"
     control.write_text("cdr3aa\tincidence\toccurrences\tconvergence\nCASSLGQAYEQYF\t2\t2\t1\nCASSLGRAYEQYF\t3\t3\t1\n")
     out = tmp_path / "result.json"
-    run = CliRunner().invoke(app, ["calibrate-selection", str(control), "--out", str(out), "--locus", "TRB", "--threads", "1"])
+    run = CliRunner().invoke(app, ["calibrate-selection", str(control), "--out", str(out), "--locus", "TRB", "--threads", "1", "--max-events", "4", "--seed", "17"])
     assert run.exit_code == 0, run.output
     report = json.loads(out.read_text())
-    assert report["selection_q"] > 0 and report["audit"]["retained_events"] == 5
+    assert report["selection_q"] > 0 and report["audit"]["retained_events"] == 4
+    assert report["audit"]["population_events"] == 5 and report["audit"]["sampling_seed"] == 17
     assert report["source"] == "isalgo" and report["model_sha256"]
     assert report["zero_mass_junctions"] == 0
 
@@ -61,3 +62,19 @@ def test_selection_factor_requires_matching_bundled_model(monkeypatch):
     monkeypatch.setattr(hashlib,'sha256',lambda data:Changed())
     with pytest.raises(ValueError,match='changed'):
         selection_factor('TRA')
+
+
+def test_control_subsample_preserves_events_and_seed(tmp_path):
+    from vdjtools.model.selection import control_event_counts
+    path = tmp_path / "control.tsv"
+    path.write_text("cdr3aa\tincidence\nCASSF\t100\nCASRF\t200\nCASQF\t300\n")
+    a, audit = control_event_counts(path, max_events=100, seed=42)
+    b, _ = control_event_counts(path, max_events=100, seed=42)
+    assert a.equals(b)
+    assert a["events"].sum() == audit["retained_events"] == 100
+    assert audit["population_events"] == 600 and audit["sampling_seed"] == 42
+    assert all(x <= y for x, y in zip(a["events"], [100, 300, 200]))
+    full, audit = control_event_counts(path, max_events=1000, seed=42)
+    assert full["events"].sum() == audit["retained_events"] == 600
+    with pytest.raises(ValueError, match="positive"):
+        control_event_counts(path, max_events=0)

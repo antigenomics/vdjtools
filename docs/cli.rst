@@ -377,10 +377,13 @@ Control-derived selection factors
 ---------------------------------
 
 ``vdjtools calibrate-selection control.ntvj.tsv.gz --locus TRB --species human
---source isalgo --event-weight incidence --threads 8 --out calibration.json``
+--source isalgo --event-weight incidence --max-events 1000000 --seed 42
+--threads 8 --out calibration.json``
 streams nucleotide-keyed independent-donor controls, verifies occurrence/incidence
 agreement when both columns exist, and aggregates nucleotide variants into
-amino-acid event counts. It computes exact marginal Pgen in one native batch,
+amino-acid event counts. It samples up to one million events without replacement
+with the specified seed (omit ``--max-events`` for the full pool), then computes
+exact marginal Pgen in one native batch,
 fits the zero-truncated Poisson effective multiplier, and records source/model
 hashes plus invalid-sequence and zero-model-mass coverage. It never uses read
 abundance as event multiplicity and requires a fresh output path.

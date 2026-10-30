@@ -61,7 +61,8 @@ def fit_selection_factor(counts, pgen, *, total_events):
     return float(np.exp(brentq(score, lo, hi)))
 
 
-def control_event_counts(path, *, sequence_column="cdr3aa", weight_column="incidence"):
+def control_event_counts(path, *, sequence_column="cdr3aa", weight_column="incidence",
+                         max_events=None, seed=42):
     """Stream a nucleotide-key control pool into amino-acid event counts.
 
     The caller establishes independent donors. NT incidence counts one event per
@@ -70,6 +71,8 @@ def control_event_counts(path, *, sequence_column="cdr3aa", weight_column="incid
     import polars as pl
     from ..io import iter_table_batches
 
+    if max_events is not None and (isinstance(max_events, bool) or max_events <= 0 or int(max_events) != max_events):
+        raise ValueError("max_events must be a positive integer")
     parts = []
     rows = invalid_rows = events = invalid_events = 0
     for batch in iter_table_batches(path):
@@ -96,8 +99,17 @@ def control_event_counts(path, *, sequence_column="cdr3aa", weight_column="incid
     counts = pl.concat(parts).group_by("junction_aa").agg(pl.col("events").sum()).filter(pl.col("events") > 0).sort("junction_aa")
     if events >= 2**53 or int(counts["events"].sum()) != events-invalid_events:
         raise ValueError("event total exceeds supported precision or aggregation overflow")
+    population_events = events - invalid_events
+    if max_events is not None and max_events < population_events:
+        # Exact event sampling without expanding incidence counts into individual rows.
+        sampled = np.random.default_rng(seed).multivariate_hypergeometric(
+            counts["events"].to_numpy(), int(max_events), method="marginals")
+        counts = counts.with_columns(pl.Series("events", sampled)).filter(pl.col("events") > 0)
     return counts, dict(source_rows=rows, source_events=events, invalid_rows=invalid_rows,
-                        invalid_events=invalid_events, retained_events=events-invalid_events,
+                        invalid_events=invalid_events, retained_events=int(counts["events"].sum()),
+                        population_events=population_events, max_events=max_events,
+                        sampling_seed=seed if max_events is not None else None,
+                        sampling="without replacement across receptor events" if max_events is not None else "full pool",
                         observed_junctions=counts.height, weight_column=weight_column)
 
 
