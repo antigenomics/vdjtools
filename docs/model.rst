@@ -437,8 +437,8 @@ an underestimate.
 Genomically impossible D–J pairs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-V(D)J recombination is **deletional** — it excises the DNA between the segments it joins — so a D
-can only be joined to a J lying 3' of it. Almost every locus puts all D genes 5' of all J genes, so
+For the deletional D–J arrangements modeled here, a D can only be joined to a J
+lying 3' of it. Almost every locus puts all D genes 5' of all J genes, so
 this constrains nothing. **TRB interleaves**:
 
 .. code-block:: text
@@ -450,13 +450,19 @@ so a TRBD2–TRBJ1 join is physically impossible. OLGA's model does **not** enco
 bundled ``olga`` set reproduces it faithfully and :func:`~vdjtools.model.check.check_model` reports
 it as ``impossible_dj_pair`` at ``warn``.
 
-For models vdjtools fits, this is a hard genomic fact rather than a parameter, and the mask is
-applied **inside the M-step**, so EM cannot relearn the pair on the next iteration. It needed to be:
+New ``isalgo`` models enforce genomic order on complete histories during
+inference, generation, Pgen and normalization. TRBD1–TRBJ2 and
+TRBD1–TRBD2–TRBJ2 remain allowed; missing preliminary D2 evidence does not veto
+the tandem history.
+
+Earlier single-D fits applied a compatibility mask inside the M-step. Their
+historical diagnostic showed why genomic support matters:
 a D match is only 10–18 nt — weak evidence on short reads — and an earlier build of the human TRB
 model had reached ``P(TRBD2 | TRBJ1-1) = 0.091`` before the constraint existed. Enforcing it also
 *improved* the fit, converging in 9 iterations instead of 11 to a slightly better log-likelihood,
 because mass that had been leaking onto impossible pairs went to the D that actually generated the
-read.
+read. These were training-objective observations, not independent validation of
+the replacement fits.
 
 :func:`~vdjtools.model.infer.enforce_dj_order` repairs a model fitted before the constraint existed.
 
@@ -469,7 +475,9 @@ a real TRB repertoire — is one of them. ``check_model`` reports these as ``uns
 :func:`~vdjtools.model.io.from_olga` accepts ``derive_orf=True`` to reconstruct the missing germline
 from the full germline and the anchor. Historical OLGA-scaffold learned models used
 that option; the replacement isalgo models use ARDA reference scaffolds directly.
-The explicit ``olga`` set keeps it off so it stays an exact Pgen oracle.
+The explicit ``olga`` set keeps this extra derivation off. Its documented anchor
+repairs still apply; an exact engine oracle additionally needs identical raw
+germlines, as described above.
 
 V/J usage is protocol-specific
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
