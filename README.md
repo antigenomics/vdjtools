@@ -32,6 +32,31 @@ and export statistical feature tables or published corpus signatures. vdjtools i
 a Python/C++ rewrite of the original Groovy/Java tool, using AIRR column names and
 Polars frames. arda, seqtree and vdjmatch supply the shared native/reference engines.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/analysis-atlas-dark.svg">
+  <source srcset="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/analysis-atlas-light.svg">
+  <img alt="vdjtools analysis atlas: prepare inputs, summarize repertoires, measure diversity, describe sequences, compare samples, model recombination, resolve paired cells and build cohort features." src="https://raw.githubusercontent.com/antigenomics/vdjtools/master/assets/analysis-atlas.png" width="100%">
+</picture>
+
+## Choose an analysis
+
+| Analysis type | What you can do | Explore |
+|---|---|---|
+| **Input & preparation** | Read AIRR, MiXCR, MiGEC, MiTCR, immunoSEQ/Adaptive, IMGT, Vidjil, RTCR, TRUST4, arda, legacy vdjtools and Parquet; filter, correct sequencing errors, downsample, pool and recompute frequencies. | [Formats & preprocessing](https://docs.isalgo.dev/vdjtools/preprocessing.html) |
+| **Summary & basic statistics** | Measure V/D/J/C and VJ usage, nucleotide/amino-acid junction-length spectratypes and isotype composition. Weight by reads or unique clonotypes. | [Repertoire statistics](https://docs.isalgo.dev/vdjtools/usage.html) |
+| **Diversity & sampling** | Summarize clone-size distributions and estimate richness, Shannon and Simpson diversity; calculate Hill-number rarefaction and extrapolation, sample coverage and bootstrap intervals. | [Diversity guide](https://docs.isalgo.dev/vdjtools/usage.html) |
+| **Sequence composition & motifs** | Profile k-mers, V-anchored motifs and amino-acid physicochemical properties, including hydropathy; summarize somatic hypermutation when identity annotations are available. | [Features](https://docs.isalgo.dev/vdjtools/features.html) |
+| **Comparison & analysis models** | Compare exact/fuzzy repertoire overlap and sample distances, test TCRnet neighbourhood enrichment against control repertoires, analyse biomarkers and dynamics, and reduce cross-batch V/J-usage bias. | [Analysis guide](https://docs.isalgo.dev/vdjtools/usage.html) |
+| **Recombination & Pgen** | Score nucleotide and amino-acid generation probabilities, generate synthetic receptors and fit recombination models with latent gene, trimming and insertion histories. Use current `isalgo` models or explicit frozen `olga-legacy` models. | [Model workshop](https://docs.isalgo.dev/vdjtools/model.html) |
+| **Paired data & single cells** | Import 10x/CellRanger, AIRR cell tables and arda cells; inspect chain multiplicity, resolve and pair chains, flag mispairing, calculate paired Pgen and bridge single-cell ecosystems. | [Single-cell guide](https://docs.isalgo.dev/vdjtools/singlecell.html) |
+| **Cohort features & signatures** | Export statistical feature tables, fit and reuse sample PCA, or project onto published vsig corpora; join complementary mirpy rsig coordinates by sample. | [Features & PCA](https://docs.isalgo.dev/vdjtools/features.html) · [Signatures](https://docs.isalgo.dev/vdjtools/signature.html) |
+| **Downstream tools** | Query VDJdb for receptor specificity with VDJmatch; build receptor and repertoire embeddings with mirpy. | [VDJmatch](https://github.com/antigenomics/vdjmatch) · [mirpy](https://github.com/antigenomics/mirpy) |
+
+**Choose the unit first:** bulk analyses operate on clonotypes; single-cell readers
+preserve cell identity and chain pairing. AIRR junctions include the conserved
+anchors; CDR3s exclude them. Pgen describes recombination probability, not antigen
+specificity. Model fitting accounts for observation errors separately from generation.
+
 ## Install
 
 ```bash
