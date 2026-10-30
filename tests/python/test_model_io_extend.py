@@ -21,6 +21,81 @@ def _gene_usage(model, seg):
     return out
 
 
+def test_germline_initializer_projects_short_allele_deletions(toy_germline):
+    from vdjtools.model.io import from_germline
+    germline = toy_germline.with_columns(sequence=pl.when(pl.col('allele') == 'TOYV2*01')
+        .then(pl.lit('TGT')).otherwise(pl.col('sequence')))
+    model = from_germline(germline, locus='TOY')
+    assert check_model(model, germline='none').filter(pl.col('severity') == 'error').is_empty()
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_completion_restores_j_deletion_newly_reachable_through_v(toy_model, missing):
+    from vdjtools.model import Model
+    from vdjtools.model.infer import augment_from_oracle
+    tables = dict(toy_model.tables)
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.when(
+        pl.col('v_allele') == 'TOYV2*01').then(0.).otherwise(pl.col('p')))
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.col('p') / pl.col('p').sum())
+    tables['j_choice'] = tables['j_choice'].with_columns(p=pl.when(
+        (pl.col('v_allele') == 'TOYV2*01') | (pl.col('j_allele') == 'TOYJ1*01'))
+        .then(0.).otherwise(pl.col('p')))
+    totals = pl.col('p').sum().over('v_allele')
+    tables['j_choice'] = tables['j_choice'].with_columns(p=pl.when(totals > 0)
+        .then(pl.col('p') / totals).otherwise(0.))
+    deletion = tables['j_5_del'].with_columns(p=pl.when(pl.col('j_allele') == 'TOYJ2*01')
+        .then((pl.col('ndel') == 0).cast(pl.Float64)).otherwise(pl.col('p')))
+    tables['j_5_del'] = (deletion.filter(pl.col('j_allele') != 'TOYJ1*01') if missing else
+        deletion.with_columns(p=pl.when(pl.col('j_allele') == 'TOYJ1*01').then(0.).otherwise(pl.col('p'))))
+    learned = Model(manifest=toy_model.manifest, tables=tables, genomic=toy_model.genomic)
+    done = augment_from_oracle(learned, toy_model)
+    assert done.tables['j_choice'].filter(pl.col('j_allele') == 'TOYJ1*01')['p'].sum() > 0
+    assert done.tables['j_5_del'].sort(['j_allele', 'ndel']).equals(deletion.sort(['j_allele', 'ndel']))
+    assert 'required_conditional' not in check_model(done, germline='none')['check'].to_list()
+    incomplete = Model(manifest=toy_model.manifest, tables={**toy_model.tables,
+        'j_5_del': tables['j_5_del']}, genomic=toy_model.genomic)
+    with pytest.raises(ValueError, match='completion template lacks j_5_del support'):
+        augment_from_oracle(learned, incomplete)
+
+
+def test_completion_reapplies_trb_dj_order():
+    from vdjtools.model import Model, from_arda
+    from vdjtools.model.infer import augment_from_oracle
+    template = from_arda('TRB')  # Legacy factorization; fresh fitted bundles use joint histories.
+    tables = dict(template.tables)
+    tables['d_gene'] = tables['d_gene'].with_columns(p=pl.lit(1. / template.genomic['genes_d'].height))
+    model = Model(manifest=template.manifest, tables=tables, genomic=template.genomic)
+    done = augment_from_oracle(model, model)
+    illegal = ((pl.col('d_allele').str.starts_with('TRBD2')) &
+               pl.col('j_allele').str.starts_with('TRBJ1'))
+    assert model.tables['d_gene'].filter(illegal)['p'].sum() > 0
+    assert done.tables['d_gene'].filter(illegal)['p'].sum() == 0
+    sums = done.tables['d_gene'].group_by('j_allele').agg(pl.col('p').sum())
+    used = done.tables['j_choice'].filter(pl.col('p') > 0)['j_allele']
+    sums = sums.filter(pl.col('j_allele').is_in(used.implode()))
+    assert sums['p'].to_list() == pytest.approx([1.] * sums.height)
+
+
+@pytest.mark.parametrize('parent_mass', [0., .5])
+def test_completion_ignores_j_support_under_unused_v_parents(toy_model, parent_mass):
+    from vdjtools.model import Model
+    from vdjtools.model.infer import augment_from_oracle
+    tables = dict(toy_model.tables)
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.when(
+        pl.col('v_allele') == 'TOYV2*01').then(parent_mass).otherwise(pl.col('p')))
+    tables['v_choice'] = tables['v_choice'].with_columns(p=pl.col('p') / pl.col('p').sum())
+    tables['j_choice'] = tables['j_choice'].with_columns(p=pl.when(
+        pl.col('v_allele') == 'TOYV2*01').then((pl.col('j_allele') == 'TOYJ1*01').cast(pl.Float64))
+        .otherwise((pl.col('j_allele') == 'TOYJ2*01').cast(pl.Float64)))
+    tables['j_5_del'] = tables['j_5_del'].with_columns(p=pl.when(
+        pl.col('j_allele') == 'TOYJ1*01').then(0.).otherwise(pl.col('p')))
+    genomic = {**toy_model.genomic, 'genes_v': toy_model.genomic['genes_v'].with_columns(
+        functional=pl.when(pl.col('v_allele') == 'TOYV2*01').then(False).otherwise(pl.col('functional')))}
+    unused = Model(manifest=toy_model.manifest, tables=tables, genomic=genomic)
+    completed = augment_from_oracle(unused, unused)
+    assert all(completed.tables[name].equals(table) for name, table in unused.tables.items())
+
+
 # --- flat marginal export / import -------------------------------------------------------------
 
 def test_marginals_frame_covers_every_event(toy_model):
@@ -129,7 +204,11 @@ def test_em_populates_and_persists_the_training_log(tmp_path, toy_model):
     reloaded = load_model(tmp_path / "fitted")
     assert reloaded.training == fitted.training
     log = training_frame(reloaded)
-    assert log.columns == ["run", "iter", "loglik", "n_scoreable", "rel_change"]
+    assert log.columns == ["run", "iter", "loglik", "n_scoreable", "rel_change",
+                           "pruned_mass_mean", "pruned_mass_max", "n_pruned_observations"]
+    assert log["pruned_mass_mean"].to_list() == report.pruned_mass_mean
+    assert log["pruned_mass_max"].to_list() == report.pruned_mass_max
+    assert log["n_pruned_observations"].to_list() == report.n_pruned_observations
     assert log.height == len(report.loglik)
 
 
@@ -294,29 +373,28 @@ def _with_ambiguous(toy_model, n=60):
     ])
 
 
-def test_ambiguous_bases_are_substituted_by_default(toy_model):
+def test_explicit_ambiguous_base_substitution(toy_model):
     """Real reads carry 'N' and the encoder knows only ACGT — substitute, keep the clonotype."""
     with_n = _with_ambiguous(toy_model)
-    with pytest.warns(UserWarning, match="substituting"):
-        fitted, report = infer_frame(toy_model, with_n, max_iter=1)
-    assert report.n_scoreable[0] == with_n.height          # nothing was thrown away
-    fitted.validate()
-
-
-def test_ambiguous_bases_can_be_dropped_instead(toy_model):
-    with_n = _with_ambiguous(toy_model)
-    with pytest.warns(UserWarning, match="dropped"):
-        fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous=None)
+    fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous="A")
+    assert report.n_sequences == with_n.height  # input retained, not necessarily supported
+    from vdjtools.model.native import pgen_nt
+    assert pgen_nt(toy_model, "TGTACCAGC") == 0.0
     assert report.n_scoreable[0] == with_n.height - 1
     fitted.validate()
+
+
+def test_ambiguous_bases_cannot_opt_out_of_a_normalization(toy_model):
+    with_n = _with_ambiguous(toy_model)
+    with pytest.raises(ValueError, match="ambiguous must be 'A'"):
+        infer_frame(toy_model, with_n, max_iter=1, ambiguous=None)
 
 
 def test_sanitize_junctions_substitutes_every_iupac_code():
     from vdjtools.model.infer import sanitize_junctions
 
     df = pl.DataFrame({"junction": ["acgTN", "ACGRY", "ACGT"]})
-    with pytest.warns(UserWarning, match="substituting"):
-        out = sanitize_junctions(df, "junction")
+    out = sanitize_junctions(df, "junction")
     assert out["junction"].to_list() == ["ACGTA", "ACGAA", "ACGT"]
     with pytest.raises(ValueError, match="ambiguous must be"):
         sanitize_junctions(df, "junction", ambiguous="N")

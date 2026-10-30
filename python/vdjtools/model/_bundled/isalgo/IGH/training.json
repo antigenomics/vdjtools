@@ -1,0 +1,660 @@
+{
+  "runs": [
+    {
+      "loglik": [
+        -55.998286827889956,
+        -50.67586392708149,
+        -50.0238567647025,
+        -49.77398863920292,
+        -49.66531466964061,
+        -49.61327175595307,
+        -49.580196885264314,
+        -49.555936251994375,
+        -49.53698209275438,
+        -49.521577978761556,
+        -49.509534424060924,
+        -49.5000510176789,
+        -49.492103584225816,
+        -49.48521166164464,
+        -49.47911729687646,
+        -49.47359928592846,
+        -49.46849514844418,
+        -49.46366404657611
+      ],
+      "n_scoreable": [
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477
+      ],
+      "gene_tv": [
+        Infinity,
+        0.09504617377254371,
+        0.012866226875128547,
+        0.004994979229108278,
+        0.002183348623114264,
+        0.0010478724243208745,
+        0.0006666536899935103,
+        0.0004893210352932168,
+        0.000382480095696568,
+        0.0003109618984050966,
+        0.00024319812074238118,
+        0.00019154707254559423,
+        0.00016055404569672723,
+        0.00013925297334445687,
+        0.00012315527333400453,
+        0.00011152201675089713,
+        0.0001031689134801379,
+        9.766017449219726e-05
+      ],
+      "n_iter": 18,
+      "converged": true,
+      "n_sequences": 143477,
+      "max_iter": 1000,
+      "tol": 0.0001,
+      "init": "uniform",
+      "native": true,
+      "elapsed_s": 1573.855,
+      "finished_at": "2026-10-30T01:36:50",
+      "template_source": "arda:IGH+history",
+      "error_rate": [
+        0.0320227733615691,
+        0.05047770977010992,
+        0.06091253743177202,
+        0.06590617358492233,
+        0.06830815131303244,
+        0.06952638657924345,
+        0.07016277230392917,
+        0.07049599169155486,
+        0.0706661527423918,
+        0.07075597337884479,
+        0.07081071197943192,
+        0.07084430626042733,
+        0.07086168858565237,
+        0.07086667285824981,
+        0.07086257897274002,
+        0.07085175751779153,
+        0.07083626756809812,
+        0.07081818399834383
+      ],
+      "error_model": "retained-germline-substitution",
+      "candidate_search": {
+        "batches": [
+          {
+            "n_queries": 10000,
+            "n_hits": 920016,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 940796,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 951725,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 966771,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 974191,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 978086,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 971655,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 972548,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 970285,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 965476,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 968685,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 944998,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 968391,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 915359,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 978562,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 842552,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 770249,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 831387,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 743166,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 857112,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 844662,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 874320,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 854887,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 831396,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 788417,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 791960,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 8414,
+            "n_hits": 547485,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 72,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          }
+        ],
+        "d_unrestricted": true,
+        "candidate_ambiguity": "DNA IUPAC symbols replaced with A before search and inference",
+        "scope": "V/J gene proposals; all functional model templates per gene",
+        "query_scope": "coding-strand full-read alternatives; junction fallback when absent",
+        "query_count": 268414,
+        "full_read_observations": 143477,
+        "junction_fallback_observations": 0,
+        "query_inputs_sha256": "753de02c235f327ac1cf625e49a6607b1d008a9e00c904b72cb9aa84e28ee206",
+        "unrestricted_v": 3448,
+        "unrestricted_j": 13113,
+        "input_masks_sha256": "f9d3ee96a632d90d05dedbb3760cbf872cfb51c89594a4b1bcc331bba6533e27"
+      },
+      "n_ambiguous": 0,
+      "prune_ratio": 1e-05,
+      "pruned_mass_mean": [
+        0.012132904006172666,
+        0.009237487846177199,
+        0.007952957604599246,
+        0.00716241203273212,
+        0.006704362347725408,
+        0.006437060734713157,
+        0.006252446269213652,
+        0.0060979796580365175,
+        0.005935369639663284,
+        0.005759849186371245,
+        0.0055658621908032235,
+        0.0053593563105271535,
+        0.005151857494269586,
+        0.004957210523577708,
+        0.00477320243463969,
+        0.004589140066629309,
+        0.004407259237809463,
+        0.004236100353496188
+      ],
+      "pruned_mass_max": [
+        0.12497771428025452,
+        0.10588202460866712,
+        0.10121625623719549,
+        0.0778051552877908,
+        0.0942416984801046,
+        0.07928693095725582,
+        0.07148609626450879,
+        0.07415545743420701,
+        0.0689031597006969,
+        0.06639995123072902,
+        0.06637232862229255,
+        0.06058183133948619,
+        0.05481253087889542,
+        0.05486784424890359,
+        0.05361784994494165,
+        0.050984525585145504,
+        0.048965197572086776,
+        0.046908925437871445
+      ],
+      "n_pruned_observations": [
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477,
+        143477
+      ]
+    }
+  ]
+}

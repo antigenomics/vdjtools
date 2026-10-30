@@ -29,6 +29,11 @@ from .schema import _allele_col, normalization_keys
 _LOG2 = np.log(2.0)
 
 
+def _normalized_marginal(marg: dict[str, float]) -> dict[str, float]:
+    total = sum(marg.values())
+    return {name: p / total if total > 0 else 0.0 for name, p in marg.items()}
+
+
 def _H(p: np.ndarray) -> float:
     """Shannon entropy (bits) of a probability vector; unnormalized-safe, 0·log0 = 0."""
     p = np.asarray(p, dtype=float)
@@ -43,9 +48,13 @@ def gene_marginal(model: Model, seg: str) -> dict[str, float]:
     """Marginal ``P(seg)`` as {allele: prob}, forward-propagated over the Bayes net.
 
     V is always a root. VDJ J is a root (``P(J)``); VJ J is ``P(J|V)`` marginalized over V.
-    D is ``P(D|J)`` marginalized over J.
+    D is ``P(D|J)`` marginalized over J. Derived marginals condition on defined
+    child support; all-zero conditionals contribute no mass. An entirely undefined
+    event returns zeros, never an invented uniform distribution.
     """
     t = model.tables
+    if seg in ("d", "d2") and "d_history" in t:
+        return _history_gene_marginal(model, f"{seg}_allele", 2 if seg == "d2" else None)
     if seg == "v":
         return dict(zip(t["v_choice"]["v_allele"], t["v_choice"]["p"]))
     if seg == "j":
@@ -56,20 +65,29 @@ def gene_marginal(model: Model, seg: str) -> dict[str, float]:
         out: dict[str, float] = {}
         for v, j, p in jt.select(["v_allele", "j_allele", "p"]).iter_rows():
             out[j] = out.get(j, 0.0) + pv.get(v, 0.0) * p
-        return out
+        return _normalized_marginal(out)
     if seg == "d":
         pj = gene_marginal(model, "j")
         out = {}
         for j, d, p in t["d_gene"].select(["j_allele", "d_allele", "p"]).iter_rows():
             out[d] = out.get(d, 0.0) + pj.get(j, 0.0) * p
-        return out
+        return _normalized_marginal(out)
     if seg == "d2":  # tandem second D: Σ_d1 P(D1) P(D2|D1)
         pd1 = gene_marginal(model, "d")
         out = {}
         for d1, d2, p in t["d2_gene"].select(["d_allele", "d2_allele", "p"]).iter_rows():
             out[d2] = out.get(d2, 0.0) + pd1.get(d1, 0.0) * p
-        return out
+        return _normalized_marginal(out)
     raise ValueError(seg)
+
+
+def _history_gene_marginal(model, column, nd=None):
+    frame = model.tables["d_history"]
+    if nd is not None:
+        frame = frame.filter(pl.col("n_d") == nd)
+    weighted = (frame.join(model.tables["j_choice"].rename({"p": "_pj"}), on="j_allele")
+                .group_by(column).agg((pl.col("p") * pl.col("_pj")).sum().alias("p")))
+    return _normalized_marginal(dict(weighted.iter_rows()))
 
 
 def _stationary(R: np.ndarray) -> np.ndarray:
@@ -92,19 +110,22 @@ def _cond_entropy(df: pl.DataFrame, parent_col: str, pmarg: dict[str, float]) ->
     """Return ``(H_marginal, H_conditional)`` in bits for a table ``P(X | parent)``.
 
     ``X`` is every non-parent, non-``p`` column jointly. ``pmarg`` is the parent's marginal.
+    Both entropies condition on parents whose child distribution is defined (nonzero).
     """
     xcols = [c for c in df.columns if c not in (parent_col, "p")]
     hcond = 0.0
+    defined_mass = 0.0
     for (pv,), grp in df.group_by([parent_col], maintain_order=True):
         w = pmarg.get(pv, 0.0)
-        if w > 0:
+        if w > 0 and grp["p"].sum() > 0:
             hcond += w * _H(grp["p"].to_numpy())
+            defined_mass += w
     marg = (
         df.with_columns(pl.col("p") * pl.col(parent_col).replace_strict(pmarg, default=0.0))
         .group_by(xcols)
         .agg(pl.col("p").sum())
     )
-    return _H(marg["p"].to_numpy()), hcond
+    return _H(marg["p"].to_numpy()), hcond / defined_mass if defined_mass > 0 else 0.0
 
 
 def entropy_table(model: Model) -> pl.DataFrame:
@@ -140,11 +161,16 @@ def entropy_table(model: Model) -> pl.DataFrame:
                 hc = h
             add(name, h, hc, len(marg))
         elif ev.kind.value in ("deletion", "deletion_2d"):
-            pcol = _allele_col(model.manifest.events[given[0]])
-            h, hc = _cond_entropy(df, pcol, gene_marginal(model, given[0].split("_")[0]))
+            if given == ("d_history",):
+                pcol = "d2_allele" if name == "d2_del" else "d_allele"
+                marginal = _history_gene_marginal(model, pcol, 1 if name == "d_del" else 2)
+            else:
+                pcol = _allele_col(model.manifest.events[given[0]])
+                marginal = gene_marginal(model, given[0].split("_")[0])
+            h, hc = _cond_entropy(df, pcol, marginal)
             realiz = ["ndel"] if ev.kind.value == "deletion" else ["ndel5", "ndel3"]
             add(name, h, hc, df.select(realiz).n_unique())  # distinct deletion states, not rows
-        elif ev.kind.value == "ins_length":
+        elif ev.kind.value in ("ins_length", "nucleotide"):
             h = _H(df["p"].to_numpy())
             add(name, h, h, df.height)
         elif ev.kind.value == "dinucleotide":
@@ -157,6 +183,9 @@ def entropy_table(model: Model) -> pl.DataFrame:
             add(name, _H(pi), hc, 4)
         elif ev.kind.value == "n_d":
             add(name, _H(df["p"].to_numpy()), _H(df["p"].to_numpy()), df.height)
+        elif ev.kind.value == "d_history":
+            h, hc = _cond_entropy(df, "j_allele", gene_marginal(model, "j"))
+            add(name, h, hc, df.select("n_d", "d_allele", "d2_allele").n_unique())
     return pl.DataFrame(rows)
 
 
@@ -175,8 +204,13 @@ def mutual_information(model: Model) -> pl.DataFrame:
         if not ev.given:
             continue
         parent = ev.given[0]
-        pcol = _allele_col(model.manifest.events[parent])
-        hm, hc = _cond_entropy(t[name], pcol, gene_marginal(model, parent.split("_")[0]))
+        if parent == "d_history":
+            pcol = "d2_allele" if name == "d2_del" else "d_allele"
+            marginal = _history_gene_marginal(model, pcol, 1 if name == "d_del" else 2)
+        else:
+            pcol = _allele_col(model.manifest.events[parent])
+            marginal = gene_marginal(model, parent.split("_")[0])
+        hm, hc = _cond_entropy(t[name], pcol, marginal)
         rows.append({"a": name, "b": parent, "mi_bits": round(hm - hc, 4)})
 
     # I(V; J): explicit — 0 for VDJ (independent roots), >0 for VJ (encoded in P(J|V)).
@@ -185,19 +219,24 @@ def mutual_information(model: Model) -> pl.DataFrame:
 
     # Within-D 5'/3' deletion coupling: the genuine conditional MI, E_D[ I(delD5; delD3 | D) ]
     # (averaging over D, not marginalizing — a D-marginal joint would inflate MI via Simpson mixing).
-    for tbl, acol, seg, lab in (("d_del", "d_allele", "d", "delD5"), ("d2_del", "d2_allele", "d2", "delD2_5")):
+    for tbl, acol, seg, lab in (("d_del", "d_allele", "d", "delD5"),
+                               ("d_tandem_del", "d_allele", "d", "delD1_tandem_5"),
+                               ("d2_del", "d2_allele", "d2", "delD2_5")):
         if tbl in t:
-            mi = _within_d_deletion_mi(t[tbl], acol, gene_marginal(model, seg))
+            marginal = (_history_gene_marginal(model, acol, 1 if tbl == "d_del" else 2)
+                        if "d_history" in t else gene_marginal(model, seg))
+            mi = _within_d_deletion_mi(t[tbl], acol, marginal)
             rows.append({"a": lab, "b": lab.replace("5", "3"), "mi_bits": round(mi, 4)})
     return pl.DataFrame(rows)
 
 
 def _within_d_deletion_mi(df: pl.DataFrame, allele_col: str, dmarg: dict[str, float]) -> float:
-    """E_D[ I(delD5; delD3 | D) ] (bits) — 5'/3' trim coupling within a D, averaged over D usage."""
+    """E_D[ I(delD5; delD3 | D) ] (bits), conditional on defined deletion support."""
     total = 0.0
+    defined_mass = 0.0
     for (d,), grp in df.group_by([allele_col], maintain_order=True):
         w = dmarg.get(d, 0.0)
-        if w <= 0:
+        if w <= 0 or grp["p"].sum() <= 0:
             continue
         m5: dict[int, float] = {}
         m3: dict[int, float] = {}
@@ -208,7 +247,8 @@ def _within_d_deletion_mi(df: pl.DataFrame, allele_col: str, dmarg: dict[str, fl
             m3[n3] = m3.get(n3, 0.0) + p
         mi_d = _H(np.fromiter(m5.values(), float)) + _H(np.fromiter(m3.values(), float)) - _H(np.fromiter(cells.values(), float))
         total += w * mi_d
-    return total
+        defined_mass += w
+    return total / defined_mass if defined_mass > 0 else 0.0
 
 
 def total_entropy(model: Model) -> pl.DataFrame:
@@ -218,14 +258,16 @@ def total_entropy(model: Model) -> pl.DataFrame:
     parents, so this frame's ``contribution_bits`` sums to the entropy of one whole recombination
     scenario — the information content of the process, and the basis of the ``2^H`` diversity
     figure in :func:`vdjtools.model.score.diversity`.
+    With undefined conditional groups, contributions summarize each event's defined support;
+    their sum is not the joint entropy of a globally normalized generative distribution.
 
     The insertion regions need care, and this is the only place the accounting is non-obvious.
     :func:`entropy_table` reports a dinucleotide event's **per-step** conditional entropy (a
     composition summary, independent of how long the N-region is). Its contribution to the scenario
-    is that per-step entropy times the expected number of steps, so the dinucleotide row here is
-    ``E[length] · H_step`` using its paired ``*_ins`` event's mean length. The first inserted base
-    is treated as drawn from the chain's stationary distribution rather than the model's separate
-    first-base bias — the standard decomposition, and worth a fraction of a bit at most.
+    for explicit-first models separates ``P(length>0) H(first)`` from transitions.
+    Transition contributions propagate the first-base distribution along the chain,
+    weighted by the probability that each transition exists. Models without a
+    separate first-base event retain the legacy ``E[length] · H_step`` convention.
 
     Args:
         model: The model to measure.
@@ -238,6 +280,8 @@ def total_entropy(model: Model) -> pl.DataFrame:
     """
     ent = entropy_table(model)
     cond = {r["event"]: r["H_cond_bits"] for r in ent.to_dicts()}
+    from .dd import d_count_probabilities
+    branch = d_count_probabilities(model) if "d_history" in model.tables else {}
     rows = []
     for name, ev in model.manifest.events.items():
         kind = ev.kind.value
@@ -245,10 +289,29 @@ def total_entropy(model: Model) -> pl.DataFrame:
         if kind == "dinucleotide":
             ins = name.replace("_dinucl", "_ins")
             t = model.tables.get(ins)
-            mean_len = 0.0
-            if t is not None:
-                mean_len = float((t["length"].cast(pl.Float64) * t["p"]).sum())
-            bits = bits * mean_len
+            first_name = name.replace("_dinucl", "_first_nt")
+            if first_name in model.tables and t is not None:
+                R = _dinucl_R(model.tables[name])
+                pi = model.tables[first_name].sort("nt")["p"].to_numpy()
+                h = np.array([_H(R[:, previous]) for previous in range(4)])
+                lengths, probs = t["length"].to_numpy(), t["p"].to_numpy()
+                bits = 0.0
+                for step in range(1, int(lengths.max(initial=0))):
+                    bits += float(probs[lengths > step].sum() * (pi @ h))
+                    pi = R @ pi
+            else:
+                mean_len = 0.0
+                if t is not None:
+                    mean_len = float((t["length"].cast(pl.Float64) * t["p"]).sum())
+                bits = bits * mean_len
+        elif kind == "nucleotide":
+            t = model.tables.get(name.replace("_first_nt", "_ins"))
+            bits *= float(t.filter(pl.col("length") > 0)["p"].sum()) if t is not None else 0.0
+        if branch:
+            if name == "d_del":
+                bits *= branch.get(1, 0.0)
+            elif name in ("d_tandem_del", "d2_del") or name.startswith("dd_"):
+                bits *= branch.get(2, 0.0)
         rows.append({"event": name, "kind": kind, "contribution_bits": round(bits, 6)})
     return pl.DataFrame(rows, schema={"event": pl.Utf8, "kind": pl.Utf8,
                                       "contribution_bits": pl.Float64})
@@ -257,8 +320,8 @@ def total_entropy(model: Model) -> pl.DataFrame:
 # --- graphviz (bnlearn-style) --------------------------------------------------------------
 
 _KIND_COLOR = {
-    "gene_choice": "#cfe8ff", "n_d": "#ffd6a5", "deletion": "#d7f0d7",
-    "deletion_2d": "#d7f0d7", "ins_length": "#f0e0ff", "dinucleotide": "#f0e0ff",
+    "gene_choice": "#cfe8ff", "n_d": "#ffd6a5", "d_history": "#ffd6a5", "deletion": "#d7f0d7",
+    "deletion_2d": "#d7f0d7", "ins_length": "#f0e0ff", "dinucleotide": "#f0e0ff", "nucleotide": "#f0e0ff",
 }
 
 
@@ -441,7 +504,11 @@ def _parent_weights(a: Model, b: Model, ev, group_keys: list[str], by: str) -> d
     if seg not in ("v", "j", "d", "d2"):
         return {}
     try:
-        ma, mb = gene_marginal(a, seg), gene_marginal(b, seg)
+        def marginal(model):
+            if ev.given == ("d_history",) and seg in ("d", "d2"):
+                return _history_gene_marginal(model, group_keys[0], 1 if ev.name == "d_del" else 2)
+            return gene_marginal(model, seg)
+        ma, mb = marginal(a), marginal(b)
     except (KeyError, ValueError):
         return {}
     out: dict[str, float] = {}

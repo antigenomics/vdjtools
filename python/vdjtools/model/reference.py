@@ -99,6 +99,7 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
         ValueError: If no germline is found for ``locus`` / ``organism``.
     """
     from arda.cdr3fix import load_anchors  # base dep; imported lazily to keep `import vdjtools` light
+    from arda.alleles import d_germline_metadata
     from arda.paths import vdj_dir
     from arda.refbuild.imgt import read_fasta
 
@@ -127,10 +128,12 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
         )
     d_path = vdj_dir(organism) / "d_germlines.fasta"
     if d_path.exists():
+        d_metadata = d_germline_metadata(organism)
         for header, seq in read_fasta(d_path):
             d_locus, allele = header.split("|", 1)
             if d_locus != locus:
                 continue
+            metadata = d_metadata[(allele, seq)]
             rows.append(
                 {
                     "allele": allele,
@@ -140,7 +143,7 @@ def load_germline(locus: str, organism: str = "human") -> pl.DataFrame:
                     "cdr3_anchor": -1,
                     "functionality": "",
                     "functional": True,
-                    "status": "ok",
+                    "status": metadata["status"],
                 }
             )
     if not rows:
@@ -173,7 +176,7 @@ def load_full_vj_germline(organism: str = "human") -> dict[tuple[str, str], str]
     from arda.annotate.reference import load_reference
     from arda.refbuild.imgt import read_fasta
 
-    ref = load_reference(organism, "nt")
+    ref = load_reference(organism, "nt", major_only=False)
     scaffolds = dict(read_fasta(ref.target_fasta))
     out: dict[tuple[str, str], str] = {}
     for sid, e in ref.entries.items():
@@ -396,6 +399,33 @@ def forbidden_dj_pairs(d_alleles, j_alleles, locus: str) -> set[tuple[str, str]]
             jn = _cluster_number(j, "J")
             if jn is not None and jn < dn:      # the J cluster lies 5' of this D
                 out.add((d, j))
+    return out
+
+
+def forbidden_tandem_pairs(d_alleles, locus: str, organism: str | None = None) -> set[tuple[str, str]]:
+    """Known impossible D1/D2 pairs, without guessing uncurated genomic ordering.
+
+    One physical D gene cannot be used twice, including through different alleles.
+    TRB additionally has the documented order TRBD1 before TRBD2. Human TRDD1,
+    TRDD2 and TRDD3 are forward genes at increasing IMGT genomic coordinates;
+    reverse coding pairs are not retained chromosomal VDDJ histories (Cieslak
+    et al., 2014, doi:10.1084/jem.20132585, Fig.8). Unknown genes, organisms and
+    custom loci retain their declared support rather than guessing from names.
+    """
+    locus = locus.upper()
+    if locus not in ('IGH', 'TRB', 'TRD'):
+        return set()
+    trd_order = {'TRDD1': 0, 'TRDD2': 1, 'TRDD3': 2} if (
+        locus == 'TRD' and (organism or '').lower() == 'human') else {}
+    out = set()
+    for d1 in d_alleles:
+        for d2 in d_alleles:
+            g1, g2 = d1.split('*')[0], d2.split('*')[0]
+            same = g1 == g2
+            reverse_trd = g1 in trd_order and g2 in trd_order and trd_order[g2] <= trd_order[g1]
+            n1, n2 = _cluster_number(d1, 'D'), _cluster_number(d2, 'D')
+            if same or reverse_trd or (locus == 'TRB' and n1 is not None and n2 is not None and n2 <= n1):
+                out.add((d1,d2))
     return out
 
 

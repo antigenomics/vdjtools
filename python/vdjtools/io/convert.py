@@ -97,9 +97,11 @@ def translate(seq: str) -> str:
     (stop → ``*``); an out-of-frame sequence is padded in the middle with ``?`` and translated
     inward from both ends, leaving the untranslatable middle codon(s) lower-cased (later
     collapsed to ``_`` by :func:`to_unified_cdr3aa`).
+    Sequencing DNA IUPAC symbols normalize to A before the internal padding is added.
     """
     if not seq:
         return ""
+    seq = schema.normalize_nt(seq)
     oof = len(seq) % 3
     if oof:
         mid = len(seq) // 2
@@ -290,6 +292,7 @@ def translate_junctions(nt, *, threads: int = 0) -> pl.Series:
     C++ would be 1.9x slower. Batch when you hold a column; keep the dict when you hold a codon.
     """
     s = nt if isinstance(nt, pl.Series) else pl.Series("junction_nt", list(nt), dtype=pl.Utf8)
+    s = schema.normalize_nt_frame(s.to_frame(), [s.name])[s.name]
     from .._core import translate_junctions as _native
 
     from ..cores import kernel_threads
@@ -309,6 +312,7 @@ def _finalize(df: pl.DataFrame, *, collapse: bool = True) -> pl.DataFrame:
     if df.height == 0:
         return schema.add_locus(schema.normalize(pl.DataFrame(schema={c: pl.Utf8 for c in
                                 (V_CALL, D_CALL, J_CALL, JUNCTION_AA, JUNCTION_NT)})))
+    df = schema.normalize_nt_frame(df, [JUNCTION_NT])
     df = df.with_columns(pl.col(COUNT).cast(pl.Int64, strict=False))
     if not collapse:
         return schema.add_locus(schema.normalize(df, recompute_freq=True))

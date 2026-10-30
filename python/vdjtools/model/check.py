@@ -23,7 +23,7 @@ import polars as pl
 from .events import EventKind
 from .model import Model
 from .reference import _ISSUE_SCHEMA, _issue
-from .schema import _allele_col, normalization_keys
+from .schema import normalization_keys
 
 #: Allele column -> the genomic frame it must resolve in. Both D events share one germline set.
 _ALLELE_GENOMIC = {"v_allele": "genes_v", "j_allele": "genes_j",
@@ -31,7 +31,8 @@ _ALLELE_GENOMIC = {"v_allele": "genes_v", "j_allele": "genes_j",
 
 #: Deletion event -> the ``palindrome_max`` key(s) bounding its most-negative (palindromic) ndel.
 DELETION_ENDS = {"v_3_del": ("v_3",), "j_5_del": ("j_5",),
-                 "d_del": ("d_5", "d_3"), "d2_del": ("d_5", "d_3")}
+                 "d_del": ("d_5", "d_3"), "d2_del": ("d_5", "d_3"),
+                 "d_tandem_del": ("d_5", "d_3")}
 _DELETION_ENDS = DELETION_ENDS   # back-compat alias
 
 
@@ -52,7 +53,7 @@ def max_reachable_trim(event_name: str, kind, cut_len: int, palindrome_max: dict
     ends = DELETION_ENDS.get(event_name)
     if ends is None or any(e not in palindrome_max for e in ends):
         return None
-    slack = 1 if getattr(kind, "value", kind) == "deletion" else 0
+    slack = 1 if getattr(kind, "value", kind) == "deletion" or event_name == "d_tandem_del" else 0
     return cut_len - sum(palindrome_max[e] for e in ends) - slack
 
 _REQUIRED_EVENTS = {
@@ -61,7 +62,7 @@ _REQUIRED_EVENTS = {
             "vd_ins", "dj_ins", "vd_dinucl", "dj_dinucl"},
 }
 #: Events that only make sense on a VDJ model (a VJ model carrying one is malformed).
-_D_EVENTS = {"d_gene", "d2_gene", "n_d", "d_del", "d2_del", "vd_ins", "dj_ins", "dd_ins",
+_D_EVENTS = {"d_gene", "d2_gene", "n_d", "d_history", "d_tandem_del", "d_del", "d2_del", "vd_ins", "dj_ins", "dd_ins",
              "vd_dinucl", "dj_dinucl", "dd_dinucl"}
 #: The extra events a tandem-D (``n_D = 2``) model must carry.
 _TANDEM_EVENTS = {"d2_gene", "d2_del", "dd_ins", "dd_dinucl"}
@@ -131,6 +132,7 @@ def check_model(model: Model, *, germline: str | pl.DataFrame = "auto", tol: flo
     rows: list[dict] = []
     rows += _check_event_set(model)
     rows += _check_tables(model, tol)
+    rows += _check_tandem_support(model)
     rows += _check_genomic_cross_refs(model)
     rows += _check_germline(model, germline)
 
@@ -144,13 +146,69 @@ def check_model(model: Model, *, germline: str | pl.DataFrame = "auto", tol: flo
     return out
 
 
+def _check_tandem_support(model: Model) -> list[dict]:
+    """Expose forbidden positive tandem paths, excluding unused parents."""
+    from .reference import forbidden_dj_pairs, forbidden_tandem_pairs
+    required = {'n_d':{'n_d','p'},'v_choice':{'v_allele','p'},'j_choice':{'j_allele','p'},
+                'd_gene':{'j_allele','d_allele','p'},'d2_gene':{'d_allele','d2_allele','p'}}
+    if model.chain_type != 'VDJ' or any(name not in model.tables or
+            not columns <= set(model.tables[name].columns) for name,columns in required.items()):
+        return []
+    tables = model.tables
+    p_two = tables['n_d'].filter(pl.col('n_d') == 2)['p'].sum()
+    if not p_two or p_two <= 0:
+        return []
+    functional = {seg:set(frame.filter(pl.col('functional'))[seg+'_allele'])
+                  for seg in ('v','j','d') if (frame := model.genomic.get('genes_'+seg)) is not None}
+    if set(functional) != {'v','j','d'}:
+        return []
+    v_mass = tables['v_choice'].filter(pl.col('v_allele').is_in(functional['v']))['p'].sum()
+    if not v_mass or v_mass <= 0:
+        return []
+    dj = forbidden_dj_pairs(functional['d'],functional['j'],model.locus)
+    dd = forbidden_tandem_pairs(functional['d'],model.locus,model.organism)
+    if not dj and not dd:
+        return []
+    parents = tables['d_gene'].filter((pl.col('p')>0)&pl.col('d_allele').is_in(functional['d']))
+    parents = parents.join(tables['j_choice'].filter((pl.col('p')>0)&
+        pl.col('j_allele').is_in(functional['j'])).rename({'p':'pj'}),on='j_allele')
+    paths = parents.join(tables['d2_gene'].filter((pl.col('p')>0)&
+        pl.col('d2_allele').is_in(functional['d'])).rename({'p':'pd2'}),on='d_allele')
+    bad = paths.filter(
+        pl.concat_str('d_allele','d2_allele',separator='|').is_in([a+'|'+b for a,b in dd]) |
+        pl.concat_str('d_allele','j_allele',separator='|').is_in([a+'|'+b for a,b in dj]) |
+        pl.concat_str('d2_allele','j_allele',separator='|').is_in([a+'|'+b for a,b in dj]))
+    bad = bad.with_columns(pl.concat_str('d_allele','d2_allele',separator='|').is_in(
+        [a+'|'+b for a,b in dd]).alias('_bad_pair')).sort('_bad_pair',descending=True)
+    # J-dependent raw products can be positive in this factorized model even when
+    # their structural scenario weight is zero; do not reject legitimate J2 tandems
+    # sharing D1 with single-D J1 paths. Impossible D1/D2 pairs are parameter defects.
+    rows = [_issue('error' if (row['d_allele'],row['d2_allele']) in dd else 'warn',
+        'tandem_support','positive factor product on a structurally excluded tandem path',
+        event='d2_gene',allele=row['d_allele']+'|'+row['d2_allele']+'|'+row['j_allele'],
+        value=float(v_mass*p_two*row['p']*row['pj']*row['pd2'])) for row in bad.head(20).iter_rows(named=True)]
+    if bad.height>20:
+        rows.append(_issue('error' if bad['_bad_pair'].any() else 'warn','tandem_support',
+            f'{bad.height-20} further structurally excluded tandem factor product(s)',
+            event='d2_gene',value=float(bad.height-20)))
+    return rows
+
+
 def _check_event_set(model: Model) -> list[dict]:
     """The declared graph matches the chain type, and tandem-D is declared consistently."""
     rows: list[dict] = []
     events = set(model.manifest.events)
     chain = model.chain_type
 
-    for missing in sorted(_REQUIRED_EVENTS[chain] - events):
+    required = _REQUIRED_EVENTS[chain]
+    if "d_history" in events:
+        required = (required - {"d_gene", "n_d"}) | {"d_history", "d_tandem_del", "d2_del", "dd_ins", "dd_dinucl"}
+        from .dd import validate_history
+        try:
+            validate_history(model)
+        except ValueError as exc:
+            rows.append(_issue("error", "history_support", str(exc), event="d_history"))
+    for missing in sorted(required - events):
         rows.append(_issue("error", "event_set",
                            f"{chain} model is missing the required event {missing!r}", event=missing))
     if chain == "VJ":
@@ -235,6 +293,30 @@ def _check_tables(model: Model, tol: float) -> list[dict]:
                                f"...and {bad.height - 20} further mis-normalized group(s)",
                                event=name, value=float(bad.height - 20)))
         zeros = sums.filter(pl.col("s").abs() <= tol).height
+        if event.kind is EventKind.DELETION and keys in (["v_allele"], ["j_allele"]):
+            allele_col = keys[0]
+            choice = allele_col[0] + "_choice"
+            mass = _choice_mass(model, choice, allele_col)
+            genomic = model.genomic.get("genes_" + allele_col[0])
+            functional = (set(genomic.filter(pl.col("functional"))[allele_col])
+                          if genomic is not None and "functional" in genomic.columns else set(mass))
+            # J|V can be nonzero only under unused V parents; those J alleles are unreachable.
+            if choice == "j_choice" and "v_allele" in model.tables.get(choice, pl.DataFrame()).columns:
+                used_v = [a for a, p in _choice_mass(model, "v_choice", "v_allele").items() if p > 0]
+                genes_v = model.genomic.get("genes_v")
+                if genes_v is not None and "functional" in genes_v.columns:
+                    functional_v = set(genes_v.filter(pl.col("functional"))["v_allele"])
+                    used_v = [a for a in used_v if a in functional_v]
+                reachable = model.tables[choice].filter(pl.col("v_allele").is_in(used_v))
+                mass = dict(reachable.group_by(allele_col).agg(pl.col("p").sum()).iter_rows())
+            conditional = dict(sums.select(allele_col, "s").iter_rows())
+            for allele, parent_mass in mass.items():
+                if allele in functional and parent_mass > 0 and abs(conditional.get(allele, 0.0)) <= tol:
+                    rows.append(_issue("error", "required_conditional",
+                        "positive reachable gene-choice mass has a missing or zero deletion conditional",
+                        event=name, allele=allele, value=float(parent_mass)))
+                    if allele in conditional:
+                        zeros -= 1
         if zeros:
             # Legal: an undefined conditional for a gene that is never used. Worth surfacing --
             # it is also what an absorbing EM state looks like.
@@ -244,6 +326,14 @@ def _check_tables(model: Model, tol: float) -> list[dict]:
 
         if event.kind is EventKind.DINUCLEOTIDE:
             rows += _check_dinucl(name, df)
+        elif event.kind is EventKind.NUCLEOTIDE:
+            if sorted(df["nt"].to_list()) != [0, 1, 2, 3]:
+                rows.append(_issue("error", "nucleotide_complete", "first-base table needs exactly nt=0,1,2,3",
+                                   event=name))
+            insertion = model.tables.get(name.replace("_first_nt", "_ins"))
+            if insertion is not None and insertion.filter(pl.col("length") > 0)["p"].sum() > tol and df["p"].sum() <= tol:
+                rows.append(_issue("error", "required_conditional", "nonempty insertions require first-base mass",
+                                   event=name))
         elif event.kind in (EventKind.DELETION, EventKind.DELETION_2D):
             rows += _check_deletion(model, name, event, df, pal)
         elif event.kind is EventKind.INS_LENGTH:
@@ -280,7 +370,7 @@ def _check_deletion(model: Model, name, event, df: pl.DataFrame, pal: dict) -> l
     rows: list[dict] = []
     if not event.given:
         return rows
-    parent_allele_col = _allele_col(model.manifest.events[event.given[0]])
+    parent_allele_col = normalization_keys(event)[0]
     frame = _ALLELE_GENOMIC.get(parent_allele_col)
     cuts = _cut_lengths(model, frame) if frame else {}
     if not cuts or parent_allele_col not in df.columns:
@@ -304,6 +394,8 @@ def _check_deletion(model: Model, name, event, df: pl.DataFrame, pal: dict) -> l
     ).filter(pl.col("_cut") > 0)
     used = used.with_columns(_max=pl.col("_cut").map_elements(
         lambda n: max_reachable_trim(name, event.kind, n, pal), return_dtype=pl.Int64))
+    if name == "d2_del" and "d_history" in model.tables:
+        used = used.with_columns(_max=pl.col("_max") - 1)
 
     # Report the FRACTION of each allele's deletion mass that is unreachable, not one row per cell.
     # A shared deletion-bin grid across alleles of different lengths (OLGA's array layout, and the
@@ -383,7 +475,10 @@ def _check_genomic_cross_refs(model: Model) -> list[dict]:
         for col in df.columns:
             if col not in _ALLELE_GENOMIC or col not in known:
                 continue
-            unknown = sorted(set(df[col].to_list()) - known[col])
+            values = set(df[col].to_list())
+            if name == "d_history" and col == "d2_allele":
+                values.discard("")  # explicit absent-D2 marker for nominal single-D histories
+            unknown = sorted(values - known[col])
             for allele in unknown[:10]:
                 rows.append(_issue("error", "allele_not_in_genomic",
                                    f"{allele!r} appears in {name!r} but not in "

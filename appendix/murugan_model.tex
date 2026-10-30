@@ -103,9 +103,17 @@ length distribution and a first-order Markov chain:
 \begin{equation}\label{eq:ins}
   P_{\ins}(\mathbf{m}) = P_{\ins}(\ell)\; b(m_1)\prod_{i=2}^{\ell} R(m_i\mid m_{i-1}),
 \end{equation}
-with $b$ the first-nucleotide (stationary) bias and $R$ the $4\times4$ dinucleotide transition matrix.
-Following IGoR/\texttt{OLGA}, the $VD$ chain is read $5'\!\to\!3'$ and the $DJ$ chain $3'\!\to\!5'$, so
-$b_{DJ}$ biases the $J$-proximal insertion nucleotide.
+with $b$ the first-nucleotide distribution and $R$ the $4\times4$ transition matrix.
+For zero insertion length, only the length factor contributes. New scaffolds fit
+$b$ independently, counting the first base of every nonempty insertion, including
+length-one insertions with no transition. Unobserved transition conditionals
+retain their normalized initial rows; zeroing them would lose probability mass
+when first bases and insertion lengths recombine independently. Models without
+explicit first-base events retain the legacy stationary-$R$ convention.
+The $VD$ chain is read $5'\!\to\!3'$ and the $DJ$ chain $3'\!\to\!5'$, so $b_{DJ}$
+describes the $J$-proximal insertion nucleotide. This independent first-base
+distribution differs from IGoR's first transition conditioned on the adjacent
+retained germline nucleotide.
 
 \paragraph{Generation probability} The quantity of interest is the probability of an \emph{observed}
 CDR3, obtained by summing over every scenario that could have produced it,
@@ -122,9 +130,10 @@ and \S\ref{sec:aa} evaluate them by dynamic programming.
 
 \texttt{vdjtools} stores a model as a directory of long-format \texttt{polars} parquet tables plus a
 \texttt{manifest.json} that names each event and lists its conditioning parents --- the edges of the
-Bayesian network of Eq.~\eqref{eq:pvdj}. Changing a locus's conditioning (e.g.\ $P(D\mid J)$ versus a
-richer $P(D\mid V,J)$) is therefore a one-line manifest edit, not a format change, and a $VJ$ locus is
-simply the same schema with the $D$-tables and second insertion absent. Each table holds the
+Bayesian network of Eq.~\eqref{eq:pvdj}. The engine implements the declared supported
+factorizations; changing parents alone does not implement a richer dependency
+such as $P(D\mid V,J)$, which also requires compatible packing, inference and
+sampling. A $VJ$ locus omits the $D$ tables and second insertion. Each table holds the
 distribution of one event, normalized within its conditioning key by a single \texttt{polars}
 \texttt{group\_by} --- which is exactly the M-step of \S\ref{sec:em}. Two conventions matter for the
 $\Pgen$ recursions.
@@ -143,12 +152,13 @@ keep \texttt{OLGA} germline to preserve exact-$\Pgen$ fidelity, whereas natively
 \texttt{arda}.
 
 \paragraph{The D-D extension} The schema carries tandem-$D$ ($n_D\!\in\!\{0,1,2\}$)
-rearrangements --- a $D$-count event $P(n_D)$, a second $D$-gene table $P(D_2\!\mid\!D_1)$, a joint
-second-$D$ deletion and a $DD$ insertion --- which \texttt{OLGA}/IGoR cannot represent
+rearrangements, including a second-$D$ deletion and a $DD$ insertion, beyond the
+single-$D$ event graphs used here as \texttt{OLGA}/IGoR references
 (\S\ref{sec:dd}). Real 5$'$-RACE TRD repertoires make this concrete: after collapsing to unique
 clonotypes, \emph{$4.15\%$ of out-of-frame and $3.42\%$ of in-frame $\delta$-chain clonotypes carry two
-aligned $D$ segments}, the signal on which the $n_D\!=\!2$ event is trained; the corresponding tandem
-fraction under any single-$D$ model is structurally zero.
+aligned $D$ segments}. These preliminary annotation fractions are not true tandem
+frequencies: inference reassigns complete histories, including reads with no preliminary
+second-$D$ call. A single-$D$ model has no tandem history by construction.
 
 \section{Nucleotide generation probability}\label{sec:nt}
 
@@ -176,44 +186,59 @@ machine precision.
 
 \section{Tandem-D (D-D) rearrangements}\label{sec:dd}
 
-A tandem-$D$ locus joins \emph{two} $D$ segments in the junction, $V\!-\!D_1\!-\!D_2\!-\!J$, which
-neither \texttt{OLGA} nor IGoR can represent. We add a $D$-count event $P(n_D)$, a second gene factor
-$P(D_2\!\mid\!D_1)$ (whose zeros carry the genomic-order mask), a joint second-$D$ deletion
-$P(\del_{D_2}^{5'},\del_{D_2}^{3'}\!\mid\!D_2)$ and a $DD$ insertion. A two-$D$ scenario has probability
-\begin{equation}\label{eq:pdd}
-  P(r_2)=P(n_D\!=\!2)\,P(V)P(J)\,P(D_1\!\mid\!J)P(D_2\!\mid\!D_1)\;
-    \textstyle\prod_{s\in\{V,J,D_1,D_2\}}\!P(\del_s)\;
-    P_{\ins}(\mathbf m^{VD})P_{\ins}(\mathbf m^{DD})P_{\ins}(\mathbf m^{DJ}),
+A tandem-$D$ locus joins two $D$ segments in the junction,
+$V\!-\!D_1\!-\!D_2\!-\!J$. New joint-history models store
+\begin{equation}\label{eq:dhistory}
+ q_J(n,D_1,D_2)=P(n,D_1,D_2\mid J),\qquad
+ \sum_{(n,D_1,D_2)\in\mathcal S_J}q_J(n,D_1,D_2)=1.
 \end{equation}
-and its CDR3 is $\sigma(r_2)=\hat V\,\mathbf m^{VD}\,\hat D_1\,\mathbf m^{DD}\,\hat D_2\,\mathbf m^{DJ}\,\hat J$.
-The middle factor of Eq.~\eqref{eq:pgennt} becomes a mixture over the $D$-count,
-\begin{equation}\label{eq:ximix}
-  \Xi(\mu)=\bigl[P(n_D\!=\!0)+P(n_D\!=\!1)\bigr]\,\Xi_1(\mu)\;+\;P(n_D\!=\!2)\,\Xi_2(\mu),
-\end{equation}
-where $\Xi_1$ is the single-$D$ sum of Eq.~\eqref{eq:dmiddle} and $\Xi_2$ enumerates two ordered,
-non-overlapping $D$ placements with $VD$, $DD$ and $DJ$ insertions between and around them. Two design
-choices keep the mixture a genuine probability.
+Here $\mathcal S_J$ contains physically permitted histories, $n\in\{1,2\}$,
+and $D_2$ is absent for $n=1$. Thus the single-$D$ probability can vary with $J$;
+there is no independent global $P(n_D)$ factor in this representation.
+TRB permits $D_1$--$D_2$--$J_2$ and single $D_1$--$J_2$ histories.
+A preliminary greedy alignment cannot veto either history.
 
-\begin{proposition}[Disjoint $D$-count partition]\label{prop:dd}
-If every $D$ in a two-$D$ scenario is required to contribute at least one nucleotide
-($\ell_{D_1},\ell_{D_2}\!\ge\!1$), then no CDR3 nucleotide sequence is counted by both $\Xi_1$ and
-$\Xi_2$, and the $n_D\!=\!0$ (D-less) case is exactly the $n_D\!=\!1$ term with a fully-trimmed $D$
-($\ell_D\!=\!0$). Hence Eq.~\eqref{eq:ximix} is a partition of the scenario space and $\Xi$ is normalized
-whenever the event tables are.
+A two-$D$ scenario has probability
+\begin{equation}\label{eq:pdd}
+ \begin{aligned}
+ P(r_2)={}&P(V)P(J)q_J(2,D_1,D_2)P(\del_V\mid V)P(\del_J\mid J)\\
+ &{}\times P(\del_{D_1}\mid D_1,n=2)P(\del_{D_2}\mid D_2,n=2)
+ \prod_{u\in\{VD,DD,DJ\}}P_{\ins}(\mathbf m^u).
+ \end{aligned}
+\end{equation}
+Its junction is $\sigma(r_2)=\hat V\,\mathbf m^{VD}\,\hat D_1\,
+\mathbf m^{DD}\,\hat D_2\,\mathbf m^{DJ}\,\hat J$.
+For $n=1$, use $q_J(1,D_1,\varnothing)$, its separate single-$D$ deletion
+conditional, and omit the $D_2$ and $DD$ factors. Consequently
+\begin{equation}\label{eq:ximix}
+ \Xi(\mu)=\sum_{r:\,\sigma_{\mathrm{middle}}(r)=\mu}
+ q_J(n,D_1,D_2)P(\text{middle trims and insertions}\mid n,D_1,D_2).
+\end{equation}
+
+\begin{proposition}[Disjoint latent histories]\label{prop:dd}
+Both retained $D$ segments in a tandem history have at least one nucleotide.
+Single-$D$ histories allow complete $D$ deletion. These are disjoint sets of
+latent histories, but their emitted nucleotide sequences can overlap.
+Their mixture is normalized when $q_J$ and every reachable conditional are normalized.
 \end{proposition}
 
-\noindent The first clause removes the identifiability trap --- a tandem in which one $D$ is fully
-deleted is indistinguishable from a single $D$ with a longer insertion --- by assigning such realizations
-to $n_D\!=\!1$ alone; the second means the model needs no separate $D$-less insertion table
-($\Xi_1$ already sums the $\ell_D\!=\!0$ placement, which is why the loader's bootstrap $P(n_D)=\delta_1$
-reproduces single-$D$ \texttt{OLGA} $\Pgen$ exactly). The reference implementation of $\Xi_2$ is a direct
-enumeration --- correct but, like the amino-acid sum of \S\ref{sec:aa} before its transfer-matrix
-rewrite, slow; the planned native port will add one $D$ block to the right partial sum $\Pi_R$
-(Eq.~\eqref{eq:rho}), weighted by $P(n_D\!=\!2)$, so that a tandem query costs one extra block-stitch
-rather than a nested placement loop. Until that port and the D-D-aware EM land, the not-yet-tandem paths
-(the native \texttt{\_core}, amino-acid $\Pgen$, generation and inference) refuse a model with
-$P(n_D\!=\!2)>0$ rather than silently returning a single-$D$ result; the $n_D\!=\!2$ event is trained by
-EM on the real TRD clonotypes noted in \S\ref{sec:tables}.
+Requiring nonempty tandem segments is an explicit model convention; it does not
+make the number of $D$ segments identifiable from a sequence. In particular,
+insertions can coincidentally match germline bases. The inference and generation
+kernels use separate normalized single-$D$, tandem-first-$D$ and second-$D$
+deletion tables, so removing fully deleted tandem states does not leak probability.
+EM accumulates posterior counts directly over $\mathcal S_J$, then normalizes within
+$J$. An optional single-$D$ pseudocount is divided uniformly among declared
+single-$D$ history rows within each $J$. Undefined groups retain their initial
+normalized conditional. The reported $D$-count probability is
+$P(n)=\sum_JP(J)\sum_{D_1,D_2}q_J(n,D_1,D_2)$.
+
+Native and reference nucleotide/amino-acid Pgen, generation and E-step kernels
+use these same factors. The native codon-constrained max-product search also
+includes tandem paths and reconstructs both $D$ spans. Legacy models retain their
+existing global $P(n_D)P(D_1\mid J)P(D_2\mid D_1)$ representation and artifact behavior;
+the joint-history schema is an explicit conversion, not a reinterpretation of
+frozen tables.
 
 \section{Amino-acid generation probability by transfer matrix}\label{sec:aa}
 
@@ -361,16 +386,66 @@ draw $(V,J[,D])$, the deletions, the insertion lengths, then the insertion nucle
 chain, and assemble Eq.~\eqref{eq:concat}. Restricting to functional genes and enforcing $\ell_V,\ell_J\ge1$
 keeps every draw scoreable; sampled V/J-usage and CDR3-length distributions match the model marginals.
 
-\paragraph{Inference} Model parameters are estimated from out-of-frame reads by
-expectation--maximization. The E-step is exactly the scenario sum of \S\ref{sec:nt}: for each read it
-computes the posterior weight $P(r\mid\sigma)=P(r)/\Pgen(\sigma)$ of every compatible scenario and
-accumulates soft counts into arrays laid out like the model tables; optionally the enumeration is
-restricted to the genes \texttt{arda} aligns (an \emph{aligned-gene mask}), which prunes the V/D/J sums
-without changing the fixed point. The M-step renormalizes each event table within its conditioning key ---
-a single \texttt{polars} \texttt{group\_by} --- reproducing the manifest's Bayesian network. On
-\texttt{OLGA}-drawn data this is a closed-loop oracle: EM must recover the generating marginals, giving a
-self-checking target before any real data exists. The E-step inner loop is the second native hot path (the
-first being $\Pgen$); with the aligned-gene mask it makes $VDJ$ inference practical.
+\paragraph{Inference} We estimate model parameters from nonfunctional reads using EM.
+Exact-match inference uses the scenario sum of
+\S\ref{sec:nt}. With the optional retained-germline substitution channel, let
+$m_r$ be the number of mismatches and $g_r$ the number of retained germline bases
+in scenario $r$ for observed sequence $y$. Its joint weight and observation likelihood are
+\begin{equation}
+ w_r=P_\theta(r)(\epsilon/3)^{m_r}(1-\epsilon)^{g_r-m_r},\qquad
+ L(y)=\sum_r w_r,\qquad P(r\mid y)=w_r/L(y).
+\end{equation}
+Here $\epsilon$ is the substitution probability, shared across retained germline
+bases; each alternative nucleotide has probability $\epsilon/3$. Inserted bases
+retain their observed Markov emissions without an observation-error channel.
+This scope differs from applying sequencing errors to every generated base.
+Exact generation $\Pgen$ remains the error-free quantity of \S\ref{sec:nt}.
+Sequencing observations are normalized to A/C/G/T before alignment and inference:
+DNA IUPAC ambiguity symbols are replaced by A. They are low-quality input symbols,
+not latent nucleotide alternatives, so inference does not enumerate or marginalize
+compatible completions. This input rule does not alter germline references or
+amino-acid patterns. The substitution channel above applies to ordinary A/C/G/T
+mismatches in the normalized observation.
+The error-rate M-step is
+\begin{equation}
+ \epsilon_{\rm new}=
+ \frac{\sum_y E[m_r\mid y]}{\sum_y E[g_r\mid y]}.
+\end{equation}
+For tandem histories, the forward/backward messages include the emission factors
+for each retained $D$ segment. Posterior mismatch and retained-length statistics
+are attributed in the reconstruction passes, once per segment; the outer $V/J$
+statistics are weighted by the complete history mass. Event tables are normalized
+within their conditioning keys using the same posterior weights.
+
+Preliminary alignment endpoints do not fix recombination boundaries. Exact inference retains all supported
+shorter retained segments and corresponding N/P histories in the sum;
+coincidentally matching N bases do not imply zero insertion. Restricting enumeration
+to a candidate gene set is a computational approximation that can change the
+likelihood and fitted parameters if compatible alternatives are omitted. It is not
+an invariance of the EM fixed point. Recorded positive-likelihood observation counts
+exclude unsupported inputs. A mean log-likelihood over that subset must not be
+interpreted as a finite full-cohort likelihood when any observation has zero support.
+
+\paragraph{Bounded native inference} The working inference default is a relative
+scenario cutoff $\rho=10^{-5}$; $\rho=0$ retains exact inference. Let $\mathcal{H}$
+partition complete scenarios into disjoint cells: a single-D gene/deletion/placement
+cell, a tandem-D bridge, or a complete VJ cell. Max-product messages give
+\begin{equation}
+ M_C=\max_{r\in C} w_r,\qquad M=\max_{C\in\mathcal{H}}M_C,\qquad
+ \mathcal{K}_{\rho}=\{C\in\mathcal{H}: M_C\ge\rho M\}.
+\end{equation}
+For $L(y)>0$, the retained likelihood and omitted probability fraction are
+\begin{equation}
+ L_{\rho}(y)=\sum_{C\in\mathcal{K}_{\rho}}\sum_{r\in C}w_r,\qquad
+ \delta_{\rho}(y)=1-\frac{L_{\rho}(y)}{L(y)}.
+\end{equation}
+Every retained event/error count uses that same cell set and normalization
+$L_{\rho}(y)$. Some weak component histories remain within retained cells; this
+preserves factorization. The relative bound follows IGoR's inference principle,
+but these global-max groups differ from its dynamic traversal cutoff. The cutoff
+does not bound total omitted mass: its mean and maximum over scoreable observations
+are recorded per iteration. Generation $\Pgen$ remains exact, and no fixed
+five-nucleotide reassignment limit is used.
 
 \section{Model diagnostics: entropy and mutual information}\label{sec:diag}
 
@@ -383,7 +458,14 @@ marginal entropy $H(X)$ (in bits) and, along each declared edge, the information
   I\bigl(X;\mathrm{Pa}(X)\bigr)=H(X)-H\bigl(X\mid \mathrm{Pa}(X)\bigr),
   \qquad H(X\mid\mathrm{Pa})=\!\!\sum_{\mathrm{pa}}\!P(\mathrm{pa})\,H(X\mid \mathrm{pa}),
 \end{equation}
-where parent marginals are obtained by forward propagation over the network. Rendering the manifest as a
+where parent marginals are obtained by forward propagation over the network. If some parent states
+have an undefined (all-zero) conditional, these diagnostics condition on the remaining defined support:
+with $A=\{\mathrm{pa}:\sum_x P(x\mid\mathrm{pa})>0\}$ and
+$Z=\sum_{\mathrm{pa}\in A}P(\mathrm{pa})$, both the child marginal and the conditional entropy use
+weights $P(\mathrm{pa})/Z$ on $A$. The same convention applies to within-$D$ deletion coupling.
+Entirely undefined events ($Z=0$) report zero marginal mass and zero entropy; no uniform mass is
+imputed. These are summaries on defined event support, including in the scenario-entropy table.
+Rendering the manifest as a
 graph, with nodes annotated by $H(X)$ and edges by $I$, gives a \texttt{bnlearn}-style summary of the
 whole model at a glance (Fig.~\ref{fig:bn}).
 

@@ -29,7 +29,7 @@ MODES = [("CASSQDLNTEAFF", "TRBV4-3*01", "TRBJ1-1*01"),               # pinned
          ("CASSPRTGELFF", None, None)]                                # both marginalized
 
 FIELDS = ("cdr3_nt", "v_call", "j_call", "v_end", "j_start", "d_call", "d_start", "d_end",
-          "pgen", "scenario_p", "n_candidates", "runner_up_pgen")
+          "pgen", "scenario_p", "n_candidates", "runner_up_pgen", "d2_call", "d2_start", "d2_end")
 
 # Not `Scenario` fields and not from the DP: the boundary a germline alignment supports, appended
 # after every history column. `test_germline_boundary.py` owns them.
@@ -64,13 +64,14 @@ def test_the_batch_is_the_per_row_loop_exactly(trb):
                 getattr(ref, f), float) else row[f] == getattr(ref, f), f
 
 
-def test_n_candidates_counts_every_distinct_candidate_not_just_the_rescored_ones(trb):
+def test_n_candidates_counts_every_distinct_candidate_not_just_the_rescored_ones():
     """A multi-allele call pools more candidates than ``n_best``; the count is pre-truncation.
 
     Reporting the re-scored count instead is silent -- every other field stays right -- and it is
     exactly what this batch got wrong first time round.
     """
     aa, v, j = "CASSGRGLNTEAFF", "TRBV19*01,TRBV6-5*01", "TRBJ1-1*01"
+    trb = load_bundled("TRB", "olga")  # This exact candidate-count case uses fixed oracle weights.
     ref = infer_nt(trb, aa, v=v, j=j, n_best=8)
     got = infer_nt_batch(trb, [aa], v=[v], j=[j], n_best=8)
     assert ref.n_candidates > 8, "case no longer pools more than n_best; pick another"

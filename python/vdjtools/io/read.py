@@ -281,6 +281,7 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     df = raw.select([pl.col(src).alias(canon) for canon, src in found.items()]
                     + [pl.col(c).cast(pl.Float64, strict=False).alias(c)
                        if _numeric_like(raw, c) else pl.col(c) for c in extra])
+    df = schema.normalize_nt_frame(df)
     if COUNT not in df.columns:
         df = df.with_columns(pl.lit(1, dtype=pl.Int64).alias(COUNT))
     else:

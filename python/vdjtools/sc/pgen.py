@@ -93,7 +93,7 @@ def _warn_if_all_null(values, model, locus, col) -> None:
 def paired_pgen(
     paired: pl.DataFrame,
     *,
-    source: str = "olga",
+    source: str = "isalgo",
     condition_vj: bool = True,
     resolve_genes: bool = True,
     alpha_locus: str | None = None,
@@ -103,14 +103,15 @@ def paired_pgen(
 
     Args:
         paired: A paired-chain frame (:func:`vdjtools.sc.pair.pair_chains` layout).
-        source: Bundled model set — ``"olga"`` (OLGA-derived) or ``"learned"`` (native EM).
+        source: Bundled model set — ``"isalgo"`` (fresh ARDA-reference fits) or ``"olga-legacy"``
+            (frozen OLGA); historical source names remain explicit compatibility selectors.
         condition_vj: Condition each chain's Pgen on its V/J call. ``False`` marginalises
             over all V/J unconditionally.
         resolve_genes: Resolve a **gene**-level call (``TRBV10-3``) to a representative
             model allele (``TRBV10-3*01``) before scoring -- see
             :func:`vdjtools.model.native.gene_to_allele`.
-            Default ``True``, because CellRanger reports genes and without this every 10x
-            row scores ``None``. Set ``False`` to score only exact allele matches.
+            Default ``True``. Set ``False`` to disable representative selection in multi-allele
+            models. A gene with one model entry always accepts gene and suffix aliases.
         alpha_locus: Locus of the α/light chain (e.g. ``"TRA"``, ``"IGK"``); inferred from
             the ``alpha_v_call`` prefix if ``None``.
         beta_locus: Locus of the β/heavy chain (e.g. ``"TRB"``, ``"IGH"``); inferred from

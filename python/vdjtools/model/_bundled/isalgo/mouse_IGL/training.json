@@ -1,0 +1,150 @@
+{
+  "runs": [
+    {
+      "loglik": [
+        -21.39938402972361,
+        -14.3737889747068,
+        -13.46298163204152,
+        -13.129326889978856,
+        -12.94143668398881,
+        -12.833720999486484,
+        -12.780194060724085,
+        -12.755787497703805,
+        -12.744617667289027,
+        -12.73947438811379,
+        -12.737539347200734,
+        -12.736583537866016
+      ],
+      "n_scoreable": [
+        128,
+        128,
+        128,
+        128,
+        128,
+        128,
+        128,
+        128,
+        128,
+        128,
+        128,
+        128
+      ],
+      "gene_tv": [
+        Infinity,
+        0.32830828425986347,
+        0.0633658490651241,
+        0.024783123915771452,
+        0.014310726480078834,
+        0.008323317351278595,
+        0.004170804302550813,
+        0.0019097177166725585,
+        0.0008756676462968218,
+        0.00040356480747465103,
+        0.0001518933084759693,
+        7.503877386865196e-05
+      ],
+      "n_iter": 12,
+      "converged": true,
+      "n_sequences": 128,
+      "max_iter": 1000,
+      "tol": 0.0001,
+      "init": "uniform",
+      "native": true,
+      "elapsed_s": 0.079,
+      "finished_at": "2026-10-29T23:42:50",
+      "template_source": "arda:IGL",
+      "error_rate": [
+        0.043123064063229175,
+        0.05067258194701701,
+        0.052681058690445155,
+        0.053672708048285354,
+        0.05405827946175059,
+        0.05422160124684815,
+        0.05437833449584378,
+        0.054529843533333025,
+        0.05461628651198811,
+        0.054651686629215414,
+        0.0546711734832036,
+        0.05468258465994229
+      ],
+      "error_model": "retained-germline-substitution",
+      "candidate_search": {
+        "batches": [
+          {
+            "n_queries": 731,
+            "n_hits": 43747,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          }
+        ],
+        "d_unrestricted": true,
+        "candidate_ambiguity": "DNA IUPAC symbols replaced with A before search and inference",
+        "scope": "V/J gene proposals; all functional model templates per gene",
+        "query_scope": "coding-strand full-read alternatives; junction fallback when absent",
+        "query_count": 731,
+        "full_read_observations": 128,
+        "junction_fallback_observations": 0,
+        "query_inputs_sha256": "26ec1c69b9f607aba3579b63c1d3b32a1ea715eeae02e0a554ae3f45f1f50b65",
+        "unrestricted_v": 0,
+        "unrestricted_j": 3,
+        "input_masks_sha256": "3118c20f8cec96d4fe5ae3ef832d34c599c05370d4ab70a1a2e22e0b36ad3ddd"
+      },
+      "n_ambiguous": 0,
+      "prune_ratio": 1e-05,
+      "pruned_mass_mean": [
+        9.076981659133959e-05,
+        9.14300959773953e-05,
+        5.3266953825179905e-05,
+        3.7937706886501746e-05,
+        2.7495833218306546e-05,
+        1.4122878855828137e-05,
+        1.626960698756381e-05,
+        1.0728037418807496e-05,
+        7.770889711154805e-06,
+        6.673973704316564e-06,
+        6.4506297122464365e-06,
+        6.896278082333343e-06
+      ],
+      "pruned_mass_max": [
+        0.00022108747456984414,
+        0.0002271171695215892,
+        0.00012305423585341825,
+        8.573371520725005e-05,
+        5.3037133323712456e-05,
+        3.368526989110791e-05,
+        3.7685417739261317e-05,
+        3.3734799054223666e-05,
+        1.8190549845672083e-05,
+        2.232853718948869e-05,
+        2.4095329126842085e-05,
+        2.4068012776042777e-05
+      ],
+      "n_pruned_observations": [
+        128,
+        128,
+        128,
+        128,
+        128,
+        128,
+        128,
+        127,
+        128,
+        126,
+        126,
+        126
+      ]
+    }
+  ]
+}

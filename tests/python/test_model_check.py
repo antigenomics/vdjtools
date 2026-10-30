@@ -8,7 +8,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from vdjtools.model import load_bundled
+from vdjtools.model import load_bundled, list_bundled
 from vdjtools.model.bundled import LOCI
 from vdjtools.model.check import check_model
 from vdjtools.model.model import Model
@@ -32,6 +32,34 @@ def test_toy_model_is_clean(toy_model):
 def test_toy_vdj_model_is_clean(toy_model_vdj):
     issues = check_model(toy_model_vdj, germline="none")
     assert issues.filter(pl.col("severity") == "error").is_empty()
+
+
+@pytest.mark.parametrize('missing', [False, True])
+@pytest.mark.parametrize('segment', ['v', 'j'])
+def test_required_deletion_conditional_distinguishes_used_and_unused(toy_model, missing, segment):
+    col, event = segment + '_allele', {'v': 'v_3_del', 'j': 'j_5_del'}[segment]
+    allele = toy_model.tables[event][col][0]
+    deletion = toy_model.tables[event]
+    deletion = (deletion.filter(pl.col(col) != allele) if missing else deletion.with_columns(
+        p=pl.when(pl.col(col) == allele).then(0.).otherwise(pl.col('p'))))
+    broken = _rebuild(toy_model, **{event: deletion})
+    issues = check_model(broken, germline='none')
+    required = issues.filter((pl.col('check') == 'required_conditional') & (pl.col('event') == event))
+    assert required['allele'].to_list() == [allele]
+    assert required['severity'].to_list() == ['error']
+    choice = segment + '_choice'
+    unused = _rebuild(broken, **{choice: broken.tables[choice].with_columns(
+        p=pl.when(pl.col(col) == allele).then(0.).otherwise(pl.col('p')))})
+    assert 'required_conditional' not in _checks(check_model(unused, germline='none'), 'error')
+
+
+@pytest.mark.parametrize('source,key', [(source, key) for source, keys in list_bundled().items() for key in keys])
+@pytest.mark.parametrize('collapse', [True, False])
+def test_every_bundled_model_is_healthy(source, key, collapse):
+    organism, locus = key.split('_', 1) if '_' in key else ('human', key)
+    issues = check_model(load_bundled(locus, source, organism=organism, collapse=collapse), germline='none')
+    errors = issues.filter(pl.col('severity') == 'error')
+    assert errors.is_empty(), errors.to_dicts()
 
 
 def test_bundled_trb_has_no_errors():
@@ -97,9 +125,8 @@ def test_deletion_unreachable_scales_with_the_lost_mass(toy_model):
     """Reported as the FRACTION of an allele's mass that no trim can reach, not per row."""
     t = toy_model.tables["v_3_del"]
     # TOYV1*01's cut_segment is 13 nt with palindrome_max 4, so ndel > 8 is unreachable.
-    heavy = t.with_columns(
-        p=pl.when((pl.col("v_allele") == "TOYV1*01") & (pl.col("ndel") > 8))
-        .then(1.0).otherwise(pl.col("p")))
+    heavy = pl.concat([t, t.filter(pl.col("v_allele") == "TOYV1*01").head(1).with_columns(
+        ndel=pl.lit(9).cast(t.schema["ndel"]), p=pl.lit(2.0))])
     heavy = heavy.with_columns(p=pl.col("p") / pl.col("p").sum().over("v_allele"))
     issues = check_model(_rebuild(toy_model, v_3_del=heavy), germline="none")
     row = issues.filter(pl.col("check") == "deletion_unreachable").filter(

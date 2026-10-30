@@ -25,6 +25,54 @@ from __future__ import annotations
 
 import polars as pl
 
+_DNA_IUPAC = "ACGTRYSWKMBDHVN"
+_AMBIGUOUS_TO_A = str.maketrans("RYSWKMBDHVN", "A" * 11)
+_ALIGNED_NT_COLUMNS = (
+    "sequence_alignment", "v_sequence_alignment", "d_sequence_alignment",
+    "d2_sequence_alignment", "j_sequence_alignment", "c_sequence_alignment",
+    "cdr1", "cdr2", "cdr3", "fwr1", "fwr2", "fwr3", "fwr4",
+)
+_OBSERVED_NT_COLUMNS = (
+    "sequence", "junction", "junction_nt", "cdr3_nt", "np1", "np2", "np3",
+    *_ALIGNED_NT_COLUMNS,
+)
+
+
+def normalize_nt(sequence: str | None) -> str | None:
+    """Normalize sequencing DNA: uppercase, replace every IUPAC ambiguity with A."""
+    if sequence is None:
+        return None
+    sequence = sequence.upper()
+    if set(sequence) - set(_DNA_IUPAC):
+        raise ValueError("invalid DNA IUPAC nucleotide input")
+    return sequence.translate(_AMBIGUOUS_TO_A)
+
+
+def normalize_nt_expr(column: str) -> pl.Expr:
+    """Vectorized nucleotide substitution; use normalize_nt_frame for validation."""
+    return pl.col(column).cast(pl.String).str.to_uppercase().str.replace_all(r"[RYSWKMBDHVN]", "A")
+
+
+def normalize_nt_frame(df: pl.DataFrame, columns=None) -> pl.DataFrame:
+    """Normalize observed DNA; default to known AIRR query fields, preserving alignment gaps.
+
+    Explicit column subsets retain their meaning. Only known aligned query/region
+    fields permit structural ``-`` and ``.`` spacers; raw DNA remains strict.
+    Germlines, amino acids, qualities and arbitrary metadata are never selected implicitly.
+    """
+    if columns is None:
+        columns = _OBSERVED_NT_COLUMNS
+    columns = [column for column in columns if column in df.columns]
+    if not columns:
+        return df
+    invalid = [pl.col(column).cast(pl.String).str.to_uppercase()
+               .str.contains(r"[^ACGTRYSWKMBDHVN.-]" if column in _ALIGNED_NT_COLUMNS
+                             else r"[^ACGTRYSWKMBDHVN]").fill_null(False) for column in columns]
+    if df.select(pl.any_horizontal(invalid).any()).item():
+        raise ValueError("invalid DNA IUPAC nucleotide input")
+    return df.with_columns([normalize_nt_expr(column).alias(column) for column in columns])
+
+
 V_CALL = "v_call"
 D_CALL = "d_call"
 J_CALL = "j_call"
@@ -174,7 +222,7 @@ def normalize(df: pl.DataFrame, *, recompute_freq: bool = False,
             exprs.append(count_expr(col).alias(col))
         else:
             exprs.append(pl.col(col).cast(dtype, strict=False).alias(col))
-    df = df.with_columns(exprs)
+    df = normalize_nt_frame(df.with_columns(exprs))
     if recompute_freq:
         df = recompute_frequency(df)
     # Canonical columns first, then whatever the reader was asked to keep. Without the second

@@ -45,6 +45,9 @@ class Model:
     def validate(self, *, tol: float = 1e-5) -> "Model":
         """Assert every event table has the right columns and normalizes; returns ``self``."""
         validate_tables(self.manifest, self.tables, tol=tol)
+        if "d_history" in self.tables:
+            from .dd import validate_history
+            validate_history(self, tol=tol)
         return self
 
     def save(self, path: str | Path, *, fmt: str = "parquet") -> None:

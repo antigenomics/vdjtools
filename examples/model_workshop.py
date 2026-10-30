@@ -529,8 +529,10 @@ def _(mo):
     mo.md("""
     ---
     **Building from the real read corpus.** The bundled `learned` models are fitted to raw
-    5'RACE FASTQ from the private `isalgo/airr_model_read` dataset: fetch, map with arda,
-    collapse to unique clonotypes, then EM. That whole pipeline is one command, parallel across
+    nonfunctional 5'RACE reads (out-of-frame or stop-codon): map with ARDA,
+    collapse to unique clonotypes, then fit with vdjtools native EM on an ARDA
+    germline scaffold. Replacement assets and full-catalog validation remain
+    release gates; OLGA parameters are not the initialization. That whole pipeline is one command, parallel across
     chains (it needs HuggingFace access and arda's mmseqs2, and takes minutes per chain):
 
     ```bash

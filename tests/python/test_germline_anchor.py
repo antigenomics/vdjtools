@@ -64,7 +64,8 @@ def test_trbv4_3_is_anchored_and_scores_real_junctions():
     """The filed case, at allele resolution and through the collapsed gene."""
     for source in ("olga", "learned"):
         raw = load_bundled("TRB", source, collapse=False).genomic["genes_v"]
-        for allele in ("TRBV4-3*01", "TRBV4-3*02"):
+        alleles = ("TRBV4-3*01", "TRBV4-3*02") if source == 'olga' else ('TRBV4-3*01',)
+        for allele in alleles:
             cut = raw.filter(pl.col("v_allele") == allele)["cut_segment"][0]
             assert translate(cut[:3]) == "C", f"{source} {allele} is not Cys-anchored: {cut[:9]}"
         m = load_bundled("TRB", source)
@@ -78,8 +79,10 @@ def test_the_repair_never_shortens_a_germline_it_cannot_confirm():
     Its arda germline is 30 nt and does not end at Phe/Trp at all, and a two-codon search cut it to
     24. So J is repaired only by undoing the known wrong-side slice, never by searching.
     """
-    g = load_bundled("TRA", "arda", organism="mouse", collapse=False).genomic["genes_j"]
-    row = g.filter(pl.col("j_allele") == "TRAJ19*01")
+    from vdjtools.model import from_arda
+    g = from_arda("TRA", "mouse", gene_level=False).genomic["genes_j"]
+    fixed = repair_anchors({'genes_j': g})['genes_j']
+    row = fixed.filter(pl.col("j_allele") == "TRAJ19*01")
     assert row.height == 1 and len(row["cdr3_segment"][0]) == 30
 
 

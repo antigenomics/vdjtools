@@ -86,10 +86,12 @@ def test_gene_level_calls_are_scored_not_silently_nulled():
     assert all(p > 0 for p in out["pgen_paired"])
 
 
-def test_resolve_genes_false_refuses_gene_level_calls():
-    """Opting out must give nulls, never a silently marginalised (larger) Pgen."""
+def test_resolve_genes_false_accepts_unambiguous_gene_calls():
+    """A gene with one representative needs no allele choice, even without the wrapper alias."""
     out = sc.paired_pgen(_strip_alleles(_paired_frame()), resolve_genes=False)
-    assert out["pgen_paired"].null_count() == out.height
+    expected = sc.paired_pgen(_paired_frame(), resolve_genes=False)
+    assert out["pgen_paired"].null_count() == 0
+    assert out["pgen_paired"].equals(expected["pgen_paired"])
 
 
 def test_an_all_null_locus_warns_rather_than_shipping_a_silent_column():

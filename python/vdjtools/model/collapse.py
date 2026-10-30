@@ -232,7 +232,25 @@ def collapse_alleles(model: Model) -> Model:
         marg["j"] = dict(zip(jmarg["j_allele"].to_list(), jmarg["p"].to_list()))
 
     # ---- D (VDJ only) ----
-    if vdj:
+    if vdj and "d_history" in t:
+        history = t["d_history"].with_columns(
+            (_gene("d_allele") + "*01").alias("d_allele"),
+            pl.when(pl.col("n_d") == 2).then(_gene("d2_allele") + "*01")
+              .otherwise(pl.lit("")).alias("d2_allele"))
+        new["d_history"] = _collapse_conditional(
+            history, "j_allele", wj, ["n_d", "d_allele", "d2_allele"])
+        weighted = t["d_history"].join(t["j_choice"].rename({"p": "_pj"}), on="j_allele")
+        dmarg = weighted.group_by("d_allele").agg((pl.col("p") * pl.col("_pj")).sum().alias("p"))
+        marg["d"] = dict(dmarg.iter_rows())
+        for name, allele, nd in (("d_del", "d_allele", 1),
+                                ("d_tandem_del", "d_allele", 2), ("d2_del", "d2_allele", 2)):
+            branch = weighted.filter(pl.col("n_d") == nd)
+            usage = branch.group_by(allele).agg((pl.col("p") * pl.col("_pj")).sum().alias("p"))
+            weights = _allele_weights(usage, allele)
+            bins = [c for c in t[name].columns if c not in (allele, "p")]
+            new[name] = _collapse_conditional(t[name], allele, weights, bins)
+
+    if vdj and "d_history" not in t:
         # d_gene is P(D | J), keyed (j_allele, d_allele). Collapse D (sum sub-alleles) then J
         # (weighted average over J sub-alleles, by j_choice usage).
         wj_full = _allele_weights(t["j_choice"], "j_allele")
@@ -263,7 +281,11 @@ def collapse_alleles(model: Model) -> Model:
                   .group_by(["_gd1", "_gd2"], maintain_order=True).agg(pl.col("pw").sum().alias("p"))            # weighted avg over D1
                   .with_columns(_rep_expr("_gd1").alias("d_allele"),
                                 _rep_expr("_gd2").alias("d2_allele")))
-            new["d2_gene"] = d2.select("d_allele", "d2_allele", "p")
+            # Undefined all-zero allele conditionals contribute no tandem support.
+            # Condition the gene-level distribution on the remaining defined mass.
+            total = pl.col("p").sum().over("d_allele")
+            new["d2_gene"] = d2.select("d_allele", "d2_allele", "p").with_columns(
+                p=pl.when(total > 0).then(pl.col("p") / total).otherwise(0.0))
         if "d2_del" in t:
             # weight by the D2 marginal P(D2) = Σ_D1 P(D2|D1)P(D1)
             pd1 = dmarg.select(pl.col("d_allele").alias("_a"), "p")
@@ -331,6 +353,8 @@ def _project_onto_germline(tables: dict[str, pl.DataFrame], genomic: dict[str, p
         limits = {r[gcol]: max_reachable_trim(name, event.kind, len(r["cut_segment"] or ""),
                                               manifest.palindrome_max)
                   for r in frame.iter_rows(named=True)}
+        if name == "d2_del" and "d_history" in manifest.events:
+            limits = {key: value - 1 if value is not None else None for key, value in limits.items()}
         if any(v is None for v in limits.values()):
             continue
         total = (pl.col("ndel") if "ndel" in out[name].columns

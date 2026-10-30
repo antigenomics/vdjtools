@@ -18,10 +18,35 @@ generation probability and sampling see :doc:`usage`; for the complete surface s
 Published model downloads
 -------------------------
 
-The `Hugging Face model mirror <https://huggingface.co/datasets/isalgo/vdjtools_models>`_
+The `Hugging Face model mirror <https://huggingface.co/datasets/isalgo/airr_feature_signatures>`_
 contains the public recombination models, corpus bundles and example sources. Its
 dataset card provides selective-download examples. Ordinary bundled-model loading
 continues to use the models installed with vdjtools.
+
+The working-model APIs and CLIs default to ``source="isalgo"``.
+vdjtools owns model fitting, probability tables, generation and Pgen; ARDA supplies
+the germline reference scaffolds, without OLGA probability-parameter seeding.
+The replacement working-model catalog targets twelve contexts: all seven human
+loci and mouse TRA, TRB, IGH, IGK and IGL. Each manifest describes the parameter
+source and reference. Delivery and validation of these twelve parameter sets are
+release gates; API changes alone do not establish completed training or publication.
+Human bundle keys remain bare loci; mouse keys are prefixed ``mouse_``. Missing
+assets fail explicitly and never fall back to a human model.
+
+No mouse TRG or TRD model is bundled. Acquiring suitable 10X or other public
+training data for these two loci is a separate future project, not a blocker for
+this twelve-context release. Their absence from the bundle does not establish
+that suitable public data do not exist.
+``source="olga-legacy"`` and CLI ``--source olga-legacy`` retain the frozen human
+bootstrap models for oracle checks and historical reproduction, including
+``collapse=False`` for allele-level comparisons. ``olga`` is an alias of
+``olga-legacy``. Compatibility names ``learned`` and ``arda`` both select fresh
+``isalgo`` fits; reproducing their previous parameter families requires a pinned
+previous release. Old bundled weights are never substituted for a missing isalgo fit.
+Existing frozen corpus manifests retain their recorded source and fingerprints;
+the source omitted by older manifests still means OLGA. A custom corpus fitted on
+previous ``learned``/``arda`` weights reports a fingerprint mismatch against the
+new aliases; use its matching pinned release for reproduction.
 
 
 Custom germline libraries
@@ -29,6 +54,15 @@ Custom germline libraries
 
 :func:`~vdjtools.model.io.from_germline` builds a model scaffold from **any** V(D)J library — your
 own FASTA, a population-specific reference, or arda's. ``from_arda`` is a thin wrapper over it.
+
+``from_arda`` defaults to one major allele per gene: a usable functional ``*01``
+when present, otherwise the lowest-numbered usable functional allele. Explicit
+``gene_level=False`` retains the allele-level reference for diagnostics. Alternative
+genes remain distinct candidates. Inference masks and generation-probability calls
+resolve allele suffixes to the model's major representative, including a fallback
+such as ``*02``. Repeated aliases do not add probability mass; unknown genes raise
+instead of silently turning into an unrestricted search. Generated calls use the
+same major names as the model's germline tables.
 
 ``load_germline`` preserves every locus membership declared by arda's anchor table.
 Shared ``TRAV…/DV…`` alleles therefore occur in both TRA and TRD libraries; an
@@ -60,12 +94,69 @@ The marginals of a fresh template are placeholders. Their support ranges **bound
 learn**, which is why ``ins_max`` is a parameter: a model whose insertion support stops at 40 can
 never learn a 45-nt N-region.
 
+New germline scaffolds use model schema 2.1 and explicit ``*_first_nt`` tables:
+four rows ``nt, p`` for A/C/G/T coded 0/1/2/3. EM learns the first nucleotide of
+each nonempty insertion separately from subsequent Markov transitions. A one-base
+insertion therefore contributes first-base evidence even though it has no
+transition. VD/VJ/DD chains start at the V-proximal side; DJ starts at the
+J-proximal side. This independent first-base distribution differs from IGoR's
+boundary-conditioned first transition. Unobserved transition conditionals retain
+their normalized initial rows so combining insertion lengths cannot lose mass.
+
+Joint single/tandem D histories
+--------------------------------
+
+``vdjtools.model.dd.to_history(template)`` explicitly converts a VDJ scaffold to
+schema 3.0; inference applies this automatically to new ARDA VDJ scaffolds.
+Its ``d_history`` table stores ``j_allele, n_d, d_allele,
+d2_allele, p`` and normalizes the complete history distribution within each J.
+Single-D rows use an empty string for the absent second D. A J with no physical
+tandem path has only single-D mass; D1–D2–J2 remains permitted in TRB.
+
+Human TRD forward coding histories respect the mapped genomic order
+TRDD1–TRDD2–TRDD3. All three genes are forward-oriented in
+`IMGT's coordinates <https://www.imgt.org/IMGTrepertoire/index.php?group=TRD&repertoire=GenePositions&section=LocusGenes&species=human>`_.
+Nonclassical joining of the opposite RSS pair deletes the coding D pair into an
+episomal circle rather than retaining reversed D templates in chromosomal VDDJ
+(`Cieslak et al., Fig.8 <https://pubmed.ncbi.nlm.nih.gov/25135298/>`_).
+The shared support rule applies this curated order only to recognized human
+TRDD genes; it does not infer unknown species or custom gene order from names.
+
+Multiple-D incorporation is a normal, abundant feature of TRD; there is no universal
+10% upper bound shared with TRB or IGH. See the
+`Chudakov-last-author 2023 conference abstract <https://doi.org/10.1055/s-0043-1768549>`_
+and the `cross-species primary study <https://pubmed.ncbi.nlm.nih.gov/42358008/>`_.
+Validation checks history normalization, genomic support and generation/Pgen
+consistency instead of forcing the fitted TRD tandem probability below that ceiling.
+
+Single-D deletion profiles allow a fully deleted D. Separate ``d_tandem_del``
+and ``d2_del`` profiles retain at least one nucleotide from each tandem D and
+normalize on that support. This partitions latent histories; different histories
+can still emit the same nucleotide sequence. Pgen sums all of them, and inference
+assigns posterior weights instead of fixing the longest preliminary alignment.
+The native scenario search includes both branches and returns ``d2_call``,
+``d2_start`` and ``d2_end`` for joint-history models. Its scenario tuple API appends
+``d2_call, idx5_2, idx3_2, pos2`` after the existing nine fields; the batch API adds
+the corresponding columns. Legacy models retain their existing output layout.
+
+Entropy contributions weight each branch-specific event by its actual activation
+probability, summed over J and the complete history table. The global D-count
+probabilities are derived summaries, not extra independent factors. Existing
+legacy model tables and assets keep their original representation.
+Scoring, both samplers and saved models share this distribution. Models without
+these events retain the legacy stationary distribution derived from their Markov
+matrix; existing OLGA assets and seeded streams are unchanged.
+
 
 Learning from your own sequences
 --------------------------------
 
 :func:`~vdjtools.model.infer.infer_frame` takes a clonotype frame, finds the junction column, and
 builds the per-read V/J masks that make EM tractable on a D-bearing locus.
+With ``error_rate`` enabled it uses fresh batched ARDA proposals instead of the
+frame's preliminary gene assignments. Proposed genes expand to every functional
+model allele; missing V/J proposals leave that segment unrestricted. D and D2
+remain unrestricted by annotation, including when no second D was called.
 
 .. code-block:: python
 
@@ -90,6 +181,43 @@ Fine-tuning is the same call with a warm start:
 
 Watching, and surviving, a long fit
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``infer_native(..., error_rate=0.01)`` enables a fitted substitution likelihood
+on retained germline bases. Each match contributes ``1-error_rate`` and each
+mismatch ``error_rate/3``; insertion bases retain their observed Markov emissions.
+Alternative trims and insertion lengths contribute posterior weights even when
+inserted bases happen to match the germline. This training likelihood is separate
+from exact generation Pgen, which remains error-free. The default ``None`` retains
+the exact-match inference mode.
+In error mode the default alignment initializer uses uniform parameters so an
+exact-match vote cannot give a mismatch-only gene absorbing zero choice mass.
+An explicit ``init="template"`` keeps the supplied model's support.
+
+The error-rate M-step divides posterior expected mismatches by posterior expected
+retained germline bases. ``report.error_rate`` records the updated rate after each
+iteration, and saved training runs declare ``error_model``. ``resume`` restores
+the last fitted rate unless explicitly overridden. ``report.n_scoreable`` counts
+positive-likelihood inputs; subtract it from ``report.n_sequences`` to count
+unsupported inputs. ``report.loglik`` is the mean over scoreable inputs, not a
+finite full-cohort likelihood when unsupported observations remain.
+
+Native inference uses ``prune_ratio=1e-5`` by default. Set it to ``0`` for exact
+inference; generation Pgen is always exact. Max-product bounds identify the best
+complete scenario and discard disjoint single-D cells or tandem-D bridges only
+when every scenario they contain falls below that ratio. VJ models prune complete
+cells. Retained cells can still contain weaker component histories. Likelihood
+and sufficient statistics use the same retained set; no fixed insertion-length
+or five-base reassignment cutoff is imposed.
+
+This follows the relative-likelihood principle in the
+`IGoR implementation <https://github.com/qmarcou/IGoR/blob/ea42ac8958645103d1c77e5b266a9a969b66cf91/igor_src/Genmodel.cpp>`_,
+while using a global maximum and factorized groups rather than IGoR's dynamic
+traversal. The ratio is **not** a bound on total omitted probability.
+``report.pruned_mass_mean``, ``report.pruned_mass_max`` and
+``report.n_pruned_observations`` record actual omitted mass and affected input
+counts per iteration. These columns also appear in pruned training logs.
+``resume`` restores the recorded ratio unless overridden. Bundled builds expose
+``EM_PRUNE_RATIO``; ``model learn`` and ``model build`` expose ``--prune-ratio``.
 
 EM on a D-bearing locus runs for a long time — IGH enumerates roughly 1,225 D pairs per read
 against TRB's 9 — and the training log only becomes readable once the fit *returns*, so a slow run
@@ -209,6 +337,113 @@ Use ``by="gene"`` to compare models built on different germline vintages or sour
 OLGA-namespace model and an arda-namespace one only line up at gene level.
 
 
+.. _release-5-4-validation:
+
+Release 5.4 validation
+----------------------
+
+All twelve ``isalgo`` models were freshly fitted to their complete nonfunctional
+inputs and converged. The seven frozen OLGA bundles retain their original bytes.
+Independent raw-OLGA engine comparisons agree on all 3,378 selected queries,
+including zeros, at relative tolerance ``1e-9`` and absolute tolerance zero.
+The table separates error-free, V/J-marginalized nucleotide Pgen support from
+observation likelihood with each fitted model's stored substitution rate.
+
+.. list-table:: Final fitted models and software-validation counts
+   :header-rows: 1
+   :widths: 18 16 12 16 19 19
+
+   * - Context
+     - Fitted clonotypes
+     - EM iterations
+     - Selected queries
+     - Positive exact Pgen
+     - Positive observation likelihood
+   * - human TRA
+     - 36984
+     - 16
+     - 300
+     - 299
+     - 300
+   * - human TRB
+     - 133622
+     - 12
+     - 300
+     - 300
+     - 300
+   * - human TRG
+     - 14780
+     - 11
+     - 300
+     - 299
+     - 300
+   * - human TRD
+     - 11433
+     - 17
+     - 300
+     - 296
+     - 300
+   * - human IGH
+     - 143477
+     - 18
+     - 300
+     - 294
+     - 300
+   * - human IGK
+     - 295371
+     - 27
+     - 300
+     - 296
+     - 300
+   * - human IGL
+     - 39184
+     - 35
+     - 300
+     - 293
+     - 300
+   * - mouse TRA
+     - 52234
+     - 9
+     - 300
+     - 300
+     - 300
+   * - mouse TRB
+     - 30865
+     - 9
+     - 300
+     - 300
+     - 300
+   * - mouse IGH
+     - 156338
+     - 27
+     - 300
+     - 300
+     - 300
+   * - mouse IGK
+     - 2357
+     - 22
+     - 300
+     - 275
+     - 300
+   * - mouse IGL
+     - 128
+     - 12
+     - 78
+     - 6
+     - 78
+
+**Scope and interpretation.** Queries are the first 300 eligible unique junctions
+from fresh annotations of the first 20,000 reads in each independent
+functional-source input; mouse IGL supplies only 78 eligible queries. This source
+bucket does not guarantee productivity. All selected queries, including stop or
+noncanonical junctions, are retained. Observation scoring performs no M-step and
+does not estimate predictive superiority or unbiased nonfunctional held-out
+likelihood. Exact Pgen zeros remain visible: retained-germline substitutions can
+have positive observation likelihood while error-free Pgen is zero. The fitted
+substitution rate does not identify instrument error, polymorphism or SHM.
+The ``1e-5`` relative scenario cutoff does not bound total omitted mass;
+validation records its actual mean, maximum and affected-query count.
+
 Likelihood and BIC
 ------------------
 
@@ -253,6 +488,14 @@ Engine oracle tests therefore compare identical raw germlines and probability
 tables, using relative tolerances with zero absolute tolerance. Anchor repairs
 are tested separately. Equality of probability tables alone does not establish
 equality of Pgen after a germline repair.
+``appendix/compare_models.py`` keeps this raw engine oracle separate from the
+frozen loaded baseline used for functional-source model comparisons. This source
+bucket does not guarantee productivity of every selected junction. The validator
+reports both gene-call-conditioned and marginalized error-free Pgen, including
+zeros, separately from the fitted model's observation likelihood with its stored
+substitution rate. Observation scoring uses one unrestricted native E-step with
+the declared relative cutoff and records actual omitted mass; it does not refit
+parameters or establish an unbiased nonfunctional held-out likelihood.
 
 Insertion-workspace boundary in the oracle
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -264,6 +507,9 @@ enumeration, while unmodified OLGA gives a smaller probability. Adding three zer
 bins to the test-only OLGA workspace restores strict relative agreement without
 changing any probability table. The regression checks this explicitly; production
 scoring and bundled model parameters are unchanged.
+The comparison validator uses this zero-only workspace padding for both VJ and
+VDJ oracle calculations. Independent nucleotide enumeration also confirms the
+correction on the mouse TRA queries that expose this boundary.
 
 Deletion mass on trims that cannot be reached
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -308,15 +554,16 @@ alleles carry some, most of it small). :func:`~vdjtools.model.check.check_model`
 can see whether a gene you care about is affected.
 
 **What to do about it.** Use the gene-collapsed models — the default — where the effect is absorbed
-by the collapse, or use the ``arda`` set, which is refit from data on arda germline and does not
-inherit the OLGA grid. If you need allele resolution *and* an affected gene, be aware Pgen through it is
+by the collapse. The replacement ``isalgo`` models are fitted on ARDA germline
+scaffolds rather than the OLGA deletion grid. ``learned`` and ``arda`` are aliases
+of the new isalgo family; they do not select the old fitted weights. If you need allele resolution *and* an affected gene, be aware Pgen through it is
 an underestimate.
 
 Genomically impossible D–J pairs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-V(D)J recombination is **deletional** — it excises the DNA between the segments it joins — so a D
-can only be joined to a J lying 3' of it. Almost every locus puts all D genes 5' of all J genes, so
+For the deletional D–J arrangements modeled here, a D can only be joined to a J
+lying 3' of it. Almost every locus puts all D genes 5' of all J genes, so
 this constrains nothing. **TRB interleaves**:
 
 .. code-block:: text
@@ -328,13 +575,19 @@ so a TRBD2–TRBJ1 join is physically impossible. OLGA's model does **not** enco
 bundled ``olga`` set reproduces it faithfully and :func:`~vdjtools.model.check.check_model` reports
 it as ``impossible_dj_pair`` at ``warn``.
 
-For models vdjtools fits, this is a hard genomic fact rather than a parameter, and the mask is
-applied **inside the M-step**, so EM cannot relearn the pair on the next iteration. It needed to be:
+New ``isalgo`` models enforce genomic order on complete histories during
+inference, generation, Pgen and normalization. TRBD1–TRBJ2 and
+TRBD1–TRBD2–TRBJ2 remain allowed; missing preliminary D2 evidence does not veto
+the tandem history.
+
+Earlier single-D fits applied a compatibility mask inside the M-step. Their
+historical diagnostic showed why genomic support matters:
 a D match is only 10–18 nt — weak evidence on short reads — and an earlier build of the human TRB
 model had reached ``P(TRBD2 | TRBJ1-1) = 0.091`` before the constraint existed. Enforcing it also
 *improved* the fit, converging in 9 iterations instead of 11 to a slightly better log-likelihood,
 because mass that had been leaking onto impossible pairs went to the D that actually generated the
-read.
+read. These were training-objective observations, not independent validation of
+the replacement fits.
 
 :func:`~vdjtools.model.infer.enforce_dj_order` repairs a model fitted before the constraint existed.
 
@@ -345,16 +598,21 @@ OLGA leaves the CDR3-region germline empty for a handful of ORF alleles while st
 usage. They can be drawn by the generator but score ``Pgen = 0``, and human ``TRBV23-1`` — 8.6 % of
 a real TRB repertoire — is one of them. ``check_model`` reports these as ``unscoreable_gene_mass``.
 :func:`~vdjtools.model.io.from_olga` accepts ``derive_orf=True`` to reconstruct the missing germline
-from the full germline and the anchor; the ``learned`` models are built that way, while the ``olga``
-set keeps it off so it stays an exact Pgen oracle.
+from the full germline and the anchor. Historical OLGA-scaffold learned models used
+that option; the replacement isalgo models use ARDA reference scaffolds directly.
+The explicit ``olga`` set keeps this extra derivation off. Its documented anchor
+repairs still apply; an exact engine oracle additionally needs identical raw
+germlines, as described above.
 
 V/J usage is protocol-specific
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Not a defect, but the most common way to get a wrong answer with these models. OLGA's were fit to
-DNA-multiplex data; the ``learned`` set to 5'RACE reads. The two amplify different V genes at very
-different rates — TRBV19 is 3.1 % of OLGA's usage and 37 % of these 5'RACE reads — so neither
-marginal is right for *your* library. The junction model (trims, insertions, dinucleotides) is the
+DNA-multiplex data; the historical ``learned`` family used 5'RACE reads. The two amplify different V genes at very
+different rates. An earlier comparison measured TRBV19 usage at 3.1 % in OLGA
+and 37 % in its 5'RACE population; those are historical population-specific
+observations, not validation results for the replacement fits. Neither marginal
+is automatically right for *your* library. The junction model (trims, insertions, dinucleotides) is the
 shared, transferable part. Use :func:`~vdjtools.model.rescale.rescale_usage` before scoring.
 
 Out-of-frame input
@@ -396,7 +654,7 @@ Rescaling V/J usage
 
    from vdjtools.model import rescale_usage
 
-   scored_with = rescale_usage(load_bundled("TRB", "learned"), my_sample)
+   scored_with = rescale_usage(load_bundled("TRB", "isalgo"), my_sample)
 
 V and J usage is **protocol-dependent** and the junction model is not: 5'RACE and DNA-multiplex
 amplify different V genes at very different rates, so neither usage marginal is right in general.
@@ -420,6 +678,21 @@ Exporting and importing tables
 
 Building from the read corpus
 -----------------------------
+
+Default raw-read builds select one usable reference allele per V/D/J gene
+**before EM**: ``*01`` when usable, otherwise the lowest-numbered usable allele.
+Empty, ambiguous and misanchored germlines are excluded.
+Allele-only duplicate clonotypes merge with exact read-count sums;
+comma-separated gene ambiguity and distinct duplicated genes are retained.
+An explicit template keeps its declared resolution and event graph.
+
+Prediction accepts a bare gene or any allele suffix when that gene has one model
+representative: ``TRBV9``, ``TRBV9*01`` and ``TRBV9*99`` condition on the same entry.
+Unknown genes raise in native Pgen rather than silently marginalizing over all genes.
+Explicit multi-allele models retain their allele-specific probabilities.
+The training inputs are the original nonfunctional read sets (out of frame or
+carrying a stop codon); a junction-only stop/frame filter does not reproduce
+whole-rearrangement nonfunctionality.
 
 The EM-fitted model sets shipped in the wheel use real 5'RACE reads; ``olga`` is an import.
 The fitting pipeline —
@@ -449,12 +722,15 @@ packaged into the wheel; from an installed vdjtools use
 
 .. note::
 
-   Real annotated junctions occasionally carry an ambiguous base, and the recombination model is
-   defined over A/C/G/T only. Both training entry points substitute ``A`` by default and warn with
-   the count (``ambiguous=None`` drops the clonotype instead). Substituting keeps the clonotype —
-   one uncertain position in a junction that is otherwise good evidence — and on these reads it
-   affects ~0.01% of rows. It is a substitution, not a marginalization, so data with many ambiguous
-   positions should use ``ambiguous=None``.
+   Sequencing nucleotide inputs use A/C/G/T only. Standard DNA IUPAC ambiguity
+   symbols are replaced with ``A`` before alignment, clonotype grouping, training
+   and nucleotide scoring. This is a mandatory input rule: ambiguity is not a
+   latent observation alphabet, and no completion enumeration or correction model
+   is used. The compatibility ``ambiguous`` argument accepts only ``"A"``.
+   Other invalid DNA symbols are input errors. Amino-acid inputs and immutable
+   germline references retain their own alphabets. Original raw files and quality
+   strings are preserved; normalization applies to the observations consumed by
+   the library.
 
 
 Command line
@@ -465,19 +741,19 @@ or as ``LOCUS[:source[:organism]]``:
 
 .. code-block:: bash
 
-   vdjtools model check TRB:learned                       # exits 1 on any error
+   vdjtools model check TRB:isalgo                       # exits 1 on any error
    vdjtools model template --locus TRB -o template/
    vdjtools model learn clones.tsv -t template/ -o fitted/
    vdjtools model log fitted/                              # loglik per iteration
-   vdjtools model entropy TRB:olga --table total
-   vdjtools model diversity TRB:olga -n 5000
-   vdjtools model compare TRB:olga TRB:learned --by gene --dot diff.pdf
-   vdjtools model compare-pgen TRB:olga TRB:learned seqs.tsv --summary
-   vdjtools model loglik seqs.tsv TRB:learned              # loglik, k, AIC, BIC
+   vdjtools model entropy TRB:olga-legacy --table total
+   vdjtools model diversity TRB:olga-legacy -n 5000
+   vdjtools model compare TRB:olga-legacy TRB:isalgo --by gene --dot diff.pdf
+   vdjtools model compare-pgen TRB:olga-legacy TRB:isalgo seqs.tsv --summary
+   vdjtools model loglik seqs.tsv TRB:isalgo              # loglik, k, AIC, BIC
    vdjtools model extend fitted/ --locus TRB -o extended/
-   vdjtools model rescale TRB:learned my_sample.tsv -o rescaled/
-   vdjtools model export TRB:olga --format tsv -o trb_tsv/
-   vdjtools model net TRB:olga --format pdf -o bn.pdf
+   vdjtools model rescale TRB:isalgo my_sample.tsv -o rescaled/
+   vdjtools model export TRB:olga-legacy --format tsv -o trb_tsv/
+   vdjtools model net TRB:olga-legacy --format pdf -o bn.pdf
 
 Options that change a model
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -549,7 +825,27 @@ affect; ``vdjtools model <sub> --help`` remains authoritative for defaults.
 Resource budgets and annotation fields
 --------------------------------------
 
-``build_model(..., threads=N)`` forwards the budget to annotation and the native E-step.
+``build_model(..., threads=N)`` forwards the budget to annotation, batched ARDA
+candidate search and the native E-step. It fits a retained-germline substitution
+rate by default (initially 0.01), and retains junctions regardless of preliminary
+V/J calls. ``candidate_masks`` returns enumeration proposals plus explicit search
+limits, missing-proposal fallback counts and a sequence/mask identity hash. These
+are recorded in training reports and checkpoints. Resuming a candidate-restricted
+fit requires matching sequences and masks; declaring ``candidate_search={}``
+explicitly records a deliberate support change. Candidate omissions can affect
+the fitted model and are a computational approximation.
+
+When full AIRR reads are available, their coding-strand sequences provide the gene
+proposals. All full-read alternatives for a clonotype are retained and unioned;
+they do not replace the observed junction or fix its deletion/insertion boundaries.
+Queries run in bounded batches, with a separate digest and full-read/fallback
+counts. Junction-only inputs explicitly fall back to junction queries. Short
+junctions can lack enough V/J sequence for a proposal; a missing proposal leaves
+that segment unrestricted. Clonotype deduplication preserves read support and
+uses a deterministic order for tied counts.
+
+New ARDA scaffolds exclude records marked ``status=truncated`` or ``partial``; an
+incomplete germline tail is not a complete short allele template.
 ``infer_native(..., threads=N)`` controls the E-step directly; zero uses the available CPU
 allocation. ``build_all(..., workers=N)`` parallelizes builds with one kernel thread each by
 default. An explicit ``threads`` override is honored, so account for both layers when choosing it.
@@ -568,6 +864,9 @@ For large new sequence draws, select the existing native sampler explicitly::
 
 ``--threads 0`` selects the allocated CPU budget; a positive count selects a smaller
 budget. Native draws are invariant to thread count. The default reference sampler
-preserves historical seeded draws and runs serially. Native and reference engines
+preserves historical single-D seeded draws and runs serially. Both samplers reject
+whole tandem proposals lacking a supported second D or a positive contribution from
+both Ds. This fixes the tandem seeded stream to match Pgen scenario weights;
+explicit OLGA single-D streams remain unchanged. Native and reference engines
 use different random streams, so the same seed does not produce identical sequences
 across engines. Neither option fits or rebuilds a model.

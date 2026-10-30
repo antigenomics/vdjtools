@@ -85,3 +85,10 @@ def test_gene_prior_gives_no_mass_to_nonfunctional_alleles(trb, prior_fit):
 def test_gene_prior_still_normalizes(prior_fit):
     assert prior_fit.tables["v_choice"]["p"].sum() == pytest.approx(1.0)
     prior_fit.validate()
+
+
+def test_generation_usage_votes_collapse_allele_aliases_before_gene_ambiguity():
+    from vdjtools.model.rescale import _vote_counts
+    sample = pl.DataFrame({'v_call': ['TOYV1*01,TOYV1*99,TOYV2*02']})
+    for frame in (sample, sample.lazy()):
+        assert _vote_counts(frame, 'v_call') == pytest.approx({'TOYV1': .5, 'TOYV2': .5})

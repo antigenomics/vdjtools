@@ -14,9 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import polars as pl
 
 from .model import Model
-from .reference import _CODON_TABLE
+from .reference import _CODON_TABLE, forbidden_dj_pairs, forbidden_tandem_pairs
 
 _NT2NUM = {"A": 0, "C": 1, "G": 2, "T": 3}
 _NUM2NT = "ACGT"
@@ -32,8 +33,26 @@ _CODON_AA = {
 def _steady_state(R: np.ndarray) -> np.ndarray:
     """Stationary distribution of a column-stochastic Markov matrix ``R[next, prev]``."""
     w, v = np.linalg.eig(R)
-    x = np.real(v[:, np.argmin(np.abs(w - 1.0))])
+    # A stationary vector may have arbitrary sign; roundoff can also give a
+    # zero-probability state a tiny opposite sign. Keep the Perron vector nonnegative.
+    x = np.abs(np.real(v[:, np.argmin(np.abs(w - 1.0))]))
     return x / x.sum()
+
+
+def _insertion_bias(model, junction, R) -> np.ndarray:
+    name = f"{junction}_first_nt"
+    tables = model.tables
+    event = model.manifest.events.get(name)
+    if event is None:
+        if name in tables:
+            raise ValueError(f"{name} table must be declared in the model manifest")
+        return _steady_state(R)
+    if event.kind.value != "nucleotide" or name not in tables:
+        raise ValueError(f"{name} requires a declared nucleotide event and its table")
+    first = tables[name].sort("nt")
+    if first["nt"].to_list() != [0, 1, 2, 3]:
+        raise ValueError(f"{name} must contain nucleotide codes 0,1,2,3 exactly once")
+    return first["p"].to_numpy()
 
 
 @dataclass(slots=True)
@@ -52,11 +71,26 @@ class _Prepared:
     maxpal: dict[str, int]                  # "v_3"/"j_5"/"d_5"/"d_3" -> palindrome max
     p_ins: dict[str, np.ndarray]            # "vd"/"dj"/"vj"/"dd" -> P(length)
     R: dict[str, np.ndarray]                # "vd"/"dj"/"vj"/"dd" -> 4×4 Markov
-    bias: dict[str, np.ndarray]             # "vd"/"dj"/"vj"/"dd" -> steady-state first-nt bias
+    bias: dict[str, np.ndarray]             # fitted first-nt distribution, or legacy steady-state bias
     # D-D (tandem) extension — populated only when the model declares an ``n_d`` mass at 2.
     p_nd: dict[int, float] = field(default_factory=lambda: {1: 1.0})   # P(n_D)
     p_d2_given_d1: dict[tuple, float] = field(default_factory=dict)     # {(d1, d2): P(D2|D1)}
     p_del_d2: dict = field(default_factory=dict)                        # {(d2, n5, n3): p}
+    forbidden_dj: set = field(default_factory=set)
+    forbidden_dd: set = field(default_factory=set)
+    explicit_first_nt: set[str] = field(default_factory=set)
+    joint_history: bool = False
+    q_tandem: dict = field(default_factory=dict)
+    p_del_d_tandem: dict = field(default_factory=dict)
+
+
+def _tandem_first(prep, j, d):
+    return 1.0 if prep.joint_history else prep.p_d_given_j.get((j, d), 0.0)
+
+
+def _tandem_pair(prep, j, d1, d2):
+    return (prep.q_tandem.get((j, d1, d2), 0.0) if prep.joint_history
+            else prep.p_d2_given_d1.get((d1, d2), 0.0))
 
 
 def _dinucl_matrix(df) -> np.ndarray:
@@ -69,6 +103,9 @@ def _dinucl_matrix(df) -> np.ndarray:
 def prepare(model: Model) -> _Prepared:
     """Unpack a model's polars tables into the lookup structures the Pgen sum uses."""
     t = model.tables
+    if "d_history" in t:
+        from .dd import validate_history
+        validate_history(model)
     vdj = model.chain_type == "VDJ"
 
     def cut_map(seg: str) -> dict[str, str]:
@@ -82,7 +119,8 @@ def prepare(model: Model) -> _Prepared:
     p_v = dict(zip(t["v_choice"]["v_allele"], t["v_choice"]["p"]))
     if vdj:
         p_j = dict(zip(t["j_choice"]["j_allele"], t["j_choice"]["p"]))
-        p_d_given_j = {(j, d): p for j, d, p in t["d_gene"].select(["j_allele", "d_allele", "p"]).iter_rows()}
+        single = (t["d_history"].filter(pl.col("n_d") == 1) if "d_history" in t else t["d_gene"])
+        p_d_given_j = {(j, d): p for j, d, p in single.select(["j_allele", "d_allele", "p"]).iter_rows()}
     else:
         p_j = {(v, j): p for v, j, p in t["j_choice"].select(["v_allele", "j_allele", "p"]).iter_rows()}
         p_d_given_j = {}
@@ -102,9 +140,11 @@ def prepare(model: Model) -> _Prepared:
         juncs.append("dd")
     p_ins, R, bias = {}, {}, {}
     for junc in juncs:
-        p_ins[junc] = t[f"{junc}_ins"].sort("length")["p"].to_numpy()
+        insertion = t[f"{junc}_ins"]
+        p_ins[junc] = np.zeros(int(insertion["length"].max() or 0) + 1)
+        p_ins[junc][insertion["length"].to_numpy()] = insertion["p"].to_numpy()
         R[junc] = _dinucl_matrix(t[f"{junc}_dinucl"])
-        bias[junc] = _steady_state(R[junc])
+        bias[junc] = _insertion_bias(model, junc, R[junc])
 
     # D-D tables — present only when the model declares the tandem extension.
     p_nd = {int(n): float(p) for n, p in t["n_d"].select(["n_d", "p"]).iter_rows()} if "n_d" in t else {1: 1.0}
@@ -113,9 +153,18 @@ def prepare(model: Model) -> _Prepared:
     if vdj and "d2_gene" in t:
         p_d2_given_d1 = {(d1, d2): p for d1, d2, p in t["d2_gene"].select(["d_allele", "d2_allele", "p"]).iter_rows()}
         p_del_d2 = {(a, n5, n3): p for a, n5, n3, p in t["d2_del"].select(["d2_allele", "ndel5", "ndel3", "p"]).iter_rows()}
+    joint = "d_history" in t
+    q_tandem, p_del_d_tandem = {}, {}
+    if joint:
+        p_nd = {1: 1.0, 2: 1.0}  # branch probabilities already belong to the joint history factors
+        q_tandem = {(j, d1, d2): p for j, d1, d2, p in
+                     t["d_history"].filter(pl.col("n_d") == 2).select("j_allele", "d_allele", "d2_allele", "p").iter_rows()}
+        p_d2_given_d1 = {(d1, d2): 1.0 for _, d1, d2 in q_tandem}  # capability marker, not a factor
+        p_del_d2 = {(a, n5, n3): p for a, n5, n3, p in t["d2_del"].select("d2_allele", "ndel5", "ndel3", "p").iter_rows()}
+        p_del_d_tandem = {(a, n5, n3): p for a, n5, n3, p in t["d_tandem_del"].select("d_allele", "ndel5", "ndel3", "p").iter_rows()}
     # A model that places mass on n_D=2 must ship the tandem tables, else _vdj_middle would silently
     # drop that mass (Pgen under-counts). Reject the malformed state at prepare time.
-    if p_nd.get(2, 0.0) > 0.0 and not p_d2_given_d1:
+    if not joint and p_nd.get(2, 0.0) > 0.0 and not p_d2_given_d1:
         raise ValueError("model has P(n_D=2)>0 but no d2_gene/d2_del/dd tables (malformed tandem model)")
 
     return _Prepared(
@@ -132,9 +181,13 @@ def prepare(model: Model) -> _Prepared:
         p_ins=p_ins,
         R=R,
         bias=bias,
+        explicit_first_nt={junction for junction in juncs if f"{junction}_first_nt" in t},
+        joint_history=joint, q_tandem=q_tandem, p_del_d_tandem=p_del_d_tandem,
         p_nd=p_nd,
         p_d2_given_d1=p_d2_given_d1,
         p_del_d2=p_del_d2,
+        forbidden_dj=forbidden_dj_pairs(functional('d'),functional('j'),model.locus) if vdj else set(),
+        forbidden_dd=forbidden_tandem_pairs(functional('d'),model.locus,model.organism) if vdj else set(),
     )
 
 
@@ -262,7 +315,7 @@ def _d_middle(prep: _Prepared, j: str, middle: str) -> float:
     return total
 
 
-def _dd_middle(prep: _Prepared, j: str, middle: str) -> float:
+def _dd_terms(prep: _Prepared, j: str, middle: str):
     """Σ over the *tandem* (two-D) scenarios producing ``middle`` = [insVD] D1 [insDD] D2 [insDJ] J.
 
     Both D segments must contribute ≥1 nt (a genuine tandem — a fully-trimmed second D collapses
@@ -292,16 +345,17 @@ def _dd_middle(prep: _Prepared, j: str, middle: str) -> float:
                     out.append((contrib, pdel))
         return out
 
-    total = 0.0
     for d1 in prep.functional_d:
-        pd1 = prep.p_d_given_j.get((j, d1), 0.0)
-        if pd1 == 0.0:
+        pd1 = _tandem_first(prep, j, d1)
+        if pd1 == 0.0 or (d1,j) in prep.forbidden_dj:
             continue
-        pl1 = d_placements(d1, prep.p_del["d"])
+        pl1 = d_placements(d1, (prep.p_del_d_tandem if prep.joint_history else prep.p_del["d"]))
         if not pl1:
             continue
         for d2 in prep.functional_d:
-            pd2 = prep.p_d2_given_d1.get((d1, d2), 0.0)
+            if (d2,j) in prep.forbidden_dj or (d1,d2) in prep.forbidden_dd:
+                continue
+            pd2 = _tandem_pair(prep, j, d1, d2)
             if pd2 == 0.0:
                 continue
             pl2 = d_placements(d2, prep.p_del_d2)
@@ -325,8 +379,11 @@ def _dd_middle(prep: _Prepared, j: str, middle: str) -> float:
                             if mid == 0.0:
                                 continue
                             right = _p_insert(middle[pos2 + ld2:], pins_dj, R_dj, b_dj, from_right=True)
-                            total += w_gene * pdel1 * pdel2 * left * mid * right
-    return total
+                            yield w_gene * pdel1 * pdel2 * left * mid * right, d1, pos1, ld1, d2, pos2, ld2
+
+
+def _dd_middle(prep: _Prepared, j: str, middle: str) -> float:
+    return sum(term[0] for term in _dd_terms(prep, j, middle))
 
 
 def _vdj_middle(prep: _Prepared, j: str, middle: str) -> float:
@@ -524,13 +581,13 @@ def _dd_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
     right = N - len_j  # DJ insertion + J start here
     out = 0.0
     for d1 in prep.functional_d:
-        pd1 = prep.p_d_given_j.get((J, d1), 0.0)
-        if pd1 == 0.0:
+        pd1 = _tandem_first(prep, J, d1)
+        if pd1 == 0.0 or (d1,J) in prep.forbidden_dj:
             continue
         cut1 = prep.cut["d"][d1]
         for i5 in range(len(cut1) + 1):
             for i3 in range(len(cut1) - i5 + 1):
-                pdel1 = prep.p_del["d"].get((d1, i5 - maxdl, i3 - maxdr), 0.0)
+                pdel1 = (prep.p_del_d_tandem if prep.joint_history else prep.p_del["d"]).get((d1, i5 - maxdl, i3 - maxdr), 0.0)
                 if pdel1 == 0.0:
                     continue
                 dc1 = [_NT2NUM[c] for c in cut1[i5:len(cut1) - i3]]
@@ -544,7 +601,9 @@ def _dd_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
                     if not _d_codons_ok(dc1, pos1, aa):
                         continue
                     for d2 in prep.functional_d:
-                        pd2g = prep.p_d2_given_d1.get((d1, d2), 0.0)
+                        if (d2,J) in prep.forbidden_dj or (d1,d2) in prep.forbidden_dd:
+                            continue
+                        pd2g = _tandem_pair(prep, J, d1, d2)
                         if pd2g == 0.0:
                             continue
                         cut2 = prep.cut["d"][d2]
@@ -580,6 +639,15 @@ def _dd_aa_middle(aa, gv, gj, len_v, len_j, N, J, prep, pins_vd, R_vd, b_vd,
     return out
 
 
+def _resolve_gene_call(alleles, call: str | None) -> str | None:
+    """Ignore the suffix when a gene has exactly one model representative."""
+    if not call or call in alleles:
+        return call
+    gene = call.split("*", 1)[0]
+    matches = [a for a in alleles if a.split("*", 1)[0] == gene]
+    return matches[0] if len(matches) == 1 else call
+
+
 def pgen_aa(prep: _Prepared, cdr3_aa: str, v: str | None = None, j: str | None = None) -> float:
     """Generation probability of an amino-acid CDR3, marginalizing over synonymous codons.
 
@@ -592,6 +660,7 @@ def pgen_aa(prep: _Prepared, cdr3_aa: str, v: str | None = None, j: str | None =
         Pgen as a float. Sums tandem-D (``n_D=2``) scenarios for a D-D model, mixed with the
         single-D term by ``P(n_D)`` — consistent with :func:`pgen_nt`.
     """
+    v, j = _resolve_gene_call(prep.cut["v"], v), _resolve_gene_call(prep.cut["j"], j)
     aa = cdr3_aa.upper()
     if prep.chain_type == "VJ":
         return _pgen_aa_vj(prep, aa, v, j)
@@ -609,7 +678,10 @@ def pgen_nt(prep: _Prepared, cdr3_nt: str, v: str | None = None, j: str | None =
     Returns:
         Pgen as a float.
     """
-    s = cdr3_nt.upper()
+    v, j = _resolve_gene_call(prep.cut["v"], v), _resolve_gene_call(prep.cut["j"], j)
+    from ..io.schema import normalize_nt
+
+    s = normalize_nt(cdr3_nt)
     vdj = prep.chain_type == "VDJ"
     v_cands = _v_candidates(prep, s, [v] if v else prep.functional_v)
     j_cands = _j_candidates(prep, s, [j] if j else prep.functional_j)

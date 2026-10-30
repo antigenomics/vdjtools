@@ -612,14 +612,23 @@ def from_germline(germline: pl.DataFrame, *, locus: str, organism: str = "custom
         }
         genomic = {"genes_v": genes_v, "genes_j": genes_j}
 
+    for junction in (("vd", "dj") if chain_type == "VDJ" else ("vj",)):
+        name = f"{junction}_first_nt"
+        tables[name] = pl.DataFrame({"nt": np.arange(4, dtype=np.uint8), "p": np.full(4, 0.25)})
+        events[name] = Event(name, EventKind.NUCLEOTIDE)
     manifest = Manifest(locus=locus, organism=organism, chain_type=chain_type, events=events,
+                        model_version="2.1.0",
                         palindrome_max={k: int(v) for k, v in pal.items()},
                         source=source or f"germline:{locus}")
-    return Model(manifest=manifest, tables=tables, genomic=genomic).validate()
+    from .collapse import _project_onto_germline
+    from .infer import enforce_dj_order
+    tables = _project_onto_germline(tables, genomic, manifest)
+    return enforce_dj_order(Model(manifest=manifest, tables=tables, genomic=genomic)).validate()
 
 
 def from_arda(locus: str, organism: str = "human", *,
-              palindrome_max: dict[str, int] | None = None, ins_max: int = 40) -> Model:
+              palindrome_max: dict[str, int] | None = None, ins_max: int = 40,
+              gene_level: bool = True) -> Model:
     """Build a recombination :class:`Model` whose gene set + germline come from **arda**.
 
     A thin wrapper over :func:`from_germline` that sources the germline library from arda — the
@@ -632,6 +641,9 @@ def from_arda(locus: str, organism: str = "human", *,
         organism: e.g. ``"human"``, ``"mouse"``.
         palindrome_max: Max palindromic nt per trimmable end (default matches OLGA human).
         ins_max: Maximum N-region insertion length in the placeholder tables.
+        gene_level: Select one usable major germline per gene (the default): prefer a functional
+            ``*01``, otherwise the lowest-numbered usable functional allele. Set False to retain
+            the explicit allele-level reference for diagnostics.
 
     Returns:
         A validated :class:`Model` (VDJ if arda has D germline for the locus, else VJ).
@@ -644,6 +656,21 @@ def from_arda(locus: str, organism: str = "human", *,
     from . import reference as ref
 
     gl = ref.load_germline(locus, organism)
+    # A partial reference tail is missing sequence, not a fully known short germline.
+    # ARDA flags these records; preliminary alignment may retain them, but complete
+    # emission templates must exclude them.
+    if "status" in gl.columns:
+        gl = gl.filter(~pl.col("status").fill_null("").is_in(["truncated", "partial"]))
+    if gene_level:
+        from arda.alleles import select_major_alleles
+
+        issues = ref.validate_germline(gl)
+        unusable = issues.filter(pl.col("check").is_in([
+            "germline_empty_sequence", "germline_ambiguous", "germline_anchor_frame"]))["allele"]
+        gl = gl.filter(~pl.col("allele").is_in(unusable.implode()))
+        selected = select_major_alleles(gl["allele"])
+        selected.update(select_major_alleles(gl.filter(pl.col("functional"))["allele"]))
+        gl = gl.filter(pl.col("allele").is_in(list(selected.values())))
     full = ref.arda_full_germline(locus, organism)
     gl = gl.with_columns(
         full_germline=pl.struct(["segment", "allele"]).map_elements(
@@ -661,7 +688,7 @@ def from_arda(locus: str, organism: str = "human", *,
 
 #: Every realization column any event kind can contribute, in a stable display order.
 _REALIZATION_COLS = ("v_allele", "j_allele", "d_allele", "d2_allele",
-                     "n_d", "ndel", "ndel5", "ndel3", "length", "from_nt", "to_nt")
+                     "n_d", "ndel", "ndel5", "ndel3", "length", "from_nt", "to_nt", "nt")
 
 
 def marginals_frame(model: Model) -> pl.DataFrame:
