@@ -385,6 +385,9 @@ enumeration, while unmodified OLGA gives a smaller probability. Adding three zer
 bins to the test-only OLGA workspace restores strict relative agreement without
 changing any probability table. The regression checks this explicitly; production
 scoring and bundled model parameters are unchanged.
+The comparison validator uses this zero-only workspace padding for both VJ and
+VDJ oracle calculations. Independent nucleotide enumeration also confirms the
+correction on the mouse TRA queries that expose this boundary.
 
 Deletion mass on trims that cannot be reached
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

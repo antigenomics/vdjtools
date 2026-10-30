@@ -1,6 +1,7 @@
 """The accepted independent functional validator stays fresh, exact and ambiguity-aware."""
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import polars as pl
@@ -11,6 +12,24 @@ _SPEC = importlib.util.spec_from_file_location(
     'appendix_compare_models', Path(__file__).resolve().parents[2] / 'appendix/compare_models.py')
 compare = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(compare)
+
+
+@pytest.mark.parametrize('chain,channels', [('VJ', ('PinsVJ',)), ('VDJ', ('PinsVD', 'PinsDJ'))])
+def test_oracle_workspace_padding_preserves_every_probability(chain, channels, tmp_path, monkeypatch):
+    class Loader:
+        def load_igor_genomic_data(self, *args):
+            pass
+        def load_and_process_igor_model(self, *args):
+            pass
+    original = {channel: np.array([.2, .3, .5]) for channel in channels}
+    monkeypatch.setattr(compare.olm, 'GenomicData' + chain, Loader)
+    monkeypatch.setattr(compare.olm, 'GenerativeModel' + chain, Loader)
+    monkeypatch.setattr(compare.ogp, 'GenerationProbability' + chain,
+                        lambda *args: SimpleNamespace(**{k: v.copy() for k, v in original.items()}))
+    oracle = compare.olga_pgen_model(tmp_path, chain)
+    for channel, probabilities in original.items():
+        padded = getattr(oracle, channel)
+        np.testing.assert_array_equal(padded, np.r_[probabilities, np.zeros(3)])
 
 
 def test_engine_oracle_import_keeps_raw_germlines_and_restores_repair(toy_model, monkeypatch, tmp_path):

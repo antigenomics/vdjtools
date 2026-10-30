@@ -6,6 +6,8 @@ The accepted protocol remains first20000 raw reads, then first N_CMP=300 eligibl
 unique junctions. No annotation/parquet cache or unproven OOF holdout is used.
 The engine oracle imports identical raw OLGA germlines; productive-input metrics
 retain the frozen loaded baseline, including its documented anchor repairs.
+The OLGA oracle workspace has three zero insertion bins appended so its codon
+iteration includes the final nonzero bin; all probability coefficients stay fixed.
 
 BUILD_GROUPS=human,mouse selects species; LOCI optionally restricts loci.
 RAW_FASTQ_DIR points to the existing raw mirror (<group>/<locus>.functional.fq.gz).
@@ -56,7 +58,11 @@ def olga_pgen_model(sub: Path, chain: str):
                              str(sub / "J_gene_CDR3_anchors.csv"))
     m = M()
     m.load_and_process_igor_model(str(sub / "model_marginals.txt"))
-    return P(m, g)
+    oracle = P(m, g)
+    # OLGA 1.3's codon iteration can omit the last insertion bin without zero padding.
+    for channel in (("PinsVJ",) if chain == "VJ" else ("PinsVD", "PinsDJ")):
+        setattr(oracle, channel, np.pad(getattr(oracle, channel), (0, 3)))
+    return oracle
 
 
 def raw_olga_model(sub: Path, locus: str, organism: str):
@@ -209,6 +215,7 @@ def run(locus: str, group: str = "human") -> dict:
     max_relative_error = (float(np.max(np.abs(ours[both_positive] - theirs[both_positive]) /
                                        theirs[both_positive])) if both_positive.any() else None)
     oracle_summary = dict(reference="raw OLGA germlines and parameters, without anchor repair",
+                          zero_workspace_bins_added=3,
                           total=len(seqs), both_positive=int(both_positive.sum()),
                           max_relative_error_both_positive=max_relative_error,
                           log10_correlation_both_positive=correlation, ours_zero=int((ours == 0).sum()),
