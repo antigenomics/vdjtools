@@ -1,5 +1,6 @@
 """The accepted independent functional validator stays fresh, exact and ambiguity-aware."""
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -55,7 +56,7 @@ def test_run_uses_raw_engine_oracle_but_keeps_loaded_performance_baseline(toy_mo
             return .2
     monkeypatch.setattr(compare, 'olga_pgen_model', lambda *a: Oracle())
     def score(model, *a, **kw):
-        assert model is raw
+        assert model is raw or model is toy_model
         return [.2]
     monkeypatch.setattr(compare.native, 'pgen_nt_batch', score)
     baselines = []
@@ -65,6 +66,31 @@ def test_run_uses_raw_engine_oracle_but_keeps_loaded_performance_baseline(toy_mo
     monkeypatch.setattr(compare, '_gene_conditioned_pgens', conditioned)
     assert compare.run('TRB')['oracle']['all_values_agree']
     assert len(baselines) == 2 and all(model is toy_model for model in baselines)
+
+
+def test_fixed_observation_channel_scores_substitutions_without_changing_model(toy_model, monkeypatch):
+    from vdjtools import _core
+    sequence = 'TGTGCCAGCAACTATGGCTATACCTTT'
+    mutated = 'A' + sequence[1:]
+    toy_model.manifest = replace(toy_model.manifest, error_rate=.01)
+    before = {name: table.clone() for name, table in toy_model.tables.items()}
+    assert compare.native.pgen_nt(toy_model, sequence) > 0
+    assert compare.native.pgen_nt(toy_model, mutated) == 0
+    original, calls = _core.estep_batch, []
+    def batch(*args):
+        calls.append(args)
+        assert args[2:5] == ([], [], []) and args[7:9] == ([], [])
+        assert args[9:] == (.01, 1e-5)
+        return original(*args)
+    monkeypatch.setattr(_core, 'estep_batch', batch)
+    result = compare._observation_summary(toy_model, [sequence, mutated], threads=1)
+    assert len(calls) == 1 and len(calls[0][1]) == 2
+    assert result['total'] == result['scoreable'] == 2 and result['unsupported'] == 0
+    assert result['all_supported'] and result['stored_error_rate'] == .01
+    assert result['mean_log_likelihood_all'] < 0
+    assert result['expected_mismatches'] > 0 and result['expected_retained_nt'] > 0
+    assert not result['mstep_performed'] and toy_model.manifest.error_rate == .01
+    assert all(table.equals(before[name]) for name, table in toy_model.tables.items())
 
 
 def test_functional_queries_always_reannotate_in_fresh_removed_directory(tmp_path, monkeypatch):

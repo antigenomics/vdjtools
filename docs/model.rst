@@ -382,7 +382,13 @@ tables, using relative tolerances with zero absolute tolerance. Anchor repairs
 are tested separately. Equality of probability tables alone does not establish
 equality of Pgen after a germline repair.
 ``appendix/compare_models.py`` keeps this raw engine oracle separate from the
-frozen loaded baseline used for productive-input model comparisons.
+frozen loaded baseline used for functional-source model comparisons. This source
+bucket does not guarantee productivity of every selected junction. The validator
+reports both gene-call-conditioned and marginalized error-free Pgen, including
+zeros, separately from the fitted model's observation likelihood with its stored
+substitution rate. Observation scoring uses one unrestricted native E-step with
+the declared relative cutoff and records actual omitted mass; it does not refit
+parameters or establish an unbiased nonfunctional held-out likelihood.
 
 Insertion-workspace boundary in the oracle
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

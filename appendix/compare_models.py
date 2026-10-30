@@ -1,10 +1,11 @@
-"""Independent productive-input software validation of isalgo and frozen OLGA models.
+"""Independent functional-source software validation of isalgo and frozen OLGA models.
 
 Fresh functional reads are outside the all-nonfunctional fitting inputs. They are
 selection-shaped observations, not unbiased recombination heldout likelihood.
 The accepted protocol remains first20000 raw reads, then first N_CMP=300 eligible
 unique junctions. No annotation/parquet cache or unproven OOF holdout is used.
-The engine oracle imports identical raw OLGA germlines; productive-input metrics
+The source bucket is not a guarantee that every selected junction is productive.
+The engine oracle imports identical raw OLGA germlines; functional-source metrics
 retain the frozen loaded baseline, including its documented anchor repairs.
 The OLGA oracle workspace has three zero insertion bins appended so its codon
 iteration includes the final nonzero bin; all probability coefficients stay fixed.
@@ -189,6 +190,36 @@ def functional_queries(group, locus):
                 test["j_call"].to_list(), counts)
 
 
+def _observation_summary(model, seqs, *, threads=THREADS):
+    """Fixed-parameter likelihood with stored substitution rate; no gene-call restrictions.
+
+    One native E-step evaluates observations without an M-step. Exact error-free
+    Pgen is reported separately. The relative cutoff is not an omitted-mass bound.
+    """
+    from vdjtools import _core
+
+    packed, _, _ = native.pack(model)
+    counts = _core.make_counts(packed)
+    error_rate = model.manifest.error_rate or 0.0
+    loglik = _core.estep_batch(
+        packed, [native._encode_observed(s) for s in seqs], [], [], [], counts,
+        native.kernel_threads(threads), [], [], error_rate, 1e-5)
+    total, scoreable = len(seqs), counts.n_scoreable
+    if not np.isfinite(loglik):
+        raise ValueError("nonfinite observation log likelihood")
+    return dict(total=total, scoreable=scoreable, unsupported=total - scoreable,
+                all_supported=scoreable == total, stored_error_rate=error_rate,
+                summed_log_likelihood_scoreable=float(loglik),
+                mean_log_likelihood_scoreable=float(loglik / scoreable) if scoreable else None,
+                mean_log_likelihood_all=float(loglik / total) if total and scoreable == total else None,
+                mean_log_likelihood_all_is_negative_infinity=bool(total and scoreable < total),
+                prune_ratio=1e-5, pruned_observations=counts.n_pruned_observations,
+                pruned_mass_fraction_mean=counts.pruned_mass_fraction_sum / scoreable if scoreable else 0.0,
+                pruned_mass_fraction_max=counts.pruned_mass_fraction_max,
+                expected_mismatches=counts.error_mismatches, expected_retained_nt=counts.error_nt,
+                mstep_performed=False)
+
+
 def run(locus: str, group: str = "human") -> dict:
     name, chain = LOCI[locus]
     oracle_path = (OLGA if group == "human" else MOUSE_OLGA) / f"{group}_{name}"
@@ -201,7 +232,7 @@ def run(locus: str, group: str = "human") -> dict:
     opg = olga_pgen_model(oracle_path, chain)
     m_oracle = raw_olga_model(oracle_path, locus, group)
     seqs, v_calls, j_calls, counts = functional_queries(group, locus)
-    print(f"\n{group}/{locus}: independent selected productive inputs; {counts}", flush=True)
+    print(f"\n{group}/{locus}: independent selected functional-source inputs; {counts}", flush=True)
     ours = np.asarray(native.pgen_nt_batch(m_oracle, seqs, threads=THREADS))
     theirs = np.asarray([opg.compute_nt_CDR3_pgen(sequence) for sequence in seqs])
     # Include every zero in the oracle assertion; filtering both-positive vectors hides defects.
@@ -239,19 +270,24 @@ def run(locus: str, group: str = "human") -> dict:
         print(row)
     usage = {label: v_support(model) for label, model in ((baseline, m_olga), ("isalgo", m_isalgo))}
     print(f"V GENE USAGE: descriptive, protocol-dependent: {usage}")
-    pgens = {}
+    pgens, marginalized = {}, {}
     for label, model in ((baseline, m_olga), ("isalgo", m_isalgo)):
         pgens[label] = _pgen_summary(_gene_conditioned_pgens(model, seqs, v_calls, j_calls))
-        print(f"PRODUCTIVE-INPUT GENE-CALL PGEN {label}: {pgens[label]}")
+        marginalized[label] = _pgen_summary(native.pgen_nt_batch(model, seqs, threads=THREADS))
+        print(f"FUNCTIONAL-SOURCE GENE-CALL PGEN {label}: {pgens[label]}")
+        print(f"FUNCTIONAL-SOURCE MARGINALIZED PGEN {label}: {marginalized[label]}")
+    observation = _observation_summary(m_isalgo, seqs)
+    print(f"ISALGO FIXED-PARAMETER OBSERVATION LIKELIHOOD: {observation}")
     insertion_zero = {
         label: {event: float(table.filter(pl.col("length") == 0)["p"].sum())
                 for event, table in model.tables.items()
                 if event in ("vj_ins", "vd_ins", "dj_ins", "dd_ins")}
         for label, model in ((baseline, m_olga), ("isalgo", m_isalgo))}
     print(f"INSERTION LENGTH P(N=0), conditional on using each event: {insertion_zero}")
-    return dict(group=group, locus=locus, population="independent selected productive inputs",
+    return dict(group=group, locus=locus, population="independent selected functional-source inputs",
                 baseline=baseline, queries=counts, oracle=oracle_summary, common_event_tv=tv_rows,
-                v_usage=usage, pgen=pgens, insertion_zero=insertion_zero)
+                v_usage=usage, pgen=pgens, pgen_marginalized=marginalized,
+                observation_likelihood=observation, insertion_zero=insertion_zero)
 
 
 def main():
