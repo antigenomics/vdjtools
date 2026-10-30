@@ -43,7 +43,7 @@ def test_model_commands_forward_organism(tmp_path, monkeypatch, command, organis
         arguments += ['--organism', 'mouse']
     result = runner.invoke(app, arguments)
     assert result.exit_code == 0, result.output
-    assert calls == [('TRA', 'learned', organism)]
+    assert calls == [('TRA', 'isalgo', organism)]
 
 
 @pytest.mark.parametrize('command', ['pgen', 'generate'])
@@ -65,11 +65,13 @@ def test_unsupported_mouse_model_is_a_friendly_cli_error(tmp_path, monkeypatch, 
 
 
 @pytest.mark.parametrize("source,engine,custom,expected_engine", [
+    ("isalgo", None, False, "native"),
     ("learned", None, False, "native"),
     ("learned", "reference", False, "reference"),
     ("learned", "native", False, "native"),
     ("olga", None, False, "reference"),
-    ("arda", None, False, "reference"),
+    ("arda", None, False, "native"),
+    ("olga-legacy", None, False, "reference"),
     ("olga", "native", False, "native"),
     ("learned", None, True, "reference"),
     ("learned", "native", True, "native"),
@@ -87,7 +89,7 @@ def test_generate_cli_engine_policy(tmp_path, toy_model, source, engine, custom,
     else:
         model = load_bundled("TRG", source)
         arguments = ["--model", "TRG"]
-        if source != "learned":
+        if source != "isalgo":
             arguments += ["--source", source]
     if engine is not None:
         arguments += ["--engine", engine]
