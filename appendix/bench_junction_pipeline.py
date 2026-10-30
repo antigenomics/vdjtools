@@ -1,14 +1,17 @@
 #!/usr/bin/env python
-"""Benchmark the junction pipeline against real nucleotide truth -- 2026-09-30.
+"""Benchmark the junction pipeline against observed nucleotide sequences -- 2026-09-30.
 
 `vdjtools.model.annotate_junctions` answers four questions off an amino-acid junction alone. Three
-of them have an external answer in `isalgo/airr_control`, whose rows are REAL nucleotide
+of them have external sequence/annotation evidence in `isalgo/airr_control`, whose rows are REAL nucleotide
 rearrangements with V/D/J called from the sequence and `VEnd`/`DStart`/`DEnd`/`JStart` beside them:
 
 * the inferred nucleotide junction -- against the observed one, exactly;
 * the V and J boundaries on it -- against `VEnd` / `JStart`;
-* the D gene, which the MODEL names -- against the nucleotide caller's;
+* the D gene, which the model names -- against the nucleotide caller's preliminary assignment;
 * where that D was placed -- against `DStart` / `DEnd`.
+
+D calls and segment boundaries are preliminary annotation evidence, not independent
+biological ground truth.
 
 The input to the pipeline is only `(cdr3aa, v gene, j gene)`: the nucleotides are hidden from it and
 used only for scoring.

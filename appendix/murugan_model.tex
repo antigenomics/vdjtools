@@ -5,6 +5,7 @@
 \usepackage{mathtools}
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage{placeins}
 \usepackage{dsfont}  % \mathds{1} indicator (OldStandard-Math lacks a bold digit 1)
 % Old-style journal look (after tex.stackexchange.com/q/645339): OldStandard text + matching
 % OpenType math, small-caps headings, run-in paragraphs. Requires lualatex (pinned in .latexmkrc).
@@ -17,6 +18,7 @@
 
 \linespread{1.15}
 \setlength{\parindent}{2em}
+\setlength{\emergencystretch}{1em}
 \titleformat{\section}{\normalfont\large\scshape\bfseries}{\thesection.}{0.6em}{}
 \titleformat{\subsection}{\normalfont\scshape\bfseries}{\thesubsection.}{0.5em}{}
 \titleformat{\paragraph}[runin]{\bfseries\scshape}{}{0pt}{}[.]
@@ -42,7 +44,7 @@
   \small
   \textsuperscript{1}Institute of Translational Medicine, Russian National Medical State University, Moscow, Russia\\
   \textsuperscript{2}Department of Genomics of Adaptive Immunity, Shemyakin--Ovchinnikov Institute of Bioorganic Chemistry RAS, Moscow, Russia\\
-  \textsuperscript{3}Institute of Molecular Biology NAS RA, Erevan, Armenia\\[6pt]
+  \textsuperscript{3}Institute of Molecular Biology NAS RA, Yerevan, Armenia\\[6pt]
   \normalsize\textit{Appendix M --- \texttt{vdjtools} model engine}%
 }
 
@@ -53,21 +55,34 @@
 
 \begin{abstract}
 \noindent
-The \texttt{vdjtools} model engine reimplements the Murugan--Marcou generative model of V(D)J
+The \texttt{vdjtools} model engine implements the Murugan--Marcou generative model of V(D)J
 recombination \cite{Murugan2012,Marcou2018} on the AIRR schema \cite{VanderHeiden2018}, storing every
 model factor as a tidy \texttt{polars} table so that the Bayesian-network structure is declared as data
-rather than baked into a file format. On top of this representation it computes the generation
-probability ($\Pgen$) of a CDR3 --- the total probability that the stochastic recombination process
+rather than hidden in an opaque file format. On top of this representation it computes the generation
+probability ($\Pgen$) of a junction --- the total probability that the stochastic recombination process
 produces a given sequence --- both for nucleotide queries (an exact scenario sum) and, more delicately,
-for amino-acid queries, where one must marginalize over all synonymous nucleotide realizations. For the
-amino-acid case we use the transfer-matrix factorization of \cite{Murugan2012,Sethna2019}, but re-derive
+for amino-acid queries, where one must marginalise over all synonymous nucleotide realisations. For the
+amino-acid case we use the transfer-matrix factorisation of \cite{Sethna2019}, but re-derive
 it from a single structural observation --- \emph{that the only coupling across a recombination-block
 boundary is codon translation, never the insertion Markov chain} --- which yields a clean left/right
-partial-sum split (\S\ref{sec:aa}) that our native C++ core evaluates faster than \texttt{OLGA}
-(\S\ref{sec:bench}) while matching it to machine precision. The same tables and scenario enumeration
-drive sequence generation (ancestral sampling) and model inference (expectation--maximization), which we
-summarize in \S\ref{sec:em}.
+partial-sum split (\S\ref{sec:aa}) that our native C++ core evaluates with machine-precision agreement to \texttt{OLGA} on identical legacy parameters
+(\S\ref{sec:bench}). The same tables and scenario enumeration
+drive sequence generation (ancestral sampling) and model inference (expectation--maximisation), which we
+describe in \S\ref{sec:em}.
 \end{abstract}
+
+\paragraph{Scope and terminology} This appendix describes the model engine shipped in
+\texttt{vdjtools} 5.4.0 and distinguishes its working \texttt{isalgo} models from frozen
+\texttt{olga-legacy} parameters.
+An AIRR \emph{junction} includes the conserved Cys104 and Phe/Trp118 codons;
+the IMGT CDR3 excludes these anchors.
+The historical OLGA API calls this anchor-inclusive sequence a CDR3.
+All sequence lengths, coordinates and probabilities below refer to the junction.
+The notation first introduces the single-$D$ factorisation, then extends it to the
+joint single/tandem histories used by current VDJ fits.
+The reference principles are the latent-history likelihood of Murugan et al.,
+including its Supporting Information, and IGoR's probabilistic scenario search
+\cite{Murugan2012,Marcou2018}; the insertion boundary convention here is stated explicitly below.
 
 \section{The generative recombination model}\label{sec:model}
 
@@ -87,7 +102,7 @@ with probability
 \end{equation}
 A $VJ$ locus (TRA, TRG, IGK, IGL) has no $D$ segment; its scenario drops $D$, the two $D$-deletions and
 one insertion, and the gene factor becomes the joint $P(V)\,P(J\mid V)$ with a single $VJ$ insertion.
-The observed CDR3 nucleotide sequence $\sigma(r)$ is the concatenation, from the conserved Cys\,104 to
+The generated junction nucleotide sequence $\sigma(r)$ is the concatenation, from the conserved Cys\,104 to
 the conserved Phe/Trp\,118 inclusive,
 \begin{equation}\label{eq:concat}
   \sigma(r)=\underbrace{\hat V}_{\text{V germline}}\;
@@ -107,22 +122,24 @@ with $b$ the first-nucleotide distribution and $R$ the $4\times4$ transition mat
 For zero insertion length, only the length factor contributes. New scaffolds fit
 $b$ independently, counting the first base of every nonempty insertion, including
 length-one insertions with no transition. Unobserved transition conditionals
-retain their normalized initial rows; zeroing them would lose probability mass
+retain their normalised initial rows; zeroing them would lose probability mass
 when first bases and insertion lengths recombine independently. Models without
 explicit first-base events retain the legacy stationary-$R$ convention.
 The $VD$ chain is read $5'\!\to\!3'$ and the $DJ$ chain $3'\!\to\!5'$, so $b_{DJ}$
 describes the $J$-proximal insertion nucleotide. This independent first-base
 distribution differs from IGoR's first transition conditioned on the adjacent
-retained germline nucleotide.
+retained germline nucleotide. In table form, \texttt{from\_nt,to\_nt,p} stores
+$R(b\mid a)$ with $a$ the previous nucleotide and $b$ the next; the packed native
+array uses the equivalent column-stochastic convention $R[b,a]$.
 
-\paragraph{Generation probability} The quantity of interest is the probability of an \emph{observed}
-CDR3, obtained by summing over every scenario that could have produced it,
+\paragraph{Generation probability} The quantity of interest is the probability of a specified
+junction, obtained by summing over every scenario that could have produced it,
 \begin{equation}\label{eq:pgen}
   \Pgen(\sigma) \;=\; \sum_{r\,:\,\sigma(r)=\sigma} P(r),
   \qquad
   \Pgen(\alpha) \;=\; \sum_{\sigma\,:\,\tau(\sigma)=\alpha}\Pgen(\sigma),
 \end{equation}
-where $\tau$ is translation: an amino-acid query $\alpha$ additionally marginalizes over all synonymous
+where $\tau$ is translation: an amino-acid query $\alpha$ additionally marginalises over all synonymous
 nucleotide sequences. Both sums are finite but astronomically large if taken literally; \S\ref{sec:nt}
 and \S\ref{sec:aa} evaluate them by dynamic programming.
 
@@ -131,57 +148,66 @@ and \S\ref{sec:aa} evaluate them by dynamic programming.
 \texttt{vdjtools} stores a model as a directory of long-format \texttt{polars} parquet tables plus a
 \texttt{manifest.json} that names each event and lists its conditioning parents --- the edges of the
 Bayesian network of Eq.~\eqref{eq:pvdj}. The engine implements the declared supported
-factorizations; changing parents alone does not implement a richer dependency
+factorisations; changing parents alone does not implement a richer dependency
 such as $P(D\mid V,J)$, which also requires compatible packing, inference and
 sampling. A $VJ$ locus omits the $D$ tables and second insertion. Each table holds the
-distribution of one event, normalized within its conditioning key by a single \texttt{polars}
+distribution of one event, normalised within its conditioning key by a single \texttt{polars}
 \texttt{group\_by} --- which is exactly the M-step of \S\ref{sec:em}. Two conventions matter for the
 $\Pgen$ recursions.
 
-\paragraph{Palindromic deletions} A negative deletion count encodes templated palindromic (P-)
+\paragraph{P-nucleotides} A negative deletion count encodes templated palindromic (P-)
 nucleotides. Each germline cut segment is pre-extended by up to \texttt{maxpal} reverse-complement
 nucleotides; a ``deletion'' of $-k$ means $k$ P-nucleotides are retained. The stored count $\del$ is thus
 \emph{biological} (negative $=$ P-nucleotides), while the dense array index used at run time is
 $\del+\texttt{maxpal}\ge 0$.
 
-\paragraph{Germline as a single source of truth} All V/D/J germline sequences and the CDR3 anchor
-offsets resolve from \texttt{arda} by allele name; \texttt{arda}'s anchor convention is byte-identical to
-\texttt{OLGA}'s (a $0$-based Cys\,104 / [FW]\,118 offset into the full germline), so no coordinate
-conversion is needed. A model never mixes germline sources: bootstrap models imported from \texttt{OLGA}
-keep \texttt{OLGA} germline to preserve exact-$\Pgen$ fidelity, whereas natively-inferred models use
-\texttt{arda}.
+\paragraph{Germline references and gene resolution} Native scaffolds resolve V/D/J
+sequences and anchor coordinates from \texttt{arda}.
+V germline is cut from its anchor to its 3$'$ end; J germline extends from its
+5$'$ end through the anchor codon.
+Anchor offsets are zero-based nucleotide coordinates in each full reference, not
+codon indices; references can differ in framework length or sequence even when
+these conventions agree.
+A model never mixes germline sources: models imported from \texttt{OLGA} retain
+their imported reference, whereas native fits use \texttt{arda}.
+Raw-OLGA engine comparisons explicitly disable anchor repairs so both engines
+receive identical germline sequences.
+New native models select one usable, complete, functional major allele per gene:
+\texttt{*01} when available, otherwise the lowest-numbered usable allele.
+Allele suffix aliases resolve to this representative without adding probability
+mass; ambiguity between different genes remains in the scenario sum.
+Explicit all-allele models retain allele-specific templates and scoring.
+Unknown calls raise rather than silently becoming unrestricted gene sums.
 
-\paragraph{The D-D extension} The schema carries tandem-$D$ ($n_D\!\in\!\{0,1,2\}$)
+\paragraph{The D-D extension} The schema carries single- and tandem-$D$
 rearrangements, including a second-$D$ deletion and a $DD$ insertion, beyond the
 single-$D$ event graphs used here as \texttt{OLGA}/IGoR references
-(\S\ref{sec:dd}). Real 5$'$-RACE TRD repertoires make this concrete: after collapsing to unique
-clonotypes, \emph{$4.15\%$ of out-of-frame and $3.42\%$ of in-frame $\delta$-chain clonotypes carry two
-aligned $D$ segments}. These preliminary annotation fractions are not true tandem
-frequencies: inference reassigns complete histories, including reads with no preliminary
-second-$D$ call. A single-$D$ model has no tandem history by construction.
+(\S\ref{sec:dd}). The current joint-history models use $n_D\in\{1,2\}$; a fully deleted
+single D remains a one-D latent history, even though it contributes zero retained
+nucleotides. A strict single-D model has no tandem history by construction.
 
 \section{Nucleotide generation probability}\label{sec:nt}
 
-For a nucleotide query $\sigma$ the inner sum of Eq.~\eqref{eq:pgen} is a direct enumeration, because the
-germline segments and both junctions are pinned by $\sigma$. Writing $N=|\sigma|$ and letting a $V$
+For a nucleotide query $\sigma$ the inner sum of Eq.~\eqref{eq:pgen} is a direct enumeration, because each candidate germline placement fixes the remaining insertion strings. Writing $N=|\sigma|$ and letting a $V$
 (resp.\ $J$) contribute $\ell_V\ge1$ (resp.\ $\ell_J\ge1$) nucleotides --- a valid rearrangement is never
 fully $V$- or $J$-deleted, matching \texttt{OLGA} ---
 \begin{equation}\label{eq:pgennt}
-  \Pgen(\sigma)=\!\!\sum_{V,J}\! P(V)P(J\!\mid\! V)\!\!
-    \sum_{\substack{\ell_V,\ell_J\ge 1\\ \sigma[0{:}\ell_V]=\hat V,\ \sigma[N-\ell_J{:}]=\hat J}}
-    \!\! P(\del_V)P(\del_J)\;\Xi\bigl(\sigma[\ell_V{:}N-\ell_J]\bigr),
+  \Pgen(\sigma)=\!\!\sum_{V,J}\! G(V,J)\!\!
+    \sum_{\substack{\ell_V,\ell_J\ge 1,\ \ell_V+\ell_J\le N\\ \sigma[0{:}\ell_V]=\hat V,\ \sigma[N-\ell_J{:}]=\hat J}}
+    \!\! P(\del_V\mid V)P(\del_J\mid J)\;\Xi_J\bigl(\sigma[\ell_V{:}N-\ell_J]\bigr),
 \end{equation}
-where for a $VJ$ locus $\Xi(\mu)=P_{\ins}(\mu)$ is the single-junction insertion weight of
-Eq.~\eqref{eq:ins}, and for a $VDJ$ locus $\Xi$ is itself a sum over the $D$ gene, its two deletions and
+where $G(V,J)=P(V)P(J\mid V)$ for VJ and $G(V,J)=P(V)P(J)$ for VDJ.
+For a $VJ$ locus $\Xi_J(\mu)=P_{\ins}(\mu)$ is the single-junction insertion weight of
+Eq.~\eqref{eq:ins}, and for a $VDJ$ locus $\Xi_J$ is itself a sum over the $D$ gene, its two deletions and
 its placement,
 \begin{equation}\label{eq:dmiddle}
-  \Xi(\mu)=\sum_D P(D\!\mid\! J)\!\!\sum_{\del_D^{5'},\del_D^{3'}}\!\! P(\del_D^{5'},\del_D^{3'})
+  \Xi_J(\mu)=\sum_D P(D\!\mid\! J)\!\!\sum_{\del_D^{5'},\del_D^{3'}}\!\! P(\del_D^{5'},\del_D^{3'}\mid D)
     \sum_{\substack{\text{placements }p\\ \mu[p{:}p+\ell_D]=\hat D}}\!\!
     P_{\ins}\bigl(\mu[0{:}p]\bigr)\,P_{\ins}\bigl(\mu[p+\ell_D{:}]\bigr).
 \end{equation}
 Common-prefix / common-suffix matching restricts $\ell_V,\ell_J$ to the genes that can actually flank
-$\sigma$, so Eq.~\eqref{eq:pgennt} is fast in practice. This nucleotide sum is the quantity the E-step
-needs (\S\ref{sec:em}); the native port reproduces \texttt{OLGA}'s \texttt{compute\_nt\_CDR3\_pgen} to
+$\sigma$, so Eq.~\eqref{eq:pgennt} is fast in practice. This exact nucleotide sum supplies the zero-error E-step; the observation-error
+channel modifies its germline emission factors (\S\ref{sec:em}). On identical raw legacy parameters, the native port reproduces \texttt{OLGA}'s \texttt{compute\_nt\_CDR3\_pgen} to
 machine precision.
 
 \section{Tandem-D (D-D) rearrangements}\label{sec:dd}
@@ -196,7 +222,12 @@ Here $\mathcal S_J$ contains physically permitted histories, $n\in\{1,2\}$,
 and $D_2$ is absent for $n=1$. Thus the single-$D$ probability can vary with $J$;
 there is no independent global $P(n_D)$ factor in this representation.
 TRB permits $D_1$--$D_2$--$J_2$ and single $D_1$--$J_2$ histories.
-A preliminary greedy alignment cannot veto either history.
+Human TRD histories follow the curated forward coding order
+TRDD1--TRDD2--TRDD3. Constraints act on complete histories before fitting,
+not on fitted probability tables afterwards.
+The implemented extension retains at most two D genes; it does not enumerate
+three-D histories. No universal 10\% tandem-D ceiling is imposed.
+A preliminary greedy alignment cannot veto a permitted history.
 
 A two-$D$ scenario has probability
 \begin{equation}\label{eq:pdd}
@@ -211,7 +242,7 @@ Its junction is $\sigma(r_2)=\hat V\,\mathbf m^{VD}\,\hat D_1\,
 For $n=1$, use $q_J(1,D_1,\varnothing)$, its separate single-$D$ deletion
 conditional, and omit the $D_2$ and $DD$ factors. Consequently
 \begin{equation}\label{eq:ximix}
- \Xi(\mu)=\sum_{r:\,\sigma_{\mathrm{middle}}(r)=\mu}
+ \Xi_J(\mu)=\sum_{r:\,\sigma_{\mathrm{middle}}(r)=\mu}
  q_J(n,D_1,D_2)P(\text{middle trims and insertions}\mid n,D_1,D_2).
 \end{equation}
 
@@ -219,24 +250,24 @@ conditional, and omit the $D_2$ and $DD$ factors. Consequently
 Both retained $D$ segments in a tandem history have at least one nucleotide.
 Single-$D$ histories allow complete $D$ deletion. These are disjoint sets of
 latent histories, but their emitted nucleotide sequences can overlap.
-Their mixture is normalized when $q_J$ and every reachable conditional are normalized.
+Their mixture is normalised when $q_J$ and every reachable conditional are normalised.
 \end{proposition}
 
 Requiring nonempty tandem segments is an explicit model convention; it does not
 make the number of $D$ segments identifiable from a sequence. In particular,
 insertions can coincidentally match germline bases. The inference and generation
-kernels use separate normalized single-$D$, tandem-first-$D$ and second-$D$
+kernels use separate normalised single-$D$, tandem-first-$D$ and second-$D$
 deletion tables, so removing fully deleted tandem states does not leak probability.
 EM accumulates posterior counts directly over $\mathcal S_J$, then normalizes within
 $J$. An optional single-$D$ pseudocount is divided uniformly among declared
 single-$D$ history rows within each $J$. Undefined groups retain their initial
-normalized conditional. The reported $D$-count probability is
+normalised conditional. The reported $D$-count probability is
 $P(n)=\sum_JP(J)\sum_{D_1,D_2}q_J(n,D_1,D_2)$.
 
 Native and reference nucleotide/amino-acid Pgen, generation and E-step kernels
 use these same factors. The native codon-constrained max-product search also
 includes tandem paths and reconstructs both $D$ spans. Legacy models retain their
-existing global $P(n_D)P(D_1\mid J)P(D_2\mid D_1)$ representation and artifact behavior;
+existing global $P(n_D)P(D_1\mid J)P(D_2\mid D_1)$ representation and artefact behavior;
 the joint-history schema is an explicit conversion, not a reinterpretation of
 frozen tables.
 
@@ -246,7 +277,7 @@ The amino-acid case is harder: the codon marginalization in Eq.~\eqref{eq:pgen} 
 the unobserved junction nucleotides. Enumerating scenarios and summing synonymous codons position by
 position (a codon-constrained dynamic program of width $|\Sigma|$ over the nucleotide state) is correct
 but costs one $O(N)$ pass per $(D,\del_D^{5'},\del_D^{3'},\text{placement})$ skeleton --- quadratic in
-$N$ and prohibitive for long CDR3s. The transfer-matrix method removes the placement and insertion sums.
+$N$ and prohibitive for long junctions. The transfer-matrix method reuses partial sums across placements and insertion lengths.
 
 \paragraph{Setup} Let $\alpha=\alpha_0\cdots\alpha_{L-1}$ be the query, $N=3L$, and $\sigma_i$ the (summed
 over) nucleotide at position $i$. Codon $c$ imposes
@@ -262,7 +293,8 @@ $\hat V$--$\mathbf{m}^{VD}$--$\hat D$--$\mathbf{m}^{DJ}$--$\hat J$, the blocks a
 codon translation, never through an insertion Markov chain.
 
 \begin{proposition}[Codon-only coupling]\label{prop:coupling}
-Across every block boundary in Eq.~\eqref{eq:concat} the recombination weight $P(r)$ factors into a left
+For fixed gene choices and trimming events, the nucleotide-dependent weight
+across each block boundary in Eq.~\eqref{eq:concat} factors into a left
 factor, the indicator(s) of the codon(s) straddling the boundary, and a right factor. No transition
 $R(\cdot\mid\cdot)$ spans a boundary.
 \end{proposition}
@@ -273,7 +305,7 @@ germline (fixed nucleotides, no chain); the $DJ$ chain, read $3'\!\to\!5'$, draw
 nucleotide from $b_{DJ}$ independent of the first $J$ nucleotide, and its $D$-proximal nucleotide carries
 no transition into $\hat D$. Hence every factor in Eq.~\eqref{eq:ins} lives strictly inside one block.
 The only inter-block constraints are the codon indicators $\indic[\tau(\cdots)=\alpha_c]$ for codons that
-straddle a boundary. \qed
+straddle a boundary.
 \end{proof}
 
 Proposition~\ref{prop:coupling} licenses computing the left and right halves of the sum \emph{once each}
@@ -283,65 +315,110 @@ and stitching them, instead of recomputing a full pass per scenario.
 starts) and each nucleotide state $x=(\sigma_{p-1},\sigma_{p-2})$,
 \begin{equation}\label{eq:lambda}
   \Lambda_p(x)=\!\!\sum_{\substack{V,\,\del_V,\,\ell_{VD}\\ \ell_V+\ell_{VD}=p}}\!\!
-    P(V)P(\del_V)\,P_{\ins}(\ell_{VD})\;\bigl[\text{$VD$ Markov}\bigr]\;
+    P(V)P(\del_V\mid V)\,P_{\ins}(\ell_{VD})\;\bigl[\text{$VD$ Markov}\bigr]\;
     \prod_{\text{codons }\subset[0,p)}\!\!\indic[\tau=\alpha],
 \end{equation}
 the total weight of all ways the $V$ germline (with $\ell_V\ge1$) plus the $VD$ insertion fill
 $[0,p)$ ending in state $x$, with every codon that lies wholly in $[0,p)$ satisfied. $\Lambda$ is built
 by one forward recursion: germline seeds are deposited at $p=\ell_V$, then the $VD$ transfer step
 --- multiply by $b_{VD}$ on the first inserted nucleotide and $R_{VD}$ thereafter, close codons at
-$p\equiv2\pmod3$, and add $P_{\ins}(\ell_{VD})$ at each length --- extends them, in $O(N|\Sigma|)$ total.
+$p-1\equiv2\pmod3$, and add $P_{\ins}(\ell_{VD})$ at each length --- extends them, in $O(NK_{VD}|\Sigma|)$ work after seeding, where $K_{VD}$ is the
+maximum supported VD insertion length, truncated to $N$.
+The code starts a separate insertion recursion from each supported germline
+boundary; it is quadratic in $N$ when $K_{VD}$ grows with $N$.
+
+For a seed boundary $q$, let $W_{q,0}$ be its germline-seeded state vector,
+including gene and deletion weights. For $\ell\ge1$, the forward update is
+\begin{equation}\label{eq:forward}
+ W_{q,\ell}(a,b)=\sum_{c}W_{q,\ell-1}(b,c)\,
+ \begin{cases}b_{VD}(a),&\ell=1,\\R_{VD}(a\mid b),&\ell>1\end{cases}
+ \chi_{q+\ell-1}(c,b,a),
+\end{equation}
+where $a,b,c$ are nucleotide states and $\chi_i$ is one unless $i\equiv2\pmod3$;
+in that phase it tests the completed codon against the query.
+Unavailable leading bases are represented by the sentinel and never enter a
+completed codon test.
+Then $\Lambda_p=\sum_{q+\ell=p}P_{\ins}(\ell)W_{q,\ell}$, including $\ell=0$.
+Insertion length weights enter this sum, not the propagation from $\ell$ to $\ell+1$.
 
 \paragraph{Right partial sums} Symmetrically, for each $D$ gene and boundary $p$ (where $\hat D$ ends),
 \begin{equation}\label{eq:rho}
   \Psi^D_p(y)=\!\!\sum_{J,\,\del_J,\,\ell_{DJ}}\!\!
-    P(D\!\mid\! J)P(J)P(\del_J)\,P_{\ins}(\ell_{DJ})\;\bigl[\text{$DJ$ Markov}\bigr]\;
+    P(D\!\mid\! J)P(J)P(\del_J\mid J)\,P_{\ins}(\ell_{DJ})\;\bigl[\text{$DJ$ Markov}\bigr]\;
     \prod_{\text{codons }\subset[p,N)}\!\!\indic[\tau=\alpha],
 \end{equation}
-with $y=(\sigma_p,\sigma_{p+1})$. Because the $DJ$ chain runs $3'\!\to\!5'$, $\Psi^D$ is built by a
+with $y=(\sigma_p,\sigma_{p+1})$ and
+$p+\ell_{DJ}+\ell_J=N$ in the sum. Because the $DJ$ chain runs $3'\!\to\!5'$, $\Psi^D$ is built by a
 \emph{backward} recursion from the $J$ boundary --- one per $D$ gene, the $P(D\mid J)$ weight folded into
-the seed. There are at most $n_D$ such passes.
+the seed. There are at most $d$ such passes, where $d$ is the number of D templates,
+each costing $O(NK_{DJ}|\Sigma|)$ after seeding.
+This $d$ is distinct from the latent D-count event $n_D$.
 
 \paragraph{Stitching} Fixing $D$, its deletions (hence the fixed germline string $\hat D$ of length
 $\ell_D$) and its start $p_0$, thread the germline nucleotides of $\hat D$ through the DP from $\Lambda_{p_0}$
 to a state distribution at $p_1=p_0+\ell_D$ (closing any codons interior to $\hat D$, no Markov weight),
 then contract with $\Psi^D_{p_1}$. By Proposition~\ref{prop:coupling} at most one codon straddles the
-$D/DJ$ boundary $p_1$; the contraction is a $4\times4$ (or scalar, when $p_1\equiv0$) sum over that
+$D/DJ$ boundary $p_1$; the contraction is a bounded codon-state contraction (or scalar product when $p_1\equiv0\pmod3$) over that
 codon's free nucleotides. Summing over $D$, its deletions and $p_0$,
 \begin{equation}\label{eq:stitch}
-  \Pgen(\alpha)=\sum_D\ \sum_{\del_D^{5'},\del_D^{3'}} P(\del_D^{5'},\del_D^{3'})
+  \Pgen(\alpha)=\sum_D\ \sum_{\del_D^{5'},\del_D^{3'}} P(\del_D^{5'},\del_D^{3'}\mid D)
     \sum_{p_0}\ \Bigl\langle\, \mathcal{T}_{\hat D}\,\Lambda_{p_0}\,,\ \Psi^D_{p_1}\,\Bigr\rangle_{p_1},
 \end{equation}
 where $\mathcal{T}_{\hat D}$ is the germline-threading operator and $\langle\cdot,\cdot\rangle_{p_1}$ the
 codon-contracting stitch at $p_1$. The insertion-length sums are already inside $\Lambda$ and $\Psi^D$, so
-the outer work is $O\!\bigl(n_D\cdot\#\!\del_D\cdot N\cdot\ell_D\bigr)$ with $\ell_D\ll N$ --- versus the
+the outer work is $O\!\bigl(d\cdot\#\!\del_D\cdot N\cdot\ell_D\bigr)$ with $\ell_D\ll N$ --- versus the
 enumeration's extra factor of $N$ from re-running the DP per placement. For a $VJ$ locus there is no $D$
-and no split: a single codon-marginalizing DP over $V$-germline\,--\,$VJ$-insertion\,--\,$J$-germline
-templates suffices, which is already inexpensive.
+and no D bridge: for each retained J template, the code builds a left DP with
+$P(J\mid V)$ in the V seed and threads each supported J suffix into its boundary state.
+The resulting computation still sums all supported V/J trims and insertion lengths.
 
 \begin{remark}
-This is the $\Pi_L\!\cdot\!\Pi_R$ factorization of \cite{Murugan2012,Sethna2019} expressed on the
+This is the $\Pi_L\!\cdot\!\Pi_R$ factorisation of \cite{Sethna2019} expressed on the
 \texttt{polars} tables. Where \texttt{OLGA} handles the $D$ block with a sliding right-deletion recursion
 folded into $\Pi_R$, we keep $\Psi^D$ purely $J$/$DJ$ and slide a short explicit germline bridge
 (Eq.~\eqref{eq:stitch}); the two agree to machine precision (\S\ref{sec:bench}), and the explicit bridge
 is what generalizes to the tandem-$D$ event.
 \end{remark}
 
-\section{Correctness and benchmark}\label{sec:bench}
+\paragraph{Tandem transfer matrices} For the two-D branch, the native engine
+builds the V/VD left matrix once and loops explicitly over J.
+For each J it builds a D-independent right matrix containing $P(J)$, J trimming
+and the DJ insertion factors.
+For each first D, threading all supported nonempty first-D trims through the
+left matrix and extending every supported DD insertion produces an intermediate
+matrix indexed by its boundary and codon state.
+Each second-D template and nonempty trim is then threaded through this matrix
+and contracted with the J-specific right matrix, weighted by
+$q_J(2,D_1,D_2)$ and the second-D deletion probability.
+The first-D deletion weight enters the intermediate matrix; the joint history
+weight enters the second-D contraction exactly once.
+Forbidden complete histories contribute zero before contraction.
+This preserves the codon-state recurrence while retaining J-dependent D-pair
+ambiguity; it does not factor $q_J$ into independent D choices.
+
+\section{Correctness checks and recorded benchmark}\label{sec:bench}
 
 The native transfer matrix is validated against two independent oracles: the transparent
 amino-acid scenario enumeration of \S\ref{sec:aa} (pure Python), and \texttt{OLGA} itself
-\cite{Sethna2019}. On the human TRB model it reproduces the published worked example
-$\Pgen(\texttt{CAWSVAPDRGGYTF}\mid \mathrm{TRBV30},\mathrm{TRBJ1\text{-}2})=1.2036\times10^{-10}$ and agrees
-with \texttt{OLGA} to a maximum relative error of $1.2\times10^{-15}$ over $25$ marginalized (all V/J/D)
-and $6$ V/J-restricted generated CDR3s --- i.e.\ to machine precision. Table~\ref{tab:bench} reports
-timing, measured by \texttt{appendix/bench\_pgen.py} on the human TRB \texttt{OLGA} default model,
-single-threaded, over $20$ marginalized queries.
+\cite{Sethna2019}. On identical imported human TRB parameters it reproduces the published worked example
+
+\begin{equation*}
+ \Pgen(\texttt{CAWSVAPDRGGYTF},\texttt{TRBV30*01},\texttt{TRBJ1-2*01})
+ =1.2036\times10^{-10}.
+\end{equation*}
+It agrees
+with \texttt{OLGA} to a maximum relative error of $1.2\times10^{-15}$ over $25$ marginalised (all V/J/D)
+and $6$ V/J-restricted generated junctions --- i.e.\ to machine precision. Table~\ref{tab:bench} reports
+historical timing, whose producer now resides in the separate benchmark project as
+\path{bench/bench_pgen.py} on the human TRB \texttt{OLGA} default model,
+single-threaded, over $20$ marginalised queries.
 
 \begin{table}[htbp]\centering
-\caption{Amino-acid $\Pgen$ throughput on human TRB (single thread, marginalized over all V/J/D).
+\caption{Recorded amino-acid $\Pgen$ throughput on human TRB (single thread, marginalised over all V/J/D).
 \textsc{tm} is the Eq.~\eqref{eq:stitch} transfer matrix in the native \texttt{\_core}; \textsc{olga} is
-\texttt{compute\_aa\_CDR3\_pgen}. Lower is better.}\label{tab:bench}
+\texttt{compute\_aa\_CDR3\_pgen}. These are historical measurements on
+20 queries with the frozen single-D OLGA parameter family, not timings of the
+current isalgo fits. Lower is better.}\label{tab:bench}
 \footnotesize
 \begin{tabular}{lrrr}\toprule
 Method & ms / sequence & vs \textsc{olga} & max.\ rel.\ error vs \textsc{olga} \\\midrule
@@ -357,15 +434,17 @@ removes.
 
 \section{Degenerate, agnostic and Hamming-ball queries}\label{sec:motif}
 
-Three capabilities fall out of the same transfer matrix at essentially no extra cost. First, the
+The same transfer matrix supports three additional query types. First, the
 codon test at each amino-acid position is a \emph{membership test against an allowed-codon set} (a
 $64$-bit mask), not an equality against one residue; a wildcard mask (any of the $20$ amino acids)
-or any degenerate set is therefore evaluated in a single pass, giving motif/regex $\Pgen$ without
+or any degenerate set is therefore evaluated in a single pass, giving fixed-length motif $\Pgen$ without
 enumerating the matching sequences. Second, conditioning on a $V$ and/or $J$ allele is a usage mask
-over the gene sums of Eqs.~\eqref{eq:lambda},~\eqref{eq:rho}; the empty restriction marginalizes over
-all functional genes --- \emph{V-agnostic} / \emph{J-agnostic} $\Pgen$.
+over the gene sums of Eqs.~\eqref{eq:lambda},~\eqref{eq:rho}; the empty restriction marginalises over
+all functional genes. These restricted sums are joint sequence-and-gene probabilities,
+not renormalised probabilities conditional on observing a gene. An unrestricted
+query is \emph{V-agnostic} / \emph{J-agnostic} $\Pgen$.
 
-Combining the two gives a fast one-mismatch query. The total $\Pgen$ of an amino-acid CDR3 and every
+Combining the two gives a fast one-mismatch query. The total $\Pgen$ of an amino-acid junction and every
 sequence within Hamming distance $1$ (one substitution) is, by inclusion--exclusion,
 \begin{equation}\label{eq:ham1}
   \Pgen^{\le 1}(\alpha)=\sum_{k=0}^{L-1}\Pgen(\alpha_{k\to *})-(L-1)\,\Pgen(\alpha),
@@ -373,21 +452,36 @@ sequence within Hamming distance $1$ (one substitution) is, by inclusion--exclus
 where $\alpha_{k\to *}$ wildcards position $k$. \texttt{OLGA} uses the same identity but pays a full
 (slow) transfer-matrix pass for each of the $L{+}1$ terms; here each term is one fast pass
 (Eq.~\eqref{eq:stitch}) with a single wildcard mask, so the native \texttt{\_core} evaluates
-Eq.~\eqref{eq:ham1} at $8.7\times$ \texttt{OLGA}'s throughput on human TRB ($67.9$ vs $7.8$~ms/query)
+Eq.~\eqref{eq:ham1}, with recorded historical throughput of $8.7\times$ \texttt{OLGA}'s throughput on human TRB ($67.9$ vs $7.8$~ms/query)
 and $2.5\times$ on human TRA ($25.1$ vs $10.1$~ms/query), matching it to a relative error of
-$10^{-15}$ throughout. A codon-boundary forward/backward sweep would collapse the $L{+}1$ passes into
-a single sweep for $VJ$ loci; the $D$-placement sum couples positions in $VDJ$ loci, so there the
-$L{+}1$-pass identity is retained.
+$10^{-15}$ on the recorded legacy comparison. These timings do not establish current
+isalgo throughput.
 
 \section{Generation and inference on the same tables}\label{sec:em}
 
 \paragraph{Generation} Ancestral sampling walks the Bayesian network of Eq.~\eqref{eq:pvdj} top-down:
 draw $(V,J[,D])$, the deletions, the insertion lengths, then the insertion nucleotides from the Markov
 chain, and assemble Eq.~\eqref{eq:concat}. Restricting to functional genes and enforcing $\ell_V,\ell_J\ge1$
-keeps every draw scoreable; sampled V/J-usage and CDR3-length distributions match the model marginals.
+keeps emitted junctions within the scorer's structural support.
+The sampler also enforces disjoint D histories and genomic order.
+The library primitive retains its reference sampler by default; the generation CLI
+selects native batched sampling for bundled isalgo models.
+Native draws are reproducible across thread counts for a fixed seed but use a
+different random stream from the reference sampler.
+Productive-only sampling rejects out-of-frame or stop-bearing draws, so its
+observed marginals are conditional on that filter rather than the unfiltered model.
+
+\paragraph{Current model catalogue} Twelve bundled isalgo fits cover all seven human
+loci and mouse TRA, TRB, IGH, IGK and IGL; mouse TRG/TRD are not bundled.
+The old \texttt{learned} and \texttt{arda} source names alias isalgo; frozen
+OLGA parameters are selected explicitly as \texttt{olga-legacy}.
+Generation and scoring use the selected model's reference and factors without
+substituting older weights for a missing fit.
 
 \paragraph{Inference} We estimate model parameters from nonfunctional reads using EM.
-Exact-match inference uses the scenario sum of
+The raw-data builder initialises the retained-germline substitution rate at
+$0.01$ and fits it; the lower-level \path{infer_native} API defaults to
+\texttt{error\_rate=None} for exact matching. Exact-match inference uses the scenario sum of
 \S\ref{sec:nt}. With the optional retained-germline substitution channel, let
 $m_r$ be the number of mismatches and $g_r$ the number of retained germline bases
 in scenario $r$ for observed sequence $y$. Its joint weight and observation likelihood are
@@ -400,13 +494,15 @@ bases; each alternative nucleotide has probability $\epsilon/3$. Inserted bases
 retain their observed Markov emissions without an observation-error channel.
 This scope differs from applying sequencing errors to every generated base.
 Exact generation $\Pgen$ remains the error-free quantity of \S\ref{sec:nt}.
-Sequencing observations are normalized to A/C/G/T before alignment and inference:
+Sequencing observations are normalised to A/C/G/T before alignment and inference:
 DNA IUPAC ambiguity symbols are replaced by A. They are low-quality input symbols,
-not latent nucleotide alternatives, so inference does not enumerate or marginalize
+not latent nucleotide alternatives, so inference does not enumerate or marginalise
 compatible completions. This input rule does not alter germline references or
 amino-acid patterns. The substitution channel above applies to ordinary A/C/G/T
-mismatches in the normalized observation.
-The error-rate M-step is
+mismatches in the normalised observation.
+Invalid non-IUPAC DNA symbols raise an error; normalisation occurs on the original
+strand before reverse complementation.
+The error-rate M-step, for equally weighted input observations, is
 \begin{equation}
  \epsilon_{\rm new}=
  \frac{\sum_y E[m_r\mid y]}{\sum_y E[g_r\mid y]}.
@@ -414,9 +510,16 @@ The error-rate M-step is
 For tandem histories, the forward/backward messages include the emission factors
 for each retained $D$ segment. Posterior mismatch and retained-length statistics
 are attributed in the reconstruction passes, once per segment; the outer $V/J$
-statistics are weighted by the complete history mass. Event tables are normalized
+statistics are weighted by the complete history mass. Event tables are normalised
 within their conditioning keys using the same posterior weights.
 
+ARDA annotations provide preliminary gene proposals, nonfunctional labels and
+alignment evidence, not fixed gene or allele assignments.
+The raw-data builder obtains V/J proposals in one batched multi-mapping search;
+proposed genes expand to the model's functional allele templates, while missing
+proposals leave that segment unrestricted. D and D2 remain unrestricted by
+preliminary annotations. The native error-aware frame API uses the same proposal
+route; exact-mode call masks remain an explicit restriction of its input support.
 Preliminary alignment endpoints do not fix recombination boundaries. Exact inference retains all supported
 shorter retained segments and corresponding N/P histories in the sum;
 coincidentally matching N bases do not imply zero insertion. Restricting enumeration
@@ -425,6 +528,20 @@ likelihood and fitted parameters if compatible alternatives are omitted. It is n
 an invariance of the EM fixed point. Recorded positive-likelihood observation counts
 exclude unsupported inputs. A mean log-likelihood over that subset must not be
 interpreted as a finite full-cohort likelihood when any observation has zero support.
+
+\paragraph{Inference flow} The implementation follows this sequence:
+\begin{Verbatim}[fontsize=\small]
+normalise observations; select reference and permitted genomic histories
+build batched V/J proposals; retain D/D2 ambiguity
+repeat until tolerance or iteration cap:
+    sum full and retained history weights for each supported observation
+    accumulate retained posterior event, mismatch and length counts
+    normalise event tables; update substitution rate
+    report likelihood, supported/unsupported counts and omitted mass
+\end{Verbatim}
+The default raw-data build uses at most 15 iterations and relative likelihood
+change tolerance $10^{-4}$; the lower-level native API defaults to 30 iterations
+and $10^{-3}$. These are convergence settings, not biological thresholds.
 
 \paragraph{Bounded native inference} The working inference default is a relative
 scenario cutoff $\rho=10^{-5}$; $\rho=0$ retains exact inference. Let $\mathcal{H}$
@@ -439,13 +556,18 @@ For $L(y)>0$, the retained likelihood and omitted probability fraction are
  L_{\rho}(y)=\sum_{C\in\mathcal{K}_{\rho}}\sum_{r\in C}w_r,\qquad
  \delta_{\rho}(y)=1-\frac{L_{\rho}(y)}{L(y)}.
 \end{equation}
-Every retained event/error count uses that same cell set and normalization
+Every retained event/error count uses that same cell set and normalisation
 $L_{\rho}(y)$. Some weak component histories remain within retained cells; this
-preserves factorization. The relative bound follows IGoR's inference principle,
+preserves factorisation. The relative bound follows IGoR's inference principle,
 but these global-max groups differ from its dynamic traversal cutoff. The cutoff
 does not bound total omitted mass: its mean and maximum over scoreable observations
 are recorded per iteration. Generation $\Pgen$ remains exact, and no fixed
-five-nucleotide reassignment limit is used.
+reassignment-length cap is used.
+Exact EM with fixed support and unregularised M-steps has the usual
+nondecreasing training-likelihood property; a changing retained cell set or
+pseudocount-regularised updates do not establish that guarantee for the exact
+unpenalised objective.
+A training-likelihood increase is not independent validation.
 
 \section{Model diagnostics: entropy and mutual information}\label{sec:diag}
 
@@ -466,22 +588,24 @@ weights $P(\mathrm{pa})/Z$ on $A$. The same convention applies to within-$D$ del
 Entirely undefined events ($Z=0$) report zero marginal mass and zero entropy; no uniform mass is
 imputed. These are summaries on defined event support, including in the scenario-entropy table.
 Rendering the manifest as a
-graph, with nodes annotated by $H(X)$ and edges by $I$, gives a \texttt{bnlearn}-style summary of the
-whole model at a glance (Fig.~\ref{fig:bn}).
+graph, with nodes annotated by $H(X)$ and supported edges by $I$, gives a \texttt{bnlearn}-style summary of the
+whole model at a glance. Figure~\ref{fig:bn} retains two historical network renderings.
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.49\linewidth]{bn_trb.pdf}\hfill
   \includegraphics[width=0.49\linewidth]{bn_trd_dd.pdf}
-  \caption{The recombination Bayesian network rendered from the manifest, nodes labelled with marginal
+  \caption{Historical recombination Bayesian networks rendered from frozen manifests, nodes labelled with marginal
     entropy $H$ (bits) and edges with mutual information $I$ (bits). \emph{Left:} human TRB (single-$D$).
-    \emph{Right:} human TRD upgraded to the tandem-$D$ model of \S\ref{sec:dd}, adding the $n_D$,
-    $D_2$-gene, $D_2$-deletion and $DD$-insertion nodes.}
+    \emph{Right:} human TRD with the legacy tandem-$D$ representation, adding the $n_D$,
+    $D_2$-gene, $D_2$-deletion and $DD$-insertion nodes. Current schema-3 fits
+    replace the separate D-choice/count factors with $q_J(n,D_1,D_2)$ and
+    separate branch-specific deletion tables (\S\ref{sec:dd}).}
   \label{fig:bn}
 \end{figure}
 
-Table~\ref{tab:entropy} compares the per-event entropy across five loci; each row's most informative
-locus is in bold. The structure is legible. Gene choice dominates in the $\alpha\beta$ loci ($H_V\!\approx\!5.7$
+Table~\ref{tab:entropy} retains a historical comparison of the per-event entropy across five frozen OLGA-reference loci; each row's most entropic
+locus is in bold. Gene choice dominates in the $\alpha\beta$ loci ($H_V\!\approx\!5.7$
 bits for TRB, $H_J\!\approx\!5.6$ for TRA), whereas TRD spends little on gene choice ($H_V\!=\!2.4$ bits,
 few $\delta$ genes) and the most on non-templated insertion ($H_{VD}\!=\!4.8$ bits) --- the TdT signature.
 The single most entropic event in every $VDJ$ locus is the joint $D$-deletion (up to $7.8$ bits for IGH),
@@ -493,19 +617,29 @@ the $VJ$ loci carry $I(V;J)>0$ through $P(J\mid V)$ (e.g.\ $0.27$ bits for TRA).
 edge $I(\{\del_D\};D)$ is large
 ($1.02$ bits for TRB), i.e.\ trimming depends strongly on which $D$ was chosen. The identical routine
 applies to an EM-inferred model, so the same table compares a model learned from real reads against the
-\texttt{OLGA} bootstrap parameter-by-parameter. On $6000$ real out-of-frame human TRB clonotypes
-(single-$D$ EM, aligned-gene mask; \texttt{bench\_em.py}) the fitted model places broader mass on
-exonuclease deletion and non-templated insertion than the synthetic bootstrap --- the $D$-deletion
-entropy rises from $6.44$ to $7.65$ bits and the $VD$-insertion entropy from $3.84$ to $4.50$ bits, while
-the held-out log-likelihood improves --- i.e.\ real repertoires are less tightly trimmed and inserted than
-the \texttt{OLGA} generative model, and the within-$D$ coupling stays near $1$ bit under both.
+\texttt{OLGA} bootstrap parameter-by-parameter. An earlier single-D, aligned-call-masked diagnostic on 6000 out-of-frame human
+TRB clonotypes reported D-deletion entropy changing from $6.44$ to $7.65$ bits
+and VD-insertion entropy from $3.84$ to $4.50$ bits, with within-D deletion
+coupling near 1 bit under both fits.
+Those values describe that diagnostic fit, not the current error-aware,
+ambiguity-preserving isalgo models.
+The producer's ``held-out'' label referred to its own training-report likelihood;
+it did not constitute a held-out evaluation.
+The independent functional-source validator in \texttt{compare\_models.py}
+is described below and has a different purpose.
+
+A separate historical annotation summary reported two aligned D segments in
+4.15\% of out-of-frame and 3.42\% of in-frame unique human TRD clonotypes.
+These are preliminary annotation fractions, not estimates of the current model's
+posterior tandem frequency; the original summary did not record the denominators.
+
 
 \begin{table}[t]
   \centering
   \small
   \caption{Marginal entropy $H(X)$ (bits) of each recombination event across five human loci, computed
-    from the model tables. Dashes mark events absent from a locus ($VJ$ loci have no $D$; $\alpha\beta$
-    loci no $VJ$ insertion). Bold marks the most entropic locus per event.}
+    from frozen OLGA-reference model tables. These values are retained as
+    historical diagnostics, not summaries of the current isalgo fits. Dashes mark events absent from a locus ($VJ$ loci have no $D$; $VDJ$ loci have no $VJ$ insertion). Bold marks the most entropic locus per event.}
   \label{tab:entropy}
   \begin{tabular}{lccccc}
     \toprule
@@ -513,7 +647,7 @@ the \texttt{OLGA} generative model, and the within-$D$ coupling stays near $1$ b
     \midrule
     $V$ choice            & \textbf{5.73} & 5.37 & 2.45 & 5.71 & 4.81 \\
     $J$ choice            & 3.40 & \textbf{5.57} & 0.65 & 2.17 & 2.83 \\
-    $D$ gene $\mid J$      & 1.42 & --- & 0.71 & \textbf{4.30} & --- \\
+    $D$ choice             & 1.42 & --- & 0.71 & \textbf{4.30} & --- \\
     $V\,3'$ deletion      & 3.58 & \textbf{3.69} & 3.44 & 3.46 & 3.15 \\
     $J\,5'$ deletion      & 3.66 & 3.89 & 3.74 & \textbf{4.13} & 3.65 \\
     $D$ deletion (5$'$,3$'$) & 6.44 & --- & 6.47 & \textbf{7.78} & --- \\
@@ -527,6 +661,66 @@ the \texttt{OLGA} generative model, and the within-$D$ coupling stays near $1$ b
   \end{tabular}
 \end{table}
 
+\FloatBarrier
+\section{Implementation, validation and scope}\label{sec:implementation}
+
+\paragraph{Code map} The Python reference scenario sums are in
+\texttt{model/pgen.py}; packed native scoring and the transfer matrices are in
+\texttt{src/pgen.cpp}, exposed by \texttt{model/native.py}.
+\texttt{model/dd.py} declares and validates joint-history support;
+\path{model/infer.py} owns proposals, EM updates and reports;
+\texttt{model/data.py} owns the raw-data build.
+\texttt{model/generate.py} provides reference/native sampling, and
+\texttt{model/analyze.py} provides entropy and mutual-information summaries.
+Paths beginning with \texttt{model/} are relative to \texttt{python/vdjtools/}.
+
+\paragraph{Exactness and resources} The probability sums are exact over the selected
+model support, apart from floating-point arithmetic; ``exact'' does not imply that
+the reference includes every biological history.
+Zero-mass branches are skipped algebraically without approximation.
+The native single-D implementation shares short D-prefix states and reduces
+right-boundary states within each query; these are transient DP workspaces.
+With $S=25$ codon states, $d$ D templates, $T$ supported D deletion pairs per
+template, maximum retained D length $G$, and insertion bounds $K_{VD},K_{DJ}$,
+a conservative bridge bound is $O(dTNGS)$, in addition to germline seeding and
+$O(NS(K_{VD}+dK_{DJ}))$ insertion recursions.
+The single-D query workspace is $O(NS+NG)$ in addition to packed model tables.
+Tandem scoring adds a J/D-pair traversal and a DD-insertion bridge; it is not
+covered by a universal linear-in-length bound.
+Native batch APIs share packed model state, release the GIL and bound their
+query workers by the selected CPU allocation; \texttt{threads=0} uses that allocation.
+
+\paragraph{Independent checks} \texttt{concordance.py} compares native nucleotide
+and amino-acid scores to OLGA on the same legacy parameter family and checks
+synonymous-codon sums when a sufficiently short generated query is available.
+It is an engine check, not validation of an independently fitted model.
+\texttt{compare\_models.py} separates this raw-reference oracle comparison from
+software validation on freshly annotated functional-source reads outside the
+nonfunctional training inputs.
+Functional-source reads have undergone selection, so their likelihood is not an
+unbiased held-out recombination objective.
+The accepted validator selects the first 20000 raw reads and then the first
+300 eligible unique junctions per context; the source bucket alone does not
+prove every selected junction is productive.
+For its OLGA oracle, three zero insertion bins extend the iteration workspace
+without changing probability coefficients.
+Focused tests cover joint-history normalisation, genomic constraints, allele
+aliases, retained-germline errors and pruning, as well as the independent validator.
+The historical timing and entropy tables above were not rerun for this revision.
+
+\paragraph{Scope limits} The present engine supports the declared VJ, single-D and
+up-to-two-D factorisations, not arbitrary Bayesian-network structures.
+The observation channel covers retained-germline substitutions, not indels or
+errors on inserted bases.
+Candidate-gene restriction and positive inference cutoffs can remove compatible
+histories; the latter reports actual omitted mass but does not bound it by the cutoff.
+Gene-level reference selection does not infer an individual's allele genotype.
+The entropy diagnostics describe the declared parameter support; dinucleotide
+marginal entropies use stationary composition, and scenario-entropy contributions
+weight first-base, transition and tandem events by their activation probabilities.
+These summaries do not replace independent validation on matched references and inputs.
+
+\clearpage
 \bibliographystyle{unsrt}
 \bibliography{refs}
 

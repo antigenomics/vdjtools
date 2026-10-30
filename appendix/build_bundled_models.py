@@ -1,8 +1,10 @@
-"""Build the EM-learned bundled models from real HuggingFace non-functional reads, all 7 loci.  2026-07-12
+"""Build the twelve bundled isalgo fits from raw nonfunctional reads.
 
-For each locus: fetch the FULL non-functional read set (HF isalgo/airr_model_read), arda-map to
-unique clonotypes = (v_call, j_call, junction), and run native EM (D-D by default on the D-bearing
-loci IGH/TRD/TRB) seeded from the ARDA germline scaffold. Saves to
+For each human or supported mouse locus, fetch the full nonfunctional read set
+(HF isalgo/airr_model_read), annotate afresh and collapse gene-level clonotypes.
+Native EM uses fresh batched V/J proposals, a fitted retained-germline substitution
+channel and joint single/tandem histories on IGH/TRD/TRB, seeded from ARDA germline
+scaffolds rather than OLGA probability tables. Saves to
 python/vdjtools/model/_bundled/isalgo/<locus>/ (parquet marginals + manifest.json + training.json).
 
 The pipeline itself now lives in the library — `vdjtools.model.data.build_model` / `build_all`,
@@ -15,7 +17,8 @@ model needs is that the rearrangement escaped selection, and both halves have. K
 out-of-frame half would condition the training set on junction length mod 3 — a bias the
 insertion-length model would then happily learn.
 
-No cap, no subsampling: every clonotype surviving the germline filter goes into EM.
+No cap, no subsampling: every eligible clonotype enters inference; positive-likelihood and unsupported
+observation counts are reported separately.
 
 Convergence-based EM: stop when the relative log-likelihood change falls below EM_TOL
 (whole-model signal, including trims/insertions/n_d). EM_ITERS is a safety cap,
@@ -77,7 +80,7 @@ def main():
         raise ValueError("mouse bundled training targets are TRA/TRB/IGH/IGK/IGL")
     DEST.mkdir(parents=True, exist_ok=True)
     # EM_SINGLE_D=1 forces strict single-D; ND_PRIOR adds a Dirichlet single-D pseudocount.
-    # GENE_PRIOR keeps every germline-functional V/J allele reachable -- P(V)=0 is an EM absorbing
+    # GENE_PRIOR keeps every germline-functional V/J gene representative reachable -- P(V)=0 is an EM absorbing
     # state, so unregularized, human TRB kept 30 of OLGA's 57 V genes having SEEN 54 in the data.
     single_d = os.environ.get("EM_SINGLE_D") == "1"
     nd_prior = float(os.environ.get("ND_PRIOR", "0"))

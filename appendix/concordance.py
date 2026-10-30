@@ -2,10 +2,10 @@
 
 For each locus: generate sequences from our model, then compare our **native** nt and aa Pgen to
 OLGA's (Pearson r on log10 Pgen, max relative error), check aa == Σ nt over synonymous codons on a
-short CDR3, and (D-bearing loci) confirm the D-D-default EM does not hallucinate tandems on
-single-D OLGA data. Prints a Markdown concordance table.
+short anchor-inclusive junction, when the generated sample contains a tractable synonymous-codon sum. This script
+does not fit models or validate tandem inference. Prints a Markdown concordance table.
 
-Reproduce (needs the [oracle] extra: `pip install olga`):
+Reproduce in the repository environment with the [oracle] extra installed:
 
     python appendix/concordance.py            # all 7 loci
     LOCI=TRB,TRD python appendix/concordance.py
@@ -24,7 +24,6 @@ from vdjtools.model import from_olga, native
 from vdjtools.model.generate import generate
 from vdjtools.model.reference import _CODON_TABLE
 
-# longer exists on disk, so this script could not run at all. NB pip olga has no TRG/TRD.
 # The OLGA models shipped in THIS repo, not pip olga's: pip ships only 5 human loci (no
 # TRG/TRD) plus mouse, while tests/python/fixtures/olga/default_models carries all 7 human loci.
 # The TRG/TRD marginals originate from mirpy's legacy-v2 branch (commit aeccd75) and are verified
