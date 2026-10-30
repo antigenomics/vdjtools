@@ -47,3 +47,17 @@ def test_calibration_cli_records_model_and_event_units(tmp_path):
     assert report["selection_q"] > 0 and report["audit"]["retained_events"] == 5
     assert report["source"] == "isalgo" and report["model_sha256"]
     assert report["zero_mass_junctions"] == 0
+
+
+def test_selection_factor_requires_matching_bundled_model(monkeypatch):
+    import hashlib
+    from vdjtools.model.selection import selection_factor
+    assert selection_factor('TRA',organism='human') == pytest.approx(3.46977501091145)
+    for locus,source in [('IGK','isalgo'),('TRA','olga-legacy')]:
+        with pytest.raises(ValueError,match='calibrated'):
+            selection_factor(locus,source=source)
+    class Changed:
+        def hexdigest(self):return '0'*64
+    monkeypatch.setattr(hashlib,'sha256',lambda data:Changed())
+    with pytest.raises(ValueError,match='changed'):
+        selection_factor('TRA')

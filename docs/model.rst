@@ -909,3 +909,9 @@ Gene-aware joint Pgen uses ``model.native.pgen_aa_gene_batch(model, sequences, v
 It sums model alleles for gene calls in one native batch, retains input order,
 rejects unknown calls, and accepts mismatches=0 (exact) or 1 (closed ball).
 ALICE and repertoire annotation share this implementation.
+
+``model.selection_factor(locus, organism="human", source="isalgo")`` returns
+a bundled effective selection multiplier only when every calibrated model-file
+hash matches. Unsupported contexts and changed models require explicit Q or
+recalibration. ``selection_mass`` applies Q once; empirical control frequencies
+already contain selection and must not be multiplied again.

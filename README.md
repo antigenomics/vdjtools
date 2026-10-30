@@ -196,3 +196,9 @@ whole-sample counting semantics. Prefer `iter_samples` when one sample fits.
 For joint junction/V/J probabilities with gene-level calls, use
 `vdjtools.model.native.pgen_aa_gene_batch`: one native batch sums the model alleles
 and supports exact or closed Hamming-1 mass. ALICE uses the same helper.
+
+``model.selection_factor(locus, organism="human", source="isalgo")`` returns
+a bundled effective selection multiplier only when every calibrated model-file
+hash matches. Unsupported contexts and changed models require explicit Q or
+recalibration. ``selection_mass`` applies Q once; empirical control frequencies
+already contain selection and must not be multiplied again.

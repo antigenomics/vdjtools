@@ -1,0 +1,23 @@
+[
+  {
+    "species": "human",
+    "locus": "TRA",
+    "source": "isalgo",
+    "selection_q": 3.46977501091145,
+    "estimator": "zero-truncated-Poisson effective event multiplicity",
+    "pgen": "unconditional exact marginal full-junction mass",
+    "model_sha256": {
+      "genes_j.parquet": "e500d3cbc7537ab12e47e502845f8f59c0e8e90dc6266bd5dfc62a68945212b7",
+      "genes_v.parquet": "1f9c2af84fe504644a9afb2bb2ac323fb23ca06ffe971473cbbc050c657adf61",
+      "j_5_del.parquet": "94dd3aadc8b5c5bd72da75068cd83a538bbc511f6c8833420bd400c0435fc294",
+      "j_choice.parquet": "f8f0a88cb49ae075b87861d061f3c2318f3e1e7f4d563b984eb91916a7bd8fdf",
+      "manifest.json": "f379f56a0d88ecccb7e90d07629df7027c79e0e7dfff5d6e83f5ce7b3a785d9b",
+      "training.json": "ba8427a0fb20c1478df9af1796c44489ff95acaa6408b2fd48b08f9291bb78e6",
+      "v_3_del.parquet": "0af95fc125f0554c4394558e18819f78916cf9b80a7a385777b12dff016260ff",
+      "v_choice.parquet": "5642b32604f6d763e6917a4f633cc24451a134548d4cb81ea6989dc0656da1c6",
+      "vj_dinucl.parquet": "4a275b65640e48b2cdf15419887cf3f772f13311b38011e02a3bcc20cc99ca82",
+      "vj_first_nt.parquet": "a4fff3b391480178e337e2336649d1f4a64ecb2362f075bb8ce3263ed30335ee",
+      "vj_ins.parquet": "6318fd9ca609d0b97806596a9f85f3548f196b0201670bdb3536a90f91c1d96b"
+    }
+  }
+]

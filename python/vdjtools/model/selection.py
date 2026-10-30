@@ -99,3 +99,31 @@ def control_event_counts(path, *, sequence_column="cdr3aa", weight_column="incid
     return counts, dict(source_rows=rows, source_events=events, invalid_rows=invalid_rows,
                         invalid_events=invalid_events, retained_events=events-invalid_events,
                         observed_junctions=counts.height, weight_column=weight_column)
+
+
+def selection_factor(locus, *, organism="human", source="isalgo"):
+    """Return the calibrated effective multiplier for an unchanged bundled model.
+
+    Unsupported model/species/locus contexts require an explicit user factor.
+    Model hashes are checked before returning Q; factors never transfer silently
+    between parameter sets. Empirical control frequencies do not need this factor.
+    """
+    import hashlib
+    import json
+    from importlib.resources import files
+    from .bundled import _source_family, _bundled_key
+
+    family=_source_family(source)
+    species=organism.lower()
+    locus=locus.upper()
+    root=files("vdjtools.model")
+    records=json.loads((root/"selection_factors.json").read_text())
+    record=next((r for r in records if (r["source"],r["species"],r["locus"]) ==
+                 (family,species,locus)),None)
+    if record is None:
+        raise ValueError(f"no calibrated selection factor for {family}/{species}/{locus}; supply explicit Q")
+    model=root/"_bundled"/family/_bundled_key(family,locus,species)
+    actual={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in model.iterdir() if p.is_file()}
+    if actual!=record["model_sha256"]:
+        raise ValueError("bundled model changed since selection calibration; supply explicit Q or recalibrate")
+    return selection_mass(1.,record["selection_q"])
