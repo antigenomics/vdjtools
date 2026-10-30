@@ -113,6 +113,15 @@ d2_allele, p`` and normalizes the complete history distribution within each J.
 Single-D rows use an empty string for the absent second D. A J with no physical
 tandem path has only single-D mass; D1–D2–J2 remains permitted in TRB.
 
+Human TRD forward coding histories respect the mapped genomic order
+TRDD1–TRDD2–TRDD3. All three genes are forward-oriented in
+`IMGT's coordinates <https://www.imgt.org/IMGTrepertoire/index.php?group=TRD&repertoire=GenePositions&section=LocusGenes&species=human>`_.
+Nonclassical joining of the opposite RSS pair deletes the coding D pair into an
+episomal circle rather than retaining reversed D templates in chromosomal VDDJ
+(`Cieslak et al., Fig.8 <https://pubmed.ncbi.nlm.nih.gov/25135298/>`_).
+The shared support rule applies this curated order only to recognized human
+TRDD genes; it does not infer unknown species or custom gene order from names.
+
 Multiple-D incorporation is a normal, abundant feature of TRD; there is no universal
 10% upper bound shared with TRB or IGH. See the
 `Chudakov-last-author 2023 conference abstract <https://doi.org/10.1055/s-0043-1768549>`_

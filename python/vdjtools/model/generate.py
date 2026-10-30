@@ -167,7 +167,7 @@ def prepare_generation(model: Model) -> _GenPrep:
         maxpal=model.manifest.palindrome_max, ins=ins, R=R, bias=bias,
         p_nd=p_nd, d2_given_d1=d2_given_d1, deld2=deld2, deld2_pairs=deld2_pairs,
         forbidden_dj=forbidden_dj_pairs(ud,uj,model.locus),
-        forbidden_dd=forbidden_tandem_pairs(ud,model.locus),
+        forbidden_dd=forbidden_tandem_pairs(ud,model.locus,model.organism),
         history_by_j=history_by_j, deld_tandem=deld_tandem, deld_tandem_pairs=deld_tandem_pairs,
     )
 

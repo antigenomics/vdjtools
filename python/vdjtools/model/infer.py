@@ -590,7 +590,7 @@ def _uniform_init(template: Model) -> dict[str, pl.DataFrame]:
             df = _mask_dj(df,template.locus)
         elif name == 'd2_gene':
             from .reference import forbidden_tandem_pairs
-            forbidden = forbidden_tandem_pairs(template.genomic['genes_d']['d_allele'],template.locus)
+            forbidden = forbidden_tandem_pairs(template.genomic['genes_d']['d_allele'],template.locus,template.organism)
             key = pl.concat_str('d_allele','d2_allele',separator='|')
             df = df.with_columns(p=pl.when(key.is_in([a+'|'+b for a,b in forbidden])).then(0.).otherwise(pl.col('p')))
         keys = normalization_keys(event)

@@ -402,22 +402,29 @@ def forbidden_dj_pairs(d_alleles, j_alleles, locus: str) -> set[tuple[str, str]]
     return out
 
 
-def forbidden_tandem_pairs(d_alleles, locus: str) -> set[tuple[str, str]]:
-    """Known impossible D1/D2 pairs, without guessing IGH/TRD genomic ordering.
+def forbidden_tandem_pairs(d_alleles, locus: str, organism: str | None = None) -> set[tuple[str, str]]:
+    """Known impossible D1/D2 pairs, without guessing uncurated genomic ordering.
 
     One physical D gene cannot be used twice, including through different alleles.
-    TRB additionally has the documented order TRBD1 before TRBD2. Custom loci
-    retain their declared support; their physical gene layout is unknown here.
+    TRB additionally has the documented order TRBD1 before TRBD2. Human TRDD1,
+    TRDD2 and TRDD3 are forward genes at increasing IMGT genomic coordinates;
+    reverse coding pairs are not retained chromosomal VDDJ histories (Cieslak
+    et al., 2014, doi:10.1084/jem.20132585, Fig.8). Unknown genes, organisms and
+    custom loci retain their declared support rather than guessing from names.
     """
     locus = locus.upper()
     if locus not in ('IGH', 'TRB', 'TRD'):
         return set()
+    trd_order = {'TRDD1': 0, 'TRDD2': 1, 'TRDD3': 2} if (
+        locus == 'TRD' and (organism or '').lower() == 'human') else {}
     out = set()
     for d1 in d_alleles:
         for d2 in d_alleles:
-            same = d1.split('*')[0] == d2.split('*')[0]
+            g1, g2 = d1.split('*')[0], d2.split('*')[0]
+            same = g1 == g2
+            reverse_trd = g1 in trd_order and g2 in trd_order and trd_order[g2] <= trd_order[g1]
             n1, n2 = _cluster_number(d1, 'D'), _cluster_number(d2, 'D')
-            if same or (locus == 'TRB' and n1 is not None and n2 is not None and n2 <= n1):
+            if same or reverse_trd or (locus == 'TRB' and n1 is not None and n2 is not None and n2 <= n1):
                 out.add((d1,d2))
     return out
 

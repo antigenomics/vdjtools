@@ -187,7 +187,7 @@ def prepare(model: Model) -> _Prepared:
         p_d2_given_d1=p_d2_given_d1,
         p_del_d2=p_del_d2,
         forbidden_dj=forbidden_dj_pairs(functional('d'),functional('j'),model.locus) if vdj else set(),
-        forbidden_dd=forbidden_tandem_pairs(functional('d'),model.locus) if vdj else set(),
+        forbidden_dd=forbidden_tandem_pairs(functional('d'),model.locus,model.organism) if vdj else set(),
     )
 
 

@@ -77,7 +77,7 @@ def to_dd(model: Model, *, p_nd2: float = 0.05) -> Model:
 
     pd = gene_marginal(model, "d")
     from .reference import forbidden_tandem_pairs
-    forbidden = forbidden_tandem_pairs(d_alleles,model.locus)
+    forbidden = forbidden_tandem_pairs(d_alleles,model.locus,model.organism)
     d2_rows = [
         {"d_allele": d1, "d2_allele": d2, "p": 0. if (d1,d2) in forbidden else pd.get(d2, 0.0)}
         for d1 in d_alleles
@@ -130,7 +130,7 @@ def to_history(model: Model, *, p_nd2: float = 0.05) -> Model:
     d = model.genomic["genes_d"].filter(pl.col("functional"))["d_allele"].to_list()
     js = model.genomic["genes_j"]["j_allele"].to_list()
     bad_dj = forbidden_dj_pairs(d, js, model.locus)
-    bad_dd = forbidden_tandem_pairs(d, model.locus)
+    bad_dd = forbidden_tandem_pairs(d, model.locus, model.organism)
 
     def norm(frame, keys):
         total = pl.col("p").sum().over(keys)
@@ -215,7 +215,7 @@ def validate_history(model: Model, *, tol: float = 1e-8) -> None:
             pl.col("_sum").is_null() | ((pl.col("_sum") - 1).abs() > tol)).height:
         raise ValueError("joint histories must sum to one for every positive J")
     dj = forbidden_dj_pairs(ds, js, model.locus)
-    dd = forbidden_tandem_pairs(ds, model.locus)
+    dd = forbidden_tandem_pairs(ds, model.locus, model.organism)
     tandem = h.filter(pl.col("n_d") == 2)
     for frame, pairs, columns in ((h, dj, ["d_allele", "j_allele"]),
                                   (tandem, dj, ["d2_allele", "j_allele"]),

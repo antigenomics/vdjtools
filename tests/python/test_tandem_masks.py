@@ -127,13 +127,13 @@ def test_scaffold_tandem_and_uniform_initializers_keep_physical_zeros():
         assert table['p'].is_finite().all()
 
 
-def test_invalid_fourth_mask_disables_tandem_in_both_infer_paths(monkeypatch):
+def test_empty_fourth_mask_disables_tandem_in_both_infer_paths(monkeypatch):
     from collections import defaultdict
     from vdjtools import _core
     from vdjtools.model.infer import _estep_seq,infer_native
     from vdjtools.model.pgen import prepare
     model = tandem()
-    mask = (['TRDV1*01'],['TRDJ1*01'],['TRDD1*01'],['UNKNOWN'])
+    mask = (['TRDV1*01'],['TRDJ1*01'],['TRDD1*01'],[])
     assert _estep_seq(prepare(model),'TGTAAACCCTTT',defaultdict(lambda:defaultdict(float)),mask) == 0
     original = _core.estep_batch
     def observed(pm,sequences,vs,js,ds,counts,threads,ddflags,d2masks,*likelihood_args):

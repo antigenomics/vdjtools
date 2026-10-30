@@ -166,7 +166,7 @@ def _check_tandem_support(model: Model) -> list[dict]:
     if not v_mass or v_mass <= 0:
         return []
     dj = forbidden_dj_pairs(functional['d'],functional['j'],model.locus)
-    dd = forbidden_tandem_pairs(functional['d'],model.locus)
+    dd = forbidden_tandem_pairs(functional['d'],model.locus,model.organism)
     if not dj and not dd:
         return []
     parents = tables['d_gene'].filter((pl.col('p')>0)&pl.col('d_allele').is_in(functional['d']))
