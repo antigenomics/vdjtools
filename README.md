@@ -192,3 +192,7 @@ For a sample too large to hold in memory, `vdjtools.io.iter_table_batches` yield
 ordered raw CSV/TSV/gzip/Parquet batches with optional column projection. It does
 not collapse clonotypes or calculate chunk-local frequencies; consumers retain
 whole-sample counting semantics. Prefer `iter_samples` when one sample fits.
+
+For joint junction/V/J probabilities with gene-level calls, use
+`vdjtools.model.native.pgen_aa_gene_batch`: one native batch sums the model alleles
+and supports exact or closed Hamming-1 mass. ALICE uses the same helper.

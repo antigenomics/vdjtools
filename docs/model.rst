@@ -904,3 +904,8 @@ the descriptive V/J subgroup count; ``n_exposure`` records the actual multiplier
 exposure with joint probability. ``probability_convention`` and ``selection_q``
 make the choice explicit in output. Model source remains a separate choice.
 Rows without V or J do not contribute to either the degree or exposure population.
+
+Gene-aware joint Pgen uses ``model.native.pgen_aa_gene_batch(model, sequences, v, j)``.
+It sums model alleles for gene calls in one native batch, retains input order,
+rejects unknown calls, and accepts mismatches=0 (exact) or 1 (closed ball).
+ALICE and repertoire annotation share this implementation.

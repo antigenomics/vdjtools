@@ -154,3 +154,29 @@ def test_joint_probability_uses_total_eligible_locus_exposure(monkeypatch):
     assert modern["E"].sum() == pytest.approx(3*2*.03)
     assert legacy.sort(S.V_CALL)["E"].to_list() == pytest.approx([.04,.04,.02])
     assert legacy["n_exposure"].to_list() == legacy["n_group"].to_list()
+
+
+def test_gene_batch_matches_explicit_allele_sums(monkeypatch):
+    from vdjtools.model import native
+    model=load_bundled('TRB','olga',collapse=False)
+    seqs=['CASSYVGSEQFF','CASSYVGSEQFF']
+    vs=['TRBV7-9','TRBV19*01'];js=['TRBJ2-1','TRBJ2-1*01']
+    original=native.pgen_aa_batch
+    calls=[]
+    def counted(*args,**kwargs):
+        calls.append(len(args[1]))
+        return original(*args,**kwargs)
+    monkeypatch.setattr(native,'pgen_aa_batch',counted)
+    for mismatches in [0,1]:
+        _,vi,ji=native.pack(model)
+        expected=[sum(original(model,[seq],[va],[ja],mismatches=mismatches,threads=1)[0]
+                      for va in _alleles_for(vi,v) for ja in _alleles_for(ji,j))
+                  for seq,v,j in zip(seqs,vs,js)]
+        calls.clear()
+        got=native.pgen_aa_gene_batch(model,seqs,vs,js,mismatches=mismatches,threads=1)
+        assert got == pytest.approx(expected,rel=1e-12)
+        assert len(calls)==1
+    with pytest.raises(ValueError,match='same length'):
+        native.pgen_aa_gene_batch(model,seqs,vs[:1],js)
+    with pytest.raises(KeyError):
+        native.pgen_aa_gene_batch(model,seqs,['UNKNOWN']*2,js)

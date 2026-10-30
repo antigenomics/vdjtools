@@ -47,36 +47,14 @@ _COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_group", "pgen_bal
          "E", "p_enrichment", "q_value", "n_exposure", "selection_q", "probability_convention", LOCUS]
 
 
-def _alleles_for(idx_of: dict[str, int], name: str) -> list[str]:
-    """The model alleles a V/J call denotes: itself if it is one, else the gene's alleles.
-
-    Real repertoires carry gene-level calls (``TRBV19``); the model is keyed by allele. Passing a
-    gene straight to the native Pgen raises (it used to silently marginalise over *every* allele —
-    measured 183x too high). Summing a gene's alleles is not an approximation: ``Σ_a Pgen(σ, V=a)``
-    over a gene's alleles *is* the gene marginal, verified to ratio 1.0000000000 against the
-    all-allele sum.
-    """
-    if name in idx_of:
-        return [name]
-    alleles = sorted(a for a in idx_of if a.split("*")[0] == name)
-    if not alleles:
-        raise KeyError(f"V/J call {name!r} is not in the model and is not a gene of any of its "
-                       f"{len(idx_of)} alleles")
-    return alleles
+from ..model.native import _alleles_for
 
 
 def _ball_pgen(model, seqs: list[str], v: str, j: str, threads: int) -> np.ndarray:
-    """Σ Pgen over the closed Hamming-1 ball of each ``seq``, at gene *or* allele resolution."""
-    from ..model.native import pack, pgen_aa_batch
-
-    _, vi, ji = pack(model)
-    vs, js = _alleles_for(vi, v), _alleles_for(ji, j)
-    total = np.zeros(len(seqs), dtype=float)
-    for va in vs:                       # a gene-level call sums over its alleles (exact)
-        for ja in js:
-            total += np.asarray(pgen_aa_batch(model, seqs, [va] * len(seqs), [ja] * len(seqs),
-                                              mismatches=1, threads=kernel_threads(threads)))
-    return total
+    """Closed Hamming-1 joint mass, summing the alleles of each gene."""
+    from ..model.native import pgen_aa_gene_batch
+    return np.asarray(pgen_aa_gene_batch(model, seqs, [v]*len(seqs), [j]*len(seqs),
+                                       mismatches=1, threads=threads))
 
 
 def _degrees(unique_aa: list[str], expanded_aa: list[str], scope: str, threads: int) -> np.ndarray:
