@@ -870,3 +870,15 @@ both Ds. This fixes the tandem seeded stream to match Pgen scenario weights;
 explicit OLGA single-D streams remain unchanged. Native and reference engines
 use different random streams, so the same seed does not produce identical sequences
 across engines. Neither option fits or rebuilds a model.
+
+
+Explicit selection-mass scaling
+-------------------------------
+
+``vdjtools.model.selection_mass(pgen, selection_q=1)`` returns the explicit
+product Q times generation mass, without clipping or normalization. It validates
+finite nonnegative input and a positive finite multiplier. The shared
+``ALICE_TRB_SELECTION_Q`` constant is 9.41, the historical ALICE average on the
+OLGA TRB scale; it is not an established TRA factor. ALICE uses this helper for
+its Poisson expectation. Empirical TCRnet controls already reflect selection
+and must not receive this generative multiplier a second time.

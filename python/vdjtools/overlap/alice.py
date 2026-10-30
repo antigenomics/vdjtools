@@ -37,10 +37,11 @@ import polars as pl
 from scipy.stats import poisson
 
 from ..biomarker.stats import fdr_bh
+from ..model.selection import ALICE_TRB_SELECTION_Q, selection_mass
 from ..io.schema import COUNT, J_CALL, JUNCTION_AA, JUNCTION_NT, LOCUS, V_CALL, add_locus
 
 #: ALICE's default thymic-selection factor — the paper's average over V–J combinations.
-DEFAULT_Q = 9.41
+DEFAULT_Q = ALICE_TRB_SELECTION_Q
 
 _COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_group", "pgen_ball",
          "E", "p_enrichment", "q_value", LOCUS]
@@ -178,7 +179,7 @@ def _score_locus(df: pl.DataFrame, model, loc: str, scope: str, selection_q: flo
             continue
         seqs = [s for s, k in zip(uniq, keep) if k]
         ball = _ball_pgen(model, seqs, v, j, threads)
-        lam = len(expanded) * selection_q * ball
+        lam = len(expanded) * selection_mass(ball, selection_q)
         rows.append(agg.filter(pl.Series(keep)).with_columns(
             pl.Series("n_neighbors", deg[keep]),
             pl.lit(len(expanded), dtype=pl.Int64).alias("n_group"),
