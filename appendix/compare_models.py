@@ -4,6 +4,8 @@ Fresh functional reads are outside the all-nonfunctional fitting inputs. They ar
 selection-shaped observations, not unbiased recombination heldout likelihood.
 The accepted protocol remains first20000 raw reads, then first N_CMP=300 eligible
 unique junctions. No annotation/parquet cache or unproven OOF holdout is used.
+The engine oracle imports identical raw OLGA germlines; productive-input metrics
+retain the frozen loaded baseline, including its documented anchor repairs.
 
 BUILD_GROUPS=human,mouse selects species; LOCI optionally restricts loci.
 RAW_FASTQ_DIR points to the existing raw mirror (<group>/<locus>.functional.fq.gz).
@@ -17,6 +19,7 @@ import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import olga
@@ -25,6 +28,7 @@ import olga.load_model as olm
 import polars as pl
 
 from vdjtools.model import Model, data, native
+from vdjtools.model import io as model_io
 from vdjtools.model.io import from_olga
 from vdjtools.model.schema import normalization_keys
 
@@ -53,6 +57,12 @@ def olga_pgen_model(sub: Path, chain: str):
     m = M()
     m.load_and_process_igor_model(str(sub / "model_marginals.txt"))
     return P(m, g)
+
+
+def raw_olga_model(sub: Path, locus: str, organism: str):
+    """Engine oracle: import the same raw germlines OLGA uses, without anchor repair."""
+    with patch.object(model_io, "repair_anchors", lambda genomic: genomic):
+        return from_olga(sub, locus=locus, organism=organism)
 
 
 def _per_parent_tv(a: pl.DataFrame, b: pl.DataFrame, parents: list[str]) -> list[float]:
@@ -183,9 +193,10 @@ def run(locus: str, group: str = "human") -> dict:
     baseline = "olga-legacy" if group == "human" else "olga-pip-import"
     m_isalgo = Model.load(BUNDLED / "isalgo" / key)
     opg = olga_pgen_model(oracle_path, chain)
+    m_oracle = raw_olga_model(oracle_path, locus, group)
     seqs, v_calls, j_calls, counts = functional_queries(group, locus)
     print(f"\n{group}/{locus}: independent selected productive inputs; {counts}", flush=True)
-    ours = np.asarray(native.pgen_nt_batch(m_olga, seqs, threads=THREADS))
+    ours = np.asarray(native.pgen_nt_batch(m_oracle, seqs, threads=THREADS))
     theirs = np.asarray([opg.compute_nt_CDR3_pgen(sequence) for sequence in seqs])
     # Include every zero in the oracle assertion; filtering both-positive vectors hides defects.
     np.testing.assert_allclose(ours, theirs, rtol=1e-9, atol=0,
@@ -197,7 +208,8 @@ def run(locus: str, group: str = "human") -> dict:
                    else None)
     max_relative_error = (float(np.max(np.abs(ours[both_positive] - theirs[both_positive]) /
                                        theirs[both_positive])) if both_positive.any() else None)
-    oracle_summary = dict(total=len(seqs), both_positive=int(both_positive.sum()),
+    oracle_summary = dict(reference="raw OLGA germlines and parameters, without anchor repair",
+                          total=len(seqs), both_positive=int(both_positive.sum()),
                           max_relative_error_both_positive=max_relative_error,
                           log10_correlation_both_positive=correlation, ours_zero=int((ours == 0).sum()),
                           oracle_zero=int((theirs == 0).sum()), rtol=1e-9, atol=0,

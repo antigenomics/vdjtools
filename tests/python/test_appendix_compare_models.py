@@ -13,6 +13,19 @@ compare = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(compare)
 
 
+def test_engine_oracle_import_keeps_raw_germlines_and_restores_repair(toy_model, monkeypatch, tmp_path):
+    from vdjtools.model import io as model_io
+    original = model_io.repair_anchors
+    genomic = object()
+    def load(path, **kwargs):
+        assert path == tmp_path and kwargs == {'locus': 'TRB', 'organism': 'human'}
+        assert model_io.repair_anchors(genomic) is genomic
+        return toy_model
+    monkeypatch.setattr(compare, 'from_olga', load)
+    assert compare.raw_olga_model(tmp_path, 'TRB', 'human') is toy_model
+    assert model_io.repair_anchors is original
+
+
 def test_functional_queries_always_reannotate_in_fresh_removed_directory(tmp_path, monkeypatch):
     monkeypatch.setenv('RAW_FASTQ_DIR', str(tmp_path / 'raw'))
     monkeypatch.setattr(compare, 'WORK', tmp_path / 'work')
@@ -95,10 +108,10 @@ def test_oracle_assertion_includes_zero_disagreements(toy_model, monkeypatch, ou
     assert compare.BUNDLED / 'isalgo' / key in loaded
     if group == 'human':
         assert compare.BUNDLED / 'olga/TRB' in loaded
-        assert not imported
+        assert imported == [(compare.OLGA / 'human_T_beta', {'locus': 'TRB', 'organism': 'human'})]
     else:
         assert loaded == [compare.BUNDLED / 'isalgo/mouse_TRB']
-        assert imported == [(compare.MOUSE_OLGA / 'mouse_T_beta', {'locus': 'TRB', 'organism': 'mouse'})]
+        assert imported == [(compare.MOUSE_OLGA / 'mouse_T_beta', {'locus': 'TRB', 'organism': 'mouse'})] * 2
 
 
 def test_default_context_selection_covers_exactly_twelve(monkeypatch, capsys):
@@ -119,6 +132,7 @@ def test_default_context_selection_covers_exactly_twelve(monkeypatch, capsys):
 def test_oracle_diagnostics_name_their_positive_pair_denominator(toy_model, monkeypatch, values, positive, correlation):
     toy_model.tables['vj_ins'] = pl.DataFrame({'length': [0, 1, 2, 3], 'p': [.6, .1, .2, .1]})
     monkeypatch.setattr(compare.Model, 'load', lambda *a, **k: toy_model)
+    monkeypatch.setattr(compare, 'from_olga', lambda *a, **k: toy_model)
     results = iter(values)
     class Oracle:
         def compute_nt_CDR3_pgen(self, seq):

@@ -372,6 +372,8 @@ Engine oracle tests therefore compare identical raw germlines and probability
 tables, using relative tolerances with zero absolute tolerance. Anchor repairs
 are tested separately. Equality of probability tables alone does not establish
 equality of Pgen after a germline repair.
+``appendix/compare_models.py`` keeps this raw engine oracle separate from the
+frozen loaded baseline used for productive-input model comparisons.
 
 Insertion-workspace boundary in the oracle
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
