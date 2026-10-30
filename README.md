@@ -157,7 +157,8 @@ Public recombination models, corpus bundles and example sources are mirrored on
 The dataset card shows selective downloads; downloading the whole mirror is unnecessary.
 
 Working model APIs and CLIs default to `isalgo`, targeting seven human loci and
-mouse TRA/TRB/IGH/IGK/IGL. Fresh fitted assets and their validation remain release
-gates; missing models fail explicitly. `olga-legacy` selects frozen OLGA models
+mouse TRA/TRB/IGH/IGK/IGL. All twelve fitted models ship in the package; see the
+[validation table](https://docs.isalgo.dev/vdjtools/model.html#release-5-4-validation)
+for exact Pgen support and fixed-model observation likelihood. `olga-legacy` selects frozen OLGA models
 (`olga` is its alias). `learned` and `arda` alias fresh `isalgo`; their previous
 parameter families require a pinned previous release.

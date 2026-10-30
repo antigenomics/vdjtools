@@ -1,0 +1,273 @@
+{
+  "runs": [
+    {
+      "loglik": [
+        -31.28275660803537,
+        -27.295042459293775,
+        -26.944370875128453,
+        -26.890319176975137,
+        -26.875395707899735,
+        -26.86879875197991,
+        -26.864888646236643,
+        -26.862119920688745,
+        -26.85991576374821
+      ],
+      "n_scoreable": [
+        52234,
+        52234,
+        52234,
+        52234,
+        52234,
+        52234,
+        52234,
+        52234,
+        52234
+      ],
+      "gene_tv": [
+        Infinity,
+        0.12747323385552198,
+        0.012847446003730558,
+        0.0020060478830183936,
+        0.0005549755277051444,
+        0.0002454645130261569,
+        0.00014552588596755662,
+        0.00010306112131555426,
+        8.205446729609412e-05
+      ],
+      "n_iter": 9,
+      "converged": true,
+      "n_sequences": 52234,
+      "max_iter": 1000,
+      "tol": 0.0001,
+      "init": "uniform",
+      "native": true,
+      "elapsed_s": 50.668,
+      "finished_at": "2026-10-29T23:39:00",
+      "template_source": "arda:TRA",
+      "error_rate": [
+        0.03491151075054884,
+        0.04753879143365246,
+        0.051750654429879216,
+        0.05322373318775982,
+        0.053813847092094254,
+        0.0540794389942433,
+        0.05421045640902094,
+        0.05428025869659738,
+        0.054320059779955174
+      ],
+      "error_model": "retained-germline-substitution",
+      "candidate_search": {
+        "batches": [
+          {
+            "n_queries": 10000,
+            "n_hits": 703514,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 706890,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 687646,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 695444,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 669862,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 672568,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 625208,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 713240,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 7736,
+            "n_hits": 528215,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          }
+        ],
+        "d_unrestricted": true,
+        "candidate_ambiguity": "DNA IUPAC symbols replaced with A before search and inference",
+        "scope": "V/J gene proposals; all functional model templates per gene",
+        "query_scope": "coding-strand full-read alternatives; junction fallback when absent",
+        "query_count": 87736,
+        "full_read_observations": 52234,
+        "junction_fallback_observations": 0,
+        "query_inputs_sha256": "0ad39759b1ba75a7a50622217c89befc1c4e6bf0ab8f4defbd094771be22dd24",
+        "unrestricted_v": 1655,
+        "unrestricted_j": 3931,
+        "input_masks_sha256": "72c5f7e770e4499e393e9a3a4070d63f9b430632fe5699994c775c41b86159e0"
+      },
+      "n_ambiguous": 0,
+      "prune_ratio": 1e-05,
+      "pruned_mass_mean": [
+        0.0001902905672929108,
+        0.0001755925634778432,
+        0.00014832791911530865,
+        0.00013883694004980464,
+        0.00013571422418025414,
+        0.00013444916711678745,
+        0.0001340972094245691,
+        0.00013437397769822796,
+        0.0001349774302053279
+      ],
+      "pruned_mass_max": [
+        0.015399032996724056,
+        0.013312243947512284,
+        0.012460462808676237,
+        0.008701858215037094,
+        0.00827298755497848,
+        0.007936494786295777,
+        0.007398353387035122,
+        0.006912059239899754,
+        0.006536619387351542
+      ],
+      "n_pruned_observations": [
+        52234,
+        52234,
+        52234,
+        52234,
+        52234,
+        52234,
+        52234,
+        52234,
+        52234
+      ]
+    }
+  ]
+}

@@ -337,6 +337,113 @@ Use ``by="gene"`` to compare models built on different germline vintages or sour
 OLGA-namespace model and an arda-namespace one only line up at gene level.
 
 
+.. _release-5-4-validation:
+
+Release 5.4 validation
+----------------------
+
+All twelve ``isalgo`` models were freshly fitted to their complete nonfunctional
+inputs and converged. The seven frozen OLGA bundles retain their original bytes.
+Independent raw-OLGA engine comparisons agree on all 3,378 selected queries,
+including zeros, at relative tolerance ``1e-9`` and absolute tolerance zero.
+The table separates error-free, V/J-marginalized nucleotide Pgen support from
+observation likelihood with each fitted model's stored substitution rate.
+
+.. list-table:: Final fitted models and software-validation counts
+   :header-rows: 1
+   :widths: 18 16 12 16 19 19
+
+   * - Context
+     - Fitted clonotypes
+     - EM iterations
+     - Selected queries
+     - Positive exact Pgen
+     - Positive observation likelihood
+   * - human TRA
+     - 36984
+     - 16
+     - 300
+     - 299
+     - 300
+   * - human TRB
+     - 133622
+     - 12
+     - 300
+     - 300
+     - 300
+   * - human TRG
+     - 14780
+     - 11
+     - 300
+     - 299
+     - 300
+   * - human TRD
+     - 11433
+     - 17
+     - 300
+     - 296
+     - 300
+   * - human IGH
+     - 143477
+     - 18
+     - 300
+     - 294
+     - 300
+   * - human IGK
+     - 295371
+     - 27
+     - 300
+     - 296
+     - 300
+   * - human IGL
+     - 39184
+     - 35
+     - 300
+     - 293
+     - 300
+   * - mouse TRA
+     - 52234
+     - 9
+     - 300
+     - 300
+     - 300
+   * - mouse TRB
+     - 30865
+     - 9
+     - 300
+     - 300
+     - 300
+   * - mouse IGH
+     - 156338
+     - 27
+     - 300
+     - 300
+     - 300
+   * - mouse IGK
+     - 2357
+     - 22
+     - 300
+     - 275
+     - 300
+   * - mouse IGL
+     - 128
+     - 12
+     - 78
+     - 6
+     - 78
+
+**Scope and interpretation.** Queries are the first 300 eligible unique junctions
+from fresh annotations of the first 20,000 reads in each independent
+functional-source input; mouse IGL supplies only 78 eligible queries. This source
+bucket does not guarantee productivity. All selected queries, including stop or
+noncanonical junctions, are retained. Observation scoring performs no M-step and
+does not estimate predictive superiority or unbiased nonfunctional held-out
+likelihood. Exact Pgen zeros remain visible: retained-germline substitutions can
+have positive observation likelihood while error-free Pgen is zero. The fitted
+substitution rate does not identify instrument error, polymorphism or SHM.
+The ``1e-5`` relative scenario cutoff does not bound total omitted mass;
+validation records its actual mean, maximum and affected-query count.
+
 Likelihood and BIC
 ------------------
 

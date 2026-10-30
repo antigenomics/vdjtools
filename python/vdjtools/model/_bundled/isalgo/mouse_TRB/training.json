@@ -1,0 +1,219 @@
+{
+  "runs": [
+    {
+      "loglik": [
+        -33.11857131350029,
+        -27.637466700501424,
+        -27.039762849556062,
+        -26.90736051738615,
+        -26.876612409919073,
+        -26.86401832822763,
+        -26.857476334289643,
+        -26.853508763330282,
+        -26.850840814620025
+      ],
+      "n_scoreable": [
+        30865,
+        30865,
+        30865,
+        30865,
+        30865,
+        30865,
+        30865,
+        30865,
+        30865
+      ],
+      "gene_tv": [
+        Infinity,
+        0.16549942813397903,
+        0.02162657878243579,
+        0.004896578897772492,
+        0.0011427396398545721,
+        0.0004685888794078268,
+        0.00024352253851435854,
+        0.00014772687165306392,
+        9.935195932014556e-05
+      ],
+      "n_iter": 9,
+      "converged": true,
+      "n_sequences": 30865,
+      "max_iter": 1000,
+      "tol": 0.0001,
+      "init": "uniform",
+      "native": true,
+      "elapsed_s": 118.365,
+      "finished_at": "2026-10-29T23:41:54",
+      "template_source": "arda:TRB+history",
+      "error_rate": [
+        0.014511354568574051,
+        0.02012249245422869,
+        0.02319527508561275,
+        0.024850990895133974,
+        0.025638609178665794,
+        0.02601645187993478,
+        0.026203088935320355,
+        0.02629786371032623,
+        0.026347158799486885
+      ],
+      "error_model": "retained-germline-substitution",
+      "candidate_search": {
+        "batches": [
+          {
+            "n_queries": 10000,
+            "n_hits": 589387,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 591400,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 590953,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 589346,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 10000,
+            "n_hits": 589552,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          },
+          {
+            "n_queries": 2360,
+            "n_hits": 136869,
+            "limits": {
+              "max_seqs": 300,
+              "evalue": 0.001,
+              "sensitivity": 7.0,
+              "kmer": 13,
+              "strand": "forward",
+              "major_only": true,
+              "rejected_reverse_hits": 0,
+              "d_threads": 24,
+              "d_serial_below": 32,
+              "vj_spans": "one per target",
+              "d_spans": "best positive span per allele",
+              "batch_size": 10000
+            }
+          }
+        ],
+        "d_unrestricted": true,
+        "candidate_ambiguity": "DNA IUPAC symbols replaced with A before search and inference",
+        "scope": "V/J gene proposals; all functional model templates per gene",
+        "query_scope": "coding-strand full-read alternatives; junction fallback when absent",
+        "query_count": 52360,
+        "full_read_observations": 30865,
+        "junction_fallback_observations": 0,
+        "query_inputs_sha256": "ada883df71672e4f1289a4293ad9831155328de3e967bf9c2b4dc54ef7b54603",
+        "unrestricted_v": 1022,
+        "unrestricted_j": 1725,
+        "input_masks_sha256": "84a12781dae094d1040b845655dfe4ea1e0b84993e0b459a2f8ca213431be918"
+      },
+      "n_ambiguous": 0,
+      "prune_ratio": 1e-05,
+      "pruned_mass_mean": [
+        0.000676855395939039,
+        0.0007478654388975817,
+        0.0006093567788720053,
+        0.0005719505361056877,
+        0.0005587401989937841,
+        0.0005514380551750443,
+        0.0005466039946409154,
+        0.0005442998217136564,
+        0.0005434401848588092
+      ],
+      "pruned_mass_max": [
+        0.01005688014840828,
+        0.006928894641182359,
+        0.006916547771857035,
+        0.009497296908439323,
+        0.007957840351902314,
+        0.008426663405383745,
+        0.008175898725676322,
+        0.008510907231735856,
+        0.008217615643513886
+      ],
+      "n_pruned_observations": [
+        30865,
+        30865,
+        30865,
+        30865,
+        30865,
+        30865,
+        30865,
+        30865,
+        30865
+      ]
+    }
+  ]
+}
