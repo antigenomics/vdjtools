@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "5.4.0"
+version = "5.5.0"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,7 +24,7 @@ classifiers = [
 # phases that import them land (model -> arda, overlap -> vdjmatch). Every dep traces to a use.
 dependencies = [
     # Exact scientific-notation Decimal parsing first shipped in Polars 1.37.
-    "polars>=1.37,<2",
+    "polars>=1.41.2,<2",
     "numpy",
     "threadpoolctl>=3",  # runtime control for already-initialized BLAS pools
     "scipy",

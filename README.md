@@ -187,3 +187,8 @@ mouse TRA/TRB/IGH/IGK/IGL. All twelve fitted models ship in the package; see the
 for exact Pgen support and fixed-model observation likelihood. `olga-legacy` selects frozen OLGA models
 (`olga` is its alias). `learned` and `arda` alias fresh `isalgo`; their previous
 parameter families require a pinned previous release.
+
+For a sample too large to hold in memory, `vdjtools.io.iter_table_batches` yields
+ordered raw CSV/TSV/gzip/Parquet batches with optional column projection. It does
+not collapse clonotypes or calculate chunk-local frequencies; consumers retain
+whole-sample counting semantics. Prefer `iter_samples` when one sample fits.

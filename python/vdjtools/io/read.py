@@ -315,3 +315,29 @@ def read_airr(path: str | os.PathLike, *, collapse: bool = True,
     df = schema.normalize(df, recompute_freq=_needs_freq(df, recompute_frequencies),
                           keep=tuple(extra))
     return schema.add_locus(df)
+
+
+def iter_table_batches(path: str | os.PathLike, *, batch_size: int = 65536,
+                       columns=None, separator: str | None = None):
+    """Yield ordered raw table batches without loading a complete sample.
+
+    Supports CSV/TSV (including gzip) and Parquet. Text fields remain strings;
+    Parquet preserves types. ``columns`` accepts a Polars projection/selector.
+    This is deliberately a raw reader: it does not collapse clonotypes, derive
+    frequencies from chunk totals, or assume paired chains share a batch. The
+    consumer owns source-aware normalization and cross-batch reductions.
+    ``batch_size`` bounds yielded rows, not total parser/native memory.
+    """
+    if type(batch_size) is not int or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+    path = Path(path)
+    suffix = path.with_suffix("").suffix if path.suffix.lower() == ".gz" else path.suffix
+    if suffix.lower() in {".parquet", ".pq"}:
+        scan = pl.scan_parquet(path)
+    else:
+        sep = separator if separator is not None else ("," if suffix.lower() == ".csv" else "\t")
+        scan = pl.scan_csv(path, separator=sep, infer_schema_length=0)
+    if columns is not None:
+        scan = scan.select(columns)
+    yield from scan.collect_batches(chunk_size=batch_size, maintain_order=True,
+                                    lazy=True, engine="streaming")
