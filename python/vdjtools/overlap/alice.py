@@ -5,13 +5,13 @@ ALICE (Pogorelyy et al., PLoS Biol 2019) asks the same question as :mod:`vdjtool
 **generation model** rather than from a control repertoire. For each amino-acid CDR3 ``σ`` within
 one V–J class::
 
-    λ_σ  =  n · Σ_{σ' : Hamming(σ,σ') ≤ 1}  Q · Pgen(σ')
+    λ_σ  =  N · Σ_{σ' : Hamming(σ,σ') ≤ 1}  Q · Pgen(σ', V, J)
     p    =  P(Poisson(λ_σ) ≥ d(σ))
 
-where ``n`` is the number of unique **nucleotide** clonotypes in that V–J class, ``d(σ)`` counts
+where ``N`` is the number of eligible unique **nucleotide** clonotypes in the locus, ``d(σ)`` counts
 the nucleotide clonotypes whose CDR3aa lies within one mismatch of ``σ`` (σ included — different
-nucleotide variants of one amino-acid sequence are genuine neighbours), and ``Q`` rescales for
-thymic selection, which removes a fraction ``1 − 1/Q`` of generated sequences.
+nucleotide variants of one amino-acid sequence are genuine neighbours), and ``Q`` is an explicit effective post-selection generation-mass multiplier.
+A fitted multiplier is not itself a measured thymic survival probability.
 
 The two nulls are complements, not rivals, and that is why both are here: ALICE's generative null
 controls for the intrinsic biases of V(D)J recombination but knows nothing about selection or
@@ -44,7 +44,7 @@ from ..io.schema import COUNT, J_CALL, JUNCTION_AA, JUNCTION_NT, LOCUS, V_CALL, 
 DEFAULT_Q = ALICE_TRB_SELECTION_Q
 
 _COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_group", "pgen_ball",
-         "E", "p_enrichment", "q_value", LOCUS]
+         "E", "p_enrichment", "q_value", "n_exposure", "selection_q", "probability_convention", LOCUS]
 
 
 def _alleles_for(idx_of: dict[str, int], name: str) -> list[str]:
@@ -98,7 +98,8 @@ def _degrees(unique_aa: list[str], expanded_aa: list[str], scope: str, threads: 
 
 def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
           source: str = "isalgo", scope: str = "1,0,0,1", selection_q: float = DEFAULT_Q,
-          min_degree: int = 3, min_count: int = 2, threads: int = 0) -> pl.DataFrame:
+          min_degree: int = 3, min_count: int = 2, threads: int = 0,
+          organism: str = "human", legacy: bool = False) -> pl.DataFrame:
     """Per-clonotype neighbourhood enrichment against a V(D)J generation model.
 
     Args:
@@ -114,6 +115,9 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
         selection_q: Thymic-selection factor ``Q``. The default is the paper's average over V–J
             combinations; it is calibrated on OLGA's **TRB** Pgen scale and there is no evidence
             it transfers to the other loci, so the benchmark titrates it per locus.
+        organism: Species of the bundled model (human or mouse).
+        legacy: Preserve the historical subgroup-sized exposure with joint mass.
+            Modern mode uses total eligible locus exposure; model choice remains explicit.
         min_degree: Only clonotypes with at least this many neighbours (self included) are
             tested; the rest are dropped. ALICE tests ``d(σ) > 2``.
         min_count: Clonotypes below this count do not participate at all. Low-count variants of
@@ -147,9 +151,9 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
 
     parts = []
     for loc in sorted(df[LOCUS].unique().to_list()):
-        mdl = model if model is not None else load_bundled(loc, source)
+        mdl = model if model is not None else load_bundled(loc, source, organism=organism)
         parts.append(_score_locus(df.filter(pl.col(LOCUS) == loc), mdl, loc, scope,
-                                  selection_q, min_degree, threads))
+                                  selection_q, min_degree, threads, legacy=legacy))
     out = pl.concat([p for p in parts if not p.is_empty()]) if any(
         not p.is_empty() for p in parts) else parts[0]
     if out.is_empty():
@@ -159,11 +163,11 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
 
 
 def _score_locus(df: pl.DataFrame, model, loc: str, scope: str, selection_q: float,
-                 min_degree: int, threads: int) -> pl.DataFrame:
+                 min_degree: int, threads: int, *, legacy: bool = False) -> pl.DataFrame:
     """Score one locus, V–J class by V–J class (ALICE's null is defined per V–J)."""
     has_nt = JUNCTION_NT in df.columns and df[JUNCTION_NT].null_count() < df.height
     nt_key = [JUNCTION_NT, JUNCTION_AA, V_CALL, J_CALL] if has_nt else [JUNCTION_AA, V_CALL, J_CALL]
-    nt = df.group_by(nt_key).agg(pl.col(COUNT).sum())      # unique nucleotide clonotypes
+    nt = df.filter(pl.col(V_CALL).is_not_null() & pl.col(J_CALL).is_not_null()).group_by(nt_key).agg(pl.col(COUNT).sum())      # unique nucleotide clonotypes
 
     rows = []
     for (v, j), grp in nt.group_by([V_CALL, J_CALL]):
@@ -179,12 +183,16 @@ def _score_locus(df: pl.DataFrame, model, loc: str, scope: str, selection_q: flo
             continue
         seqs = [s for s, k in zip(uniq, keep) if k]
         ball = _ball_pgen(model, seqs, v, j, threads)
-        lam = len(expanded) * selection_mass(ball, selection_q)
+        exposure = len(expanded) if legacy else nt.height
+        lam = len(expanded) * selection_q * ball if legacy else exposure * selection_mass(ball, selection_q)
         rows.append(agg.filter(pl.Series(keep)).with_columns(
             pl.Series("n_neighbors", deg[keep]),
             pl.lit(len(expanded), dtype=pl.Int64).alias("n_group"),
             pl.Series("pgen_ball", ball),
             pl.Series("E", lam),
+            pl.lit(exposure).alias("n_exposure"),
+            pl.lit(float(selection_q)).alias("selection_q"),
+            pl.lit("legacy-subgroup-times-joint" if legacy else "locus-total-times-joint").alias("probability_convention"),
             pl.Series("p_enrichment", poisson.sf(deg[keep] - 1, lam)),
             pl.lit(v).alias(V_CALL), pl.lit(j).alias(J_CALL),
         ))

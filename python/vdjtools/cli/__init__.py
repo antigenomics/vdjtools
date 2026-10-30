@@ -1020,6 +1020,8 @@ def alice(
     fmt: str = _FMT, out: Optional[Path] = _OUT,
     locus: Optional[str] = typer.Option(None, "--locus", help="Force one locus (else per-locus)."),
     source: str = typer.Option("isalgo", "--source", help="Bundled model source (default: isalgo); olga-legacy retains historical reproduction."),
+    organism: str = typer.Option("human", "--species"),
+    legacy: bool = typer.Option(False, "--legacy", help="Historical subgroup-sized exposure; model source remains explicit."),
     scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
     selection_q: float = typer.Option(9.41, "--q", help="Thymic-selection factor Q."),
     min_degree: int = typer.Option(3, "--min-degree", help="Only test clonotypes with >= this "
@@ -1040,7 +1042,7 @@ def alice(
     try:
         res = _alice(read(sample, fmt=fmt), locus=locus, source=source, scope=scope,
                      selection_q=selection_q, min_degree=min_degree, min_count=min_count,
-                     threads=threads)
+                     threads=threads, organism=organism, legacy=legacy)
     except (ImportError, KeyError, ValueError) as e:
         _err(str(e))
     _write(res, out)

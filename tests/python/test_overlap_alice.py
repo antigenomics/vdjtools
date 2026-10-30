@@ -135,3 +135,22 @@ def test_alice_min_degree_gates_singletons():
     res = O.alice(_sample(aa + lone), locus="TRB", min_degree=3)
     assert "CWWWWWWWWWWWF" not in res[S.JUNCTION_AA].to_list()
     assert (res["n_neighbors"] >= 3).all()
+
+
+def test_joint_probability_uses_total_eligible_locus_exposure(monkeypatch):
+    import importlib
+    import numpy as np
+    module = importlib.import_module("vdjtools.overlap.alice")
+    frame = pl.concat([_sample(["CASSF", "CATSF"], v="TRBV2", j="TRBJ1"),
+                       _sample(["CAVRF"], v="TRBV3", j="TRBJ2"),
+                       _sample(["CQQQF"], v=None, j="TRBJ2")])
+    monkeypatch.setattr(module, "_ball_pgen", lambda model, seqs, v, j, threads: np.full(len(seqs), .01))
+    monkeypatch.setattr(module, "_degrees", lambda unique, expanded, scope, threads: np.ones(len(unique), dtype=int))
+    modern = module._score_locus(frame, None, "TRB", "0", 2., 1, 1)
+    legacy = module._score_locus(frame, None, "TRB", "0", 2., 1, 1, legacy=True)
+    assert modern.height == legacy.height == 3
+    assert modern["n_exposure"].to_list() == [3]*3
+    assert modern["E"].to_list() == pytest.approx([.06]*3)
+    assert modern["E"].sum() == pytest.approx(3*2*.03)
+    assert legacy.sort(S.V_CALL)["E"].to_list() == pytest.approx([.04,.04,.02])
+    assert legacy["n_exposure"].to_list() == legacy["n_group"].to_list()

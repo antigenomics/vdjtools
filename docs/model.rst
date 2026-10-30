@@ -892,3 +892,15 @@ The unconditioned mean is N times Q times Pgen; fitted Q is model-, species-
 and locus-specific. Unsupported zero-mass sequences require an explicit coverage
 audit. All-singleton data do not identify a positive estimate. This effective
 constant does not establish a sequence-specific thymic survival probability.
+
+
+ALICE exposure convention
+-------------------------
+
+Modern ALICE multiplies joint V/J neighbourhood generation mass by the total
+eligible nucleotide-clonotype count in the locus, then by Q. ``n_group`` remains
+the descriptive V/J subgroup count; ``n_exposure`` records the actual multiplier.
+``legacy=True`` (CLI ``--legacy``) restores the historical subgroup-sized
+exposure with joint probability. ``probability_convention`` and ``selection_q``
+make the choice explicit in output. Model source remains a separate choice.
+Rows without V or J do not contribute to either the degree or exposure population.
