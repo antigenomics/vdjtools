@@ -237,3 +237,15 @@ CellRanger in, QC and paired Pgen, then out to scirpy, dandelion and scRepertoir
 
 ``examples/single_cell.py`` covers the analysis side: dCODE dextramer data, antigen-driven
 clustering, and grading it with :func:`~vdjtools.sc.cluster_eval`.
+
+
+Chain evidence support
+----------------------
+
+``sc.chain_support(hits, by=["sample_id", "receptor_id", "target_id"])`` reduces
+TRA/TRB hit rows into separate, union and intersection Boolean support columns.
+Identity keys must preserve the receptor and complete target context. Duplicate
+hits never multiply support, and an orphan cannot satisfy intersection. Only
+keys present in the hit table are returned; the caller preserves no-hit rows and
+raw denominators. Strict and fuzzy chain matches can enter the same reducer;
+the reducer itself assigns neither thresholds nor probabilities.
