@@ -36,7 +36,9 @@ def _(mo):
     Explore any bundled recombination model as a **Bayes net** — nodes are recombination events
     (sized/annotated by their marginal Shannon entropy *H*), edges are the conditioning
     dependencies (annotated by mutual information *I*). Compare the **OLGA** bootstrap models to
-    the **EM-learned** models fit to real out-of-frame repertoires.
+    the **EM-learned** models fit to real nonfunctional repertoires (out-of-frame or stop-codon).
+    vdjtools owns the fits and runtime models; ARDA supplies germline references.
+    Replacement assets and full-catalog validation remain release gates.
     """)
     return
 
@@ -44,7 +46,7 @@ def _(mo):
 @app.cell
 def _(list_bundled, mo):
     avail = list_bundled()
-    source = mo.ui.dropdown(list(avail), value="olga", label="Model source")
+    source = mo.ui.dropdown(list(avail), value="learned", label="Model source")
     return avail, source
 
 
@@ -59,7 +61,8 @@ def _(avail, mo, source):
 @app.cell
 def _(load_bundled, locus, mo, source):
     mo.stop(locus.value is None, mo.md("*No bundled models found — build them first.*"))
-    model = load_bundled(locus.value, source.value)
+    organism, chain = locus.value.split("_", 1) if "_" in locus.value else ("human", locus.value)
+    model = load_bundled(chain, source.value, organism=organism)
     mo.md(f"**{locus.value}** · *{source.value}* · chain **{model.chain_type}** · "
           f"{model.genomic['genes_v'].height} V / {model.genomic['genes_j'].height} J genes")
     return (model,)

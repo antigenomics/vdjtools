@@ -32,7 +32,8 @@ from vdjtools.model.score import (
 #   j_5_del    reachable -4..17 / -4..11 (22/16 bins)  -> (22 - 1) + (16 - 1) = 36
 #   vj_ins     lengths 0..3, one group                  ->  4 - 1 =  3
 #   vj_dinucl  column-stochastic 4x4, 4 groups          -> 4 * (4 - 1) = 12
-TOY_FREE_PARAMS = 2 + 3 + 36 + 36 + 3 + 12
+#   vj_first_nt four initial nucleotides               -> 4 - 1 = 3
+TOY_FREE_PARAMS = 2 + 3 + 36 + 36 + 3 + 12 + 3
 
 
 def test_free_params_matches_the_hand_count(toy_model):

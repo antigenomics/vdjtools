@@ -46,15 +46,23 @@ def test_a_gene_level_call_is_resolved_rather_than_refused(trb):
         assert all(a[0] >= b[0] for a, b in zip(got, got[1:])), "not ordered by weight"
 
 
-def test_refusing_resolution_is_available_and_actually_refuses(trb):
+def test_single_representative_needs_no_allele_selection(trb):
+    aa, v, j = CASES[0]
+    aliases = gene_to_allele(trb)
+    expected = best_aa_scenarios(trb, aa, aliases[v], aliases[j], resolve_genes=False)
+    assert expected
+    assert best_aa_scenarios(trb, aa, v, j, resolve_genes=False) == expected
+
+
+def test_refusing_resolution_rejects_a_multiallele_gene(toy_model):
     with pytest.raises(KeyError, match="gene name"):
-        best_aa_scenarios(trb, CASES[0][0], CASES[0][1], CASES[0][2], resolve_genes=False)
+        best_aa_scenarios(toy_model, "CAF", "TOYV1", "TOYJ1", resolve_genes=False)
 
 
 def test_an_unknown_call_raises_and_names_it_rather_than_returning_empty(trb):
     """The filed complaint: an empty list with no reason. A naming mismatch must raise, not decline."""
-    with pytest.raises(KeyError, match="TRBV21-1"):
-        best_aa_scenarios(trb, "CASSKSQDEQYF", "TRBV21-1", "TRBJ2-7")
+    with pytest.raises(KeyError, match="TRBV999"):
+        best_aa_scenarios(trb, "CASSKSQDEQYF", "TRBV999", "TRBJ2-7")
 
 
 def test_an_empty_result_means_the_dp_explains_nothing_not_a_naming_problem(trb):
@@ -77,15 +85,17 @@ def test_the_batch_is_the_per_row_loop_exactly(trb):
     j = [c[2] for c in CASES] * 40
     got = best_aa_scenarios_batch(trb, aa, v, j, k=4)
     assert got.columns == ["row", "rank", "w", "v_call", "len_v", "j_call", "len_j",
-                           "d_call", "idx5", "idx3", "pos"]
+                           "d_call", "idx5", "idx3", "pos", "d2_call", "idx5_2", "idx3_2", "pos2"]
     for i in (0, 1, 2, 77):
         ref = best_aa_scenarios(trb, aa[i], v[i], j[i], 4)
         rows = got.filter(pl.col("row") == i).sort("rank")
         assert rows.height == len(ref)
-        for r, (w, va, lv, ja, lj, da, i5, i3, pos) in zip(rows.iter_rows(named=True), ref):
+        for r, (w, va, lv, ja, lj, da, i5, i3, pos, d2, k5, k3, pos2) in zip(rows.iter_rows(named=True), ref):
             assert r["w"] == w and r["v_call"] == va and r["len_v"] == lv
             assert r["j_call"] == ja and r["len_j"] == lj and r["d_call"] == da
             assert (r["idx5"], r["idx3"], r["pos"]) == (i5, i3, pos)
+            assert (r["d2_call"], r["idx5_2"], r["idx3_2"], r["pos2"]) == (d2, k5, k3, pos2)
+    assert got.schema['d2_call'] == pl.String
 
 
 def test_the_batch_result_does_not_depend_on_the_thread_count(trb):
@@ -96,6 +106,26 @@ def test_the_batch_result_does_not_depend_on_the_thread_count(trb):
     one = best_aa_scenarios_batch(trb, aa, v, j, k=4, threads=1)
     many = best_aa_scenarios_batch(trb, aa, v, j, k=4, threads=min(8, available_cores()))
     assert one.equals(many)
+
+
+def test_late_tandem_calls_preserve_nullable_string_dtype(trb, monkeypatch):
+    """A long null prefix must not turn a later D2 name into an uncastable Object column."""
+    import numpy as np
+    from vdjtools import _core
+
+    n = 12000
+    def batch(*args):
+        cols = {name: np.zeros(n, dtype=np.int32) for name in
+                ('row', 'rank', 'v', 'len_v', 'j', 'len_j', 'idx5', 'idx3', 'pos',
+                 'idx5_2', 'idx3_2', 'pos2')}
+        cols.update(w=np.ones(n), d=np.full(n, -1), d2=np.full(n, -1))
+        cols['d2'][-1] = 0
+        return cols
+    monkeypatch.setattr(_core, 'best_aa_scenarios_batch', batch)
+    result = best_aa_scenarios_batch(trb, ['CASSF'] * n, k=1, threads=1)
+    assert result.schema['d_call'] == result.schema['d2_call'] == pl.String
+    assert result['d_call'].null_count() == n and result['d2_call'].null_count() == n - 1
+    assert result['d2_call'][-1] == trb.genomic['genes_d']['d_allele'][0]
 
 
 def test_a_declined_query_contributes_no_rows_rather_than_a_marginalized_one(trb):

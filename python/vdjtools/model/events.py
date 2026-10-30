@@ -24,6 +24,8 @@ class EventKind(str, Enum):
     - ``DELETION_2D``   — joint 5'+3' trimming of a D segment.            realization: ``ndel5, ndel3``
     - ``INS_LENGTH``    — number of non-templated (N-region) insertions.  realization: ``length``
     - ``DINUCLEOTIDE``  — Markov transition of the N-region nt sequence.  realization: ``from_nt, to_nt``
+    - ``NUCLEOTIDE``    — first nucleotide of a nonempty N-region.       realization: ``nt``
+    - ``D_HISTORY``     — J-conditioned joint single/tandem D history.  realization: ``n_d, d_allele, d2_allele``
     """
 
     GENE_CHOICE = "gene_choice"
@@ -32,6 +34,8 @@ class EventKind(str, Enum):
     DELETION_2D = "deletion_2d"
     INS_LENGTH = "ins_length"
     DINUCLEOTIDE = "dinucleotide"
+    NUCLEOTIDE = "nucleotide"
+    D_HISTORY = "d_history"
 
 
 @dataclass(frozen=True, slots=True)

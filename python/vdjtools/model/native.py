@@ -18,14 +18,27 @@ def _encode(seq: str) -> list[int]:
     return [_NT2NUM[c] for c in seq]
 
 
+def _encode_observed(seq: str) -> list[int]:
+    """Encode sequencing DNA after mandatory IUPAC-to-A normalization."""
+    from ..io.schema import normalize_nt
+
+    return _encode(normalize_nt(seq))
+
+
 def _gene_idx(idx_of: dict[str, int], name: str | None, kind: str) -> int:
-    """Resolve a V/J **allele** name to its model index; ``None`` marginalizes (index ``-1``).
+    """Resolve a V/J call to its model index; ``None`` marginalizes (index ``-1``).
+
+    A gene with one model representative accepts bare names and arbitrary allele suffixes.
+    Explicit multi-allele models retain allele resolution.
 
     Raises on an unknown name rather than falling back to ``-1``: ``-1`` means "marginalize over
     every allele", so a silent fallback turns a mis-typed or gene-level call into a *different,
     larger* Pgen with no error — e.g. ``"TRBV9"`` (gene) returned the V/J-agnostic value, 2.38x
     the true ``"TRBV9*01"`` Pgen.
     """
+    from .pgen import _resolve_gene_call
+
+    name = _resolve_gene_call(idx_of, name)
     if not name:
         return -1
     idx = idx_of.get(name)
@@ -47,14 +60,14 @@ def gene_to_allele(model: Model) -> dict[str, str]:
     """Map each V/J **gene** the model carries to a representative allele of that gene.
 
     Real repertoires and every aligner report genes (``TRBV10-3``) while a model is keyed by
-    allele (``TRBV10-3*01``), and :func:`pgen_aa` deliberately raises on a gene name rather than
-    silently marginalising over every allele — that fallback once returned a Pgen 2.38x too high
-    with no error. So the gene has to be resolved to a concrete allele deliberately and visibly.
+    allele (``TRBV10-3*01``). A gene call must resolve to a concrete entry rather than silently
+    marginalising over every gene — that fallback once returned a Pgen 2.38x too high with no error.
 
     The representative is the lowest-numbered allele present, i.e. ``*01`` wherever the model has
     it. Alleles of one gene share the CDR3-region germline in all but rare cases, so this is the
     conventional reading of a gene-level call — but it IS a choice, which is why the functions
-    using it expose ``resolve_genes=False`` to refuse it instead.
+    using it expose ``resolve_genes=False`` to refuse allele selection in multi-allele models.
+    A gene with one model entry always accepts the shared gene and suffix aliases.
 
     Args:
         model: A recombination :class:`Model`.
@@ -166,8 +179,16 @@ def pack(model: Model):
         # D-D (tandem) extension — populated only when the model declares it.
         pm.p_nd1 = float(prep.p_nd.get(0, 0.0) + prep.p_nd.get(1, 0.0))
         pm.p_nd2 = float(prep.p_nd.get(2, 0.0))
+        pm.joint_history = prep.joint_history
+        if prep.joint_history:
+            pm.q_tandem = [float(prep.q_tandem.get((j, d1, d2), 0.0))
+                           for j in j_alleles for d1 in d_alleles for d2 in d_alleles]
+            pm.del_d_tandem = _del_dense_d_fixed(prep.p_del_d_tandem, di, prep.maxpal["d_5"],
+                                                prep.maxpal["d_3"], pm.nbins_d5, pm.nbins_d3)
         pm.dd = bool(prep.p_d2_given_d1)
         if pm.dd:
+            pm.tandem_forbidden_dj = [int((d,j) in prep.forbidden_dj) for j in j_alleles for d in d_alleles]
+            pm.tandem_forbidden_dd = [int((d1,d2) in prep.forbidden_dd) for d1 in d_alleles for d2 in d_alleles]
             pm.pd2_given_d1 = [float(prep.p_d2_given_d1.get((d1, d2), 0.0)) for d1 in d_alleles for d2 in d_alleles]
             pm.del_d2 = _del_dense_d_fixed(prep.p_del_d2, di, prep.maxpal["d_5"], prep.maxpal["d_3"], pm.nbins_d5, pm.nbins_d3)
             pm.ins_dd = prep.p_ins["dd"].tolist()
@@ -191,7 +212,7 @@ def pgen_nt(model: Model, cdr3_nt: str, v: str | None = None, j: str | None = No
     from .._core import pgen_nt as _pgen_nt
 
     pm, vi, ji = pack(model)
-    return _pgen_nt(pm, _encode(cdr3_nt.upper()),
+    return _pgen_nt(pm, _encode_observed(cdr3_nt),
                     _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"))
 
 
@@ -208,7 +229,8 @@ def pgen_aa(
         model: A recombination :class:`Model`.
         cdr3_aa: The junction/CDR3 amino-acid sequence (Cys → Phe/Trp inclusive).
         v: V **allele** to condition on (e.g. ``"TRBV9*01"``), or ``None`` to marginalize over all
-            V (V-agnostic). A gene-level name (``"TRBV9"``) or any unknown allele raises
+            V (V-agnostic). Gene and suffix aliases resolve when a gene has one model entry;
+            an unknown gene or an unresolved call in a multi-allele model raises
             :class:`KeyError` — it must not silently degrade to the V-agnostic value.
         j: J allele to condition on (e.g. ``"TRBJ2-3*01"``), or ``None`` to marginalize (as ``v``).
         mismatches: ``0`` for the exact sequence; ``1`` to also sum the Pgen of every
@@ -331,7 +353,8 @@ def pgen_aa_batch(
         cdr3_aas: Junction/CDR3 amino-acid sequences.
         v: Optional per-sequence V **alleles** to condition on (same length as ``cdr3_aas``);
             ``None`` marginalises over all V for every sequence. Individual entries may be
-            ``None``. An unknown or gene-level name raises :class:`KeyError` (see :func:`pgen_aa`).
+            ``None``. Single-entry genes accept gene and suffix aliases; unresolved names raise
+            :class:`KeyError` (see :func:`pgen_aa`).
         j: Optional per-sequence J alleles (as ``v``).
         mismatches: ``0`` for exact Pgen, ``1`` for the Hamming-1 ball (as :func:`pgen_aa`).
         threads: Worker threads; ``0`` = auto (the available CPU allocation).
@@ -381,12 +404,15 @@ def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
 
     Raises:
         KeyError: If any ``v``/``j`` entry names no allele the model carries.
-        ValueError: If ``v``/``j`` has the wrong length, or a sequence has a non-ACGT base.
+        ValueError: If ``v``/``j`` has the wrong length, or input contains symbols outside
+            DNA IUPAC. Sequencing IUPAC symbols normalize to A before encoding.
     """
     from .._core import pgen_nt_batch as _batch
 
     pm, vi, ji = pack(model)
-    seqs = [s.upper() for s in cdr3_nts]
+    from ..io.schema import normalize_nt
+
+    seqs = [normalize_nt(s) for s in cdr3_nts]
     v_idxs = [_gene_idx(vi, x, "V") for x in v] if v is not None else []
     j_idxs = [_gene_idx(ji, x, "J") for x in j] if j is not None else []
     if v_idxs and len(v_idxs) != len(seqs):
@@ -409,19 +435,21 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
         model: The recombination model.
         cdr3_aa: CDR3 amino-acid sequence (conserved Cys -> conserved Phe/Trp inclusive).
         v, j: Optional V/J names to condition on. ``None`` marginalizes. A gene-level name is
-            resolved to a representative allele unless ``resolve_genes=False``; a name the model
-            has no gene for raises :class:`KeyError` naming it.
+            resolved to a representative allele. ``resolve_genes=False`` disables allele selection
+            in multi-allele models; single-entry genes always accept aliases. Unknown genes raise
+            :class:`KeyError` naming them.
         k: How many scenarios to return.
         resolve_genes: Resolve a **gene**-level call (``TRBV10-3``) to a representative model
             allele (``TRBV10-3*01``) before the DP — see :func:`gene_to_allele`. Default ``True``,
-            because real V/J calls are gene-level and without it every one of them raises. Set
-            ``False`` to accept exact allele names only.
+            because real V/J calls are gene-level. Set ``False`` to require exact allele names in
+            multi-allele models; a single-representative gene needs no allele selection.
 
     Returns:
         ``[(w, v_allele, len_v, j_allele, len_j, d_allele | None, idx5, idx3, pos)]``, descending by
         ``w``. ``len_v``/``len_j`` are the nucleotides each germline contributes to the CDR3, so the
         boundaries are ``v_end = len_v`` and ``j_start = 3 * len(cdr3_aa) - len_j``;
         ``idx5``/``idx3`` are the D's 5'/3' trims and ``pos`` where its contribution starts.
+        Joint-history models append ``d2_call, idx5_2, idx3_2, pos2`` to each tuple.
 
         **Empty** only when the DP can explain nothing: a residue outside the genetic code (which
         has no codons), or no rearrangement reachable under the pinned V/J. It is never empty
@@ -429,7 +457,7 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
 
     Raises:
         KeyError: If ``v`` or ``j`` names no gene the model carries (with ``resolve_genes``), or no
-            exact allele (without it).
+            resolvable model entry (without it).
 
     Note:
         This is the argmax of a *probability* model, not an aligner. Measured on 25,000 real human
@@ -451,7 +479,9 @@ def best_aa_scenarios(model: Model, cdr3_aa: str, v: str | None = None, j: str |
     ij = {i: a for a, i in ji.items()}
     got = _best(pm, cdr3_aa.upper(), _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"), k)
     return [(s.w, iv[s.v], s.len_v, ij[s.j], s.len_j,
-             d_alleles[s.d] if s.d >= 0 else None, s.idx5, s.idx3, s.pos) for s in got]
+             d_alleles[s.d] if s.d >= 0 else None, s.idx5, s.idx3, s.pos) +
+            ((d_alleles[s.d2] if s.d2 >= 0 else None, s.idx5_2, s.idx3_2, s.pos2)
+             if pm.joint_history else ()) for s in got]
 
 
 def best_aa_scenarios_batch(
@@ -487,6 +517,7 @@ def best_aa_scenarios_batch(
         A :class:`polars.DataFrame` with one row per **scenario**, ordered by ``row`` then ``rank``:
         ``row`` (index into ``cdr3_aas``), ``rank`` (0-based within that row's top-``k``), ``w``,
         ``v_call``, ``len_v``, ``j_call``, ``len_j``, ``d_call``, ``idx5``, ``idx3``, ``pos``.
+        Joint-history models add ``d2_call, idx5_2, idx3_2, pos2`` columns.
         A sequence the DP cannot explain contributes **no rows**, so an absent ``row`` value is how
         a declined query shows up; it is never a silently marginalized scenario.
 
@@ -519,14 +550,19 @@ def best_aa_scenarios_batch(
     names_d = np.array(model.genomic["genes_d"]["d_allele"].to_list()
                        if model.chain_type == "VDJ" else [], dtype=object)
     d = cols["d"]
+    extra = ({"d2_call": np.where(cols["d2"] >= 0, names_d[np.maximum(cols["d2"], 0)], None).tolist(),
+              "idx5_2": cols["idx5_2"], "idx3_2": cols["idx3_2"], "pos2": cols["pos2"]}
+             if pm.joint_history else {})
     return pl.DataFrame({
         "row": cols["row"], "rank": cols["rank"], "w": cols["w"],
         "v_call": names_v[cols["v"]], "len_v": cols["len_v"],
         "j_call": names_j[cols["j"]], "len_j": cols["len_j"],
-        "d_call": (np.where(d >= 0, names_d[np.maximum(d, 0)], None)
-                   if names_d.size else np.full(d.shape, None, dtype=object)),
+        "d_call": (np.where(d >= 0, names_d[np.maximum(d, 0)], None).tolist()
+                   if names_d.size else [None] * len(d)),
         "idx5": cols["idx5"], "idx3": cols["idx3"], "pos": cols["pos"],
-    })
+        **extra,
+    }, schema_overrides={"v_call": pl.String, "j_call": pl.String, "d_call": pl.String,
+                         **({"d2_call": pl.String} if pm.joint_history else {})})
 
 
 def _alts(spec, alias: dict, idx_of: dict, kind: str) -> list[int]:
@@ -606,4 +642,10 @@ def infer_nt_many(model: Model, cdr3_aas: list, v: list | None = None, j: list |
     cols["d_call"] = (np.where(d >= 0, names_d[np.maximum(d, 0)], None) if names_d.size
                       else np.full(d.shape, None, dtype=object))
     del cols["d"]
+    d2 = cols.pop("d2")
+    if pm.joint_history:
+        cols["d2_call"] = np.where(d2 >= 0, names_d[np.maximum(d2, 0)], None)
+    else:
+        cols.pop("d2_start")
+        cols.pop("d2_end")
     return cols

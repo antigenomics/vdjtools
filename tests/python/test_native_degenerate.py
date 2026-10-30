@@ -137,14 +137,14 @@ def test_v_j_conditioning_matches_pgen_aa():
     assert np.isclose(at_j, total, rtol=1e-9)
 
 
-def test_gene_level_name_raises_not_silently_marginalizes():
-    """A gene-level V/J must raise here exactly as it does for ``pgen_aa`` (the -1 trap)."""
+def test_gene_level_name_conditions_not_silently_marginalizes():
+    """An unambiguous gene call conditions exactly as its representative allele."""
     m = load_bundled("TRB", "olga")
     allowed = list("CASSVGLYSTDTQYF")
-    with pytest.raises(KeyError, match="gene name"):
-        native.pgen_aa_degenerate(m, allowed, "TRBV9", "TRBJ2-3*01")
-    with pytest.raises(KeyError, match="gene name"):
-        native.pgen_aa_degenerate_batch(m, [allowed], ["TRBV9"], ["TRBJ2-3*01"])
+    expected = native.pgen_aa_degenerate(m, allowed, "TRBV9*01", "TRBJ2-3*01")
+    assert 0 < expected < native.pgen_aa_degenerate(m, allowed)
+    assert native.pgen_aa_degenerate(m, allowed, "TRBV9", "TRBJ2-3*01") == expected
+    assert native.pgen_aa_degenerate_batch(m, [allowed], ["TRBV9"], ["TRBJ2-3*01"]) == [expected]
     with pytest.raises(KeyError, match="not in the model"):
         native.pgen_aa_degenerate(m, allowed, "TRBV999*01")
 

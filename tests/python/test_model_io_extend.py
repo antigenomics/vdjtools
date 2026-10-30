@@ -59,8 +59,12 @@ def test_completion_restores_j_deletion_newly_reachable_through_v(toy_model, mis
 
 
 def test_completion_reapplies_trb_dj_order():
+    from vdjtools.model import Model, from_arda
     from vdjtools.model.infer import augment_from_oracle
-    model = load_bundled('TRB', 'arda', collapse=False)
+    template = from_arda('TRB')  # Legacy factorization; fresh fitted bundles use joint histories.
+    tables = dict(template.tables)
+    tables['d_gene'] = tables['d_gene'].with_columns(p=pl.lit(1. / template.genomic['genes_d'].height))
+    model = Model(manifest=template.manifest, tables=tables, genomic=template.genomic)
     done = augment_from_oracle(model, model)
     illegal = ((pl.col('d_allele').str.starts_with('TRBD2')) &
                pl.col('j_allele').str.starts_with('TRBJ1'))
@@ -200,7 +204,11 @@ def test_em_populates_and_persists_the_training_log(tmp_path, toy_model):
     reloaded = load_model(tmp_path / "fitted")
     assert reloaded.training == fitted.training
     log = training_frame(reloaded)
-    assert log.columns == ["run", "iter", "loglik", "n_scoreable", "rel_change"]
+    assert log.columns == ["run", "iter", "loglik", "n_scoreable", "rel_change",
+                           "pruned_mass_mean", "pruned_mass_max", "n_pruned_observations"]
+    assert log["pruned_mass_mean"].to_list() == report.pruned_mass_mean
+    assert log["pruned_mass_max"].to_list() == report.pruned_mass_max
+    assert log["n_pruned_observations"].to_list() == report.n_pruned_observations
     assert log.height == len(report.loglik)
 
 
@@ -365,29 +373,28 @@ def _with_ambiguous(toy_model, n=60):
     ])
 
 
-def test_ambiguous_bases_are_substituted_by_default(toy_model):
+def test_explicit_ambiguous_base_substitution(toy_model):
     """Real reads carry 'N' and the encoder knows only ACGT — substitute, keep the clonotype."""
     with_n = _with_ambiguous(toy_model)
-    with pytest.warns(UserWarning, match="substituting"):
-        fitted, report = infer_frame(toy_model, with_n, max_iter=1)
-    assert report.n_scoreable[0] == with_n.height          # nothing was thrown away
-    fitted.validate()
-
-
-def test_ambiguous_bases_can_be_dropped_instead(toy_model):
-    with_n = _with_ambiguous(toy_model)
-    with pytest.warns(UserWarning, match="dropped"):
-        fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous=None)
+    fitted, report = infer_frame(toy_model, with_n, max_iter=1, ambiguous="A")
+    assert report.n_sequences == with_n.height  # input retained, not necessarily supported
+    from vdjtools.model.native import pgen_nt
+    assert pgen_nt(toy_model, "TGTACCAGC") == 0.0
     assert report.n_scoreable[0] == with_n.height - 1
     fitted.validate()
+
+
+def test_ambiguous_bases_cannot_opt_out_of_a_normalization(toy_model):
+    with_n = _with_ambiguous(toy_model)
+    with pytest.raises(ValueError, match="ambiguous must be 'A'"):
+        infer_frame(toy_model, with_n, max_iter=1, ambiguous=None)
 
 
 def test_sanitize_junctions_substitutes_every_iupac_code():
     from vdjtools.model.infer import sanitize_junctions
 
     df = pl.DataFrame({"junction": ["acgTN", "ACGRY", "ACGT"]})
-    with pytest.warns(UserWarning, match="substituting"):
-        out = sanitize_junctions(df, "junction")
+    out = sanitize_junctions(df, "junction")
     assert out["junction"].to_list() == ["ACGTA", "ACGAA", "ACGT"]
     with pytest.raises(ValueError, match="ambiguous must be"):
         sanitize_junctions(df, "junction", ambiguous="N")

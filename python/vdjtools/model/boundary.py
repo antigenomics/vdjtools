@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from .model import Model
 from .native import gene_to_allele
+from .pgen import _resolve_gene_call
 from .reference import translate
 
 __all__ = ["germline_boundary"]
@@ -116,7 +117,7 @@ def germline_boundary(model: Model, cdr3_aas, v=None, j=None):
     v_end: list[int | None] = [None] * n
     j_start: list[int | None] = [None] * n
 
-    def allele(name):
+    def allele(name, germline):
         """One allele name from any of the three per-row call forms `infer_nt` documents.
 
         ⚠ Including a LIST. `infer_nt_batch` accepts "an allele, comma-separated alleles or a list"
@@ -132,19 +133,19 @@ def germline_boundary(model: Model, cdr3_aas, v=None, j=None):
             if not name:
                 return None
         first = name.split(",")[0].strip()
-        return alias.get(first, first)
+        return _resolve_gene_call(germline, alias.get(first, first))
 
     for i, aa in enumerate(aas):
         if not aa:
             continue
-        got = germ_v.get(allele(v[i])) if v is not None else None
+        got = germ_v.get(allele(v[i], germ_v)) if v is not None else None
         if got is not None:
             seg, prot = got
             m, stop = 0, min(len(prot), len(aa))
             while m < stop and aa[m] == prot[m]:
                 m += 1
             v_end[i] = boundary_nt(aa, m, seg, "V")[0]
-        got = germ_j.get(allele(j[i])) if j is not None else None
+        got = germ_j.get(allele(j[i], germ_j)) if j is not None else None
         if got is not None:
             seg, prot = got
             m, stop = 0, min(len(prot), len(aa))

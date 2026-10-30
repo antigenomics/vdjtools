@@ -32,9 +32,13 @@ def test_shared_germline_membership(organism, legacy_anchors, monkeypatch):
     ('human', 'TRAV38-2/DV8*01'), ('mouse', 'TRAV13-4/DV7*01'),
 ])
 def test_shared_allele_reaches_template_and_bundle(organism, allele):
-    template = from_arda('TRA', organism)
+    # The library exposes all alleles; working bundles retain the major reference per gene.
+    template = from_arda('TRA', organism, gene_level=False)
     bundled = load_bundled('TRA', 'arda', organism=organism, collapse=False)
     for model in (template, bundled):
         assert allele in model.genomic['genes_v']['v_allele']
-    assert set(bundled.genomic['genes_v']['v_allele']) == set(template.genomic['genes_v']['v_allele'])
+    major = from_arda('TRA', organism)
+    expected = set(major.genomic['genes_v']['v_allele'])
+    actual = set(bundled.genomic['genes_v']['v_allele'])
+    assert actual == expected <= set(template.genomic['genes_v']['v_allele'])
     assert bundled.tables['v_choice'].filter(pl.col('v_allele') == allele)['p'].item() > 0

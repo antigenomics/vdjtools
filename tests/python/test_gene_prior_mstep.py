@@ -25,7 +25,7 @@ def mstep_case(toy_germline_vdj):
     pm, _, _ = pack(model)
     raw = make_counts(pm)
     fields = ("v_choice", "j_choice", "v_3_del", "j_5_del", "d_gene", "d_del",
-              "ins_vd", "ins_dj", "dinucl_vd", "dinucl_dj", "n_d")
+              "ins_vd", "ins_dj", "dinucl_vd", "dinucl_dj", "first_vd", "first_dj", "n_d")
     counts = SimpleNamespace(**{name: getattr(raw, name) for name in fields})
     alleles = [model.genomic[f"genes_{seg}"][f"{seg}_allele"].to_list()
                for seg in ("v", "j", "d")]

@@ -34,7 +34,10 @@ Normally you would load your own data with one call, and vdjtools would detect t
    sample = vio.read("clones.tsv")     # MiXcr, immunoSEQ, AIRR, Parquet, native -- detected
 
 So that this page runs with nothing downloaded, draw a synthetic repertoire from one of the
-recombination models that ship in the wheel. Generated receptor sequences, with a rank-based clone-size distribution:
+recombination models that ship in the wheel. This fixed tutorial explicitly uses
+the historical OLGA model to preserve the saved example outputs below; ordinary
+model calls now default to ``isalgo`` (see :doc:`model` for the candidate release
+gates). Generated receptor sequences have a rank-based clone-size distribution:
 
 .. code-block:: python
 
@@ -48,7 +51,7 @@ recombination models that ship in the wheel. Generated receptor sequences, with 
 
    def demo_sample(locus="TRB", clones=2000, reads=20_000, a=1.0, seed=0):
        """A synthetic repertoire: sequences from a bundled model, clone sizes from a rank law."""
-       seqs = generate(load_bundled(locus, "olga"), clones, seed=seed, productive_only=True)
+       seqs = generate(load_bundled(locus, "olga-legacy"), clones, seed=seed, productive_only=True)
        rng = np.random.default_rng(seed)
        freq = np.arange(1, seqs.height + 1, dtype=float) ** -a      # f_i proportional to i**-a
        counts = rng.multinomial(reads, freq / freq.sum())
@@ -170,12 +173,13 @@ convergent recombination interesting.
 
    from vdjtools.model import load_bundled, native
 
-   model = load_bundled("TRB", source="olga")
-   native.pgen_aa(model, "CASSLAPGATNEKLFF")       # 3.595e-08
+   model = load_bundled("TRB")                    # isalgo working default
+   native.pgen_aa(model, "CASSLAPGATNEKLFF")       # amino-acid generation probability
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)   # and its whole Hamming-1 ball
 
-Models for all seven human loci ship in the wheel, so there is nothing to download and no OLGA
-install. Native Pgen is checked against OLGA on identical probability tables and raw
+Bundled model loading requires no download or OLGA installation. The replacement
+isalgo catalog targets seven human and five mouse loci; consult :doc:`model` for
+asset availability and the release gate. Native Pgen is checked against OLGA on identical probability tables and raw
 germlines. The :ref:`model guide <olga-caveats>` explains germline repairs and oracle
 workspace differences. vdjtools also supports tandem-D recombination. You can fit a model to your own
 non-productive reads -- see :doc:`model`.

@@ -9,11 +9,33 @@ from vdjtools.model import list_bundled, load_bundled
 from vdjtools.model.bundled import LOCI, SOURCES
 
 VDJ = {"TRB", "TRD", "IGH"}
+MOUSE_LOCI = ('TRA', 'TRB', 'IGH', 'IGK', 'IGL')
+
+
+def test_canonical_learned_catalog_covers_human_and_mouse():
+    assert set(list_bundled()['isalgo']) == set(LOCI) | {f'mouse_{locus}' for locus in MOUSE_LOCI}
+
+
+@pytest.mark.parametrize('organism,locus', [('human', locus) for locus in LOCI] +
+                         [('mouse', locus) for locus in MOUSE_LOCI])
+def test_default_resolves_canonical_learned_model(organism, locus):
+    default = load_bundled(locus, organism=organism)
+    explicit = load_bundled(locus, 'learned', organism=organism)
+    assert default.manifest == explicit.manifest
+    assert default.tables.keys() == explicit.tables.keys()
+    assert all(default.tables[name].equals(explicit.tables[name]) for name in default.tables)
+
+
+@pytest.mark.parametrize('locus', ['TRG', 'TRD'])
+def test_unbundled_mouse_loci_fail_without_human_fallback(locus):
+    # Human models exist, but cannot stand in for the deferred mouse contexts.
+    with pytest.raises(FileNotFoundError, match="organism 'mouse'"):
+        load_bundled(locus, organism='mouse')
 
 
 def test_all_olga_loci_bundled():
     """Every one of the 7 human loci ships an OLGA bootstrap model."""
-    assert set(list_bundled()["olga"]) == set(LOCI)
+    assert set(list_bundled()["olga-legacy"]) == set(LOCI)
 
 
 @pytest.mark.parametrize("locus", LOCI)
@@ -41,16 +63,14 @@ def test_bad_source_and_locus_raise():
 def test_learned_models_load_and_score(locus):
     """The EM-learned models (fit to real out-of-frame reads) load and are usable by the native Pgen.
 
-    D-bearing loci carry an **arda-anchored** tandem-D event with a biologically-plausible
-    ``P(n_D=2)`` (a read may be tandem only where arda called a second D — this counters the
-    identifiability that inflates unregularized D-D EM). Skips until the models are built and committed."""
+    D-bearing loci carry the joint single/tandem-D event. Preliminary ARDA D calls do not
+    constrain its histories."""
     native = pytest.importorskip("vdjtools.model.native")
-    if locus not in list_bundled().get("learned", []):
-        pytest.skip(f"learned model for {locus} not built yet")
+    assert locus in list_bundled()['isalgo']
     m = load_bundled(locus, "learned")
     is_vdj = locus in VDJ
     assert m.chain_type == ("VDJ" if is_vdj else "VJ")
-    assert ("d2_gene" in m.tables) == is_vdj  # D-loci carry the tandem-D event; VJ do not
+    assert ("d_history" in m.tables) == is_vdj  # fresh D-bearing fits use joint histories
 
     # V support must not have collapsed onto one gene: the shipped-broken TRB put 48.5% of all V
     # mass on TRBV19 with TRBV20-1 (the most-used human TRBV) at exactly 0. A gene-fraction bound
@@ -76,10 +96,14 @@ def test_learned_models_load_and_score(locus):
     assert orphan.height == 0, f"{locus}: {orphan.height} choosable V alleles have no deletion mass"
 
     if is_vdj:
-        p2 = dict(zip(m.tables["n_d"]["n_d"].to_list(), m.tables["n_d"]["p"].to_list())).get(2, 0.0)
-        # Lower bound too: an anchored D-D EM that regressed to a no-op would learn identically
-        # zero tandem mass on every locus, and `< 0.1` alone would not catch it.
-        assert 0.0 < p2 < 0.1, f"{locus}: P(n_D=2)={p2} (0 = D-D EM collapsed; >=0.1 = unregularized)"
+        from vdjtools.model.dd import d_count_probabilities
+        probabilities = d_count_probabilities(m)
+        assert sum(probabilities.values()) == pytest.approx(1.0)
+        p2 = probabilities.get(2, 0.0)
+        # Both histories must remain supported. A universal 10% ceiling came from
+        # greedy-D2 anchoring and is biologically invalid for TRD; the joint
+        # history is normalized within J, then marginalized with P(J).
+        assert 0.0 < p2 < 1.0, f"{locus}: single/tandem branch collapsed: P(n_D=2)={p2}"
 
     # Generate a real batch (not 5) so a rare choosable-but-unsamplable allele is actually hit.
     df = __import__("vdjtools.model.generate", fromlist=["generate"]).generate(m, 200, seed=0)
@@ -87,19 +111,15 @@ def test_learned_models_load_and_score(locus):
 
 
 def test_sources_constant():
-    assert SOURCES == ("olga", "learned", "arda")
+    assert SOURCES == ("isalgo", "olga-legacy", "olga", "learned", "arda")
 
 
 # --- the arda-namespace set (organism-keyed; the only one with mouse) -----------------
 
-def test_arda_set_is_reachable_and_covers_mouse():
-    """The 9 shipped arda models load through the public loader, mouse included.
-
-    They were on disk but unreachable before: ``SOURCES`` omitted ``"arda"``, and the loader
-    keyed ``_bundled/<source>/<LOCUS>`` while the arda dirs are ``<organism>_<LOCUS>``.
-    """
-    keys = list_bundled()["arda"]
-    assert set(keys) == {f"human_{loc}" for loc in LOCI} | {"mouse_TRA", "mouse_TRB"}
+def test_arda_alias_reaches_canonical_human_and_mouse_family():
+    """The old source spelling resolves to fresh isalgo fits, including all five mouse loci."""
+    assert set(list_bundled()["isalgo"]) == set(LOCI) | {f"mouse_{loc}" for loc in MOUSE_LOCI}
+    assert "arda" not in list_bundled()
 
 
 @pytest.mark.parametrize("locus", LOCI)
@@ -121,7 +141,7 @@ def test_load_arda_mouse_model_and_generate(locus):
 
 
 def test_organism_is_not_silently_ignored_by_a_set_vendored_for_human_only():
-    """Asking olga/learned for mouse must fail loudly, not hand back the human model -- and the
+    """Asking olga for mouse must fail loudly, not hand back the human model -- and the
     message must say the gap is in what is VENDORED, not in the upstream set.
 
     ⚠ OLGA is **not** a human-only project: it ships `mouse_T_alpha`, `mouse_T_beta`,
@@ -129,17 +149,15 @@ def test_organism_is_not_silently_ignored_by_a_set_vendored_for_human_only():
     `from_olga`. The old message asserted the set itself was human-only, which is false and sends a
     reader looking for a mouse model somewhere it exists.
     """
-    for src in ("olga", "learned"):
-        with pytest.raises(ValueError, match="VENDORED"):
-            load_bundled("TRB", src, organism="mouse")
-        with pytest.raises(ValueError, match="mouse_T_beta"):
-            load_bundled("TRB", src, organism="mouse")
-    with pytest.raises(FileNotFoundError, match="available"):
-        load_bundled("IGH", "arda", organism="mouse")     # arda has no mouse IGH
+    with pytest.raises(ValueError, match="VENDORED"):
+        load_bundled("TRB", 'olga', organism="mouse")
+    with pytest.raises(ValueError, match="mouse_T_beta"):
+        load_bundled("TRB", 'olga', organism="mouse")
+    assert load_bundled("IGH", "arda", organism="mouse").organism == "mouse"
 
 
-def test_arda_and_learned_are_different_namespaces():
-    """The point of the arda set: allele names come from arda, so they can differ from OLGA's."""
+def test_canonical_learned_uses_the_arda_namespace():
+    """Working fits use ARDA names; OLGA remains an explicit historical source."""
     a = load_bundled("TRB", "arda").tables["v_choice"]["v_allele"].to_list()
     lrn = load_bundled("TRB", "learned").tables["v_choice"]["v_allele"].to_list()
-    assert set(a) != set(lrn)
+    assert set(a) == set(lrn)

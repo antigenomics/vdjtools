@@ -55,7 +55,8 @@ def _vote_counts(sample, call_col: str) -> dict[str, float]:
     """
     lf = sample.lazy() if isinstance(sample, pl.DataFrame) else sample
     genes = (pl.col(call_col).str.split(",")
-             .list.eval(pl.element().str.strip_chars().str.split("*").list.first()))
+             .list.eval(pl.element().str.strip_chars().str.split("*").list.first())
+             .list.unique().list.sort())
     g = (lf.filter(pl.col(call_col).is_not_null())
            .select(genes.alias("g"))
            .with_columns(w=pl.lit(1.0) / pl.col("g").list.len())

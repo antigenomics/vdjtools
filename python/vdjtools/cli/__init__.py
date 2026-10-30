@@ -71,15 +71,17 @@ def _info(msg: str) -> None:
     typer.secho(msg, fg=typer.colors.GREEN, err=True)
 
 
-def _load_model(model: Optional[str], source: str, model_path: Optional[Path]):
+def _load_model(model: Optional[str], source: str, model_path: Optional[Path], organism: str = 'human'):
     from vdjtools.model import load_bundled, load_model
 
+    if organism not in ('human', 'mouse'):
+        _err('--organism must be human or mouse')
     if model_path is not None:
         return load_model(model_path)
     if model is None:
         _err("give a model: --model <LOCUS> (built-in) or --model-path <DIR>")
     try:
-        return load_bundled(model, source=source)
+        return load_bundled(model, source=source, organism=organism)
     except (ValueError, FileNotFoundError) as e:  # unknown source / locus not bundled
         _err(str(e))
 
@@ -155,7 +157,8 @@ def models() -> None:
 def pgen(
     input: Path = typer.Argument(..., help="Table (TSV) or list of CDR3 sequences."),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
-    source: str = typer.Option("olga", help="Built-in model set: olga | learned."),
+    source: str = typer.Option("isalgo", help="Built-in model set: isalgo | olga-legacy."),
+    organism: str = typer.Option('human', help='Built-in model organism: human | mouse.'),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     column: Optional[str] = typer.Option(None, "--column", "-c", help="Sequence column (default: auto-detect / first)."),
     v_col: Optional[str] = typer.Option(None, "--v-col", help="V-allele column to condition on (default: marginalize)."),
@@ -175,7 +178,7 @@ def pgen(
 
     if seq_type not in ("auto", "aa", "nt"):
         _err("--type must be auto, aa or nt")
-    m = _load_model(model, source, model_path)
+    m = _load_model(model, source, model_path, organism)
     df, seqcol = _read_seq_table(input, column, no_header)
     seqs = df[seqcol].to_list()
     vs = df[v_col].to_list() if v_col and v_col in df.columns else [None] * len(seqs)
@@ -203,23 +206,26 @@ def pgen(
 @app.command()
 def generate(
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Built-in locus: TRA TRB TRG TRD IGH IGK IGL."),
-    source: str = typer.Option("olga", help="Built-in model set: olga | learned."),
+    source: str = typer.Option("isalgo", help="Built-in model set: isalgo | olga-legacy."),
+    organism: str = typer.Option('human', help='Built-in model organism: human | mouse.'),
     model_path: Optional[Path] = typer.Option(None, help="Load a custom model directory instead of a built-in."),
     n: int = typer.Option(100, "--number", "-n", help="Number of sequences to generate."),
     seed: Optional[int] = typer.Option(None, help="Random seed for reproducible draws."),
     productive: bool = typer.Option(False, help="Only keep in-frame, stop-free (productive) rearrangements."),
-    engine: str = typer.Option("reference", help="Sampler: reference preserves historical seeds; native uses a distinct, faster random stream."),
+    engine: Optional[str] = typer.Option(None, help="Sampler: native by default for bundled isalgo models; reference for legacy sources/custom paths. Explicit reference preserves historical seeds; native uses a distinct random stream."),
     threads: int = typer.Option(0, min=0, help="Native kernel CPU budget; 0 uses allocated cores. Reference sampling is serial."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout)."),
 ) -> None:
     """Sample recombined sequences from a model — like ``olga-generate_sequences``.
 
     Emits ``junction_nt, junction_aa, v_call, d_call, d2_call, j_call, productive`` (``d2_call`` is the
-    tandem D on the learned D-bearing loci; null otherwise).
+    tandem D on the isalgo D-bearing loci; null otherwise).
     """
     from vdjtools.model.generate import generate as _generate
 
-    m = _load_model(model, source, model_path)
+    if engine is None:
+        engine = "native" if model_path is None and source in ("isalgo", "learned", "arda") else "reference"
+    m = _load_model(model, source, model_path, organism)
     _write(_generate(m, n, seed=seed, productive_only=productive, engine=engine, threads=threads), out)
 
 
@@ -762,7 +768,7 @@ def corpus(
     seed: int = typer.Option(20260927, "--seed", help="Base seed; every draw is a recorded offset."),
     loci: Optional[str] = typer.Option(None, "--loci", help="Comma-separated subset (default: all "
                                                             "seven)."),
-    source: str = typer.Option("olga", "--source", help="Bundled model set: olga | learned | arda."),
+    source: str = typer.Option("isalgo", "--source", help="Bundled model set: isalgo | olga-legacy (compatibility: olga | learned | arda)."),
     depth_spread: Optional[float] = typer.Option(None, "--depth-spread",
                                                  help="Multiplicative depth range each repertoire's "
                                                       "size is drawn log-uniformly across, around "
@@ -1013,7 +1019,7 @@ def alice(
     sample: Path = typer.Argument(..., help="Clonotype sample file."),
     fmt: str = _FMT, out: Optional[Path] = _OUT,
     locus: Optional[str] = typer.Option(None, "--locus", help="Force one locus (else per-locus)."),
-    source: str = typer.Option("olga", "--source", help="Bundled model source; leave on olga."),
+    source: str = typer.Option("isalgo", "--source", help="Bundled model source (default: isalgo); olga-legacy retains historical reproduction."),
     scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
     selection_q: float = typer.Option(9.41, "--q", help="Thymic-selection factor Q."),
     min_degree: int = typer.Option(3, "--min-degree", help="Only test clonotypes with >= this "
@@ -1045,7 +1051,7 @@ model_app = typer.Typer(
     no_args_is_help=True,
     help="Recombination-model workshop: build, learn, check, compare, score, extend.\n\n"
          "A model is named either as a directory, or as LOCUS[:source[:organism]] for a built-in "
-         "(TRB, TRB:learned, TRA:arda:mouse). The single-model commands also accept the "
+         "(TRB, TRB:isalgo, TRA:isalgo:mouse). The single-model commands also accept the "
          "-m/--model + --source + --model-path flags the top-level pgen/generate use.",
 )
 app.add_typer(model_app, name="model")
@@ -1062,7 +1068,7 @@ def _model_arg(spec: str):
         return load_model(path)
     parts = spec.split(":")
     locus = parts[0]
-    source = parts[1] if len(parts) > 1 else "olga"
+    source = parts[1] if len(parts) > 1 else "isalgo"
     organism = parts[2] if len(parts) > 2 else "human"
     try:
         return load_bundled(locus, source=source, organism=organism)
@@ -1169,6 +1175,8 @@ def model_learn(
     init: str = typer.Option("align", help="align | uniform | template (template = warm start / fine-tune)."),
     gene_prior: float = typer.Option(1.0, help="Dirichlet pseudocount over functional V/J alleles."),
     nd_prior: float = typer.Option(0.0, help="Pseudocount pushing P(n_D=2) toward 0."),
+    prune_ratio: Optional[float] = typer.Option(None, "--prune-ratio", min=0.0,
+        help="Relative best-scenario cutoff: default 1e-5, or the recorded value on resume; 0 is exact."),
     single_d: bool = typer.Option(False, "--single-d", help="Force a strict single-D model."),
     no_calls: bool = typer.Option(False, "--no-calls", help="Ignore V/J calls (much slower)."),
     verbose: bool = typer.Option(False, "--verbose", "-v",
@@ -1211,6 +1219,15 @@ def model_learn(
         from vdjtools.model.io import from_arda
 
         base = from_arda(locus, organism)
+    pruning = 1e-5 if prune_ratio is None else prune_ratio
+    restored = {}
+    if resume_from is not None:
+        runs = (base.training or {}).get("runs", [])
+        if runs:
+            if prune_ratio is None:
+                pruning = runs[-1].get("prune_ratio", 0.0)
+            if runs[-1].get("error_rate"):
+                restored["error_rate"] = runs[-1]["error_rate"][-1]
     try:
         clones = _read(input, fmt="auto")
     except Exception:  # noqa: BLE001 - fall back to a plain table read
@@ -1220,6 +1237,7 @@ def model_learn(
         m, rep = infer_frame(base, clones, seq_col=column, use_calls=not no_calls,
                              max_iter=max_iter, tol=tol, init=init,
                              gene_prior=gene_prior, nd_prior=nd_prior, single_d=single_d,
+                             prune_ratio=pruning, **restored,
                              progress=print_progress() if verbose else None,
                              checkpoint=checkpoint, checkpoint_every=checkpoint_every)
     except (ValueError, KeyError) as e:
@@ -1238,6 +1256,8 @@ def model_build(
     work_dir: Path = typer.Option(Path("/tmp/vdjtools_build"), help="Scratch dir for arda output."),
     cap: Optional[int] = typer.Option(None, help="Cap reads per chain (default: use every read)."),
     max_iter: int = typer.Option(15, help="EM iteration cap."),
+    prune_ratio: float = typer.Option(1e-5, "--prune-ratio", min=0.0,
+        help="Relative best-scenario cutoff; 0 is exact. Actual omitted mass is recorded."),
     verbose: bool = typer.Option(False, "--verbose", "-v",
                                  help="Stream arda's mapping output and each EM iteration."),
     out: Optional[Path] = _MODEL_OUT,
@@ -1261,7 +1281,7 @@ def model_build(
     res = build_all([c.strip() for c in chains.split(",") if c.strip()],
                     groups=tuple(g.strip() for g in groups.split(",") if g.strip()),
                     workers=workers, out_dir=out, work_dir=work_dir, cap=cap, iters=max_iter,
-                    verbose=verbose)
+                    verbose=verbose, prune_ratio=prune_ratio)
     ok = [r["stats"] for r in res.values() if "stats" in r]
     for key, r in res.items():
         if "error" in r:
@@ -1721,7 +1741,7 @@ def sc_pgen(
     out: Optional[Path] = _OUT,
     fmt: str = _SC_FMT,
     locus_pair: str = _SC_PAIR,
-    source: str = typer.Option("olga", "--source", help="Bundled model source: olga | learned."),
+    source: str = typer.Option("isalgo", "--source", help="Bundled model source: isalgo | olga-legacy."),
     condition_vj: bool = typer.Option(True, "--condition-vj/--no-condition-vj",
                                       help="Condition each chain's Pgen on its V/J call. "
                                            "--no-condition-vj marginalises over all V/J."),

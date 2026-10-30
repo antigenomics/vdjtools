@@ -12,7 +12,10 @@ A sample to play with
 
 Real workflows load a repertoire with ``io.read("sample.tsv")`` (see `Loading data`_).
 So this page is runnable with no downloads, the snippet below draws a synthetic counted
-sample straight from a bundled model — every later example reuses ``demo_sample``:
+sample straight from a bundled model — every later example reuses ``demo_sample``.
+This fixed fixture explicitly retains ``olga-legacy`` to reproduce the recorded numeric
+examples. New working-model calls default to ``isalgo``; see :doc:`model` for
+the replacement catalog and its release gate:
 
 .. code-block:: python
 
@@ -26,7 +29,7 @@ sample straight from a bundled model — every later example reuses ``demo_sampl
 
    def demo_sample(locus="TRB", clones=2000, reads=20_000, a=1.0, seed=0):
        """A canonical clonotype frame: sequences from a bundled model, clone sizes from a rank law."""
-       seqs = generate(load_bundled(locus, "olga"), clones, seed=seed, productive_only=True)
+       seqs = generate(load_bundled(locus, "olga-legacy"), clones, seed=seed, productive_only=True)
        rng = np.random.default_rng(seed)
        freq = np.arange(1, seqs.height + 1, dtype=float) ** -a      # f_i proportional to i**-a
        counts = rng.multinomial(reads, freq / freq.sum())
@@ -491,27 +494,43 @@ Recombination model
 -------------------
 
 :mod:`vdjtools.model` is the native V(D)J engine — generation probability, sampling, and EM
-inference. Precomputed models for all 7 human loci ship in the wheel:
+inference. Working-model calls default to ``isalgo``. The replacement catalog
+targets seven human loci and mouse TRA/TRB/IGH/IGK/IGL; fitted assets and complete
+validation remain release gates (see :doc:`model`):
 
 .. code-block:: python
 
    from vdjtools.model import load_bundled, native
    from vdjtools.model.generate import generate
 
-   model = load_bundled("TRB", "olga")           # or "learned" (fit to real repertoires)
+   model = load_bundled("TRB")                   # isalgo working default
    native.pgen_aa(model, "CASSLAPGATNEKLFF")      # amino-acid Pgen
    native.pgen_aa(model, "CASSLAPGATNEKLFF", mismatches=1)     # + the Hamming-1 ball
    native.pgen_aa_batch(model, seqs, threads=0)   # many sequences, thread-parallel (~11x)
    native.pgen_nt_batch(model, nts, threads=0)    # the nucleotide batch (new in 4.5.0)
    generate(model, 1000)                          # sample a repertoire -> DataFrame
-   generate(model, 10 ** 6, engine="native")      # 149-577x, its own random stream
+   generate(model, 10 ** 6, engine="native")      # one native batch, its own random stream
 
 .. note::
 
    ``generate`` has two engines. ``engine="reference"`` (the default) is the Python ancestral
-   sampler; ``engine="native"`` is the same Bayes net in C++ and is **149-577x** faster on one core
-   — TRB 25,428 to 6,196,346 sequences per second, and IGH with ``productive_only=True`` 4,029 to
-   2,325,649. Each draw is seeded from ``(seed, row)``, so the output never depends on ``threads``.
+   sampler; ``engine="native"`` samples the same Bayes net in one C++ batch. Earlier bundled-model
+   benchmarks measured **149-577x** speedups on one core: TRB 25,428 to 6,196,346 sequences per
+   second, and IGH with ``productive_only=True`` 4,029 to 2,325,649. Each native draw is seeded
+   from ``(seed, row)``, so its output never depends on ``threads``.
+
+   The ``vdjtools generate`` CLI selects native sampling by default for bundled isalgo models.
+   Explicit ``--source olga-legacy`` (or its ``olga`` alias) and custom ``--model-path``
+   inputs retain reference sampling. ``learned`` and ``arda`` alias isalgo and also use native
+   sampling. ``--engine`` overrides either policy; ``--threads 0`` uses
+   the allocated CPU budget for native calls. The library primitive above retains its reference
+   default for historical seed reproduction.
+
+   With fitted, uncollapsed human TRB parameters, one call of 10,000 in-frame, stop-free draws
+   took 7.031 s with the reference engine on one thread, 0.076 s for the first native call on
+   one thread, and 0.036 s for a subsequent native call on 24 threads. The model was loaded once
+   before timing; native preparation was reused for the last call. These timings depend on
+   model parameters and acceptance rates.
 
    The two are **different random streams**. They agree in distribution — TRB V-usage correlation
    0.99766 against a 20,000-draw reference sample, nucleotide length means within 0.036 nt — but
@@ -760,6 +779,10 @@ Every workflow above has a CLI counterpart; inputs are auto-detected and results
    vdjtools models                                # list the bundled models
    vdjtools generate -m TRB -n 1000 -o gen.tsv    # (cf. olga-generate_sequences)
    vdjtools pgen seqs.tsv -m TRB -o pgen.tsv      # (cf. olga-compute_pgen)
+
+   # Built-in models default to human; mouse requires an explicit organism.
+   vdjtools generate -m TRA --organism mouse -n 100 -o mouse.tsv
+   vdjtools pgen mouse.tsv -m TRA --organism mouse -o mouse-pgen.tsv
 
    # data: convert any format to the canonical table, and preprocess
    vdjtools convert mixcr.txt.gz -o clones.parquet    # → canonical Parquet (or .tsv)

@@ -15,7 +15,7 @@ ln -s /path/to/airr_benchmark data_dump/airr_benchmark        # etc. per dataset
 ```
 
 Example sources and published models are also available in the
-[`isalgo/vdjtools_models`](https://huggingface.co/datasets/isalgo/vdjtools_models)
+[`isalgo/airr_feature_signatures`](https://huggingface.co/datasets/isalgo/airr_feature_signatures)
 mirror. Select the files you need using the dataset card; notebook input datasets
 remain linked below.
 

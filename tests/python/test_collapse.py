@@ -46,7 +46,7 @@ def test_tandem_collapse_normalizes_over_defined_parent_alleles(toy_model_vdj):
 
 
 def _shipped() -> list[tuple[str, str, str]]:
-    """Every ``(source, organism, locus)`` actually shipped — ``arda`` alone carries mouse."""
+    """Every ``(source, organism, locus)`` advertised canonically; isalgo carries five mouse contexts."""
     from vdjtools.model.bundled import list_bundled
 
     out = []
@@ -57,7 +57,7 @@ def _shipped() -> list[tuple[str, str, str]]:
     return out
 
 
-#: 23 models: ``olga`` and ``learned`` over 7 human loci, ``arda`` over 7 human + mouse TRA/TRB.
+#: Canonical release catalog: twelve isalgo fits plus seven frozen OLGA models.
 BUNDLED = _shipped()
 
 
@@ -113,8 +113,8 @@ def test_collapsed_pgen_tracks_the_allele_sum():
 
 
 def test_load_bundled_collapse_flag():
-    full = load_bundled("TRB", "learned", collapse=False)
-    coll = load_bundled("TRB", "learned")              # default True
+    full = load_bundled("TRB", "olga", collapse=False)
+    coll = load_bundled("TRB", "olga")                 # fixed allele-preserving oracle
     assert coll.tables["v_choice"].height < full.tables["v_choice"].height
     assert full.tables["v_choice"].height == 89        # allele resolution retained when asked
     # a query on the collapsed model maps any allele of a gene to its *01 representative
@@ -171,12 +171,12 @@ def test_representative_is_the_longest_germline_not_the_most_used():
     Picking by usage alone made the truncated allele the gene's germline (relabelled *01, which was
     doubly misleading) and stranded 25% of the gene's own deletion distribution.
     """
-    raw = load_bundled("IGK", "learned", collapse=False)
+    raw = load_bundled("IGK", "olga-legacy", collapse=False)
     alleles = raw.genomic["genes_v"].filter(pl.col("gene") == "IGKV3-20")
     lengths = {r["v_allele"]: len(r["cut_segment"]) for r in alleles.iter_rows(named=True)}
     assert lengths["IGKV3-20*02"] < lengths["IGKV3-20*01"], "fixture assumption changed"
 
-    c = load_bundled("IGK", "learned", collapse=True)
+    c = load_bundled("IGK", "olga-legacy", collapse=True)
     rep = c.genomic["genes_v"].filter(pl.col("gene") == "IGKV3-20")
     assert rep.height == 1
     assert len(rep["cut_segment"][0]) == max(lengths.values())
@@ -211,10 +211,10 @@ def _anchor_frame_aa(cdr3_segment: str) -> str:
 #: * ``TRAJ35*01`` — arda records ``anchor_nt=25``/``templated_aa=IGFGNVLHC`` with ``status=ok``:
 #:   human TRAJ35's anchor sits past the FGxG motif, so the templated region ends on a Cys. IMGT
 #:   still calls the allele F.
-#: * ``IGHJ6*02`` — OLGA's namespace only (``olga``/``learned``). OLGA ships the CDR3-region
+#: * ``IGHJ6*02`` — the frozen ``olga-legacy`` family only. OLGA ships the CDR3-region
 #:   germline 1 nt shorter than arda's 32-nt ``ATTACTACTACTACTACGGTATGGACGTCTGG``, cutting the
 #:   Trp118 codon in half; arda's own IGHJ6*02 templates ``YYYYYGMDVW`` and passes.
-_TERMINAL_ANCHOR_EXCEPTIONS = {"TRAJ35*01", "IGHJ6*02"}
+_TERMINAL_ANCHOR_EXCEPTIONS = {"TRAJ35*01"}
 
 
 @pytest.mark.parametrize("source,organism,locus", BUNDLED)
@@ -239,16 +239,17 @@ def test_bundled_j_germline_templates_a_terminal_anchor_residue(source, organism
     status = dict(zip(ref["allele"].to_list(), ref["status"].to_list()))
     usable = {a for a in func if func[a] == "F" and status[a] == "ok"}
 
+    exceptions = _TERMINAL_ANCHOR_EXCEPTIONS | ({"IGHJ6*02"} if source == "olga-legacy" else set())
     checked, bad = 0, []
     for r in m.genomic["genes_j"].iter_rows(named=True):
         gene, seq = r["gene"], r["cdr3_segment"] or ""
         if collapse:
             required = any(a.split("*")[0] == gene for a in usable)
-            exempt = all(a in _TERMINAL_ANCHOR_EXCEPTIONS
+            exempt = all(a in exceptions
                          for a in usable if a.split("*")[0] == gene)
         else:
             required = r["j_allele"] in usable
-            exempt = r["j_allele"] in _TERMINAL_ANCHOR_EXCEPTIONS
+            exempt = r["j_allele"] in exceptions
         if not seq or not required or exempt:
             continue
         checked += 1
@@ -321,23 +322,13 @@ def test_bundled_cdr3_germline_sits_on_the_documented_side_of_the_anchor(source,
 
 
 def test_the_learned_set_is_never_a_mix_of_builders():
-    """The seven `learned` loci must all report the **same** builder version.
-
-    A germline defect lives in the builder, so "which build is this from" should be a lookup rather
-    than a posterior comparison against a reference fit. The dangerous state is a *partial*
-    regeneration, where half the set silently answers a different question from the other half —
-    this caught exactly that (4 loci at ``3.9.2``, 3 at ``""``) when an all-loci rebuild was
-    interrupted midway.
-
-    Deliberately **not** asserting that every model carries a stamp. Only regenerating the shipped
-    set could satisfy that, so it would encode "always rebuild" as policy — and the models are
-    regenerated when a germline actually changes, not to populate a metadata field.
-    """
-    stamped = {locus: load_bundled(locus, "learned", collapse=False).manifest.builder_version
-               for locus in LOCI}
-    assert len(set(stamped.values())) == 1, (
-        f"learned set has mixed builder versions: {stamped} — regenerate all seven loci together, "
-        f'never a subset. ("" is not missing data: it means the model predates 3.9.2.)')
+    """All twelve fresh fits carry one nonempty builder version, including mouse."""
+    contexts = [("human", locus) for locus in LOCI] + [
+        ("mouse", locus) for locus in ("TRA", "TRB", "IGH", "IGK", "IGL")]
+    stamped = {(organism, locus): load_bundled(locus, "isalgo", organism=organism,
+                 collapse=False).manifest.builder_version for organism, locus in contexts}
+    assert all(stamped.values()), f"fresh isalgo models lack builder stamps: {stamped}"
+    assert len(set(stamped.values())) == 1, f"isalgo set has mixed builder versions: {stamped}"
 
 
 def test_trbj2_7_is_not_a_silent_zero():

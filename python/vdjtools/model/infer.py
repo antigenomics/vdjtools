@@ -3,7 +3,8 @@
 Expectation–Maximization over the recombination Bayes net: the **E-step** enumerates every
 scenario that could produce each observed nt CDR3 (the same enumeration as ``pgen``), weights
 them by the current model, and accumulates *soft counts* per event realization; the **M-step**
-re-normalizes those counts in polars to get the next marginals. Trained on out-of-frame reads,
+re-normalizes those counts in polars to get the next marginals. Fit to nonfunctional reads
+(out-of-frame or stop-bearing),
 it recovers the raw generation model (no productivity conditioning, so no selection bias).
 
 Closed-loop oracle: generate synthetic sequences from a known model, then ``infer`` must recover
@@ -12,16 +13,15 @@ Phase 1f native-port candidate.
 """
 from __future__ import annotations
 
-import warnings
 from collections import defaultdict
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from math import log
 
 import numpy as np
 import polars as pl
 
 from .model import Model
-from .pgen import _NT2NUM, _j_candidates, _v_candidates, prepare
+from .pgen import _NT2NUM, _j_candidates, _v_candidates, _tandem_first, _tandem_pair, prepare
 from .schema import normalization_keys, table_columns
 
 
@@ -46,6 +46,14 @@ class InferenceReport:
     elapsed_s: float = 0.0
     finished_at: str = ""
     template_source: str = ""
+    error_rate: list[float] = field(default_factory=list)  # retained-germline substitution MLE after each M-step
+    error_model: str = "exact"
+    candidate_search: dict = field(default_factory=dict)
+    n_ambiguous: int = 0
+    prune_ratio: float = 0.0
+    pruned_mass_mean: list[float] = field(default_factory=list)
+    pruned_mass_max: list[float] = field(default_factory=list)
+    n_pruned_observations: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """The report as a JSON-serializable dict (one entry of a model's ``training["runs"]``)."""
@@ -62,12 +70,19 @@ class InferenceReport:
     def to_frame(self) -> pl.DataFrame:
         """Per-iteration training log: ``iter, loglik, n_scoreable, rel_change``."""
         n = len(self.loglik)
-        return pl.DataFrame({
+        frame = pl.DataFrame({
             "iter": list(range(1, n + 1)),
             "loglik": self.loglik,
             "n_scoreable": (self.n_scoreable + [None] * n)[:n],
             "rel_change": (self.gene_tv + [None] * n)[:n],
         })
+        if self.prune_ratio:
+            frame = frame.with_columns([
+                pl.Series(name, (values + [None] * n)[:n])
+                for name, values in (("pruned_mass_mean", self.pruned_mass_mean),
+                                     ("pruned_mass_max", self.pruned_mass_max),
+                                     ("n_pruned_observations", self.n_pruned_observations))])
+        return frame
 
 
 def _record(report: InferenceReport, model: Model, template: Model, *, started: float,
@@ -89,7 +104,8 @@ def _record(report: InferenceReport, model: Model, template: Model, *, started: 
     report.template_source = template.manifest.source
     runs = list((template.training or {}).get("runs", []))
     runs.append(report.to_dict())
-    return Model(manifest=model.manifest, tables=model.tables, genomic=model.genomic,
+    manifest = replace(model.manifest, error_rate=report.error_rate[-1]) if report.error_rate else model.manifest
+    return Model(manifest=manifest, tables=model.tables, genomic=model.genomic,
                  training={"runs": runs})
 
 
@@ -144,6 +160,13 @@ def resume(path, sequences, **kw):
     if not isinstance(path, Model):
         kw.setdefault("checkpoint", path)
     kw["init"] = "template"
+    runs = (base.training or {}).get("runs", [])
+    if runs and runs[-1].get("error_rate"):
+        kw.setdefault("error_rate", runs[-1]["error_rate"][-1])
+    if runs and runs[-1].get("candidate_search"):
+        kw.setdefault("candidate_search", runs[-1]["candidate_search"])
+    if runs:
+        kw.setdefault("prune_ratio", runs[-1].get("prune_ratio", 0.0))
     return infer_native(base, sequences, **kw)
 
 
@@ -195,15 +218,16 @@ def training_frame(obj) -> pl.DataFrame:
         >>> training_frame(m)     # loglik per iteration, ready to plot
     """
     if isinstance(obj, InferenceReport):
-        return obj.to_frame().with_columns(run=pl.lit(0, dtype=pl.Int64)).select(
-            ["run", "iter", "loglik", "n_scoreable", "rel_change"])
+        frame = obj.to_frame().with_columns(run=pl.lit(0, dtype=pl.Int64))
+        return frame.select(["run", *[c for c in frame.columns if c != "run"]])
     runs = (getattr(obj, "training", None) or {}).get("runs", [])
     if not runs:
         return pl.DataFrame(schema={"run": pl.Int64, "iter": pl.Int64, "loglik": pl.Float64,
                                     "n_scoreable": pl.Int64, "rel_change": pl.Float64})
     parts = [InferenceReport.from_dict(r).to_frame().with_columns(run=pl.lit(i, dtype=pl.Int64))
              for i, r in enumerate(runs)]
-    return pl.concat(parts).select(["run", "iter", "loglik", "n_scoreable", "rel_change"])
+    frame = pl.concat(parts, how="diagonal_relaxed")
+    return frame.select(["run", *[c for c in frame.columns if c != "run"]])
 
 
 def _loglik_rel(loglik: list[float]) -> float:
@@ -241,11 +265,17 @@ def _insert_markov(seq: str, R: np.ndarray, bias: np.ndarray, *, from_right: boo
     return w, trans
 
 
+def _accum_first(prep, junction, sequence, from_right, weight, local):
+    if sequence and junction in prep.explicit_first_nt:
+        nt = _NT2NUM[sequence[-1] if from_right else sequence[0]]
+        local[(f"{junction}_first_nt", (nt,))] += weight
+
+
 def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> float:
     """Accumulate one sequence's soft counts into ``counts``; return its Pgen (for log-lik).
 
-    ``mask`` optionally restricts enumeration to a read's aligned genes — ``(v_genes, j_genes,
-    d_genes)`` name lists (e.g. from arda). This is what makes VDJ inference tractable: without it
+    ``mask`` is ``(V,J,D1)`` or ``(V,J,D1,D2)``. Three entries leave D2 unrestricted;
+    an empty fourth entry disables tandem enumeration. This makes VDJ inference tractable: without it
     every V that shares the conserved Cys prefix is a candidate and the D enumeration runs for each.
     ``allow_dd`` gates the tandem (n_D=2) enumeration for this read (arda-anchored D-D learning).
     """
@@ -254,9 +284,13 @@ def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> 
     local: dict = defaultdict(float)
     total = 0.0
 
-    v_mask = mask[0] if mask else prep.functional_v
-    j_mask = mask[1] if mask else prep.functional_j
+    v_mask = mask[0] if mask and mask[0] else prep.functional_v
+    j_mask = mask[1] if mask and mask[1] else prep.functional_j
     d_mask = mask[2] if mask and mask[2] else (prep.functional_d if vdj else None)
+    d2_mask = mask[3] if mask and len(mask)>3 else None
+    if d2_mask is not None:
+        d2_mask = [allele for allele in d2_mask if allele in prep.cut.get('d',{})]
+    allow_dd = allow_dd and d2_mask != []
     v_cands = _v_candidates(prep, s, v_mask)
     j_cands = _j_candidates(prep, s, j_mask)
     for V, pv, v_opts in v_cands:
@@ -276,7 +310,7 @@ def _estep_seq(prep, s: str, counts: dict, mask=None, allow_dd: bool = True) -> 
                             total += _accum_vdj(prep, J, V, nv, nj, mid, base * p1, local, d_mask)
                         p2 = prep.p_nd.get(2, 0.0)
                         if p2 > 0.0 and prep.p_d2_given_d1 and allow_dd:
-                            total += _accum_dd(prep, J, V, nv, nj, mid, base * p2, local, d_mask)
+                            total += _accum_dd(prep, J, V, nv, nj, mid, base * p2, local, d_mask, d2_mask)
                     else:
                         total += _accum_vj(prep, V, J, nv, nj, mid, base, local)
 
@@ -301,6 +335,7 @@ def _accum_vj(prep, V, J, nv, nj, mid, base, local) -> float:
     local[("v_3_del", (V, nv))] += w
     local[("j_5_del", (J, nj))] += w
     local[("vj_ins", (L,))] += w
+    _accum_first(prep, "vj", mid, False, w, local)
     for fr, to in trans:
         local[("vj_dinucl", (fr, to))] += w
     return w
@@ -340,13 +375,16 @@ def _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
                     seq_total += w
                     local[("v_choice", (V,))] += w
                     local[("j_choice", (J,))] += w
-                    local[("d_gene", (J, D))] += w
+                    local[("d_history", (J, 1, D, "")) if prep.joint_history else ("d_gene", (J, D))] += w
                     local[("v_3_del", (V, nv))] += w
                     local[("j_5_del", (J, nj))] += w
                     local[("d_del", (D, idx5 - maxdl, idx3 - maxdr))] += w
                     local[("vd_ins", (lvd,))] += w
                     local[("dj_ins", (ldj,))] += w
-                    local[("n_d", (1,))] += w  # this scenario has exactly one D
+                    if not prep.joint_history:
+                        local[("n_d", (1,))] += w
+                    _accum_first(prep, "vd", ins_vd, False, w, local)
+                    _accum_first(prep, "dj", ins_dj, True, w, local)
                     for fr, to in tvd:
                         local[("vd_dinucl", (fr, to))] += w
                     for fr, to in tdj:
@@ -354,7 +392,7 @@ def _accum_vdj(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
     return seq_total
 
 
-def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
+def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None, d2_mask=None) -> float:
     """Two-D (tandem) soft-count accumulation: ``mid`` = [insVD] D1 [insDD] D2 [insDJ], each D ≥1 nt.
 
     The reference (naive) enumeration mirroring :func:`~vdjtools.model.pgen._dd_middle`; correctness
@@ -365,14 +403,15 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
     m = len(mid)
     dset = d_mask if d_mask is not None else prep.functional_d
     seq_total = 0.0
+    d2set = d2_mask if d2_mask is not None else prep.functional_d
     for D1 in dset:
-        pd1 = prep.p_d_given_j.get((J, D1), 0.0)
-        if pd1 == 0.0:
+        pd1 = _tandem_first(prep, J, D1)
+        if pd1 == 0.0 or (D1,J) in prep.forbidden_dj:
             continue
         cut1 = prep.cut["d"][D1]
         for i5 in range(len(cut1) + 1):
             for i3 in range(len(cut1) - i5 + 1):
-                pdel1 = prep.p_del["d"].get((D1, i5 - maxdl, i3 - maxdr), 0.0)
+                pdel1 = (prep.p_del_d_tandem if prep.joint_history else prep.p_del["d"]).get((D1, i5 - maxdl, i3 - maxdr), 0.0)
                 if pdel1 == 0.0:
                     continue
                 dc1 = cut1[i5:len(cut1) - i3]
@@ -389,8 +428,10 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
                     left = base * pd1 * pdel1 * pins_vd[lvd] * mwvd
                     if left <= 0.0:
                         continue
-                    for D2 in dset:
-                        pd2g = prep.p_d2_given_d1.get((D1, D2), 0.0)
+                    for D2 in d2set:
+                        if (D2,J) in prep.forbidden_dj or (D1,D2) in prep.forbidden_dd:
+                            continue
+                        pd2g = _tandem_pair(prep, J, D1, D2)
                         if pd2g == 0.0:
                             continue
                         cut2 = prep.cut["d"][D2]
@@ -420,16 +461,24 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
                                     seq_total += w
                                     local[("v_choice", (V,))] += w
                                     local[("j_choice", (J,))] += w
-                                    local[("d_gene", (J, D1))] += w
-                                    local[("d2_gene", (D1, D2))] += w
+                                    if prep.joint_history:
+                                        local[("d_history", (J, 2, D1, D2))] += w
+                                    else:
+                                        local[("d_gene", (J, D1))] += w
+                                        local[("d2_gene", (D1, D2))] += w
                                     local[("v_3_del", (V, nv))] += w
                                     local[("j_5_del", (J, nj))] += w
-                                    local[("d_del", (D1, i5 - maxdl, i3 - maxdr))] += w
+                                    local[("d_tandem_del" if prep.joint_history else "d_del",
+                                            (D1, i5 - maxdl, i3 - maxdr))] += w
                                     local[("d2_del", (D2, k5 - maxdl, k3 - maxdr))] += w
                                     local[("vd_ins", (lvd,))] += w
                                     local[("dd_ins", (ldd,))] += w
                                     local[("dj_ins", (ldj,))] += w
-                                    local[("n_d", (2,))] += w  # this scenario has two Ds
+                                    if not prep.joint_history:
+                                        local[("n_d", (2,))] += w
+                                    _accum_first(prep, "vd", mid[:pos1], False, w, local)
+                                    _accum_first(prep, "dd", ins_dd, False, w, local)
+                                    _accum_first(prep, "dj", ins_dj, True, w, local)
                                     for fr, to in tvd:
                                         local[("vd_dinucl", (fr, to))] += w
                                     for fr, to in tdd:
@@ -444,6 +493,36 @@ def _accum_dd(prep, J, V, nv, nj, mid, base, local, d_mask=None) -> float:
 # for a D-D model it learns P(n_D=2) from the tandem soft counts.
 def _fit_events(manifest) -> list[str]:
     return list(manifest.events)
+
+
+def _retain_unobserved_transitions(template, name, frame):
+    if name.replace("_dinucl", "_first_nt") not in template.manifest.events:
+        return frame
+    # No transition evidence leaves this conditional unidentified; retain a normalized
+    # initial row rather than losing generation mass under a different insertion length.
+    previous = template.tables[name].rename({"p": "_previous"})
+    return (frame.join(previous, on=["from_nt", "to_nt"], how="left")
+            .with_columns(p=pl.when(pl.col("p").sum().over("from_nt") > 0)
+                          .then(pl.col("p")).otherwise(pl.col("_previous")))
+            .drop("_previous"))
+
+
+def _retain_history_groups(template, name, frame, keys):
+    if "d_history" not in template.tables:
+        return frame
+    values = [c for c in frame.columns if c != "p"]
+    previous = template.tables[name].rename({"p": "_previous"})
+    return (previous.join(frame, on=values, how="left").with_columns(pl.col("p").fill_null(0.0))
+            .with_columns(p=pl.when(pl.col("p").sum().over(keys) > 0)
+                          .then(pl.col("p")).otherwise(pl.col("_previous"))).drop("_previous"))
+
+
+def _single_history_prior(frame, nd_prior):
+    if not nd_prior:
+        return frame
+    singles = (pl.col("n_d") == 1).sum().over("j_allele")
+    return frame.with_columns(p=pl.col("p") + pl.when(pl.col("n_d") == 1)
+                              .then(nd_prior / singles).otherwise(0.0))
 
 
 def _mstep(template: Model, counts: dict, nd_prior: float = 0.0) -> dict[str, pl.DataFrame]:
@@ -462,11 +541,21 @@ def _mstep(template: Model, counts: dict, nd_prior: float = 0.0) -> dict[str, pl
                 data[c].append(val)
             data["p"].append(cnt)
         df = pl.DataFrame(data, schema=table_columns(event))
+        # Preserve declared support: dense insertion arrays use row position as length.
+        # Keeping only observed length=1 would turn it into index0 in prepare().
+        df = (template.tables[name].select(value_cols).join(df, on=value_cols, how="left")
+              .with_columns(pl.col("p").fill_null(0.0)))
+        if event.kind.value == "dinucleotide":
+            df = _retain_unobserved_transitions(template, name, df)
+        if name == "d_history":
+            df = _single_history_prior(df, nd_prior)
+        if name in ("d_history", "d_del", "d_tandem_del", "d2_del"):
+            df = _retain_history_groups(template, name, df, normalization_keys(event))
         if name in ("d_gene", "d2_gene"):
             df = _mask_dj(df, template.locus)   # see _mask_dj: a hard genomic fact, not a parameter
         keys = normalization_keys(event)
         total = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
-        tables[name] = df.with_columns(p=pl.col("p") / total)
+        tables[name] = df.with_columns(p=pl.when(total > 0).then(pl.col("p") / total).otherwise(0.0))
     return tables
 
 
@@ -493,10 +582,23 @@ def _mask_dj(df: pl.DataFrame, locus: str) -> pl.DataFrame:
 def _uniform_init(template: Model) -> dict[str, pl.DataFrame]:
     tables = {}
     for name, event in template.manifest.events.items():
+        if name == "d_history":
+            tables[name] = template.tables[name]
+            continue
         df = template.tables[name].with_columns(p=pl.lit(1.0))
+        if name == 'd_gene':
+            df = _mask_dj(df,template.locus)
+        elif name == 'd2_gene':
+            from .reference import forbidden_tandem_pairs
+            forbidden = forbidden_tandem_pairs(template.genomic['genes_d']['d_allele'],template.locus,template.organism)
+            key = pl.concat_str('d_allele','d2_allele',separator='|')
+            df = df.with_columns(p=pl.when(key.is_in([a+'|'+b for a,b in forbidden])).then(0.).otherwise(pl.col('p')))
         keys = normalization_keys(event)
         total = pl.col("p").sum().over(keys) if keys else pl.col("p").sum()
-        tables[name] = df.with_columns(p=pl.col("p") / total)
+        tables[name] = df.with_columns(p=pl.when(total>0).then(pl.col("p") / total).otherwise(0.))
+    if "d_history" in tables:
+        from .collapse import _project_onto_germline
+        return _project_onto_germline(tables, template.genomic, template.manifest)
     return tables
 
 
@@ -558,10 +660,23 @@ DD_DEFAULT_LOCI = frozenset({"TRB", "TRD", "IGH"})
 def _maybe_promote_dd(template: Model, single_d: bool, p_nd2_init: float) -> Model:
     """Promote a single-D VDJ template to a tandem-D model by default (unless ``single_d``).
 
-    D-D is the default for the D-bearing loci; ``single_d=True``, a VJ locus, or an already-tandem
-    template all leave it unchanged.
+    New ARDA scaffolds use normalized joint histories. Explicit legacy tandem
+    models retain their event graph; ``single_d`` disables their tandem branch.
     """
-    from .dd import has_tandem, to_dd
+    from .dd import has_tandem, to_dd, to_history
+    if "d_history" in template.tables:
+        if not single_d:
+            return template
+        history = template.tables["d_history"].with_columns(
+            p=pl.when(pl.col("n_d") == 1).then(pl.col("p")).otherwise(0.0))
+        total = pl.col("p").sum().over("j_allele")
+        history = history.with_columns(p=pl.when(total > 0).then(pl.col("p") / total).otherwise(0.0))
+        return Model(manifest=template.manifest, tables={**template.tables, "d_history": history},
+                     genomic=template.genomic, training=template.training)
+    if (template.chain_type == 'VDJ' and template.locus in DD_DEFAULT_LOCI
+            and template.manifest.source.startswith('arda:')
+            and 'vd_first_nt' in template.tables and 'd2_gene' not in template.tables):
+        return to_history(template, p_nd2=0.0 if single_d else p_nd2_init)
     if single_d or template.chain_type != "VDJ" or has_tandem(template):
         return template
     if template.manifest.locus not in DD_DEFAULT_LOCI:
@@ -595,19 +710,21 @@ def infer(
         tol: Stop when the V-usage total-variation between iterations falls below this.
         init: ``"align"`` (seed gene usage from a best-match vote — the default and fastest),
             ``"uniform"`` (each event uniform on its support), or ``"template"`` (warm start).
-        masks: Optional per-sequence ``(v_genes, j_genes, d_genes)`` name lists (e.g. from
+        masks: Optional per-sequence ``(v_genes, j_genes, d1_genes[, d2_genes])`` name lists (e.g. from
             :func:`arda_masks`) restricting each read's scenario enumeration to its aligned genes.
+            Empty V/J/D1 lists leave that segment unrestricted.
+            Three-tuples or a fourth ``None`` leave D2 unrestricted. An empty fourth
+            list disables tandem enumeration, including unknown D2 calls.
             **Strongly recommended for VDJ** — without it the E-step enumerates every Cys-sharing
             V × the full D grid per read (tens of s/seq); with it, VDJ inference is tractable.
         single_d: By default a **tandem-D (D-D)** model is learned for the D-bearing loci
-            (IGH/TRD/TRB): a single-D template is promoted with :func:`~vdjtools.model.dd.to_dd`
-            (seeding ``P(n_D=2)=p_nd2_init``) and EM learns the true ``P(n_D=2)``. Set ``True`` to
-            keep a strict single-D model. No effect on VJ loci or an already-tandem template.
+            (IGH/TRD/TRB). New ARDA scaffolds use J-conditioned joint histories;
+            legacy single-D templates use :func:`~vdjtools.model.dd.to_dd`.
+            Set True to keep strict single-D support. VJ loci are unaffected.
         p_nd2_init: Initial ``P(n_D=2)`` seed when promoting to D-D (ignored if ``single_d``).
         dd_allowed: Optional per-read booleans gating the tandem (``n_D=2``) E-step — a read may be
-            tandem only where ``dd_allowed[i]`` is true (e.g. reads arda flags with a ``d2_call``).
-            Anchors D-D learning to alignment-detected tandems, countering the tandem-vs-long-insertion
-            identifiability that inflates unregularized ``P(n_D=2)`` on real data. ``None`` = all reads.
+            tandem only where ``dd_allowed[i]`` is true. None allows every read.
+            Preliminary or absent D2 annotations are not grounds for disabling a history.
         nd_prior: Dirichlet/Beta pseudocount added to the single-D (``n_D=1``) soft count each M-step,
             regularizing ``P(n_D=2)`` toward 0. Both anchors combine.
         progress: Optional ``callable(iteration, loglik, rel_change, n_scoreable)`` invoked after
@@ -626,7 +743,10 @@ def infer(
 
     started = _time.monotonic()
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
-    upper = [s.upper() for s in sequences]
+    masks = _canonical_masks(template, masks, len(sequences))
+    from ..io.schema import normalize_nt
+
+    upper = [normalize_nt(s) for s in sequences]
     if init == "template":
         tables = template.tables
     elif init == "align":
@@ -659,7 +779,7 @@ def infer(
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
         model = new_model
         # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
-        # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
+        # usage alone: gene usage can settle while trims/insertions/D-D still move.
         rel = _loglik_rel(report.loglik)
         report.gene_tv.append(rel)
         if progress is not None:
@@ -722,53 +842,73 @@ def gene_masks(model: Model, v_calls: list[str], j_calls: list[str]) -> list[tup
     return [(call_alleles(va, v), call_alleles(ja, j), None) for v, j in zip(v_calls, j_calls)]
 
 
+def _canonical_masks(model: Model, masks: list | None, n_sequences: int) -> list | None:
+    """Resolve major-allele aliases without losing alternatives between genes.
+
+    A real empty V/J/D1 set means unrestricted enumeration. An unknown name must
+    raise instead of being dropped into that empty-set sentinel. Empty D2 disables
+    tandem histories, whereas None leaves D2 unrestricted.
+    """
+    if masks is None:
+        return None
+    if len(masks) != n_sequences:
+        raise ValueError('masks must have the same length as sequences')
+    indexes = {seg: _gene_to_alleles(model, seg) for seg in ('v', 'j')}
+    indexes['d'] = _gene_to_alleles(model, 'd') if model.chain_type == 'VDJ' else {}
+    known = {seg: {a for values in index.values() for a in values} for seg, index in indexes.items()}
+
+    def resolve(names, seg):
+        if names is None:
+            return None
+        index = indexes[seg]
+        result = []
+        for call in ([names] if isinstance(names, str) else names):
+            if not isinstance(call, str):
+                raise TypeError('mask allele names must be strings')
+            for name in call.split(','):
+                name = name.strip()
+                if not name:
+                    continue
+                matches = index.get(name.split('*', 1)[0], [])
+                if name in known[seg]:
+                    result.append(name)
+                elif len(matches) == 1:
+                    result.extend(matches)
+                elif name in index:  # explicit multi-allele legacy gene: retain every template
+                    result.extend(index[name])
+                else:
+                    raise KeyError(f'{seg.upper()} mask name {name!r} is not in the model')
+        return list(dict.fromkeys(result))
+
+    result = []
+    for mask in masks:
+        if mask is None:
+            result.append(([], [], None))
+            continue
+        if len(mask) not in (3, 4):
+            raise ValueError('each mask must contain V, J, D1 and optionally D2')
+        canonical = (resolve(mask[0], 'v') or [], resolve(mask[1], 'j') or [], resolve(mask[2], 'd'))
+        result.append(canonical + (resolve(mask[3], 'd'),) if len(mask) == 4 else canonical)
+    return result
+
+
 #: Columns `infer_frame` will look for as the nucleotide junction, in preference order.
 _JUNCTION_COLS = ("junction", "junction_nt", "cdr3_nt", "cdr3nt", "sequence")
 
 
-def sanitize_junctions(df: pl.DataFrame, col: str, *, ambiguous: str | None = "A",
+def sanitize_junctions(df: pl.DataFrame, col: str, *, ambiguous: str = "A",
                        where: str = "infer_frame") -> pl.DataFrame:
-    """Make a junction column safe for the native encoder, which knows only A/C/G/T.
+    """Normalize sequencing junctions; every DNA IUPAC ambiguity is replaced with A."""
+    from ..io.schema import normalize_nt_frame
 
-    Real annotated reads carry the occasional ambiguous base (``N``, or an IUPAC code), and an
-    unhandled one surfaces as a ``KeyError`` from deep inside the E-step.
-
-    Args:
-        df: Clonotype frame.
-        col: Junction column.
-        ambiguous: A single base to substitute for every non-ACGT character (default ``"A"``), or
-            ``None`` to drop those clonotypes instead. Substituting is the default because it keeps
-            the clonotype: an ambiguous base is one uncertain position in a junction that is
-            otherwise perfectly good evidence, and on these reads it affects ~0.01% of rows, so
-            dropping costs sample size for no gain in correctness. It is a *substitution*, not a
-            marginalization — the base is treated as read, so a run with many ambiguous positions
-            will bias the insertion model toward the substituted base and should use ``None``.
-        where: Caller name, used in the warning.
-
-    Returns:
-        A frame with the column uppercased and cleaned; rows are dropped only when
-        ``ambiguous is None``.
-    """
-    df = df.with_columns(pl.col(col).str.to_uppercase())
-    bad = df.filter(~pl.col(col).str.contains(r"^[ACGT]+$")).height
-    if not bad:
-        return df
-    if ambiguous is None:
-        warnings.warn(
-            f"{where}: dropped {bad} of {df.height} clonotypes whose {col!r} contains non-ACGT "
-            f"bases (the recombination model is defined over A/C/G/T only)", stacklevel=3)
-        return df.filter(pl.col(col).str.contains(r"^[ACGT]+$"))
-    if ambiguous not in ("A", "C", "G", "T"):
-        raise ValueError(f"ambiguous must be one of A, C, G, T or None, got {ambiguous!r}")
-    warnings.warn(
-        f"{where}: {bad} of {df.height} clonotypes have non-ACGT bases in {col!r}; substituting "
-        f"{ambiguous!r} (pass ambiguous=None to drop them instead)", stacklevel=3)
-    return df.with_columns(pl.col(col).str.replace_all(r"[^ACGT]", ambiguous))
+    if ambiguous != "A":
+        raise ValueError(f"{where}: ambiguous must be 'A'; sequencing ambiguities are replaced with A")
+    return normalize_nt_frame(df, [col])
 
 
 def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
                 v_col: str = "v_call", j_col: str = "j_call", use_calls: bool = True,
-                native: bool = True, ambiguous: str | None = "A", **kw):
+                native: bool = True, ambiguous: str = "A", **kw):
     """Fit a model from a **clonotype frame** — the ergonomic entry point to EM.
 
     Wraps :func:`infer_native` with the two steps every caller otherwise repeats: find the
@@ -788,8 +928,7 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
         use_calls: Build per-read masks from the V/J calls. Turn off only if the frame's calls are
             untrustworthy — inference then enumerates every gene and gets much slower.
         native: Use :func:`infer_native` (default). ``False`` runs the pure-Python :func:`infer`.
-        ambiguous: What to do with a junction holding a non-ACGT base — substitute this base
-            (default ``"A"``), or ``None`` to drop the clonotype. See :func:`sanitize_junctions`.
+        ambiguous: Must be ``"A"``: DNA IUPAC symbols are always replaced with A.
         **kw: Passed through (``max_iter``, ``tol``, ``init``, ``single_d``, ``nd_prior``,
             ``gene_prior``, ...).
 
@@ -817,24 +956,148 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
         raise ValueError(f"column {col!r} has no usable sequences")
     seqs = df[col].to_list()
     masks = None
-    if use_calls and v_col in df.columns and j_col in df.columns:
-        masks = gene_masks(template, df[v_col].to_list(), df[j_col].to_list())
+    if native and kw.get("error_rate") is not None and use_calls:
+        from .data import _with_candidate_sequences
+
+        df = _with_candidate_sequences(df)
+        queries = df["candidate_sequences"].to_list() if "candidate_sequences" in df.columns else None
+        masks, evidence = candidate_masks(seqs, template, threads=kw.get("threads", 0),
+                                          query_sequences=queries)
+        kw["candidate_search"] = evidence
+    elif use_calls and v_col in df.columns and j_col in df.columns:
+        if 'd2_call' in df.columns:
+            from .data import _build_masks
+            masks = _build_masks(df.with_columns(pl.col(v_col).alias('v_call'),
+                pl.col(j_col).alias('j_call')),template)
+        else:
+            masks = gene_masks(template, df[v_col].to_list(), df[j_col].to_list())
+    if not native and "prune_ratio" in kw:
+        if kw.pop("prune_ratio") != 0:
+            raise ValueError("pure-Python inference is exact; use native=True for pruning")
     fn = infer_native if native else infer
     return fn(template, seqs, masks=masks, **kw)
 
 
 def arda_masks(contigs: list[str], model: Model, *, organism: str = "human") -> tuple[list[str], list[tuple]]:
-    """Annotate nt contigs with arda and build ``(junctions, masks)`` for masked :func:`infer`.
+    """Extract junctions and fresh ARDA candidate masks for probabilistic training.
 
     The production path for real reads: ``junctions, masks = arda_masks(contigs, template);
     infer_native(template, junctions, masks=masks)``. arda is a base dependency (ships with vdjtools).
     """
-    from .stitch import annotate
+    from arda import annotate_sequences
+    from .data import _with_candidate_sequences
 
-    calls = annotate(contigs, organism=organism)
-    junctions = calls["junction"].to_list()
-    masks = gene_masks(model, calls["v_call"].to_list(), calls["j_call"].to_list())
+    if not contigs:
+        return [], []
+    calls = pl.DataFrame(annotate_sequences(contigs, seqtype="nt", organism=organism))
+    if "sequence" not in calls.columns:
+        if calls.height != len(contigs):
+            raise ValueError("annotation without sequence must retain one row per input contig")
+        calls = calls.with_columns(pl.Series("sequence", contigs))
+    calls = _with_candidate_sequences(calls)
+    junctions = calls["junction"].fill_null("").to_list()
+    masks, _ = candidate_masks(junctions, model, organism=organism,
+                               query_sequences=calls["candidate_sequences"].to_list())
     return junctions, masks
+
+
+def _candidate_identity(sequences, masks) -> str:
+    import hashlib
+    import json
+
+    from ..io.schema import normalize_nt
+
+    payload = json.dumps(([normalize_nt(s) for s in sequences], masks), separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def candidate_masks(sequences: list[str], model: Model, *, organism: str | None = None,
+                    threads: int = 0, batch_size: int = 10000,
+                    query_sequences: list[list[str]] | None = None) -> tuple[list[tuple], dict]:
+    """Batched ARDA V/J proposals for training, expanding each gene to all model templates.
+
+    The proposals restrict genes, never deletion boundaries or allele identities.
+    Missing proposals leave that segment unrestricted. D/D2 remain unrestricted:
+    a short local D hit or absent greedy D2 call must not decide the history.
+    Returns three-entry masks and explicit candidate-search limits/counts.
+    This finite candidate search is an approximation, not exhaustive inference.
+    ``query_sequences`` supplies coding-strand full-read alternatives per observation;
+    all their gene proposals are unioned. Empty alternatives fall back to the junction.
+    These queries never replace the observed junction or determine its boundaries.
+    """
+    from arda import alignment_candidates
+    from ..io.schema import normalize_nt
+    from ..cores import kernel_threads
+
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    if query_sequences is not None and len(query_sequences) != len(sequences):
+        raise ValueError("query_sequences must have one list per observation")
+    threads = kernel_threads(threads)
+    sequences = [normalize_nt(s) for s in sequences]
+    index = pl.concat([
+        model.genomic[f"genes_{seg.lower()}"]
+        .filter(pl.col("functional"))
+        .select(pl.lit(seg).alias("segment"),
+                pl.col(f"{seg.lower()}_allele").alias("model_allele"))
+        for seg in ("V", "J")
+    ]).with_columns(gene=pl.col("model_allele").str.split("*").list.first())
+    v, j = [set() for _ in sequences], [set() for _ in sequences]
+    evidence = {"batches": [], "d_unrestricted": True,
+                "candidate_ambiguity": "DNA IUPAC symbols replaced with A before search and inference",
+                "scope": "V/J gene proposals; all functional model templates per gene"}
+    import hashlib
+    import json
+    from itertools import islice
+
+    fallback = 0
+
+    def query_rows():
+        nonlocal fallback
+        for i, sequence in enumerate(sequences):
+            alternatives = query_sequences[i] if query_sequences is not None else None
+            if alternatives is not None and not isinstance(alternatives, list):
+                raise TypeError("query_sequences rows must be lists of sequences or None")
+            alternatives = sorted({normalize_nt(s) for s in (alternatives or []) if s})
+            if not alternatives:
+                alternatives = [normalize_nt(sequence)]
+                fallback += 1
+            yield from ((i, s) for s in alternatives)
+
+    queries = enumerate(query_rows())
+    digest = hashlib.sha256(b"[")
+    query_count = 0
+    while batch := list(islice(queries, batch_size)):
+        owners = {str(q): obs for q, (obs, _) in batch}
+        records = [(str(q), s) for q, (_, s) in batch]
+        for q, row in batch:
+            if q:
+                digest.update(b",")
+            digest.update(json.dumps(row, separators=(",", ":")).encode())
+        query_count += len(batch)
+        result = alignment_candidates(records, organism=organism or model.organism,
+                                      threads=threads, batch_size=batch_size)
+        hits = result["alignments"]
+        evidence["batches"].append({"n_queries": len(records), "n_hits": hits.height,
+                                    "limits": result["limits"]})
+        mapped = (hits.filter(pl.col("segment").is_in(["V", "J"]))
+                  .select("sequence_id", "segment", "alleles").explode("alleles", empty_as_null=True)
+                  .with_columns(gene=pl.col("alleles").str.split("*").list.first())
+                  .join(index, on=["segment", "gene"], how="inner")
+                  .group_by("sequence_id", "segment")
+                  .agg(pl.col("model_allele").unique().sort()))
+        for query, segment, alleles in mapped.iter_rows():
+            (v if segment == "V" else j)[owners[query]].update(alleles)
+    digest.update(b"]")
+    evidence.update(query_scope="coding-strand full-read alternatives; junction fallback when absent",
+                    query_count=query_count, full_read_observations=len(sequences) - fallback,
+                    junction_fallback_observations=fallback,
+                    query_inputs_sha256=digest.hexdigest())
+    evidence["unrestricted_v"] = sum(not values for values in v)
+    evidence["unrestricted_j"] = sum(not values for values in j)
+    masks = [(sorted(a), sorted(b), None) for a, b in zip(v, j)]
+    evidence["input_masks_sha256"] = _candidate_identity(sequences, masks)
+    return masks, evidence
 
 
 # --------------------------------------------------------------------------------------------
@@ -962,6 +1225,8 @@ def enforce_dj_order(model: Model) -> Model:
     Example:
         >>> fixed = enforce_dj_order(load_bundled("TRB", "learned", collapse=False))
     """
+    if "d_history" in model.tables:
+        return model.validate()
     if model.chain_type != "VDJ" or "d_gene" not in model.tables:
         return model
     tables = dict(model.tables)
@@ -1127,7 +1392,7 @@ def extend_alleles(model: Model, germline: pl.DataFrame, *, weight: float = 1.0)
         seeded = (seeded.join(old_totals, on=[*nk, "_g"], how="left")
                   .with_columns(_new=pl.col("p").sum().over([*nk, "_g"])))
         seeded = seeded.with_columns(
-            p=pl.when((pl.col("_new") > 0) & (pl.col("_old") > 0))
+            p=pl.when((pl.col("_new") > 0) & pl.col("_old").is_not_null())
             .then(pl.col("p") * pl.col("_old") / pl.col("_new"))
             .otherwise(pl.col("p"))
         ).drop(["_g", "_old", "_new"])
@@ -1171,6 +1436,7 @@ def _clip_deletions(block: pl.DataFrame, ev_name: str, event, cut_len: int,
 def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior=0.0,
                   gene_prior=0.0) -> dict[str, pl.DataFrame]:
     vdj = template.chain_type == "VDJ"
+    joint = "d_history" in template.tables
     mp = template.manifest.palindrome_max
     nV, nJ, nD = len(v_alleles), len(j_alleles), len(d_alleles)
 
@@ -1191,10 +1457,9 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         the data still decides the actual usage. Non-functional alleles (pseudogenes/ORFs) are
         deliberately NOT given mass -- the model cannot score them anyway.
 
-        The prior only protects alleles the data actually ATTRIBUTED reads to (soft count > 0),
-        NOT every functional allele: the E-step commits V-choice to one best-match allele per read,
-        so a functional secondary allele (e.g. TRDV2*03 when arda calls TRDV2*01) gets zero soft
-        count AND zero deletion/insertion counts. Handing it choice mass anyway makes it
+        The prior only protects alleles with positive posterior counts. The E-step sums gene
+        alternatives; an unsupported state can still have zero choice AND zero deletion/insertion
+        counts. Handing it choice mass alone makes it
         selectable by the generative sampler while its deletion distribution is all-zero -> the
         sampler draws it and then has nothing to draw a deletion from (IndexError). Guarding on
         ``p > 0`` keeps every mass-bearing allele conditionally complete, which is what
@@ -1217,10 +1482,11 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         ndel = np.tile(np.arange(nb) - maxpal, len(alleles))
         return norm(pl.DataFrame({col: a, "ndel": ndel.astype(np.int16), "p": list(arr)}), [col])
 
-    def dinucl(arr):
+    def dinucl(arr, name):
         i = np.arange(16)  # arr index i = to*4 + from
-        return norm(pl.DataFrame({"from_nt": (i % 4).astype(np.uint8), "to_nt": (i // 4).astype(np.uint8),
-                                  "p": list(arr)}), ["from_nt"])
+        frame = pl.DataFrame({"from_nt": (i % 4).astype(np.uint8), "to_nt": (i // 4).astype(np.uint8),
+                              "p": list(arr)})
+        return norm(_retain_unobserved_transitions(template, name, frame), ["from_nt"])
 
     t = {}
     t["v_choice"] = gene_choice(pl.DataFrame({"v_allele": v_alleles, "p": list(counts.v_choice)}), "v_allele", "v", [])
@@ -1230,9 +1496,22 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
         t["j_choice"] = gene_choice(pl.DataFrame({"j_allele": j_alleles, "p": list(counts.j_choice)}), "j_allele", "j", [])
         # Zero the genomically impossible D-J pairs BEFORE normalizing, so EM cannot relearn them
         # on the next iteration -- a post-hoc patch would be undone by the very next M-step.
-        t["d_gene"] = norm(_mask_dj(pl.DataFrame({
-            "j_allele": np.repeat(j_alleles, nD), "d_allele": np.tile(d_alleles, nJ),
-            "p": list(counts.d_gene)}), template.locus), ["j_allele"])
+        if joint:
+            vi_d, vi_j = {a: i for i, a in enumerate(d_alleles)}, {a: i for i, a in enumerate(j_alleles)}
+            history = template.tables["d_history"]
+            indices = history.select(
+                pl.col("j_allele").replace_strict(vi_j, return_dtype=pl.Int64).alias("j"),
+                pl.col("d_allele").replace_strict(vi_d, return_dtype=pl.Int64).alias("d1"),
+                pl.col("d2_allele").replace_strict(vi_d, default=0, return_dtype=pl.Int64).alias("d2"))
+            jd = indices["j"].to_numpy() * nD + indices["d1"].to_numpy()
+            values = np.where(history["n_d"].to_numpy() == 1, np.asarray(counts.history_single)[jd],
+                              np.asarray(counts.history_tandem)[jd * nD + indices["d2"].to_numpy()])
+            raw = _single_history_prior(history.with_columns(p=pl.Series("p", values)), nd_prior)
+            t["d_history"] = norm(_retain_history_groups(template, "d_history", raw, ["j_allele"]), ["j_allele"])
+        else:
+            t["d_gene"] = norm(_mask_dj(pl.DataFrame({
+                "j_allele": np.repeat(j_alleles, nD), "d_allele": np.tile(d_alleles, nJ),
+                "p": list(counts.d_gene)}), template.locus), ["j_allele"])
         n5, n3 = nbins["d5"], nbins["d3"]
         t["d_del"] = norm(pl.DataFrame({
             "d_allele": np.repeat(d_alleles, n5 * n3),
@@ -1241,32 +1520,50 @@ def _mstep_native(template: Model, counts, v_alleles, j_alleles, d_alleles, nbin
             "p": list(counts.d_del)}), ["d_allele"])
         t["vd_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_vd), dtype=np.int16), "p": list(counts.ins_vd)}), [])
         t["dj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dj), dtype=np.int16), "p": list(counts.ins_dj)}), [])
-        t["vd_dinucl"] = dinucl(counts.dinucl_vd)
-        t["dj_dinucl"] = dinucl(counts.dinucl_dj)
+        t["vd_dinucl"] = dinucl(counts.dinucl_vd, "vd_dinucl")
+        t["dj_dinucl"] = dinucl(counts.dinucl_dj, "dj_dinucl")
         # n_d learned from the soft counts (indexed by the n_D value): single-D emits only n_D=1 mass
         # -> renormalizes to delta(1) (a no-op); D-D emits n_D=1 and n_D=2 -> learns P(n_D=2).
-        nd = template.tables["n_d"]
-        # Dirichlet/Beta prior: nd_prior pseudocounts added to the single-D (n_D=1) bucket regularize
-        # away the tandem over-attribution of unregularized D-D EM on real data.
-        nd_counts = [float(counts.n_d[int(k)]) + (nd_prior if int(k) == 1 else 0.0) for k in nd["n_d"]]
-        t["n_d"] = norm(nd.with_columns(p=pl.Series("p", nd_counts)), [])
-        if "d2_gene" in template.manifest.events:  # tandem-D model — learn the second-D events too
-            t["d2_gene"] = norm(pl.DataFrame({
-                "d_allele": np.repeat(d_alleles, nD), "d2_allele": np.tile(d_alleles, nD),
-                "p": list(counts.d2_gene)}), ["d_allele"])
+        if not joint:
+            nd = template.tables["n_d"]
+            # Dirichlet/Beta prior: nd_prior pseudocounts added to the single-D (n_D=1) bucket regularize
+            # away the tandem over-attribution of unregularized D-D EM on real data.
+            nd_counts = [float(counts.n_d[int(k)]) + (nd_prior if int(k) == 1 else 0.0) for k in nd["n_d"]]
+            t["n_d"] = norm(nd.with_columns(p=pl.Series("p", nd_counts)), [])
+        if joint or "d2_gene" in template.manifest.events:  # tandem-D model — learn the second-D events too
+            if not joint:
+                t["d2_gene"] = norm(pl.DataFrame({
+                    "d_allele": np.repeat(d_alleles, nD), "d2_allele": np.tile(d_alleles, nD),
+                    "p": list(counts.d2_gene)}), ["d_allele"])
             t["d2_del"] = norm(pl.DataFrame({
                 "d2_allele": np.repeat(d_alleles, n5 * n3),
                 "ndel5": np.tile(np.repeat(np.arange(n5) - mp["d_5"], n3), nD).astype(np.int16),
                 "ndel3": np.tile(np.arange(n3) - mp["d_3"], n5 * nD).astype(np.int16),
                 "p": list(counts.d2_del)}), ["d2_allele"])
             t["dd_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_dd), dtype=np.int16), "p": list(counts.ins_dd)}), [])
-            t["dd_dinucl"] = dinucl(counts.dinucl_dd)
+            t["dd_dinucl"] = dinucl(counts.dinucl_dd, "dd_dinucl")
     else:
         t["j_choice"] = norm(pl.DataFrame({
             "v_allele": np.repeat(v_alleles, nJ), "j_allele": np.tile(j_alleles, nV),
             "p": list(counts.j_choice)}), ["v_allele"])
         t["vj_ins"] = norm(pl.DataFrame({"length": np.arange(len(counts.ins_vj), dtype=np.int16), "p": list(counts.ins_vj)}), [])
-        t["vj_dinucl"] = dinucl(counts.dinucl_vj)
+        t["vj_dinucl"] = dinucl(counts.dinucl_vj, "vj_dinucl")
+    if joint:
+        t["d_del"] = t["d_del"].with_columns(p=pl.Series("p", list(counts.d_del)))
+        t["d2_del"] = t["d2_del"].with_columns(p=pl.Series("p", list(counts.d2_del)))
+        raw = t["d_del"].with_columns(p=pl.Series("p", list(counts.d_tandem_del)))
+        t["d_tandem_del"] = raw
+        for name, col in (("d_del", "d_allele"), ("d_tandem_del", "d_allele"), ("d2_del", "d2_allele")):
+            t[name] = norm(_retain_history_groups(template, name, t[name], [col]), [col])
+        if not sum(counts.ins_dd):
+            t["dd_ins"] = template.tables["dd_ins"]
+    for junction in (("vd", "dj", "dd") if vdj else ("vj",)):
+        event = f"{junction}_first_nt"
+        if event not in template.manifest.events:
+            continue
+        values = getattr(counts, f"first_{junction}")
+        t[event] = (norm(pl.DataFrame({"nt": np.arange(4, dtype=np.uint8), "p": list(values)}), [])
+                    if sum(values) > 0 else template.tables[event])
     return t
 
 
@@ -1287,10 +1584,33 @@ def infer_native(
     checkpoint=None,
     checkpoint_every: int = 1,
     threads: int = 0,
+    error_rate: float | None = None,
+    candidate_search: dict | None = None,
+    prune_ratio: float = 1e-5,
 ) -> tuple[Model, InferenceReport]:
-    """EM inference with the native C++ E-step — same result as :func:`infer`, much faster.
+    """EM inference with the native C++ E-step and optional probability-bound pruning.
 
     ``threads`` bounds E-step kernel threads; ``0`` uses the available CPU allocation.
+    ``prune_ratio`` (default 1e-5) discards disjoint history cells whose best
+    complete scenario is below this fraction of the best complete scenario.
+    Cells can retain weaker component histories. This is a conservative factorized
+    analogue of IGoR's relative cutoff, not its traversal order. Set 0 for exact
+    inference. Reports record the actual mean/maximum omitted probability mass;
+    the scenario cutoff does not bound their sum. Generation Pgen stays exact.
+
+    ``error_rate=None`` retains exact matching. A value in [0, 1] enables a fitted
+    retained-germline substitution channel: each match contributes ``1-error_rate``
+    and each mismatch ``error_rate/3``. Inserted bases use their observed Markov
+    emissions without an error channel. The posterior mismatch/templated-base ratio
+    updates the rate after each M-step and is recorded in ``report.error_rate``.
+    This observation likelihood is distinct from exact generation Pgen.
+    In error mode, the default ``init="align"`` uses uniform initialization:
+    exact-match alignment votes would otherwise make mismatch-only genes unreachable.
+    ``candidate_search`` records proposal limits/counts in reports and checkpoints;
+    it does not change enumeration independently of ``masks``.
+    DNA IUPAC sequencing symbols are always replaced with A before initialization,
+    candidate-evidence verification and likelihood evaluation. ``n_ambiguous`` counts
+    input observations requiring that substitution, without an uncertainty model.
 
     Requires the compiled ``_core`` extension. See :func:`infer` for the arguments (including
     ``single_d`` / ``p_nd2_init`` / ``dd_allowed`` / ``nd_prior`` / ``gene_prior``).
@@ -1308,15 +1628,29 @@ def infer_native(
 
     from .._core import estep_batch, make_counts
     from ..cores import kernel_threads
+    from math import isfinite
+
+    if not isfinite(prune_ratio) or not 0 <= prune_ratio < 1:
+        raise ValueError("prune_ratio must be finite and between 0 (inclusive) and 1 (exclusive)")
 
     threads = kernel_threads(threads)
-    from .native import _encode, pack
+    from .native import _encode_observed, pack
 
     started = _time.monotonic()
     template = _maybe_promote_dd(template, single_d, p_nd2_init)
+    masks = _canonical_masks(template, masks, len(sequences))
     ddflags = [1 if a else 0 for a in dd_allowed] if dd_allowed is not None else []
 
-    upper = [s.upper() for s in sequences]
+    from ..io.schema import normalize_nt
+
+    n_ambiguous = sum(any(c in "RYSWKMBDHVN" for c in s.upper()) for s in sequences)
+    upper = [normalize_nt(s) for s in sequences]
+    seqs_enc = [_encode_observed(s) for s in upper]
+    if candidate_search and (masks is None or _candidate_identity(upper, masks) != candidate_search.get("input_masks_sha256")):
+        raise ValueError("candidate-restricted EM requires the same sequences and masks as recorded evidence; "
+                         "pass candidate_search={} explicitly to declare changed support")
+    if error_rate is not None and init == "align":
+        init = "uniform"
     if init == "template":
         tables = template.tables
     elif init == "align":
@@ -1331,35 +1665,45 @@ def infer_native(
     vi = {a: i for i, a in enumerate(v_alleles)}
     ji = {a: i for i, a in enumerate(j_alleles)}
     di = {a: i for i, a in enumerate(d_alleles)}
-    seqs_enc = [_encode(s) for s in upper]
     if masks is not None:
         vmasks = [[vi[a] for a in mk[0] if a in vi] for mk in masks]
         jmasks = [[ji[a] for a in mk[1] if a in ji] for mk in masks]
         dmasks = [[di[a] for a in (mk[2] or []) if a in di] for mk in masks]
+        d2masks = [[di[a] for a in (mk[3] or []) if a in di] if len(mk)>3 else [] for mk in masks]
+        ddflags = [int((ddflags[i] if ddflags else True) and
+                   (len(mk)<4 or mk[3] is None or bool(d2masks[i]))) for i,mk in enumerate(masks)]
     else:
-        vmasks = jmasks = dmasks = []
+        vmasks = jmasks = dmasks = d2masks = []
 
-    report = InferenceReport()
+    report = InferenceReport(error_model="exact" if error_rate is None else "retained-germline-substitution",
+                             candidate_search=dict(candidate_search or {}), n_ambiguous=n_ambiguous,
+                             prune_ratio=prune_ratio)
     meta = dict(started=started, max_iter=max_iter, tol=tol, init=init, native=True,
                 n_sequences=len(upper))
     for it in range(max_iter):
         pm, _, _ = pack(model)
         counts = make_counts(pm)
-        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags)
-        # Report the per-sequence MEAN, matching infer() (line ~431) -- estep_batch returns the
-        # summed log-likelihood, and appending it raw made infer_native's loglik differ from
-        # infer's by a factor of n (the two are documented as "same result"). Denominator is the
-        # input read count; n_scoreable is populated so the sum can be recovered if needed.
-        n = len(seqs_enc)
+        ll = estep_batch(pm, seqs_enc, vmasks, jmasks, dmasks, counts, threads, ddflags, d2masks,
+                         0.0 if error_rate is None else error_rate, prune_ratio)
+        # Match infer(): the native sum includes positive-likelihood observations only.
+        # Counting all inputs here silently hid unsupported reads and diluted the mean.
+        n = counts.n_scoreable
         report.loglik.append(ll / n if n else float("-inf"))
         report.n_scoreable.append(n)
+        report.pruned_mass_mean.append(counts.pruned_mass_fraction_sum / n if n else 0.0)
+        report.pruned_mass_max.append(counts.pruned_mass_fraction_max)
+        report.n_pruned_observations.append(counts.n_pruned_observations)
+        if error_rate is not None:
+            if counts.error_nt > 0:
+                error_rate = min(1.0, max(0.0, counts.error_mismatches / counts.error_nt))
+            report.error_rate.append(error_rate)
         nbins = {"v": pm.nbins_v, "j": pm.nbins_j, "d5": pm.nbins_d5, "d3": pm.nbins_d3}
         new_tables = _mstep_native(template, counts, v_alleles, j_alleles, d_alleles, nbins, nd_prior, gene_prior)
         new_model = Model(manifest=template.manifest, tables={**model.tables, **new_tables}, genomic=template.genomic)
         report.n_iter = it + 1
         model = new_model
-        # Converge on the relative log-likelihood improvement (whole-model, monotone post-fix), not V
-        # usage alone: V is arda-masked so it settles in ~2 iters while trims/insertions/D-D still move.
+        # Converge on relative whole-model log-likelihood change, not V
+        # usage alone: gene usage can settle while trims/insertions/D-D still move.
         rel = _loglik_rel(report.loglik)
         report.gene_tv.append(rel)
         if progress is not None:
@@ -1371,8 +1715,8 @@ def infer_native(
             break
     # Completion pass: EM only keeps genes whose CDR3s were producibly observed, so functional genes
     # arda never saw (or saw but couldn't emit) end at P=0 — yet a user's library may be full of them.
-    # ``template`` is the OLGA oracle (from_olga seed), differing only in D/D-D, so transplant its own
-    # usage + conditionals for every functional gene the learned model is missing. Only in the prior
+    # ``template`` supplies compatible usage and conditionals: the default raw builder uses
+    # an ARDA scaffold; an explicitly supplied OLGA template retains its own parameters. Only in the prior
     # mode (``gene_prior > 0``), i.e. "keep every real gene reachable".
     if gene_prior > 0:
         model = augment_from_oracle(model, template)

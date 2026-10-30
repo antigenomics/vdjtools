@@ -41,8 +41,13 @@ struct PackedModel {
     // D-D (tandem, n_D=2) extension — populated only when `dd` is true (P(n_D=2)>0). D2 draws
     // from the same D germline (cut_d) as D1, so it reuses nbins_d5/nbins_d3 and maxpal_d5/d3.
     bool dd = false;
+    bool joint_history = false;
+    std::vector<double> q_tandem;          // [nJ*nD*nD], joint tandem history given J
+    std::vector<double> del_d_tandem;      // D1 deletion conditional in the tandem branch
     double p_nd1 = 1.0, p_nd2 = 0.0;        // P(n_D=1) (0-D folds in via a fully-trimmed D), P(n_D=2)
     std::vector<double> pd2_given_d1;       // [nD*nD] row-major, P(D2|D1)
+    std::vector<uint8_t> tandem_forbidden_dj;  // [nJ*nD], DD-only structural exclusions
+    std::vector<uint8_t> tandem_forbidden_dd;  // [nD*nD], physical-gene reuse / known TRB order
     std::vector<double> del_d2;             // [nD*nbins_d5*nbins_d3], second-D joint 5'/3' deletion
     std::vector<double> ins_dd, R_dd, bias_dd;  // DD insertion junction (same layout as vd/dj)
 
@@ -120,6 +125,7 @@ struct AaScenario {
     double w = 0.0;
     int v = -1, len_v = 0, j = -1, len_j = 0;
     int d = -1, idx5 = 0, idx3 = 0, pos = 0;
+    int d2 = -1, idx5_2 = 0, idx3_2 = 0, pos2 = 0;
 };
 
 // Top-``k`` scenarios by joint max-product weight for an amino-acid CDR3 — the same Pi_L*Pi_R
@@ -129,8 +135,7 @@ struct AaScenario {
 // Returns SCENARIOS, not nucleotides: recovering the nt string is one cheap per-scenario DP over
 // the free positions (see vdjtools.model.viterbi), so the expensive search need not carry paths.
 //
-// Tandem-D (n_D=2) is deliberately not enumerated: a single D trimmed to zero length already
-// reaches every middle, so D-D can only reorder candidates, never add one.
+// Joint-history models enumerate both single- and tandem-D paths.
 std::vector<AaScenario> best_aa_scenarios(const PackedModel& m, const std::string& aa,
                                           int v_idx, int j_idx, int k);
 
@@ -144,6 +149,7 @@ struct AaScenarioBatch {
     std::vector<int> row, rank;
     std::vector<double> w;
     std::vector<int> v, len_v, j, len_j, d, idx5, idx3, pos;
+    std::vector<int> d2, idx5_2, idx3_2, pos2;
 };
 
 AaScenarioBatch best_aa_scenarios_batch(const PackedModel& m,
@@ -158,6 +164,7 @@ struct InferNt {
     bool ok = false;
     std::string nt;
     int v = -1, len_v = 0, j = -1, len_j = 0, d = -1, d_start = 0, d_end = 0;
+    int d2 = -1, d2_start = 0, d2_end = 0;
     int n_candidates = 0;
     double pgen = 0.0, scenario_p = 0.0, runner_up_pgen = 0.0;
 };
@@ -222,8 +229,15 @@ AlignVotes align_init_votes(const PackedModel& m, const std::vector<std::string>
 // EM soft counts — one accumulator per event realization, laid out like the PackedModel prob
 // arrays so the Python M-step can renormalize them directly.
 struct Counts {
+    size_t n_scoreable = 0;  // observations with positive likelihood, independent of soft-count mass
+    double error_mismatches = 0.0, error_nt = 0.0;  // posterior retained-germline statistics
+    // Per-observation approximation diagnostics, never likelihood-scaled soft counts.
+    double pruned_mass_fraction_sum = 0.0, pruned_mass_fraction_max = 0.0;
+    uint64_t n_pruned_observations = 0;
     std::vector<double> v_choice, j_choice, d_gene, v_3_del, j_5_del, d_del;
     std::vector<double> ins_vd, ins_dj, ins_vj, dinucl_vd, dinucl_dj, dinucl_vj;
+    std::vector<double> first_vd, first_dj, first_vj, first_dd;
+    std::vector<double> history_single, history_tandem, d_tandem_del;
     // D-D (tandem) soft counts — sized/populated only for a `dd` model. n_d[k] = P(n_D=k) mass
     // (k in {1,2}); d2_gene = P(D2|D1) [nD*nD]; d2_del [nD*nbins_d5*nbins_d3]; ins_dd/dinucl_dd
     // like the vd junction. Single-D E-step fills n_d[1] only (renormalizes to delta(1), a no-op).
@@ -238,10 +252,20 @@ Counts make_counts(const PackedModel& m);
 // are gene-index lists restricting enumeration (empty => all functional genes of that segment).
 // ``nthreads`` partitions the reads across worker threads (each with a private accumulator, reduced
 // in a fixed order); 0 = serial (Python APIs resolve allocation). Small batches run single-threaded so their
-// result stays bitwise-identical. The soft counts are exact regardless of thread count (up to the
+// result stays bitwise-identical. With prune_ratio=0 the soft counts are exact (up to the
 // float summation order, which the fixed reduction keeps deterministic per ``nthreads``).
 // ``dd_allowed`` optionally gates the tandem (n_D=2) E-step per read (1 = may be tandem, 0 = single-D
-// only); empty = every read may be tandem. Used to anchor D-D learning to arda's tandem calls.
+// only); empty = every read may be tandem. Explicit caller constraint only; preliminary
+// alignment D calls do not gate the production training path.
+// Optional d2masks restrict D2 independently of dmasks (D1). Absent/empty masks mean
+// unrestricted; Python disables dd_allowed for an explicitly empty fourth mask.
+// error_rate>0 enables retained-germline substitution emissions for training only.
+// Counts records posterior mismatches/retained bases and actual scoreable observations.
+// Sequencing observations contain ACGT indices 0..3 only. Python ingress replaces
+// DNA IUPAC symbols with A; this low-level boundary rejects all other indices.
+// prune_ratio=0 is exact. Otherwise disjoint history cells whose best complete
+// component is below prune_ratio * global best are removed conservatively.
+// This ratio does not bound total omitted mass; Counts records its actual fraction.
 double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int8_t>>& seqs,
                    const std::vector<std::vector<int>>& vmasks,
@@ -249,6 +273,8 @@ double estep_batch(const PackedModel& m,
                    const std::vector<std::vector<int>>& dmasks,
                    Counts& counts,
                    int nthreads = 0,
-                   const std::vector<int>& dd_allowed = {});
+                   const std::vector<int>& dd_allowed = {},
+                   const std::vector<std::vector<int>>& d2masks = {},
+                   double error_rate = 0.0, double prune_ratio = 0.0);
 
 }  // namespace vdjtools

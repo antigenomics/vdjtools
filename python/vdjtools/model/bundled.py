@@ -1,28 +1,8 @@
-"""Precomputed recombination models shipped with vdjtools.
+"""Offline bundled models: fresh ``isalgo`` fits and frozen ``olga-legacy`` assets.
 
-Three model sets live under ``vdjtools/model/_bundled/``:
-
-- ``olga`` — imported from OLGA's default models (the exact-Pgen bootstrap; single-D).
-  The seven **human** loci, OLGA's germline namespace. ⚠ OLGA itself also ships five MOUSE models
-  (``mouse_T_alpha``, ``mouse_T_beta``, ``mouse_B_heavy``, ``mouse_B_kappa``, ``mouse_B_lambda``);
-  they are simply not vendored here yet, so this set answers human only. That is a fact about this
-  bundle, not about OLGA.
-- ``learned`` — EM-inferred from real non-functional reads (out-of-frame + stop-codon, HuggingFace), tandem-D on the D-bearing
-  loci (IGH/TRD/TRB). These carry a learned ``P(n_D=2)`` and broader trim/insertion distributions
-  than the synthetic OLGA models. Seven human loci, OLGA's germline namespace.
-- ``arda`` — the same EM inference on the **arda** IMGT allele namespace (:func:`from_arda`
-  scaffold refit by :func:`~vdjtools.model.infer.infer_native`). Nine models: the seven human
-  loci **plus mouse TRA/TRB — the only bundled set carrying a non-human organism today**. Use this
-  one when
-  the rest of your pipeline is arda-annotated, so generated sequences share one allele namespace
-  with your query data instead of needing a name fallback.
-
-``arda`` models are keyed by ``{organism}_{LOCUS}`` on disk; the other two by ``{LOCUS}`` alone.
-:func:`load_bundled` hides that — pass ``organism=`` and it picks the right key.
-
-Each model is a directory of parquet marginal tables + ``manifest.json`` (see :mod:`vdjtools.model`).
-Each ``manifest.json`` records what the model was built from; the builder is
-``appendix/build_bundled_models.py``.
+Compatibility ``learned`` and ``arda`` select fresh isalgo fits; ``olga`` selects
+frozen OLGA assets. Old parameter families require a pinned historical release.
+Missing new fits fail explicitly; they are never synthesized or substituted.
 """
 from __future__ import annotations
 
@@ -32,22 +12,25 @@ from .io import load_model
 from .collapse import collapse_alleles
 from .model import Model
 
-#: The three shipped model sets.
-SOURCES = ("olga", "learned", "arda")
-#: The seven human loci with bundled models (``arda`` adds mouse TRA/TRB).
+#: Canonical names and explicitly supported compatibility selectors.
+SOURCES = ("isalgo", "olga-legacy", "olga", "learned", "arda")
+_CANONICAL_SOURCES = ("isalgo", "olga-legacy")
+#: The seven human receptor loci; isalgo mouse bundles cover five loci.
 LOCI = ("TRA", "TRB", "TRG", "TRD", "IGH", "IGK", "IGL")
-#: Sets whose directories are keyed ``{organism}_{LOCUS}`` rather than ``{LOCUS}``.
-_ORGANISM_KEYED = ("arda",)
+def _source_family(source: str) -> str:
+    """Resolve supported historical spellings without selecting historical learned weights."""
+    return {"learned": "isalgo", "arda": "isalgo", "olga": "olga-legacy"}.get(source, source)
 
 
 def _bundled_key(source: str, locus: str, organism: str) -> str:
     """Directory name for one bundled model, per that set's naming scheme."""
-    if source in _ORGANISM_KEYED:
-        return f"{organism.lower()}_{locus.upper()}"
+    source = _source_family(source)
+    if source == "isalgo" and organism.lower() == "mouse":
+        return f"mouse_{locus.upper()}"
     if organism.lower() != "human":
         raise ValueError(
             f"vdjtools bundles the {source!r} model set for human only (got "
-            f"organism={organism!r}); use source='arda', which carries mouse TRA and TRB. "
+            f"organism={organism!r}); the isalgo set carries mouse TRA/TRB/IGH/IGK/IGL. "
             f"⚠ This is a gap in what is VENDORED, not in the upstream set: OLGA ships "
             f"mouse_T_alpha, mouse_T_beta, mouse_B_heavy, mouse_B_kappa and mouse_B_lambda, and "
             f"all five import cleanly through `from_olga`."
@@ -55,23 +38,21 @@ def _bundled_key(source: str, locus: str, organism: str) -> str:
     return locus.upper()
 
 
-def load_bundled(locus: str, source: str = "olga", *, organism: str = "human",
+def load_bundled(locus: str, source: str = "isalgo", *, organism: str = "human",
                  collapse: bool = True) -> Model:
     """Load a precomputed model shipped with the package (no OLGA/HuggingFace at runtime).
 
     Args:
         locus: One of ``TRA TRB TRG TRD IGH IGK IGL`` (case-insensitive).
-        source: ``"olga"`` (OLGA bootstrap, exact Pgen), ``"learned"`` (EM-inferred from real
-            non-functional reads; tandem-D on IGH/TRD/TRB), or ``"arda"`` (the same EM inference on
-            the **arda IMGT allele namespace**, and the only set VENDORED here for mouse).
-        organism: ``"human"`` (default) or ``"mouse"``. Only the ``arda`` set is VENDORED here
-            with a non-human organism; asking the others for one is an error rather than a silent
-            human model. OLGA's own five mouse models exist upstream — see the module docstring.
-        collapse: If ``True`` (default), collapse each gene to a single ``*01`` allele via
-            :func:`~vdjtools.model.collapse.collapse_alleles` — the working gene-level resolution,
-            in which Pgen also collapses a clonotype's allele to ``*01`` (short-read aligners cannot
-            resolve alleles reliably, so the suffix is noise). Pass ``collapse=False`` for full
-            allele resolution, e.g. the exact-OLGA-Pgen fidelity check.
+        source: ``"isalgo"`` (default; fresh ARDA-reference EM fits), ``"olga-legacy"``
+            (frozen human bootstrap), or compatibility ``"olga"``, ``"learned"``, ``"arda"``.
+        organism: ``"human"`` (default) or ``"mouse"``. The isalgo mouse catalog covers TRA/TRB/IGH/IGK/IGL.
+            No mouse TRG/TRD model is bundled. Their data acquisition is a separate
+            future project. Missing combinations fail rather than using a human model.
+        collapse: If ``True`` (default), collapse multi-allele models to one ``*01`` entry per
+            gene via :func:`~vdjtools.model.collapse.collapse_alleles`. Already gene-level isalgo
+            fits retain their selected reference labels and tables. Pass ``collapse=False`` for
+            full allele resolution, e.g. the exact-OLGA-Pgen fidelity check.
 
     Returns:
         The :class:`~vdjtools.model.model.Model`.
@@ -82,14 +63,16 @@ def load_bundled(locus: str, source: str = "olga", *, organism: str = "human",
         FileNotFoundError: If no bundled model exists for ``(source, organism, locus)``.
 
     Example:
-        >>> m = load_bundled("TRB")                                  # olga, human
-        >>> m_arda = load_bundled("TRB", "arda")                     # arda namespace, human
-        >>> m_mouse = load_bundled("TRB", "arda", organism="mouse")  # the only VENDORED mouse set
+        >>> m = load_bundled("TRB")                                  # isalgo, human
+        >>> m_arda = load_bundled("TRB", "arda")                     # alias of isalgo, human
+        >>> m_mouse = load_bundled("TRB", "arda", organism="mouse")  # alias of isalgo, mouse
     """
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
+    source = _source_family(source)
     key = _bundled_key(source, locus, organism)
-    root = files("vdjtools.model") / "_bundled" / source / key
+    directory = "olga" if source == "olga-legacy" else source
+    root = files("vdjtools.model") / "_bundled" / directory / key
     if not root.is_dir():
         raise FileNotFoundError(
             f"no bundled {source!r} model for locus {locus!r} (organism {organism!r}); "
@@ -97,17 +80,22 @@ def load_bundled(locus: str, source: str = "olga", *, organism: str = "human",
         )
     with as_file(root) as path:
         m = load_model(path)
+    if collapse and source == "isalgo" and all(g["gene"].n_unique() == g.height for g in m.genomic.values()):
+        return m  # Already fitted at gene resolution; keep the selected reference allele labels.
     return collapse_alleles(m) if collapse else m
 
 
 def list_bundled() -> dict[str, list[str]]:
-    """Return the available bundled models as ``{source: [key, ...]}``.
+    """Return canonical bundled families as ``{source: [key, ...]}``.
 
-    Keys are bare loci for ``olga``/``learned`` and ``{organism}_{LOCUS}`` for ``arda``, matching
-    what :func:`load_bundled` accepts for each set.
+    Compatibility names resolve to these families; old weights require a pinned prior release.
+
+    Keys are bare human loci, plus ``mouse_{LOCUS}`` for isalgo mouse fits.
+    Empty canonical families remain visible so missing release assets cannot be hidden.
     """
     out: dict[str, list[str]] = {}
-    for src in SOURCES:
-        base = files("vdjtools.model") / "_bundled" / src
+    for src in _CANONICAL_SOURCES:
+        directory = "olga" if src == "olga-legacy" else src
+        base = files("vdjtools.model") / "_bundled" / directory
         out[src] = sorted(d.name for d in base.iterdir() if d.is_dir()) if base.is_dir() else []
     return out

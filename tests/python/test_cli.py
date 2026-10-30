@@ -16,15 +16,103 @@ from vdjtools.cli import app
 runner = CliRunner()
 
 
-def test_generate_native_cli_matches_library(tmp_path):
+@pytest.mark.parametrize('command', ['pgen', 'generate'])
+@pytest.mark.parametrize('organism', ['human', 'mouse'])
+def test_model_commands_forward_organism(tmp_path, monkeypatch, command, organism):
+    import importlib
+    import vdjtools.model as models
+    from vdjtools.model import native
+    marker, calls = object(), []
+    def load(locus, *, source, organism):
+        calls.append((locus, source, organism))
+        return marker
+    monkeypatch.setattr(models, 'load_bundled', load)
+    def sample(model, n, **kwargs):
+        assert model is marker and kwargs['engine'] == 'native'
+        return pl.DataFrame({'junction_aa': ['CASSF'] * n})
+    monkeypatch.setattr(importlib.import_module('vdjtools.model.generate'), 'generate', sample)
+    def score(model, sequences, *args, **kwargs):
+        assert model is marker
+        return [.25] * len(sequences)
+    monkeypatch.setattr(native, 'pgen_aa_batch', score)
+    source = tmp_path / 'queries.tsv'
+    source.write_text('junction_aa\nCASSF\n')
+    arguments = ([command, str(source)] if command == 'pgen' else [command, '-n', '2'])
+    arguments += ['--model', 'TRA', '-o', str(tmp_path / 'out.tsv')]
+    if organism == 'mouse':
+        arguments += ['--organism', 'mouse']
+    result = runner.invoke(app, arguments)
+    assert result.exit_code == 0, result.output
+    assert calls == [('TRA', 'isalgo', organism)]
+
+
+@pytest.mark.parametrize('command', ['pgen', 'generate'])
+@pytest.mark.parametrize('organism,message', [('mouse', 'no bundled mouse TRG model'),
+                                            ('rabbit', '--organism must be human or mouse')])
+def test_unsupported_mouse_model_is_a_friendly_cli_error(tmp_path, monkeypatch, command, organism, message):
+    import vdjtools.model as models
+    def missing(locus, *, source, organism):
+        assert locus == 'TRG' and organism == 'mouse'
+        raise FileNotFoundError('no bundled mouse TRG model')
+    monkeypatch.setattr(models, 'load_bundled', missing)
+    source = tmp_path / 'queries.tsv'
+    source.write_text('junction_aa\nCASSF\n')
+    arguments = [command, str(source)] if command == 'pgen' else [command]
+    result = runner.invoke(app, arguments + ['--model', 'TRG', '--organism', organism])
+    assert result.exit_code == 1
+    assert 'error: ' + message in result.output
+    assert isinstance(result.exception, SystemExit)
+
+
+@pytest.mark.parametrize("source,engine,custom,expected_engine", [
+    ("isalgo", None, False, "native"),
+    ("learned", None, False, "native"),
+    ("learned", "reference", False, "reference"),
+    ("learned", "native", False, "native"),
+    ("olga", None, False, "reference"),
+    ("arda", None, False, "native"),
+    ("olga-legacy", None, False, "reference"),
+    ("olga", "native", False, "native"),
+    ("learned", None, True, "reference"),
+    ("learned", "native", True, "native"),
+])
+def test_generate_cli_engine_policy(tmp_path, toy_model, source, engine, custom, expected_engine):
+    from vdjtools.model import load_bundled
+    from vdjtools.model.generate import generate
+    from vdjtools.model.io import load_model, save_model
+
+    if custom:
+        path = tmp_path / "model"
+        save_model(toy_model, path)
+        model = load_model(path)
+        arguments = ["--model-path", str(path)]
+    else:
+        model = load_bundled("TRG", source)
+        arguments = ["--model", "TRG"]
+        if source != "isalgo":
+            arguments += ["--source", source]
+    if engine is not None:
+        arguments += ["--engine", engine]
+    out = tmp_path / "draws.parquet"
+    result = runner.invoke(app, ["generate", *arguments, "-n", "64", "--seed", "7", "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    expected = generate(model, 64, seed=7, engine=expected_engine, threads=1)
+    assert pl.read_parquet(out).equals(expected)
+
+
+@pytest.mark.parametrize('organism,locus',
+                         [('human', locus) for locus in ('TRA', 'TRB', 'TRG', 'TRD', 'IGH', 'IGK', 'IGL')]
+                         + [('mouse', locus) for locus in ('TRA', 'TRB', 'IGH', 'IGK', 'IGL')])
+def test_generate_native_cli_matches_library(tmp_path, organism, locus):
     from vdjtools.model import load_bundled
     from vdjtools.model.generate import generate
 
     out = tmp_path / "native.parquet"
-    result = runner.invoke(app, ["generate", "-m", "TRB", "-n", "64", "--seed", "7",
+    result = runner.invoke(app, ["generate", "-m", locus, "--organism", organism,
+                                 "-n", "64", "--seed", "7",
                                  "--engine", "native", "--threads", "1", "-o", str(out)])
     assert result.exit_code == 0, result.output
-    assert pl.read_parquet(out).equals(generate(load_bundled("TRB"), 64, seed=7,
+    assert pl.read_parquet(out).equals(generate(load_bundled(locus, organism=organism), 64, seed=7,
                                                engine="native", threads=1))
 
 

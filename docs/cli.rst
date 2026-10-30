@@ -30,8 +30,12 @@ bounded worker **threads**, with serial inner numerical kernels. Python-heavy
 parts remain GIL limited. Only one coarse task is queued per worker.
 
 **Models.** Wherever a command takes a model, it accepts ``LOCUS``, ``LOCUS:source``,
-``LOCUS:source:organism``, or a path to a model directory -- for example ``TRB``, ``TRB:learned``,
-``TRB:olga:human``.
+``LOCUS:source:organism``, or a path to a model directory -- for example ``TRB``, ``TRB:isalgo``,
+``TRB:olga-legacy:human``. An omitted source selects the canonical ``isalgo`` default;
+``TRB:isalgo:mouse`` selects its mouse population. ``olga-legacy`` is the frozen
+oracle family; ``olga`` aliases it. ``learned`` and ``arda`` alias fresh ``isalgo``
+fits. Their previous fitted weights require a pinned previous release. Missing fits
+fail explicitly. See :doc:`model` for catalog coverage and the fitted-asset release gate.
 
 Data and pre-processing
 -----------------------
@@ -313,11 +317,11 @@ Subcommands for building, fitting, auditing and comparing models. Full walkthrou
 
 .. code-block:: bash
 
-   vdjtools model check TRB:learned
+   vdjtools model check TRB:isalgo
    vdjtools model template --locus TRB -o tmpl/
    vdjtools model learn clones.tsv -t tmpl/ -o fitted/
-   vdjtools model compare TRB:olga TRB:learned --by gene --dot diff.pdf
-   vdjtools model loglik seqs.tsv TRB:learned
+   vdjtools model compare TRB:olga-legacy TRB:isalgo --by gene --dot diff.pdf
+   vdjtools model loglik seqs.tsv TRB:isalgo
 
 Single cell
 -----------

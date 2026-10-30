@@ -163,7 +163,35 @@ def annotate_reads(
     return pl.read_csv(airr, separator="\t", infer_schema_length=20000)
 
 
-def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False) -> pl.DataFrame:
+def _with_candidate_sequences(clones: pl.DataFrame) -> pl.DataFrame:
+    """Retain coding-strand full reads as candidate proposals, separate from junctions."""
+    from ..io.schema import normalize_nt_frame
+
+    clones = normalize_nt_frame(clones, ["sequence", "junction"])
+    if "candidate_sequences" in clones.columns:
+        candidates = pl.col("candidate_sequences").cast(pl.List(pl.String))
+        bases = pl.element().str.to_uppercase()
+        invalid = candidates.list.eval(
+            bases.str.contains(r"[^ACGTRYSWKMBDHVN]").fill_null(False)).list.any().fill_null(False)
+        if clones.select(invalid.any()).item():
+            raise ValueError("invalid DNA IUPAC nucleotide input")
+        clones = clones.with_columns(candidates.list.eval(
+            bases.str.replace_all(r"[RYSWKMBDHVN]", "A")))
+    if "sequence" not in clones.columns:
+        return clones
+    seq = pl.col("sequence").cast(pl.String)
+    if "rev_comp" in clones.columns:
+        reverse = pl.col("rev_comp").cast(pl.String).str.to_lowercase().is_in(["t", "true", "1"])
+        complement = dict(zip("ACGT", "TGCA"))
+        seq = pl.when(reverse).then(seq.str.reverse().str.replace_many(complement)).otherwise(seq)
+    parts = [pl.col("candidate_sequences").fill_null([])] if "candidate_sequences" in clones.columns else []
+    return clones.with_columns(pl.concat_list([*parts, seq]).list.eval(
+        pl.element().filter(pl.element().is_not_null() & (pl.element().str.len_bytes() > 0)))
+        .list.unique().list.sort().alias("candidate_sequences"))
+
+
+def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False,
+                      gene_level: bool = False) -> pl.DataFrame:
     """Collapse an arda clonotype table to unique clonotypes = ``(v_call, j_call, junction)``.
 
     Isotype (``c_call``) is dropped from the key — isotype switching is the same clonotype. Rows are
@@ -174,12 +202,21 @@ def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False) -> 
         clones: An arda clonotype frame (from :func:`annotate_reads`).
         naive_igm_only: Keep only IgM (naive B) clonotypes before collapsing (IGH only; no-op
             elsewhere) — for a naive-repertoire (pre-selection-independent) subset.
+        gene_level: Strip allele suffixes, canonicalize ambiguous gene sets and merge their counts.
 
     Returns:
         Deduplicated clonotype frame: ``v_call, j_call, junction, junction_aa, locus, d_call,
         d2_call, count`` (one row per unique clonotype), sorted by descending ``count``.
+        When full reads are available, ``candidate_sequences`` retains their coding-strand
+        union for preliminary gene proposals; junctions remain the EM observations.
     """
-    df = clones
+    df = _with_candidate_sequences(clones)
+    if gene_level:
+        df = df.with_columns([
+            pl.col(c).cast(pl.Utf8).str.split(",")
+            .list.eval(pl.element().str.strip_chars().str.split("*").list.first())
+            .list.unique().list.sort().list.join(",").alias(c)
+            for c in ("v_call", "j_call", "d_call", "d2_call") if c in df.columns])
     if naive_igm_only and "c_call" in df.columns:
         df = df.filter(pl.col("c_call").fill_null("").str.starts_with("IGHM"))
     df = df.filter(pl.col("junction").is_not_null() & (pl.col("junction").str.len_bytes() > 0))
@@ -191,15 +228,26 @@ def unique_clonotypes(clones: pl.DataFrame, *, naive_igm_only: bool = False) -> 
     ]
     if empty_to_null:
         df = df.with_columns(empty_to_null)
-    cnt = pl.col("duplicate_count").cast(pl.Int64, strict=False) if "duplicate_count" in df.columns else pl.lit(1)
+    count_cols = [pl.col(c).cast(pl.Int64, strict=False)
+                  for c in ("duplicate_count", "count") if c in df.columns]
+    cnt = pl.coalesce([*count_cols, pl.lit(1, dtype=pl.Int64)]).sum() if count_cols else pl.len().cast(pl.Int64)
+    annotations = []
+    for c in ("junction_aa", "locus", "d_call", "d2_call"):
+        if c not in df.columns:
+            expr = pl.lit(None, dtype=pl.Utf8)
+        elif gene_level and c in ("d_call", "d2_call"):
+            expr = (pl.col(c).drop_nulls().str.split(",").explode(empty_as_null=True).drop_nulls()
+                    .unique().sort().str.join(",").replace("", None))
+        else:
+            expr = pl.col(c).first()
+        annotations.append(expr.alias(c))
+    if "candidate_sequences" in df.columns:
+        annotations.append(pl.col("candidate_sequences").explode(empty_as_null=True).drop_nulls()
+                           .unique().sort().alias("candidate_sequences"))
     out = df.group_by(["v_call", "j_call", "junction"]).agg(
-        pl.col("junction_aa").first(),
-        pl.col("locus").first(),
-        pl.col("d_call").first(),
-        pl.col("d2_call").first(),
-        cnt.sum().alias("count"),
-    )
-    return out.sort("count", descending=True)
+        *annotations, cnt.alias("count"))
+    return out.sort(["count", "v_call", "j_call", "junction"],
+                    descending=[True, False, False, False], nulls_last=True)
 
 
 def prepare(
@@ -211,6 +259,7 @@ def prepare(
     cap: int | None = None,
     reconstruct: bool = False,
     naive_igm_only: bool = False,
+    gene_level: bool = False,
     threads: int = 0,
     verbose: bool = False,
 ) -> pl.DataFrame:
@@ -220,7 +269,7 @@ def prepare(
         fq, out_dir=out_dir, prefix=f"{group}_{chain}_{label}",
         organism=ORGANISM[group], cap=cap, reconstruct=reconstruct, threads=threads, verbose=verbose,
     )
-    return unique_clonotypes(reads, naive_igm_only=naive_igm_only)
+    return unique_clonotypes(reads, naive_igm_only=naive_igm_only, gene_level=gene_level)
 
 
 #: Directory of the arda-mapped clonotype examples shipped with the source tree.
@@ -326,15 +375,16 @@ def load_prepared(group: str = "human", chain: str = "TRB", label: str = "nonfun
 #: absorbing state of this EM, so without a Dirichlet pseudocount over the germline's functional
 #: alleles one unlucky iteration deletes a real gene permanently (human TRB kept 30 of 57 V genes
 #: unregularized, having seen 54 in the data).
-BUILD_DEFAULTS = {"iters": 15, "tol": 1e-4, "gene_prior": 1.0, "nd_prior": 0.0}
+BUILD_DEFAULTS = {"iters": 15, "tol": 1e-4, "gene_prior": 1.0, "nd_prior": 0.0, "prune_ratio": 1e-5}
 
 
 def build_model(chain: str, *, group: str = "human", template=None, clones: pl.DataFrame | None = None,
                 work_dir: str | Path = "/tmp/vdjtools_build", cap: int | None = None,
                 iters: int = 15, tol: float = 1e-4, single_d: bool = False,
                 nd_prior: float = 0.0, gene_prior: float = 1.0, threads: int = 0,
-                ambiguous: str | None = "A", verbose: bool = False,
-                checkpoint=None, checkpoint_every: int = 1):
+                ambiguous: str = "A", verbose: bool = False,
+                checkpoint=None, checkpoint_every: int = 1,
+                error_rate: float | None = 0.01, prune_ratio: float = 1e-5):
     """Fetch, annotate and EM-fit a model for one chain — the whole corpus pipeline, end to end.
 
     Args:
@@ -343,9 +393,9 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         template: Model supplying the gene set, germline and event graph. Defaults to
             :func:`~vdjtools.model.io.from_arda` for the chain and the group's organism.
         clones: Skip fetch+annotate and fit these clonotypes instead (an ``EM_DATA_DIR`` parquet,
-            a :func:`load_prepared` subset, or your own reads). Must carry ``junction``,
-            ``v_call``, ``j_call`` and, for a D locus, ``d_call``/``d2_call``.
-        work_dir: Scratch directory for arda's per-read output (it caches there).
+            a :func:`load_prepared` subset, or your own reads). Preliminary V/J/D calls are
+            not constraints; fresh batched ARDA proposals supply the V/J candidate sets.
+        work_dir: Scratch directory for freshly generated arda per-read output.
         cap: Read cap for annotation. ``None`` uses every read — a subsample is a silent claim that
             the tail does not matter, and the tail is where the rare V genes are.
         iters: EM iteration cap. Convergence is on relative log-likelihood, so this is a safety net.
@@ -355,9 +405,11 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         gene_prior: Dirichlet pseudocount over the germline's functional V/J alleles — see
             :data:`BUILD_DEFAULTS`.
         threads: Annotation and E-step kernel threads (``0`` = auto).
-        ambiguous: Substitute this base for any non-ACGT character in a junction (default ``"A"``),
-            or ``None`` to drop those clonotypes. See
-            :func:`~vdjtools.model.infer.sanitize_junctions`.
+        error_rate: Initial retained-germline substitution probability, fitted by EM.
+            ``None`` retains exact matching. D/D2 paths remain unrestricted by annotation.
+        ambiguous: Must be ``"A"``: DNA IUPAC sequencing symbols are replaced with A.
+        prune_ratio: Relative best-scenario cutoff; 0 is exact. Actual omitted mass
+            is recorded separately in the training report.
 
     Returns:
         ``(model, report, stats)`` — ``stats`` records ``chain, group, chain_type, n_clonotypes,
@@ -368,30 +420,37 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
         >>> model.save("models/TRB")
     """
     import time
+    from math import isfinite
 
-    from .infer import infer_native, print_progress
+    if not isfinite(prune_ratio) or not 0 <= prune_ratio < 1:
+        raise ValueError("prune_ratio must be finite and between 0 (inclusive) and 1 (exclusive)")
+
+    from .infer import candidate_masks, infer_native, print_progress
     from .io import from_arda
 
     started = time.perf_counter()
     organism = ORGANISM[group]
-    base = template if template is not None else from_arda(chain, organism)
+    base = template if template is not None else from_arda(chain, organism, gene_level=True)
     if clones is None:
         clones = prepare(group, chain, "nonfunctional", out_dir=work_dir, cap=cap,
-                         threads=threads, verbose=verbose)
+                         threads=threads, verbose=verbose, gene_level=template is None)
 
-    uniq = _filter_for_em(clones, base, ambiguous)
+    if template is None:
+        clones = clones.with_columns([pl.lit(None, dtype=pl.String).alias(c)
+                                      for c in ("v_call", "j_call") if c not in clones.columns])
+        clones = unique_clonotypes(clones, gene_level=True)
+    uniq = _filter_for_em(clones, base, ambiguous, use_calls=False)
     n_all = uniq.height
     seqs = [s.upper() for s in uniq["junction"].to_list()]
-    masks = _build_masks(uniq, base)
-    # Tandem D anchored to arda: a read may be n_D=2 only where arda called a second D. This
-    # counters the tandem-vs-long-insertion identifiability that inflates unregularized D-D EM
-    # (TRB drifts to P(n_D=2) ~ 0.28).
-    dd_allowed = None
-    if base.chain_type == "VDJ" and not single_d and "d2_call" in uniq.columns:
-        dd_allowed = [r is not None for r in uniq["d2_call"].to_list()]
+    uniq = _with_candidate_sequences(uniq)
+    queries = uniq["candidate_sequences"].to_list() if "candidate_sequences" in uniq.columns else None
+    masks, evidence = candidate_masks(seqs, base, organism=organism, threads=threads,
+                                      query_sequences=queries)
 
     model, rep = infer_native(base, seqs, masks=masks, max_iter=iters, tol=tol,
-                              single_d=single_d, dd_allowed=dd_allowed, nd_prior=nd_prior,
+                              single_d=single_d, nd_prior=nd_prior, error_rate=error_rate,
+                              candidate_search=evidence,
+                              prune_ratio=prune_ratio,
                               gene_prior=gene_prior, threads=threads,
                               progress=print_progress(prefix=f"[{chain}] ") if verbose else None,
                               checkpoint=checkpoint, checkpoint_every=checkpoint_every)
@@ -403,63 +462,72 @@ def build_model(chain: str, *, group: str = "human", template=None, clones: pl.D
     from .. import __version__
 
     model.manifest = replace(model.manifest, builder_version=__version__)
-    nd = (dict(zip(model.tables["n_d"]["n_d"].to_list(), model.tables["n_d"]["p"].to_list()))
-          if "n_d" in model.tables else {})
+    from .dd import d_count_probabilities
+    nd = d_count_probabilities(model)
     stats = {
         "chain": chain, "group": group, "chain_type": base.chain_type,
         "n_clonotypes": clones.height, "n_used": n_all, "p_nd2": nd.get(2),
         "loglik_first": rep.loglik[0] if rep.loglik else None,
         "loglik_last": rep.loglik[-1] if rep.loglik else None,
         "iters": rep.n_iter, "seconds": round(time.perf_counter() - started, 1),
+        "n_scoreable": rep.n_scoreable[-1] if rep.n_scoreable else 0,
+        "candidate_search": evidence,
+        "prune_ratio": prune_ratio,
     }
     return model, rep, stats
 
 
-def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str | None = "A") -> pl.DataFrame:
+def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str = "A", *,
+                   use_calls: bool = True) -> pl.DataFrame:
     """Keep clonotypes the template can actually score: known V/J **gene**, encodable junction.
 
-    Filter on GENE, not allele. arda and a bootstrap model resolve alleles differently -- arda
+    ``use_calls=False`` (the corpus builder) retains junctions regardless of preliminary
+    V/J assignments; fresh candidate search supplies the enumeration proposals.
+    With explicit call filtering, filter on GENE, not allele. arda and a bootstrap model resolve alleles differently -- arda
     calls TRBV20-1*07, which OLGA's 89-allele index does not contain -- so an allele-level
     membership test deletes the WHOLE gene before `gene_masks` ever sees it. Measured on human TRB:
     TRBV20-1, the most-used human TRBV, went to zero training clonotypes and hence P(V)=0 in the
     shipped model. `gene_masks` already maps a call to every model allele of its gene, so the read
     is perfectly usable. Gene-level keeps 32,562 clonotypes and 54 V genes vs 24,980 and 51.
 
-    Ambiguous bases are substituted rather than dropped, matching `infer_frame` -- the two training
-    entry points must not disagree about what counts as usable data.
+    DNA IUPAC sequencing symbols are always replaced with A; other policies are rejected.
     """
     from .infer import sanitize_junctions
 
+    if not use_calls:
+        kept = clones.filter(pl.col("junction").is_not_null() &
+                             (pl.col("junction").str.len_bytes() > 0))
+        return sanitize_junctions(kept, "junction", ambiguous=ambiguous, where="build_model")
     vgenes = {a.split("*")[0] for a in base.genomic["genes_v"]["v_allele"].to_list()}
     jgenes = {a.split("*")[0] for a in base.genomic["genes_j"]["j_allele"].to_list()}
-    vg = pl.col("v_call").str.split("*").list.first()
-    jg = pl.col("j_call").str.split("*").list.first()
-    kept = clones.filter(vg.is_in(list(vgenes)) & jg.is_in(list(jgenes)))
+    vg = pl.col("v_call").str.split(",").list.eval(pl.element().str.strip_chars().str.split("*").list.first())
+    jg = pl.col("j_call").str.split(",").list.eval(pl.element().str.strip_chars().str.split("*").list.first())
+    kept = clones.filter((vg.list.set_intersection(list(vgenes)).list.len() > 0) &
+                         (jg.list.set_intersection(list(jgenes)).list.len() > 0))
     return sanitize_junctions(kept, "junction", ambiguous=ambiguous, where="build_model")
 
 
 def _build_masks(uniq: pl.DataFrame, base) -> list[tuple]:
-    """Per-read E-step masks, with the D mask parsed as a SET of alleles.
+    """Per-read E-step masks with separate D1/D2 allele sets.
 
     AIRR writes an aligner tie comma-separated (``IGHD2-2*01,IGHD2-2*02``), so testing the whole
     joined string against a set of single alleles never matches and falls through to an empty mask
     = every D enumerated. On IGH that was 64% of reads: not just slow (35 D genes vs 3 for TRB) but
     a worse model, because the D marginal stops being anchored to what arda actually saw. A
-    genuinely absent D call still yields ``[]``, which is correct -- we know nothing.
+    genuinely absent D1 call yields ``[]`` (unrestricted). A supplied D2 column
+    adds a fourth mask: absent/unknown D2 yields ``[]`` and disables tandem paths.
     """
-    from .infer import gene_masks
+    from .infer import gene_masks, call_alleles, _gene_to_alleles
 
     masks = gene_masks(base, uniq["v_call"].to_list(), uniq["j_call"].to_list())
-    if base.chain_type != "VDJ" or "d_call" not in uniq.columns:
+    if base.chain_type != "VDJ":
         return masks
-    dset = set(base.genomic["genes_d"]["d_allele"].to_list())
-
-    def d_mask(call: str | None) -> list[str]:
-        if not call:
-            return []
-        return [a for a in (p.strip() for p in call.split(",")) if a in dset]
-
-    return [(mk[0], mk[1], d_mask(c)) for mk, c in zip(masks, uniq["d_call"].to_list())]
+    index = _gene_to_alleles(base,"d")
+    calls = uniq["d_call"].to_list() if "d_call" in uniq.columns else [None]*uniq.height
+    masks = [(mk[0],mk[1],call_alleles(index,call)) for mk,call in zip(masks,calls)]
+    if "d2_call" in uniq.columns:
+        masks = [(*mk,call_alleles(index,call)) for mk,call in zip(masks,uniq["d2_call"].to_list())]
+    return masks
 
 
 def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, out_dir=None,
