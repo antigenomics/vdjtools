@@ -882,3 +882,13 @@ finite nonnegative input and a positive finite multiplier. The shared
 OLGA TRB scale; it is not an established TRA factor. ALICE uses this helper for
 its Poisson expectation. Empirical TCRnet controls already reflect selection
 and must not receive this generative multiplier a second time.
+
+
+``model.fit_selection_factor(counts, pgen, total_events=N)`` fits an effective
+selection multiplier from receptor-event multiplicities using a zero-truncated
+Poisson likelihood. Conditioning on positive counts is necessary because the
+input contains observed sequences only. Counts must not be sequencing reads.
+The unconditioned mean is N times Q times Pgen; fitted Q is model-, species-
+and locus-specific. Unsupported zero-mass sequences require an explicit coverage
+audit. All-singleton data do not identify a positive estimate. This effective
+constant does not establish a sequence-specific thymic survival probability.

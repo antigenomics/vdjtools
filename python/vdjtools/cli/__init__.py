@@ -1813,3 +1813,55 @@ def sc_export(
     except (ImportError, ValueError) as e:
         _err(str(e))
     _info(f"wrote {cells.height} contigs ({cells['cell_id'].n_unique()} cells) -> {out}")
+
+
+@app.command("calibrate-selection")
+def calibrate_selection(
+    control: Path = typer.Argument(..., help="Independent-donor NT-key control pool."),
+    out: Path = typer.Option(..., "--out", "-o", help="Fresh calibration JSON path."),
+    locus: str = typer.Option(..., "--locus"),
+    species: str = typer.Option("human", "--species"),
+    source: str = typer.Option("isalgo", "--source"),
+    event_weight: str = typer.Option("incidence", "--event-weight"),
+    sequence_column: str = typer.Option("cdr3aa", "--sequence-column"),
+    threads: int = typer.Option(0, "--threads"),
+):
+    """Estimate a model-specific effective selection factor from receptor events."""
+    import hashlib, json, time
+    from importlib.resources import files
+    import numpy as np
+    from vdjtools.model import load_bundled, native
+    from vdjtools.model.bundled import _bundled_key, _source_family
+    from vdjtools.model.selection import control_event_counts, fit_selection_factor
+
+    if out.exists(): raise FileExistsError(out)
+    started = time.monotonic()
+    def digest(path):
+        value = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024**2), b""):
+                value.update(block)
+        return value.hexdigest()
+    input_hash = digest(control)
+    family = _source_family(source)
+    directory = "olga" if family == "olga-legacy" else family
+    model_root = Path(str(files("vdjtools.model") / "_bundled" / directory / _bundled_key(source, locus, species)))
+    model_hashes = {str(p.relative_to(model_root)): digest(p) for p in sorted(model_root.rglob("*")) if p.is_file()}
+    counts, audit = control_event_counts(control, sequence_column=sequence_column, weight_column=event_weight)
+    typer.echo(f"Loaded {counts.height} junctions / {audit['retained_events']} events", err=True)
+    model = load_bundled(locus, source, organism=species, collapse=False)
+    pgen = np.asarray(native.pgen_aa_batch(model, counts["junction_aa"].to_list(), mismatches=0, threads=threads))
+    supported = np.isfinite(pgen) & (pgen > 0)
+    if not np.all(np.isfinite(pgen) & (pgen >= 0) & (pgen <= 1)):
+        raise ValueError("invalid model probabilities")
+    y = counts["events"].to_numpy()
+    factor = fit_selection_factor(y[supported], pgen[supported], total_events=audit["retained_events"])
+    if digest(control) != input_hash or model_hashes != {str(p.relative_to(model_root)): digest(p) for p in sorted(model_root.rglob("*")) if p.is_file()}:
+        raise RuntimeError("control or model changed during calibration")
+    report = dict(species=species, locus=locus, source=family, selection_q=factor,
+        estimator="zero-truncated-Poisson effective event multiplicity", pgen="unconditional exact marginal full-junction mass",
+        audit=audit, zero_mass_junctions=int((~supported).sum()), zero_mass_events=int(y[~supported].sum()),
+        control_sha256=input_hash, model_sha256=model_hashes, seconds=time.monotonic()-started)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2)+"\n")
+    typer.echo(str(out))

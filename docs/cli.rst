@@ -371,3 +371,16 @@ corpus. ``pca`` requires either ``--fit FILE`` or ``--rotation FILE``; ``--cohor
 TABLE`` changes the fitting rows and ``--columns FILE`` selects measurements.
 See :doc:`features` for transforms, coverage, column selection, missing values,
 feature-space identities and saved rotations.
+
+
+Control-derived selection factors
+---------------------------------
+
+``vdjtools calibrate-selection control.ntvj.tsv.gz --locus TRB --species human
+--source isalgo --event-weight incidence --threads 8 --out calibration.json``
+streams nucleotide-keyed independent-donor controls, verifies occurrence/incidence
+agreement when both columns exist, and aggregates nucleotide variants into
+amino-acid event counts. It computes exact marginal Pgen in one native batch,
+fits the zero-truncated Poisson effective multiplier, and records source/model
+hashes plus invalid-sequence and zero-model-mass coverage. It never uses read
+abundance as event multiplicity and requires a fresh output path.
