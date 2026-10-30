@@ -1533,6 +1533,37 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
                 right[js(j, start)] += dj[cell(start, end)] * jweight[js(j, end)];
         }
 
+    // Reuse only query-local emission work. Integer diagonal prefix differences
+    // reproduce the exact mismatch count for each P-extended D substring. The
+    // probability table evaluates the original pow expression once per (n,e),
+    // without recurrences, log/exp transformations or changes in accumulation order.
+    // Keep the original zero-error-rate early-exit path entirely unchanged.
+    std::vector<std::vector<int>> mismatch_prefix;
+    std::vector<double> emissions;
+    int emission_width = 0;
+    if (rate != 0.0) {
+        mismatch_prefix.resize(D);
+        int longest = 0;
+        for (int d = 0; d < D; ++d) {
+            if (!first_copies[d] && !(tandem && second_copies[d])) continue;
+            const auto& cut = m.cut_d[d];
+            const int length = static_cast<int>(cut.size());
+            longest = std::max(longest, std::min(length, N));
+            auto& prefix = mismatch_prefix[d];
+            prefix.assign(static_cast<size_t>(length + 1) * W, 0);
+            for (int i = 0; i < length; ++i)
+                for (int j = 0; j < N; ++j)
+                    prefix[static_cast<size_t>(i + 1) * W + j + 1]
+                        = prefix[static_cast<size_t>(i) * W + j] + (cut[i] != seq[j]);
+        }
+        emission_width = longest + 1;
+        emissions.assign(static_cast<size_t>(emission_width) * emission_width, 0.0);
+        for (int n = 0; n <= longest; ++n)
+            for (int errors = 0; errors <= n; ++errors)
+                emissions[static_cast<size_t>(n) * emission_width + errors]
+                    = std::pow(rate / 3.0, errors) * std::pow(1.0 - rate, n - errors);
+    }
+
     // Each retained D substring has one emission irrespective of its V/J neighbors.
     // Iterate its deletion states again only when a backward message is available.
     auto d_spans = [&](const std::vector<double>& deletions, const std::vector<int>& active,
@@ -1548,7 +1579,15 @@ double estep_joint(const PackedModel& m, const std::vector<int8_t>& observed,
                     if ((nonempty && !retained) || deletions[index] == 0.0) continue;
                     for (int lo = 0; lo + retained <= N; ++lo) {
                         int errors;
-                        const double emission = templated_emission(cut.data() + i5, seq + lo, retained, rate, errors);
+                        double emission;
+                        if (rate == 0.0) {
+                            emission = templated_emission(cut.data() + i5, seq + lo, retained, rate, errors);
+                        } else {
+                            const auto& prefix = mismatch_prefix[d];
+                            errors = prefix[static_cast<size_t>(i5 + retained) * W + lo + retained]
+                                   - prefix[static_cast<size_t>(i5) * W + lo];
+                            emission = emissions[static_cast<size_t>(retained) * emission_width + errors];
+                        }
                         const double weight = deletions[index] * emission;
                         if (weight > 0.0) visit(d, index, lo, lo + retained, weight, errors);
                     }
