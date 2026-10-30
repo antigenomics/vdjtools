@@ -550,15 +550,15 @@ def best_aa_scenarios_batch(
     names_d = np.array(model.genomic["genes_d"]["d_allele"].to_list()
                        if model.chain_type == "VDJ" else [], dtype=object)
     d = cols["d"]
-    extra = ({"d2_call": np.where(cols["d2"] >= 0, names_d[np.maximum(cols["d2"], 0)], None),
+    extra = ({"d2_call": np.where(cols["d2"] >= 0, names_d[np.maximum(cols["d2"], 0)], None).tolist(),
               "idx5_2": cols["idx5_2"], "idx3_2": cols["idx3_2"], "pos2": cols["pos2"]}
              if pm.joint_history else {})
     return pl.DataFrame({
         "row": cols["row"], "rank": cols["rank"], "w": cols["w"],
         "v_call": names_v[cols["v"]], "len_v": cols["len_v"],
         "j_call": names_j[cols["j"]], "len_j": cols["len_j"],
-        "d_call": (np.where(d >= 0, names_d[np.maximum(d, 0)], None)
-                   if names_d.size else np.full(d.shape, None, dtype=object)),
+        "d_call": (np.where(d >= 0, names_d[np.maximum(d, 0)], None).tolist()
+                   if names_d.size else [None] * len(d)),
         "idx5": cols["idx5"], "idx3": cols["idx3"], "pos": cols["pos"],
         **extra,
     }, schema_overrides={"v_call": pl.String, "j_call": pl.String, "d_call": pl.String,

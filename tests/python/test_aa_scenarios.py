@@ -108,6 +108,26 @@ def test_the_batch_result_does_not_depend_on_the_thread_count(trb):
     assert one.equals(many)
 
 
+def test_late_tandem_calls_preserve_nullable_string_dtype(trb, monkeypatch):
+    """A long null prefix must not turn a later D2 name into an uncastable Object column."""
+    import numpy as np
+    from vdjtools import _core
+
+    n = 12000
+    def batch(*args):
+        cols = {name: np.zeros(n, dtype=np.int32) for name in
+                ('row', 'rank', 'v', 'len_v', 'j', 'len_j', 'idx5', 'idx3', 'pos',
+                 'idx5_2', 'idx3_2', 'pos2')}
+        cols.update(w=np.ones(n), d=np.full(n, -1), d2=np.full(n, -1))
+        cols['d2'][-1] = 0
+        return cols
+    monkeypatch.setattr(_core, 'best_aa_scenarios_batch', batch)
+    result = best_aa_scenarios_batch(trb, ['CASSF'] * n, k=1, threads=1)
+    assert result.schema['d_call'] == result.schema['d2_call'] == pl.String
+    assert result['d_call'].null_count() == n and result['d2_call'].null_count() == n - 1
+    assert result['d2_call'][-1] == trb.genomic['genes_d']['d_allele'][0]
+
+
 def test_a_declined_query_contributes_no_rows_rather_than_a_marginalized_one(trb):
     """An absent ``row`` is how a decline shows up; a silently V/J-agnostic row would be the trap."""
     aa = ["CASSQDLNTEAFF", "CASSXQDLNTEAFF", "CASSPRTGELFF"]
