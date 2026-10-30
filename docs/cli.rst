@@ -384,3 +384,7 @@ amino-acid event counts. It computes exact marginal Pgen in one native batch,
 fits the zero-truncated Poisson effective multiplier, and records source/model
 hashes plus invalid-sequence and zero-model-mass coverage. It never uses read
 abundance as event multiplicity and requires a fresh output path.
+
+For ``calibrate-selection``, ``--sequence-column`` selects the full-junction
+amino-acid column (default ``cdr3aa`` in native control tables). It must include
+the conserved anchors; bare CDR3 sequences are not completed automatically.
