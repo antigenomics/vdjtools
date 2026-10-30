@@ -751,18 +751,13 @@ void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64
     }
 }
 
-// NOTE: both D loops below carry the same nested-prefix redundancy `pgen_aa_vdj` just shed, and
-// the D2 loop would take the same two-pass treatment. Left alone on purpose: every bundled model
-// reports P(n_D=2) = 0, so nothing shipped reaches this function. The D1 loop is also harder --
-// it accumulates into the shared `Mf` through `extend_ins_into`, so preserving the summation
-// order (and with it bitwise equality) is a different problem from the single-D case.
 // Tandem (n_D=2) aa Pgen middle: V+insVD (Lf, reused) → D1 → insDD (Mf) → D2 → insDJ+J (Rb per J).
 // P(D1|J) couples D1 to J, so J is looped explicitly (few J on the D-bearing loci) and its P(J),
 // P(delJ), insDJ+J go into a D-less right DP; P(D1|J)·P(D2|D1) apply at the D placements. Matches
 // the pure-Python `_dd_aa_middle` reference (which matches Σ nt over synonymous codons) exactly.
 double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
     int N = 3 * alen, nD = m.nD();
-    std::vector<double> Lf, RbJ, Mf, dp(25), ndp(25);
+    std::vector<double> Lf, RbJ, Mf, seeds, dp(25), ndp(25);
     std::vector<char> lf_any, rb_any;
     mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);  // V + insVD, once
     int8_t g[128];
@@ -774,6 +769,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
             double pd1 = tandem_first_weight(m, j, d1);
             if (pd1 == 0.0) continue;
             Mf.assign((N + 1) * 25, 0.0);
+            seeds.assign((N + 1) * 25, 0.0);
             const auto& cut1 = m.cut_d[d1];
             int L1 = cut1.size();
             for (int i5 = 0; i5 <= L1 && i5 < m.nbins_d5; ++i5)
@@ -788,9 +784,18 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
                         double wgt = pd1 * pdel1;
                         for (int s = 0; s < 25; ++s) dp[s] = Lf[pos1 * 25 + s] * wgt;
                         if (!thread_fixed(dp, ndp, g, ld1, pos1, allowed)) continue;
-                        extend_ins_into(dp, pos1 + ld1, N, allowed, m.ins_dd, m.R_dd, m.bias_dd, Mf);
+                        for (int s = 0; s < 25; ++s)
+                            seeds[(pos1 + ld1) * 25 + s] += dp[s];
                     }
                 }
+            // The insertion recurrence is linear in its boundary state. Sum all
+            // D1 histories ending at a boundary before extending that state once.
+            for (int q = 1; q < N; ++q) {
+                const double* seed = &seeds[q * 25];
+                if (std::none_of(seed, seed + 25, [](double w) { return w != 0.0; })) continue;
+                std::copy_n(seed, 25, dp.begin());
+                extend_ins_into(dp, q, N, allowed, m.ins_dd, m.R_dd, m.bias_dd, Mf);
+            }
             for (int d2 : m.func_d) {
             if (!tandem_allowed(m,j,d1,d2)) continue;
                 double pd2 = tandem_pair_weight(m, j, d1, d2);
