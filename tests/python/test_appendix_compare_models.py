@@ -26,6 +26,28 @@ def test_engine_oracle_import_keeps_raw_germlines_and_restores_repair(toy_model,
     assert model_io.repair_anchors is original
 
 
+def test_run_uses_raw_engine_oracle_but_keeps_loaded_performance_baseline(toy_model, monkeypatch):
+    raw = object()
+    monkeypatch.setattr(compare.Model, 'load', lambda *a: toy_model)
+    monkeypatch.setattr(compare, 'raw_olga_model', lambda *a: raw)
+    monkeypatch.setattr(compare, 'functional_queries', lambda *a: (['AAA'], ['V'], ['J'], {}))
+    class Oracle:
+        def compute_nt_CDR3_pgen(self, seq):
+            return .2
+    monkeypatch.setattr(compare, 'olga_pgen_model', lambda *a: Oracle())
+    def score(model, *a, **kw):
+        assert model is raw
+        return [.2]
+    monkeypatch.setattr(compare.native, 'pgen_nt_batch', score)
+    baselines = []
+    def conditioned(model, *a):
+        baselines.append(model)
+        return [.1]
+    monkeypatch.setattr(compare, '_gene_conditioned_pgens', conditioned)
+    assert compare.run('TRB')['oracle']['all_values_agree']
+    assert len(baselines) == 2 and all(model is toy_model for model in baselines)
+
+
 def test_functional_queries_always_reannotate_in_fresh_removed_directory(tmp_path, monkeypatch):
     monkeypatch.setenv('RAW_FASTQ_DIR', str(tmp_path / 'raw'))
     monkeypatch.setattr(compare, 'WORK', tmp_path / 'work')
