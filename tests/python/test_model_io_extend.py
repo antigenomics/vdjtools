@@ -200,7 +200,11 @@ def test_em_populates_and_persists_the_training_log(tmp_path, toy_model):
     reloaded = load_model(tmp_path / "fitted")
     assert reloaded.training == fitted.training
     log = training_frame(reloaded)
-    assert log.columns == ["run", "iter", "loglik", "n_scoreable", "rel_change"]
+    assert log.columns == ["run", "iter", "loglik", "n_scoreable", "rel_change",
+                           "pruned_mass_mean", "pruned_mass_max", "n_pruned_observations"]
+    assert log["pruned_mass_mean"].to_list() == report.pruned_mass_mean
+    assert log["pruned_mass_max"].to_list() == report.pruned_mass_max
+    assert log["n_pruned_observations"].to_list() == report.n_pruned_observations
     assert log.height == len(report.loglik)
 
 
