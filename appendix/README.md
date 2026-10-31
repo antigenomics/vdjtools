@@ -1,10 +1,11 @@
 # Model-engine appendix
 
-[Read the compiled appendix](murugan_model.pdf) · [LaTeX source](murugan_model.tex)
+[Read the compiled appendix](vdj_rearrangement_model.pdf) · [LaTeX source](vdj_rearrangement_model.tex)
 
-The appendix describes the model engine in vdjtools 5.4.0: exact nucleotide and
+The appendix describes the current vdjtools model engine: exact nucleotide and
 amino-acid Pgen, joint single/tandem-D histories, sequence generation,
-error-aware inference, pruning and model diagnostics. It uses AIRR **junctions**
+error-aware inference, pruning, model diagnostics and optional coarse selection
+calibration. It uses AIRR **junctions**
 including the conserved anchors; IMGT CDR3 excludes them.
 The current API guide is [Model workshop](https://docs.isalgo.dev/vdjtools/model.html).
 
