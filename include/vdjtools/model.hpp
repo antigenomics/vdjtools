@@ -118,7 +118,7 @@ std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::s
                                   int mismatches, int nthreads, bool anchored_only = false);
 
 // Unnormalized selection-weighted AA mass, allele weights[v*nJ+j].
-// The source model is immutable and workers share variants.
+// The source model is immutable and workers share only immutable model parameters and small V-weight views.
 std::vector<double> selection_pgen_aa_batch(const PackedModel& m,
     const std::vector<std::string>& seqs, const std::vector<double>& weights, int nthreads);
 

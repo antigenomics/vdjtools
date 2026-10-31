@@ -402,8 +402,9 @@ Eq.~\eqref{eq:stitch}. This operation is bilinear, so the tandem branch is
     = \sum_{j,e} C_e\!\left(\sum_d H_{jde}M_d,R_j\right).
 \end{align}
 The global tandem-mixture weight, when present, multiplies $T$ exactly once
-in the caller. The implementation chooses the first expression when $D\le J$
-and the second otherwise. Thus it performs at most
+in the caller. The implementation chooses between these expressions using the active first-D
+and J counts, after removing complete histories with exactly zero weight or
+forbidden support. The second-D templates remain unrestricted by that choice. Thus it performs at most
 $\min(D^2,JD)$ second-D bridge walks, rather than $JD^2$, and computes each
 $M_d$ only once. Mixing messages costs $O(JD^2NS)$ in the dense worst case;
 zero history weights are skipped. Message storage is $O((J+D)NS)$ in the
@@ -420,8 +421,33 @@ input matrix. At a DD-insertion end, completed codons can be forgotten before
 the fixed second-D block: boundary phases zero, one and two need respectively
 zero, one and two past bases. Thus at most 1, 4 or 16 canonical states remain,
 further restricted by the codon mask. Only those cells enter the D-pair mixing
-loop. The insertion's internal Markov recurrence retains its full state;
-forgetting its last inserted base before the insertion ends would be incorrect.
+loop. Inside the DD insertion, the last inserted base remains necessary for the
+Markov transition even when a codon has just ended. The exact interior state
+counts at phases zero, one and two are therefore 4, 4 and 16. Let $x_q^{(0)}(a)$
+and $x_q^{(1)}(a)$ denote masses at nucleotide boundary $q$ with last base $a$,
+and let $x_q^{(2)}(a,b)$ retain the two most recent bases, newest first.
+With $R_{ca}=P(c\mid a)$, the subsequent insertion steps are
+\begin{align}
+ x_{q+1}^{(1)}(c) &= \sum_a x_q^{(0)}(a)R_{ca}, &&q\equiv0\pmod3,\\
+ x_{q+1}^{(2)}(c,a) &= x_q^{(1)}(a)R_{ca}, &&q\equiv1\pmod3,\\
+ x_{q+1}^{(0)}(c) &= \sum_{a,b}x_q^{(2)}(a,b)R_{ca}
+       \mathbf{1}\{(b,a,c)\in A_{\lfloor q/3\rfloor}\}, &&q\equiv2\pmod3.
+\end{align}
+Here $A_k$ is the allowed codon set at amino-acid position $k$. The first inserted
+base uses its fitted first-base bias rather than a transition from the preceding
+germline. Zero insertion uses the original seed directly. Each supported
+insertion length multiplies its endpoint mass exactly once. At insertion end,
+the states project back to the 1/4/16 canonical fixed-D boundary representation.
+The aggregation forgets only bases absent from both the unfinished codon and the
+next Markov transition, so it preserves the complete nonnegative history sum.
+It reduces state work without truncating insertion-length support.
+First-/two-base preparation is shared across D templates only when their incoming
+matrix is identical. In the left-mixing contraction the input differs for each
+$(j,e)$ and is prepared separately. Exact AA batches own bounded prefix scratch
+per worker and reset active entries for every new input; selected batches use
+one immutable model with small J-dependent V-choice arrays. No computed Pgen
+result is cached between calls or queries.
+
 All nonzero deletion weights remain; a prefix shorter than the first supported
 length still propagates because it can lead to a longer supported fragment.
 Each D retains at least one nucleotide and J retains at least one nucleotide.

@@ -146,3 +146,74 @@ def test_alice_cli_shipped_profile_records_complete_multiplier(tmp_path):
         scored['v_call'].to_list(),scored['j_call'].to_list())
     np.testing.assert_allclose(scored['selection_q'],expected,rtol=1e-12)
     np.testing.assert_allclose(scored['E'],scored['n_exposure']*scored['pgen_ball']*expected,rtol=1e-12)
+
+
+def test_native_selected_views_keep_allele_weights_inside_joint_sum():
+    from vdjtools.model import native
+    from vdjtools._core import selection_pgen_aa_batch as selected, pgen_aa
+    model = history_model(duplicate_alleles=True)
+    packed, vi, ji = native.pack(model)
+    weights = [(.25 + v) * (1 + j * .75) if (v + j) % 3 else 0.
+               for v in range(len(vi)) for j in range(len(ji))]
+    original = list(packed.pv)
+    sequences = ['CF', 'CNF', 'CTF', '', 'C'] * 3
+    expected = [sum(weights[v * len(ji) + j] * pgen_aa(packed, seq, v, j)
+                    for v in range(len(vi)) for j in range(len(ji))) for seq in sequences]
+    for threads in (1, 2):
+        np.testing.assert_allclose(selected(packed, sequences, weights, threads), expected,
+                                   rtol=1e-12, atol=0)
+    assert packed.pv == original
+
+
+def test_selected_workspace_counts_model_lengths_and_workers():
+    from vdjtools.model import native
+    from vdjtools._core import _selection_workspace_bytes as estimate
+    packed, _, _ = native.pack(history_model())
+    baseline = estimate(packed, 10, 100, 1)
+    assert estimate(packed, 20, 100, 1) > baseline
+    assert estimate(packed, 10, 100, 2) > baseline
+    old = list(packed.q_tandem)
+    try:
+        packed.q_tandem = old + [0.] * 10000
+        assert estimate(packed, 10, 100, 1) >= baseline + 80000
+    finally:
+        packed.q_tandem = old
+    with pytest.raises(ValueError):
+        estimate(packed, 10**9, 100, 1)
+    with pytest.raises(ValueError, match='indexing'):
+        estimate(packed, (2**31 - 1) // 100 // 3 + 1, 1, 1)
+
+
+def test_selected_vj_view_matches_explicit_allele_sum():
+    from vdjtools.model import load_bundled, native
+    from vdjtools.model.generate import generate
+    from vdjtools._core import selection_pgen_aa_batch as selected, pgen_aa
+    model = load_bundled('TRA')
+    rows = generate(model, 2, seed=226, productive_only=True, engine='native', threads=1)
+    packed, vi, ji = native.pack(model)
+    v = vi[rows['v_call'][0]]; j = ji[rows['j_call'][0]]
+    vs = {v, (v + 1) % len(vi)}; js = {j, (j + 1) % len(ji)}
+    weights = [(.5 + a) / (1 + b) if a in vs and b in js else 0.
+               for a in range(len(vi)) for b in range(len(ji))]
+    seqs = rows['junction_aa'].to_list()
+    expected = [sum(weights[a * len(ji) + b] * pgen_aa(packed, seq, a, b)
+                    for a in vs for b in js) for seq in seqs]
+    assert expected[0] > 0
+    np.testing.assert_allclose(selected(packed, seqs, weights, 2), expected, rtol=1e-12, atol=0)
+
+
+@pytest.mark.parametrize('kind', ['length', 'vj-length'])
+def test_selected_memory_guard_rejects_before_native_scoring(monkeypatch, kind):
+    from vdjtools.model.selection import selection_pgen_aa_batch
+    import vdjtools._core as core
+    model = history_model()
+    reference = selection_reference(model, threads=1)
+    profile = fit_selection_profile(model, reference.with_columns(
+        (pl.col('p_pre') * 10000).round().cast(pl.Int64).alias('events')),
+        kind=kind, threads=1)
+    monkeypatch.setattr('vdjtools.cores.available_memory', lambda: 0)
+    def unexpected(*args):
+        raise AssertionError('native scorer started before memory admission')
+    monkeypatch.setattr(core, 'selection_pgen_aa_batch', unexpected)
+    with pytest.raises(MemoryError, match='selection-weighted native Pgen'):
+        selection_pgen_aa_batch(model, ['CF'], profile, threads=2)

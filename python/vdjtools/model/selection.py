@@ -488,15 +488,20 @@ def selection_pgen_aa_batch(model, sequences, profile, *, threads=0):
     length_weights = np.exp(curve[li] - profile['log_normalizer'])
     if not np.all(np.isfinite(length_weights) & (length_weights > 0)):
         raise ValueError('selection length factor outside floating-point range')
+    if profile['kind'] not in {'length', 'vj-length'}:
+        raise ValueError('profile kind must be length or vj-length')
     budget = kernel_threads(threads)
+    from .._core import _selection_workspace_bytes
+    packed, vi, ji = native.pack(model)
+    label_bytes = (len(ji) * sum(len(name.encode()) + 16 for name in vi)
+                   + len(vi) * sum(len(name.encode()) + 16 for name in ji))
+    require_memory(_selection_workspace_bytes(packed, int(lengths.max()), len(seq), budget)
+                   + 4 * label_bytes,
+                   'selection-weighted native Pgen')
     if profile['kind'] == 'length':
         values = native.pgen_aa_batch(model, seq.to_list(), threads=budget)
     elif profile['kind'] == 'vj-length':
         from .._core import selection_pgen_aa_batch as _selected
-        packed, vi, ji = native.pack(model)
-        parameter_bytes = sum(table.estimated_size() for table in [*model.tables.values(), *model.genomic.values()])
-        require_memory(len(ji) * parameter_bytes * 4 + len(seq) * (int(lengths.max()) * 16 + 256),
-                       'selection-weighted native Pgen')
         v = pl.DataFrame({'v_call': list(vi), '_v': list(vi.values())})
         j = pl.DataFrame({'j_call': list(ji), '_j': list(ji.values())})
         weights = (v.with_columns(pl.col('v_call').str.split('*').list.first())
@@ -504,8 +509,6 @@ def selection_pgen_aa_batch(model, sequences, profile, *, threads=0):
                    .join(pl.DataFrame(profile['log_vj']), on=['v_call', 'j_call'], how='left', validate='m:1')
                    .sort('_v', '_j').select(pl.col('log_q').exp().fill_null(0).alias('weight'))['weight'].to_list())
         values = _selected(packed, seq.to_list(), weights, budget)
-    else:
-        raise ValueError('profile kind must be length or vj-length')
     result = np.asarray(values) * length_weights
     if not np.all(np.isfinite(result) & (result >= 0)):
         raise ValueError('invalid selection-weighted generation mass')

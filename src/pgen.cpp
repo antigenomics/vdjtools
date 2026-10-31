@@ -342,12 +342,13 @@ inline int sidx(int a, int b) { return (a + 1) * 5 + (b + 1); }
 void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
                 const std::vector<double>& pins, const std::vector<double>& R,
                 const std::vector<double>& bias, int jbind,
-                std::vector<double>& Lf, std::vector<char>& lf_any) {
+                std::vector<double>& Lf, std::vector<char>& lf_any,
+                const double* pv_override = nullptr) {
     Lf.assign((N + 1) * 25, 0.0);
     std::vector<double> seed((N + 1) * 25, 0.0);
     std::vector<char> has_seed(N + 1, 0);
     for (int v : mask_or_all(v_idx, m.func_v)) {
-        double pv = m.pv[v];
+        double pv = pv_override ? pv_override[v] : m.pv[v];
         if (pv == 0.0) continue;
         if (jbind >= 0) {  // VJ: weight the V seed by P(J|V)
             double pjv = m.pjv[v * m.nJ() + jbind];
@@ -617,7 +618,8 @@ inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt
 
 double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
                     const std::vector<double>* shared_left = nullptr,
-                    const std::vector<char>* shared_any = nullptr) {
+                    const std::vector<char>* shared_any = nullptr,
+                    const double* pv_override = nullptr) {
     int N = 3 * alen;
     std::vector<double> local_left, Rb, res, reduced((N + 1) * 4);
     std::vector<uint64_t> right_terms(N + 1);
@@ -625,7 +627,7 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
     std::vector<int> first, last;
     std::vector<char> local_any, rb_any, live;
     if (!shared_left)
-        mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, local_left, local_any);
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, local_left, local_any, pv_override);
     const auto& Lf = shared_left ? *shared_left : local_left;
     const auto& lf_any = shared_any ? *shared_any : local_any;
     double total = 0.0;
@@ -780,31 +782,58 @@ void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64
         }
     };
     if (!pins.empty() && pins[0] != 0.0) accumulate(q0, dp0.data(), pins[0]);
-    std::array<double, 25> first{}, second{};
+    if (pins.size() < 2 || q0 >= N) return;
+    // Inside an insertion, completed codons still retain the last Markov base.
+    // Phases 0/1/2 need 4/4/16 states; insertion END projection remains 1/4/16.
+    std::array<double, 16> first{}, second{};
     double* cur = first.data();
-    double* ncur = second.data();
-    std::copy_n(dp0.begin(), 25, cur);
+    double* next = second.data();
+    const int phase = (q0 + 1) % 3;
+    for (int s = 0; s < 25; ++s) {
+        const double w = dp0[s];
+        if (w == 0.0) continue;
+        const int a = s / 5 - 1, b = s % 5 - 1;
+        for (int c = 0; c < 4; ++c) {
+            if (bias[c] == 0.0 || (q0 % 3 == 2 &&
+                !ok_codon(allowed[q0 / 3], b * 16 + a * 4 + c))) continue;
+            cur[phase == 2 ? c * 4 + a : c] += w * bias[c];
+        }
+    }
     for (int ell = 1; q0 + ell <= N && ell < (int)pins.size(); ++ell) {
-        int mm = q0 + ell - 1;
-        bool ce = (mm % 3 == 2);
-        uint64_t am = allowed[mm / 3];
-        std::fill_n(ncur, 25, 0.0);
-        bool any = false;
-        for (int s = 0; s < 25; ++s) {
-            double w = cur[s];
-            if (w == 0.0) continue;
-            int p1 = s / 5 - 1, p2 = s % 5 - 1;
-            for (int nt = 0; nt < 4; ++nt) {
-                double mult = (ell == 1) ? bias[nt] : R[nt * 4 + p1];
-                if (mult == 0.0) continue;
-                if (ce && !ok_codon(am, p2 * 16 + p1 * 4 + nt)) continue;
-                ncur[sidx(nt, p1)] += w * mult;
-                any = true;
+        const int q = q0 + ell, ph = q % 3;
+        if (pins[ell] != 0.0) {
+            if (ph == 0) {
+                double mass = 0.0;
+                for (int a = 0; a < 4; ++a) mass += cur[a];
+                Mf[q * 25] += pins[ell] * mass;
+            } else if (ph == 1) {
+                for (int a = 0; a < 4; ++a)
+                    Mf[q * 25 + sidx(a, -1)] += pins[ell] * cur[a];
+            } else {
+                for (int a = 0; a < 4; ++a) for (int b = 0; b < 4; ++b)
+                    Mf[q * 25 + sidx(a, b)] += pins[ell] * cur[a * 4 + b];
             }
         }
-        std::swap(cur, ncur);
-        if (!any) break;
-        if (pins[ell] != 0.0) accumulate(q0 + ell, cur, pins[ell]);
+        if (q == N || ell + 1 == (int)pins.size()) break;
+        std::fill_n(next, 16, 0.0);
+        if (ph == 2) {
+            for (int a = 0; a < 4; ++a) for (int b = 0; b < 4; ++b) {
+                const double w = cur[a * 4 + b];
+                if (w == 0.0) continue;
+                for (int c = 0; c < 4; ++c)
+                    if (R[c * 4 + a] != 0.0 && ok_codon(allowed[q / 3], b * 16 + a * 4 + c))
+                        next[c] += w * R[c * 4 + a];
+            }
+        } else {
+            for (int a = 0; a < 4; ++a) {
+                const double w = cur[a];
+                if (w == 0.0) continue;
+                for (int c = 0; c < 4; ++c)
+                    if (R[c * 4 + a] != 0.0)
+                        next[ph == 1 ? c * 4 + a : c] += w * R[c * 4 + a];
+            }
+        }
+        std::swap(cur, next);
     }
 }
 
@@ -930,7 +959,6 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
         if (active_j[k])
             mk_right_tm(m, allowed, N, -1, js[k], rights[k], rb_any);
     auto& first_prepared = scratch.first;
-    auto& second_prepared = scratch.second;
     first_prepared.prepare(Lf, N - 2, allowed);
     double total = 0.0;
     // Only codon-compatible canonical boundary states can carry mass.
@@ -949,6 +977,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
         }
     }
     const bool mix_left = std::count(active_j.begin(), active_j.end(), 1) < static_cast<int>(active_d.size());
+    auto& second_prepared = scratch.second;
     std::vector<std::vector<double>> middles(mix_left ? m.nD() : 0);
     for (int d1 : active_d) {
         std::fill(seeds.begin(), seeds.end(), 0.0);
@@ -1020,7 +1049,8 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
 // For each J we build the left DP (V germline + VJ insertion, weighted by P(V)P(J|V)), then thread
 // the fixed J germline suffix over [N-len_j, N) and sum. O(nJ * N * 25) — replaces the old
 // per-scenario enumeration, which was ~1000x slower on VJ loci with many V/J alleles.
-double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
+double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
+                  const double* pv_override = nullptr) {
     int N = 3 * alen;
     double total = 0.0;
     std::vector<double> Lf, dp(25), ndp(25);
@@ -1048,7 +1078,7 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
             }
         }
         if (!possible) continue;
-        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any);
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any, pv_override);
         for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
             int p = N - len_j, idxj = Lj - len_j;
             if (p < 1 || !lf_any[p]) continue;  // >=1 V/insertion nt before J
@@ -1086,14 +1116,15 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
 }  // namespace
 
 static double pgen_aa_masked_scratch(const PackedModel& m, const uint64_t* allowed, int L,
-                                     int v_idx, int j_idx, TandemScratch& scratch) {
-    if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx);
+                                     int v_idx, int j_idx, TandemScratch& scratch,
+                                     const double* pv_override = nullptr) {
+    if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx, pv_override);
     // Share the V+VD message across both branches of the exact n_D mixture.
     if (!m.dd || !(m.p_nd2 > 0.0))
-        return m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx);
+        return m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, nullptr, nullptr, pv_override);
     std::vector<double> left;
     std::vector<char> any;
-    mk_left_tm(m, allowed, 3 * L, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left, any);
+    mk_left_tm(m, allowed, 3 * L, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left, any, pv_override);
     double r = m.p_nd1 == 0.0 ? 0.0 :
         m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, &left, &any);
     r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, j_idx, left, scratch);
@@ -1216,7 +1247,7 @@ std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::s
 }
 
 // Gene-dependent selection is linear in P(V). Prepare immutable J-specific
-// model views once, then score all observations in one shared native batch.
+// V-weight views once, then score all observations against one immutable model.
 std::vector<double> selection_pgen_aa_batch(const PackedModel& m,
     const std::vector<std::string>& seqs, const std::vector<double>& weights, int nthreads) {
     if (weights.size() != static_cast<size_t>(m.nV()) * m.nJ())
@@ -1224,22 +1255,26 @@ std::vector<double> selection_pgen_aa_batch(const PackedModel& m,
     for (double w : weights)
         if (!std::isfinite(w) || w < 0.0)
             throw std::invalid_argument("selection weights must be finite and nonnegative");
-    std::vector<PackedModel> variants;
+    if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
+    std::vector<std::vector<double>> v_choices;
     std::vector<int> js;
-    variants.reserve(m.func_j.size());
     for (int j : m.func_j) {
         bool active = false;
         for (int v : m.func_v) active |= weights[v * m.nJ() + j] > 0.0;
         if (!active) continue;
-        variants.push_back(m);
+        auto& choice = v_choices.emplace_back(m.pv);
         js.push_back(j);
-        for (int v = 0; v < m.nV(); ++v)
-            variants.back().pv[v] *= weights[v * m.nJ() + j];
+        for (int v = 0; v < m.nV(); ++v) choice[v] *= weights[v * m.nJ() + j];
     }
-    return run_batch(seqs.size(), nthreads, [&](size_t i) {
+    const size_t workers = std::min(seqs.size(), static_cast<size_t>(std::max(1, nthreads)));
+    std::vector<TandemScratch> scratch(workers);
+    return run_batch(seqs.size(), nthreads, [&](size_t i, int worker) {
+        std::vector<uint64_t> allowed(seqs[i].size());
+        for (size_t c = 0; c < allowed.size(); ++c) allowed[c] = mask_for_aa(seqs[i][c]);
         double total = 0.0;
-        for (size_t k = 0; k < variants.size(); ++k)
-            total += pgen_aa(variants[k], seqs[i], -1, js[k]);
+        for (size_t k = 0; k < js.size(); ++k)
+            total += pgen_aa_masked_scratch(m, allowed.data(), allowed.size(), -1, js[k],
+                                           scratch[worker], v_choices[k].data());
         return total;
     }, true);
 }

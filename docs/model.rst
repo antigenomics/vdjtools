@@ -1033,6 +1033,12 @@ check prevents applying a profile to a different model. Legacy mode rejects
 profiles. ``selection_q`` in profiled output records the complete per-query
 multiplier, including the shape.
 
+Selected native batches keep one immutable packed model and small J-dependent
+V-choice arrays, preserving each gene factor inside the latent sum. Memory
+admission includes packed capacities, weights and label buffers, query lengths,
+and the selected workers' live DP storage; it rejects an allocation that exceeds
+the existing available-memory guard before constructing the weighted batch.
+
 The Python APIs are ``fit_selection_profile``, ``selection_profile_factors``,
 ``load_selection_profile`` and ``selection_pgen_aa_batch`` in ``vdjtools.model``.
 The latter returns shape-weighted mass without global Q and leaves the source
@@ -1098,9 +1104,19 @@ Exact tandem-D performance (#226)
 
 Query-local V/VD, D/DD and J/DJ messages are shared by linear contraction.
 Retained D prefixes, compatible boundary states and right-boundary coefficients
-are reused. The contraction order uses the model's D/J dimensions. These are
+are reused. The contraction order uses active first-D/J support dimensions. These are
 algebraic changes: all supported one-nucleotide D fragments and all nonzero
 history weights remain. No model parameter, minimum D2 length or cutoff changes.
+
+The DD insertion interior uses exact 4/4/16 codon-phase states while retaining
+the last inserted nucleotide for its Markov transition. Its first nucleotide
+uses the fitted first-base bias; zero insertion and every supported insertion
+length retain their original mass. Endpoint states project to the existing
+1/4/16 fixed-D boundary representation. Ordinary exact AA batches and selected
+batches own bounded worker scratch; other entry points own query-local scratch.
+Pgen calls and results are never cached.
+
+The following recorded measurements precede this state-compression refinement.
 
 A matched Linux run used 40 allocated logical CPUs and 1,000 native-generated
 productive AA junctions per human locus (seed 226), with V/J marginalized:
@@ -1132,7 +1148,7 @@ productive AA junctions per human locus (seed 226), with V/J marginalized:
 The single-D column temporarily disables tandem probability and restores it;
 that diagnostic omits real mass and is not an optimization. Full exact scoring
 still takes about 2.2x, 1.9x and 4.1x those diagnostic times respectively.
-The final optimized kernel scored 100,000 queries in 3.90/6.09/105.37 seconds
+That optimized checkpoint scored 100,000 queries in 3.90/6.09/105.37 seconds
 for TRB/TRD/IGH, with at most 159204 KiB process peak RSS. An earlier optimized
 kernel completed one million IGH queries in 1425.83 seconds, using 688684 KiB
 peak RSS; that large run predates the final boundary-coefficient refinement.
