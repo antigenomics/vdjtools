@@ -24,6 +24,11 @@ Check the installed version and CLI help before using version-dependent options.
 Use the [API reference](https://docs.isalgo.dev/vdjtools/api.html) for import paths
 and signatures, and [CLI reference](https://docs.isalgo.dev/vdjtools/cli.html) for flags.
 
+Before interpreting results or choosing model/feature defaults, read the relevant
+section of [workflow caveats](references/caveats.md): input and pairing, feature
+identity/coverage/resources, or model references/inference/selection. Each section
+links directly to the owning documentation section.
+
 ## Start with the data unit
 
 ```python
