@@ -202,7 +202,8 @@ unsupported inputs. ``report.loglik`` is the mean over scoreable inputs, not a
 finite full-cohort likelihood when unsupported observations remain.
 
 Native inference uses ``prune_ratio=1e-5`` by default. Set it to ``0`` for exact
-inference; generation Pgen is always exact. Max-product bounds identify the best
+inference; Pgen is exact by default (the explicit AA tandem approximation is
+described below). Max-product bounds identify the best
 complete scenario and discard disjoint single-D cells or tandem-D bridges only
 when every scenario they contain falls below that ratio. VJ models prune complete
 cells. Retained cells can still contain weaker component histories. Likelihood
@@ -863,8 +864,11 @@ For large new sequence draws, select the existing native sampler explicitly::
    vdjtools generate --model TRB --number 10000 --seed 7 --engine native --threads 0 -o draws.tsv
 
 ``--threads 0`` selects the allocated CPU budget; a positive count selects a smaller
-budget. Native draws are invariant to thread count. The default reference sampler
-preserves historical single-D seeded draws and runs serially. Both samplers reject
+budget. Native draws are invariant to thread count. The CLI defaults to native
+sampling for bundled ``isalgo`` models and its ``learned``/``arda`` aliases;
+legacy sources and custom model paths default to reference sampling. Explicit
+``--engine`` overrides this choice. The Python ``generate`` API retains its
+reference default, preserving historical single-D seeded draws and running serially. Both samplers reject
 whole tandem proposals lacking a supported second D or a positive contribution from
 both Ds. This fixes the tandem seeded stream to match Pgen scenario weights;
 explicit OLGA single-D streams remain unchanged. Native and reference engines

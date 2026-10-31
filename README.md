@@ -95,8 +95,11 @@ For large new sequence draws, select the native sampler and its allocated CPU bu
 vdjtools generate -m TRB -n 10000 --engine native --threads 0 --seed 7 -o generated.tsv
 ```
 
-Native draws are identical across thread counts. The default reference sampler preserves
-historical seeded draws; the two engines use different random streams.
+Native draws are identical across thread counts. The CLI defaults to native sampling
+for bundled `isalgo` models (including `learned`/`arda` aliases), and reference
+sampling for legacy sources and custom model paths. The Python `generate` API
+defaults to reference sampling to preserve historical seeded draws; the engines
+use different random streams.
 
 Fit your own sample PCA on selected measurements, compatible control rows, or reuse
 a saved rotation:
@@ -197,8 +200,13 @@ For joint junction/V/J probabilities with gene-level calls, use
 `vdjtools.model.native.pgen_aa_gene_batch`: one native batch sums the model alleles
 and supports exact or closed Hamming-1 mass. ALICE uses the same helper.
 
-``model.selection_factor(locus, organism="human", source="isalgo")`` returns
+`model.selection_factor(locus, organism="human", source="isalgo")` returns
 a bundled effective selection multiplier only when every calibrated model-file
 hash matches. Unsupported contexts and changed models require explicit Q or
-recalibration. ``selection_mass`` applies Q once; empirical control frequencies
+recalibration. `selection_mass` applies Q once; empirical control frequencies
 already contain selection and must not be multiplied again.
+
+Pgen is exact by default. AA scoring supports an explicit `--approximate-tandem`
+option for supported dense joint-history models, including human isalgo IGH.
+Approximate file outputs carry `pgen_method=rank1`; nucleotide and Hamming-1
+requests reject this option. See the [approximation scope and validation](https://docs.isalgo.dev/vdjtools/model.html#optional-approximation-of-tandem-histories).
