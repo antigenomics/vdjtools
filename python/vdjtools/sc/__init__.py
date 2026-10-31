@@ -21,6 +21,7 @@ from .cluster_eval import (
 )
 from .pair import (
     chain_multiplicity,
+    chain_support,
     flag_mispairing,
     pair_chains,
     resolve_chains,
@@ -37,7 +38,7 @@ __all__ = [
     # AIRR Rearrangement interchange (what every downstream bridge is built on)
     "to_airr", "from_airr", "write_airr", "write_screpertoire",
     # pairing / QC
-    "resolve_chains", "pair_chains", "chain_multiplicity", "flag_mispairing",
+    "chain_support", "resolve_chains", "pair_chains", "chain_multiplicity", "flag_mispairing",
     # paired-chain generation probability
     "paired_pgen",
     # cluster evaluation

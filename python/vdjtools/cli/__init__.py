@@ -165,6 +165,8 @@ def pgen(
     j_col: Optional[str] = typer.Option(None, "--j-col", help="J-allele column to condition on (default: marginalize)."),
     seq_type: str = typer.Option("auto", "--type", help="auto | aa | nt."),
     mismatches: int = typer.Option(0, help="Amino-acid Hamming ball: 0 exact, 1 sums all single-substitution neighbours."),
+    approximate_tandem: bool = typer.Option(False, "--approximate-tandem",
+        help="Opt in to rank-one AA tandem-history approximation; exact scoring is the default."),
     no_header: bool = typer.Option(False, "--no-header", help="Input is a bare sequence list (no header row)."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout)."),
 ) -> None:
@@ -192,15 +194,24 @@ def pgen(
     for i, s in enumerate(seqs):
         if s:
             groups[_is_nt(s) if seq_type == "auto" else (seq_type == "nt")].append(i)
+    if approximate_tandem and (groups[True] or mismatches != 0):
+        _err("--approximate-tandem requires amino-acid input and --mismatches 0")
     for is_nt, idx in groups.items():
         if not idx:
             continue
         sub, subv, subj = [seqs[i] for i in idx], [vs[i] for i in idx], [js[i] for i in idx]
-        got = (native.pgen_nt_batch(m, sub, subv, subj) if is_nt else
-               native.pgen_aa_batch(m, sub, subv, subj, mismatches=mismatches))
+        try:
+            got = (native.pgen_nt_batch(m, sub, subv, subj) if is_nt else
+                   native.pgen_aa_batch(m, sub, subv, subj, mismatches=mismatches,
+                       **({"approximate_tandem": True} if approximate_tandem else {})))
+        except (ValueError, KeyError, MemoryError) as error:
+            _err(str(error))
         for i, p in zip(idx, got):
             pg[i] = p
-    _write(df.with_columns(pl.Series("pgen", pg)), out)
+    result = df.with_columns(pl.Series("pgen", pg))
+    if approximate_tandem or "pgen_method" in result.columns:
+        result = result.with_columns(pl.lit("rank1" if approximate_tandem else "exact").alias("pgen_method"))
+    _write(result, out)
 
 
 @app.command()
@@ -994,22 +1005,29 @@ def tcrnet(
     fmt: str = _FMT, out: Optional[Path] = _OUT,
     locus: Optional[str] = typer.Option(None, "--locus", help="Force one locus (else per-locus)."),
     species: str = typer.Option("human", "--species"),
+    mode: str = typer.Option("empirical", "--mode", help="empirical | alice generative null."),
+    source: str = typer.Option("isalgo", "--source", help="ALICE model source."),
+    selection_q: Optional[float] = typer.Option(None, "--q", help="ALICE Q override; default is model-specific."),
+    legacy: bool = typer.Option(False, "--legacy", help="Historical ALICE formula and Q=9.41."),
+    selection_profile: Optional[str] = typer.Option(None, "--selection-profile", help="Opt-in length | vj-length | model-bound calibration JSON."),
     scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
     threads: int = typer.Option(0, "--threads", help="0 = all cores."),
 ) -> None:
     """Neighbourhood enrichment against a CONTROL REPERTOIRE (TCRnet).
 
     The control absorbs thymic selection and endemic-pathogen expansions, which a generation
-    model cannot — at the cost of needing a large, HLA-matched cohort. See `alice` for the
-    generative null. Neither can see a monoclonal expansion: enrichment measures breadth.
+    model cannot — at the cost of needing a large, HLA-matched cohort. ``--mode alice``
+    selects the generative null with model-specific selection calibration. Neither can see
+    a monoclonal expansion: enrichment measures breadth.
     """
     from vdjtools.io.batch import read
     from vdjtools.overlap import tcrnet as _tcrnet
 
     try:
         res = _tcrnet(read(sample, fmt=fmt), locus=locus, species=species, scope=scope,
-                      threads=threads)
-    except (ImportError, ValueError) as e:
+                      threads=threads, mode=mode, source=source, selection_q=selection_q,
+                      legacy=legacy, selection_profile=selection_profile)
+    except (ImportError, KeyError, ValueError) as e:
         _err(str(e))
     _write(res, out)
 
@@ -1020,8 +1038,11 @@ def alice(
     fmt: str = _FMT, out: Optional[Path] = _OUT,
     locus: Optional[str] = typer.Option(None, "--locus", help="Force one locus (else per-locus)."),
     source: str = typer.Option("isalgo", "--source", help="Bundled model source (default: isalgo); olga-legacy retains historical reproduction."),
+    organism: str = typer.Option("human", "--species"),
+    legacy: bool = typer.Option(False, "--legacy", help="Historical subgroup-sized exposure; model source remains explicit."),
+    selection_profile: Optional[str] = typer.Option(None, "--selection-profile", help="Opt-in length | vj-length | model-bound calibration JSON."),
     scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
-    selection_q: float = typer.Option(9.41, "--q", help="Thymic-selection factor Q."),
+    selection_q: Optional[float] = typer.Option(None, "--q", help="Effective Q override; default is model-specific (legacy: 9.41)."),
     min_degree: int = typer.Option(3, "--min-degree", help="Only test clonotypes with >= this "
                                                            "many neighbours (self included)."),
     min_count: int = typer.Option(2, "--min-count", help="Ignore clonotypes below this count."),
@@ -1029,8 +1050,8 @@ def alice(
 ) -> None:
     """Neighbourhood enrichment against a V(D)J GENERATION MODEL (ALICE).
 
-    Controls for the intrinsic biases of recombination, but knows nothing about selection or
-    about which clonotypes are already common in people — the complement of `tcrnet`. Returns
+    Uses recombination mass with a model-specific effective selection multiplier;
+    empirical TCRnet instead estimates background from observed controls. Returns
     q_value and picks no threshold: the published ones differ 100-fold and were never
     reconciled.
     """
@@ -1040,7 +1061,7 @@ def alice(
     try:
         res = _alice(read(sample, fmt=fmt), locus=locus, source=source, scope=scope,
                      selection_q=selection_q, min_degree=min_degree, min_count=min_count,
-                     threads=threads)
+                     threads=threads, organism=organism, legacy=legacy, selection_profile=selection_profile)
     except (ImportError, KeyError, ValueError) as e:
         _err(str(e))
     _write(res, out)
@@ -1813,3 +1834,86 @@ def sc_export(
     except (ImportError, ValueError) as e:
         _err(str(e))
     _info(f"wrote {cells.height} contigs ({cells['cell_id'].n_unique()} cells) -> {out}")
+
+
+@app.command("calibrate-selection")
+def calibrate_selection(
+    control: Path = typer.Argument(..., help="Independent-donor NT-key control pool."),
+    out: Path = typer.Option(..., "--out", "-o", help="Fresh calibration JSON path."),
+    locus: str = typer.Option(..., "--locus"),
+    species: str = typer.Option("human", "--species"),
+    source: str = typer.Option("isalgo", "--source"),
+    event_weight: str = typer.Option("incidence", "--event-weight"),
+    sequence_column: str = typer.Option("cdr3aa", "--sequence-column"),
+    max_events: Optional[int] = typer.Option(None, "--max-events", min=1, help="Sample at most this many receptor events before Pgen."),
+    seed: int = typer.Option(42, "--seed", help="Reproducible event-sampling seed."),
+    profile: str = typer.Option("global", "--profile", help="global | length | vj-length; coarse factors are opt-in."),
+    smoothing: float = typer.Option(1., "--smoothing", min=0, help="Second-difference penalty on shared log length factors."),
+    shrinkage: float = typer.Option(1., "--shrinkage", min=0, help="Positive log-factor ridge penalty in event-count units."),
+    threads: int = typer.Option(0, "--threads"),
+):
+    """Estimate a model-specific effective selection factor from receptor events."""
+    import hashlib
+    import json
+    import time
+    from importlib.resources import files
+    import numpy as np
+    from vdjtools.model import load_bundled, native
+    from vdjtools.model.bundled import _bundled_key, _source_family
+    from vdjtools.model.selection import (control_event_counts, fit_selection_factor,
+        fit_selection_profile, selection_pgen_aa_batch)
+
+    if profile not in {'global', 'length', 'vj-length'}:
+        raise ValueError('profile must be global, length or vj-length')
+    if profile != 'global' and shrinkage <= 0:
+        raise ValueError('profile shrinkage must be positive')
+    if out.exists():
+        raise FileExistsError(out)
+    started = time.monotonic()
+    def digest(path):
+        value = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024**2), b""):
+                value.update(block)
+        return value.hexdigest()
+    input_hash = digest(control)
+    family = _source_family(source)
+    directory = "olga" if family == "olga-legacy" else family
+    model_root = Path(str(files("vdjtools.model") / "_bundled" / directory / _bundled_key(source, locus, species)))
+    model_hashes = {str(p.relative_to(model_root)): digest(p) for p in sorted(model_root.rglob("*")) if p.is_file()}
+    counts, audit = control_event_counts(control, sequence_column=sequence_column, weight_column=event_weight, max_events=max_events, seed=seed, preserve_vj=profile != "global")
+    typer.echo(f"Loaded {counts.height} junctions / {audit['retained_events']} events", err=True)
+    model = load_bundled(locus, source, organism=species, collapse=False)
+    shape = None
+    if profile != 'global':
+        import polars as pl
+        shape = fit_selection_profile(model, counts.with_columns(
+            pl.col('junction_aa').str.len_chars().cast(pl.Int64).alias('junction_aa_length')),
+            kind=profile, smoothing=smoothing, shrinkage=shrinkage, threads=threads)
+        typer.echo(f"Selection shape fitted; elapsed {time.monotonic()-started:.3f} s", err=True)
+        counts = counts.group_by('junction_aa').agg(pl.col('events').sum()).sort('junction_aa')
+        lengths = counts['junction_aa'].str.len_chars().to_numpy()
+        eligible = (lengths >= shape['length_min']) & (lengths < shape['length_min'] + len(shape['log_length']))
+        pgen = np.zeros(counts.height)
+        pgen[eligible] = selection_pgen_aa_batch(model,
+            counts.filter(pl.Series(eligible))['junction_aa'].to_list(), shape, threads=threads)
+    else:
+        pgen = np.asarray(native.pgen_aa_batch(model, counts["junction_aa"].to_list(), mismatches=0, threads=threads))
+    typer.echo(f"Pgen complete for {len(pgen)} junctions; elapsed {time.monotonic()-started:.3f} s", err=True)
+    supported = np.isfinite(pgen) & (pgen > 0)
+    if not np.all(np.isfinite(pgen) & (pgen >= 0) & (pgen <= 1)):
+        raise ValueError("invalid model probabilities")
+    y = counts["events"].to_numpy()
+    factor = fit_selection_factor(y[supported], pgen[supported], total_events=audit["retained_events"])
+    if digest(control) != input_hash or model_hashes != {str(p.relative_to(model_root)): digest(p) for p in sorted(model_root.rglob("*")) if p.is_file()}:
+        raise RuntimeError("control or model changed during calibration")
+    report = dict(species=species, locus=locus, source=family, selection_q=factor,
+        estimator="zero-truncated-Poisson effective event multiplicity", pgen="unconditional exact marginal full-junction mass",
+        audit=audit, zero_mass_junctions=int((~supported).sum()), zero_mass_events=int(y[~supported].sum()),
+        control_sha256=input_hash, model_sha256=model_hashes, seconds=time.monotonic()-started)
+    if shape is not None:
+        report['selection_profile'] = shape
+        report['pgen'] = 'exact selected marginal full-junction mass; global Q separate'
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2)+"\n")
+    typer.echo(str(out))

@@ -124,7 +124,7 @@ def test_alice_returns_q_and_picks_no_threshold():
     assert (res["q_value"].to_numpy() >= res["p_enrichment"].to_numpy() - 1e-12).all()
     # E = n * Q * pgen_ball, reconstructible from the returned columns
     r = res.row(0, named=True)
-    assert r["E"] == pytest.approx(r["n_group"] * 9.41 * r["pgen_ball"], rel=1e-9)
+    assert r["E"] == pytest.approx(r["n_exposure"] * r["selection_q"] * r["pgen_ball"], rel=1e-9)
 
 
 def test_alice_min_degree_gates_singletons():
@@ -135,3 +135,89 @@ def test_alice_min_degree_gates_singletons():
     res = O.alice(_sample(aa + lone), locus="TRB", min_degree=3)
     assert "CWWWWWWWWWWWF" not in res[S.JUNCTION_AA].to_list()
     assert (res["n_neighbors"] >= 3).all()
+
+
+def test_joint_probability_uses_total_eligible_locus_exposure(monkeypatch):
+    import importlib
+    import numpy as np
+    module = importlib.import_module("vdjtools.overlap.alice")
+    frame = pl.concat([_sample(["CASSF", "CATSF"], v="TRBV2", j="TRBJ1"),
+                       _sample(["CAVRF"], v="TRBV3", j="TRBJ2"),
+                       _sample(["CQQQF"], v=None, j="TRBJ2")])
+    monkeypatch.setattr(module, "_ball_pgen", lambda model, seqs, v, j, threads: np.full(len(seqs), .01))
+    monkeypatch.setattr(module, "_degrees", lambda unique, expanded, scope, threads: np.ones(len(unique), dtype=int))
+    modern = module._score_locus(frame, None, "TRB", "0", 2., 1, 1)
+    legacy = module._score_locus(frame, None, "TRB", "0", 2., 1, 1, legacy=True)
+    assert modern.height == legacy.height == 3
+    assert modern["n_exposure"].to_list() == [3]*3
+    assert modern["E"].to_list() == pytest.approx([.06]*3)
+    assert modern["E"].sum() == pytest.approx(3*2*.03)
+    assert legacy.sort(S.V_CALL)["E"].to_list() == pytest.approx([.04,.04,.02])
+    assert legacy["n_exposure"].to_list() == legacy["n_group"].to_list()
+
+
+def test_gene_batch_matches_explicit_allele_sums(monkeypatch):
+    from vdjtools.model import native
+    model=load_bundled('TRB','olga',collapse=False)
+    seqs=['CASSYVGSEQFF','CASSYVGSEQFF']
+    vs=['TRBV7-9','TRBV19*01'];js=['TRBJ2-1','TRBJ2-1*01']
+    original=native.pgen_aa_batch
+    calls=[]
+    def counted(*args,**kwargs):
+        calls.append(len(args[1]))
+        return original(*args,**kwargs)
+    monkeypatch.setattr(native,'pgen_aa_batch',counted)
+    for mismatches in [0,1]:
+        _,vi,ji=native.pack(model)
+        expected=[sum(original(model,[seq],[va],[ja],mismatches=mismatches,threads=1)[0]
+                      for va in _alleles_for(vi,v) for ja in _alleles_for(ji,j))
+                  for seq,v,j in zip(seqs,vs,js)]
+        calls.clear()
+        got=native.pgen_aa_gene_batch(model,seqs,vs,js,mismatches=mismatches,threads=1)
+        assert got == pytest.approx(expected,rel=1e-12)
+        assert len(calls)==1
+    with pytest.raises(ValueError,match='same length'):
+        native.pgen_aa_gene_batch(model,seqs,vs[:1],js)
+    with pytest.raises(KeyError):
+        native.pgen_aa_gene_batch(model,seqs,['UNKNOWN']*2,js)
+
+
+def test_alice_uses_calibrated_factor_and_explicit_legacy():
+    from vdjtools.model import selection_factor
+    sample = _sample(['CASSF', 'CATSF', 'CATTF'])
+    modern = O.alice(sample, locus='TRB', min_degree=1)
+    assert modern['selection_q'].to_list() == [selection_factor('TRB')] * modern.height
+    assert modern['E'].to_list() == pytest.approx(
+        (modern['n_exposure'] * modern['selection_q'] * modern['pgen_ball']).to_list())
+    legacy = O.alice(sample, locus='TRB', source='olga-legacy', legacy=True, min_degree=1)
+    assert legacy['selection_q'].to_list() == [9.41] * legacy.height
+    with pytest.raises(ValueError, match='explicit'):
+        O.alice(sample, model=load_bundled('TRB'), locus='TRB', min_degree=1)
+
+
+def test_tcrnet_alice_mode_delegates_and_rejects_empirical_q():
+    sample = _sample(['CASSF', 'CATSF', 'CATTF'])
+    assert O.tcrnet(sample, locus='TRB', mode='alice').equals(O.alice(sample, locus='TRB'))
+    with pytest.raises(ValueError, match='ALICE'):
+        O.tcrnet(sample, locus='TRB', selection_q=2.)
+    with pytest.raises(ValueError, match='control'):
+        O.tcrnet(sample, locus='TRB', mode='alice', control=object())
+
+
+def test_anchored_hamming_ball_matches_eligible_neighbor_enumeration():
+    from vdjtools.model import Model, native
+    from test_dd import _tiny_aligned_dd_model
+    base = _tiny_aligned_dd_model()
+    tables = dict(base.tables)
+    for name, allele in [('v_3_del', 'v_allele'), ('j_5_del', 'j_allele')]:
+        tables[name] = pl.DataFrame({allele: ['V' if allele == 'v_allele' else 'J'] * 3,
+            'ndel': pl.Series([0, 1, 2], dtype=pl.Int16), 'p': [.4, .3, .3]})
+    model = Model(base.manifest, tables, base.genomic)
+    seq = 'CHHF'
+    neighbors = {seq} | {seq[:i] + aa + seq[i+1:] for i in range(len(seq)) for aa in _AA}
+    neighbors = [s for s in neighbors if s.startswith('C') and s[-1] in 'FW']
+    expected = sum(native.pgen_aa(model, s, 'V', 'J') for s in neighbors)
+    actual = native.pgen_aa_gene_batch(model, [seq], ['V'], ['J'], mismatches=1,
+                                      anchored_only=True, threads=1)
+    assert actual == pytest.approx([expected], rel=1e-12)
+    assert actual[0] < native.pgen_aa_gene_batch(model, [seq], ['V'], ['J'], mismatches=1, threads=1)[0]

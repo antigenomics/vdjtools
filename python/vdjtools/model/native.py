@@ -2,7 +2,8 @@
 
 ``pack`` reconstructs the model's dense arrays (gene choice, deletion, insertion, dinucleotide)
 and germline cut segments into a C++ :class:`PackedModel`; ``pgen_nt`` calls the native Pgen.
-The result matches the pure-Python reference (and OLGA) exactly — the native path is just faster.
+The default result matches the pure-Python reference (and OLGA) exactly.
+AA batches additionally expose an explicitly requested tandem-history approximation.
 """
 from __future__ import annotations
 
@@ -340,13 +341,16 @@ def pgen_aa_batch(
     j: list[str | None] | None = None,
     mismatches: int = 0,
     threads: int = 0,
+    anchored_only: bool = False,
+    approximate_tandem: bool = False,
 ) -> list[float]:
     """Batch amino-acid Pgen over many CDR3s, parallelized across sequences in native code.
 
-    Computes the same value as calling :func:`pgen_aa` per sequence, but releases the GIL and
+    By default, computes the same value as calling :func:`pgen_aa` per sequence, but releases the GIL and
     partitions the sequences across worker threads — the clean, exact speedup for the real
-    workload (Pgen / 1-mismatch matching over many clonotypes). The result is bitwise-identical
-    to the serial per-sequence computation for any ``threads``.
+    workload (Pgen / 1-mismatch matching over many clonotypes). In exact mode the result is
+    bitwise-identical to the serial per-sequence computation for any ``threads``.
+    The optional approximation is also invariant to thread count, but is not exact Pgen.
 
     Args:
         model: A recombination :class:`Model`.
@@ -357,6 +361,10 @@ def pgen_aa_batch(
             :class:`KeyError` (see :func:`pgen_aa`).
         j: Optional per-sequence J alleles (as ``v``).
         mismatches: ``0`` for exact Pgen, ``1`` for the Hamming-1 ball (as :func:`pgen_aa`).
+        approximate_tandem: Explicitly approximate dense off-diagonal joint tandem history
+            weights by positive rank-one factors. Only supported dense tandem models and
+            ``mismatches=0`` are accepted. Original parameters and exact defaults are unchanged.
+            The empirical log-Pgen error is not a per-query bound. No Pgen result is cached.
         threads: Worker threads; ``0`` = auto (the available CPU allocation).
             VDJ or Hamming-1 batches use workers from two sequences; cheaper exact
             VJ batches stay serial below 64 sequences.
@@ -364,6 +372,10 @@ def pgen_aa_batch(
     Returns:
         Per-sequence Pgen in input order.
     """
+    if not isinstance(approximate_tandem, bool):
+        raise TypeError("approximate_tandem must be a bool")
+    if approximate_tandem and mismatches != 0:
+        raise ValueError("rank-one tandem approximation requires mismatches=0")
     if mismatches not in (0, 1):
         raise ValueError("mismatches must be 0 or 1")
     from .._core import pgen_aa_batch as _batch
@@ -376,7 +388,16 @@ def pgen_aa_batch(
         raise ValueError("v must have the same length as cdr3_aas")
     if j_idxs and len(j_idxs) != len(seqs):
         raise ValueError("j must have the same length as cdr3_aas")
-    return _batch(pm, seqs, v_idxs, j_idxs, mismatches, kernel_threads(threads))
+    budget = kernel_threads(threads)
+    if approximate_tandem:
+        from ..cores import require_memory
+        from .._core import _selection_workspace_bytes
+        require_memory(_selection_workspace_bytes(pm, max(map(len, seqs), default=0), len(seqs), budget),
+                       'rank-one tandem Pgen')
+        return _batch(pm, seqs, v_idxs, j_idxs, mismatches, budget, anchored_only, True)
+    if anchored_only:
+        return _batch(pm, seqs, v_idxs, j_idxs, mismatches, budget, True)
+    return _batch(pm, seqs, v_idxs, j_idxs, mismatches, budget)
 
 
 def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,
@@ -649,3 +670,50 @@ def infer_nt_many(model: Model, cdr3_aas: list, v: list | None = None, j: list |
         cols.pop("d2_start")
         cols.pop("d2_end")
     return cols
+
+
+def _alleles_for(idx_of: dict[str, int], name: str) -> list[str]:
+    """The model alleles a V/J call denotes: itself if it is one, else the gene's alleles.
+
+    Real repertoires carry gene-level calls (``TRBV19``); the model is keyed by allele. Passing a
+    gene straight to the native Pgen raises (it used to silently marginalise over *every* allele —
+    measured 183x too high). Summing a gene's alleles is not an approximation: ``Σ_a Pgen(σ, V=a)``
+    over a gene's alleles *is* the gene marginal, verified to ratio 1.0000000000 against the
+    all-allele sum.
+    """
+    if name in idx_of:
+        return [name]
+    alleles = sorted(a for a in idx_of if a.split("*")[0] == name)
+    if not alleles:
+        raise KeyError(f"V/J call {name!r} is not in the model and is not a gene of any of its "
+                       f"{len(idx_of)} alleles")
+    return alleles
+
+
+
+def pgen_aa_gene_batch(model, cdr3_aas, v, j, *, mismatches=0, threads=0, anchored_only=False):
+    """Joint junction/V/J mass for gene or allele calls in one native batch.
+
+    Gene calls sum all matching model alleles; allele calls select that allele.
+    Unknown calls raise KeyError, never silently marginalize. Returns masses in
+    input order. mismatches=0 is exact; 1 includes the closed Hamming-1 ball.
+    """
+    import polars as pl
+    if len(v)!=len(cdr3_aas) or len(j)!=len(cdr3_aas):
+        raise ValueError('v and j must have the same length as cdr3_aas')
+    if mismatches not in (0,1):
+        raise ValueError('mismatches must be 0 or 1')
+    if not len(cdr3_aas):
+        return []
+    _,vi,ji=pack(model)
+    rows=pl.DataFrame({'junction_aa':cdr3_aas,'v':v,'j':j}).with_row_index('_key')
+    expanded=rows
+    for column,index in [('v',vi),('j',ji)]:
+        names=rows[column].unique().sort().to_list()
+        mapping=pl.DataFrame({column:names,column+'_allele':[_alleles_for(index,n) for n in names]}).explode(column+'_allele', empty_as_null=True)
+        expanded=expanded.join(mapping,on=column,validate='m:m')
+    values=pgen_aa_batch(model,expanded['junction_aa'].to_list(),expanded['v_allele'].to_list(),
+                        expanded['j_allele'].to_list(),mismatches=mismatches,threads=threads,
+                        **({'anchored_only': True} if anchored_only else {}))
+    return expanded.select('_key').with_columns(pl.Series('pgen',values)).group_by('_key').agg(
+        pl.col('pgen').sum()).sort('_key')['pgen'].to_list()

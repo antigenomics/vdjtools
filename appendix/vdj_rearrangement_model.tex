@@ -37,7 +37,7 @@
 \newcommand{\del}{\mathrm{del}}
 \newcommand{\indic}{\mathds{1}}
 
-\title{\scshape The V(D)J recombination model and fast generation probabilities in \texttt{vdjtools}}
+\title{\scshape The V(D)J rearrangement model and exact generation probabilities in \texttt{vdjtools}}
 \author{Mikhail Shugay\textsuperscript{1,2,3}\thanks{Correspondence:
   \href{mailto:mikhail.shugay@gmail.com}{mikhail.shugay@gmail.com}}}
 \date{%
@@ -71,8 +71,8 @@ drive sequence generation (ancestral sampling) and model inference (expectation-
 describe in \S\ref{sec:em}.
 \end{abstract}
 
-\paragraph{Scope and terminology} This appendix describes the model engine shipped in
-\texttt{vdjtools} 5.4.0 and distinguishes its working \texttt{isalgo} models from frozen
+\paragraph{Scope and terminology} This appendix describes the current
+\texttt{vdjtools} model engine and distinguishes its working \texttt{isalgo} models from frozen
 \texttt{olga-legacy} parameters.
 An AIRR \emph{junction} includes the conserved Cys104 and Phe/Trp118 codons;
 the IMGT CDR3 excludes these anchors.
@@ -380,21 +380,182 @@ folded into $\Pi_R$, we keep $\Psi^D$ purely $J$/$DJ$ and slide a short explicit
 is what generalizes to the tandem-$D$ event.
 \end{remark}
 
-\paragraph{Tandem transfer matrices} For the two-D branch, the native engine
-builds the V/VD left matrix once and loops explicitly over J.
-For each J it builds a D-independent right matrix containing $P(J)$, J trimming
-and the DJ insertion factors.
-For each first D, threading all supported nonempty first-D trims through the
-left matrix and extending every supported DD insertion produces an intermediate
-matrix indexed by its boundary and codon state.
-Each second-D template and nonempty trim is then threaded through this matrix
-and contracted with the J-specific right matrix, weighted by
-$q_J(2,D_1,D_2)$ and the second-D deletion probability.
-The first-D deletion weight enters the intermediate matrix; the joint history
-weight enters the second-D contraction exactly once.
-Forbidden complete histories contribute zero before contraction.
-This preserves the codon-state recurrence while retaining J-dependent D-pair
-ambiguity; it does not factor $q_J$ into independent D choices.
+\paragraph{Exact tandem contraction}
+Let $N$ be the junction nucleotide length, $S=25$ the codon-state count,
+$D$ the number of functional D templates, and $J$ the number of selected J
+alleles. The native engine builds the V/VD left matrix once.
+For each first D template $d$, it sums all supported nonempty retained-D
+histories ending at each boundary/state and extends that sum through the DD
+insertion recurrence. Call the resulting matrix $M_d$.
+This matrix contains the first-D deletion weight but no J-dependent history
+weight. For each J allele $j$, $R_j$ contains $P(J=j)$, J trimming and DJ
+insertion factors. Let $H_{jde}$ denote the joint tandem-history weight for
+first D $d$ and second D $e$, or the legacy product
+$P(d\mid j)P(e\mid d)$. Forbidden complete histories have $H_{jde}=0$.
+
+For fixed second D $e$, let $C_e(A,B)$ mean threading every supported nonempty
+trim of $e$ through left message $A$, multiplying by its second-D deletion
+probability, and stitching with right message $B$ using
+Eq.~\eqref{eq:stitch}. This operation is bilinear, so the tandem branch is
+\begin{align}
+ T &= \sum_{d,e} C_e\!\left(M_d,\sum_j H_{jde}R_j\right)
+    = \sum_{j,e} C_e\!\left(\sum_d H_{jde}M_d,R_j\right).
+\end{align}
+The global tandem-mixture weight, when present, multiplies $T$ exactly once
+in the caller. The implementation chooses between these expressions using the active first-D
+and J counts, after removing complete histories with exactly zero weight or
+forbidden support. The second-D templates remain unrestricted by that choice. Thus it performs at most
+$\min(D^2,JD)$ second-D bridge walks, rather than $JD^2$, and computes each
+$M_d$ only once. Mixing messages costs $O(JD^2NS)$ in the dense worst case;
+zero history weights are skipped. Message storage is $O((J+D)NS)$ in the
+second form and $O(JNS)$ in the first, excluding the existing fixed-size
+codon-state scratch.
+
+Both D roles share a prefix walk over placements and 5-prime trims. Successive
+retained lengths extend the same prefix instead of rethreading each 3-prime
+trim from its beginning. A zero codon-compatible message terminates every
+longer prefix exactly. After two fixed bases, the message has only one possible
+codon state, so subsequent fixed bases use a scalar state transition.
+The first- and second-base messages are shared across 5-prime cuts for each
+input matrix. At a DD-insertion end, completed codons can be forgotten before
+the fixed second-D block: boundary phases zero, one and two need respectively
+zero, one and two past bases. Thus at most 1, 4 or 16 canonical states remain,
+further restricted by the codon mask. Only those cells enter the D-pair mixing
+loop. Inside the DD insertion, the last inserted base remains necessary for the
+Markov transition even when a codon has just ended. The exact interior state
+counts at phases zero, one and two are therefore 4, 4 and 16. Let $x_q^{(0)}(a)$
+and $x_q^{(1)}(a)$ denote masses at nucleotide boundary $q$ with last base $a$,
+and let $x_q^{(2)}(a,b)$ retain the two most recent bases, newest first.
+With $R_{ca}=P(c\mid a)$, the subsequent insertion steps are
+\begin{align}
+ x_{q+1}^{(1)}(c) &= \sum_a x_q^{(0)}(a)R_{ca}, &&q\equiv0\pmod3,\\
+ x_{q+1}^{(2)}(c,a) &= x_q^{(1)}(a)R_{ca}, &&q\equiv1\pmod3,\\
+ x_{q+1}^{(0)}(c) &= \sum_{a,b}x_q^{(2)}(a,b)R_{ca}
+       \mathbf{1}\{(b,a,c)\in A_{\lfloor q/3\rfloor}\}, &&q\equiv2\pmod3.
+\end{align}
+Here $A_k$ is the allowed codon set at amino-acid position $k$. The first inserted
+base uses its fitted first-base bias rather than a transition from the preceding
+germline. Zero insertion uses the original seed directly. Each supported
+insertion length multiplies its endpoint mass exactly once. At insertion end,
+the states project back to the 1/4/16 canonical fixed-D boundary representation.
+The aggregation forgets only bases absent from both the unfinished codon and the
+next Markov transition, so it preserves the complete nonnegative history sum.
+It reduces state work without truncating insertion-length support.
+First-/two-base preparation is shared across D templates only when their incoming
+matrix is identical. In the left-mixing contraction the input differs for each
+$(j,e)$ and is prepared separately. Exact AA batches own bounded prefix scratch
+per worker and reset active entries for every new input; selected batches use
+one immutable model with small J-dependent V-choice arrays. No computed Pgen
+result is cached between calls or queries.
+
+All nonzero deletion weights remain; a prefix shorter than the first supported
+length still propagates because it can lead to a longer supported fragment.
+Each D retains at least one nucleotide and J retains at least one nucleotide.
+No minimum retained-D length beyond this model convention, probability cutoff,
+or renormalization is used. Linearity proves equivalence in exact arithmetic;
+changing nonnegative reduction order can change floating-point rounding.
+Native singleton-codon NT masks, AA masks, degenerate masks and Hamming-1 calls
+use this same kernel. The V+VD message is computed once and shared across
+single-D and tandem branches of the mixture; single-D coefficients and frozen
+OLGA probabilities retain their original meanings.
+
+For each right message, the boundary join has an adjoint coefficient vector
+$B_j(q,s)$ such that $\operatorname{join}(A,R_j;q)=\sum_s A(q,s)B_j(q,s)$.
+It is computed once per right message and reused over all second-D trims.
+After two fixed D bases only one left state survives, so each terminal join
+becomes one multiplication. This is the same nonnegative bilinear form;
+no retained-prefix contribution is omitted.
+
+For a nonnegative sum of $k$ fixed floating-point terms, sequential accumulation
+has relative rounding-error bound $\gamma_k=ku/(1-ku)$ when $ku<1$, where
+$u$ is unit roundoff. This bound concerns the sum alone, not errors already
+present in its terms. A contraction with fewer additions can therefore be more
+accurate than the original enumeration while differing from its double result.
+In the Linux 1,000-query IGH comparison, 32 differences exceeded $10^{-12}$
+relative to the old double accumulation. Re-evaluating all 32 with the original
+kernel and only its final tandem accumulator promoted to long double gave
+maximum relative errors $4.8\times10^{-13}$ for the optimized contraction and
+$5.9\times10^{-12}$ for the original double result. No probability cutoff was
+introduced to obtain this agreement.
+
+\paragraph{Explicit approximation of tandem histories}
+The preceding algorithm is exact by default. An opt-in AA-batch mode approximates
+only the joint history matrix when every off-diagonal functional D pair has positive
+weight and the D count exceeds the J count. For a fixed J, write
+$r_d=\sum_e H_{jde}$, $c_e=\sum_d H_{jde}$ and $z=\sum_{d,e}H_{jde}$.
+Define positive factors $u_d=r_d/z$ and
+$v_e=c_e z/\sum_{a,b:\,a\ne b}u_ac_b$. The approximated matrix is
+\begin{equation}
+ \widehat H_{jde}=u_dv_e\,\mathbf{1}\{d\ne e\},\qquad
+ \sum_{d,e}\widehat H_{jde}=z.
+\end{equation}
+Thus the original per-J tandem mass and structural support are retained without
+changing the stored parameters. The mixed D2 input becomes
+$v_e(\sum_d u_dM_d-u_eM_e)$. If diagonal subtraction is cancellation-prone, the
+code recomputes that cell as a positive off-diagonal sum; it never drops small
+history terms. The insertion and retained-D recurrences are unchanged.
+Factors are owned by one batch and no Pgen result is cached.
+
+Accuracy is evaluated empirically as
+$\sqrt{\sum_i(\log\widehat p_i-\log p_i)^2/\sum_i(\log p_i)^2}$ over queries
+with positive exact probability, counting exact zeros and support failures
+separately. This aggregate metric is neither a uniform relative-probability bound
+nor a guarantee of unchanged downstream decisions. The exact mode remains the
+default; nucleotide, inference, generation and selected-normalization paths do
+not use this option.
+
+\section{Optional coarse post-selection calibration}
+
+The recombination model and its error-free generation probabilities remain
+unchanged. The optional selection model retains a joint V/J factor and a shared
+length factor from the factorized approach of Elhanati et al.\ \cite{Elhanati2014},
+without amino-acid-position factors. Here $L$ counts amino acids including the
+conserved C and terminal F/W. Let $g=(v,j)$ be a gene pair and let
+$P_0(g,L)$ be the exact recombination mass conditioned on a C-first,
+F/W-last, stop-free junction, computed by degenerate-AA DP. Its unconditioned
+eligible mass $E_0$ is retained separately. Define
+\begin{equation}
+ S(g,L)=\frac{\exp(a_g+b_L)}{Z},\qquad
+ Z=\sum_{g,L}P_0(g,L)\exp(a_g+b_L).
+\end{equation}
+Thus $\sum P_0S=1$; the length-only option fixes $a_g=0$.
+For observation stratum $i$, let $y_i$ count independent receptor events,
+$L_i$ be its anchored length and $C_i$ the compatible gene-pair set.
+Missing calls expand this set; preliminary calls incompatible with every model
+cell at that length are reconsidered over all pairs. Truly unsupported lengths
+are audited and excluded. With $n=\sum_i y_i$ over supported strata, maximize
+\begin{equation}
+ \sum_i y_i\log\!\left[\sum_{g\in C_i}P_0(g,L_i)e^{a_g+b_{L_i}}\right]
+ -n\log Z-\frac{\rho}{2}(\lVert a\rVert^2+\lVert b\rVert^2)
+ -\frac{\tau}{2}\lVert\Delta^2 b\rVert^2.
+\end{equation}
+Here $\rho>0$ fixes the log-weight gauges and shrinks sparse cells;
+$\tau\ge0$ smooths the shared log length curve through second differences.
+Penalties use event-count likelihood units. Ambiguous observations use the sum
+inside the logarithm, rather than a fixed choice of one gene. Reports retain
+optimizer diagnostics and unsupported/reassigned event counts.
+
+A separate effective multiplicity scale $Q$ is fitted after the shape. For an
+observed AA junction $\sigma_i$, the model mass entering this fit is
+\begin{equation}
+ p_i=\sum_g P_{\rm gen}(\sigma_i,g)S(g,|\sigma_i|),\qquad
+ \lambda_i=NQp_i,
+\end{equation}
+where $N$ is the sampled eligible receptor-event exposure. The observed count
+$y_i$ follows a zero-truncated Poisson likelihood; the positive maximum satisfies
+$\sum_i[y_i-\lambda_i/(1-e^{-\lambda_i})]=0$. Zero-mass junctions and their events
+are reported separately, never counted as scored observations. This effective
+scale is not a measured thymic survival probability. Gene-dependent weights
+enter the latent gene sum; multiplying marginal Pgen by one chosen gene factor
+would be incorrect. A complete parameter hash binds the fitted shape to its
+recombination model. Event subsampling precedes V/J/AA reduction and samples
+integer receptor events without replacement, rather than read abundance.
+
+In ALICE's fixed-V/J substitution ball, length is constant, so $S(g,L)$ can
+multiply the eligible joint ball once. Profiled balls retain C-first/F/W-last
+neighbors. The reference-panel consumer applies $S$ before its AA-maximum
+reducer, then corrects residual within-V J composition using
+$\sum_L P_0(g,L)S(g,L)$ rather than the unselected gene marginal.
 
 \section{Correctness checks and recorded benchmark}\label{sec:bench}
 

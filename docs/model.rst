@@ -870,3 +870,331 @@ both Ds. This fixes the tandem seeded stream to match Pgen scenario weights;
 explicit OLGA single-D streams remain unchanged. Native and reference engines
 use different random streams, so the same seed does not produce identical sequences
 across engines. Neither option fits or rebuilds a model.
+
+
+Explicit selection-mass scaling
+-------------------------------
+
+``vdjtools.model.selection_mass(pgen, selection_q=1)`` returns the explicit
+product Q times generation mass, without clipping or normalization. It validates
+finite nonnegative input and a positive finite multiplier. The shared
+``ALICE_TRB_SELECTION_Q`` constant is 9.41, the historical ALICE average on the
+OLGA TRB scale; it is not an established TRA factor. ALICE uses this helper for
+its Poisson expectation. Empirical TCRnet controls already reflect selection
+and must not receive this generative multiplier a second time.
+
+
+``model.fit_selection_factor(counts, pgen, total_events=N)`` fits an effective
+selection multiplier from receptor-event multiplicities using a zero-truncated
+Poisson likelihood. Conditioning on positive counts is necessary because the
+input contains observed sequences only. Counts must not be sequencing reads.
+The unconditioned mean is N times Q times Pgen; fitted Q is model-, species-
+and locus-specific. Unsupported zero-mass sequences require an explicit coverage
+audit. All-singleton data do not identify a positive estimate. This effective
+constant does not establish a sequence-specific thymic survival probability.
+
+``vdjtools calibrate-selection CONTROL --locus TRB --max-events 1000000 --seed 42
+--threads 40 --out factor.json`` samples up to one million eligible receptor
+incidence events without replacement before computing exact Pgen. Sampling uses
+NT incidence summed over synonymous variants, never sequencing read abundance.
+The report records population and sampled event totals, seed and unsupported
+model mass; the fitted exposure is the sampled total. Omit ``--max-events`` for
+the full pool. The same seed and control produce the same sample.
+
+
+``model.selection_reference(model, threads=0)`` computes exact preselection mass
+by V gene, J gene and anchored junction AA length. Each query allows C first,
+F/W last and all 20 non-stop amino acids internally. A single native degenerate-AA
+batch covers the complete finite length support, including tandem-D histories;
+alleles are summed into gene cells. The flat output contains ``v_call``,
+``j_call``, ``junction_aa_length`` and ``p_pre``. Its mass sums to the model's
+eligible-junction probability, which need not equal one. Normalize by that sum
+when fitting a selection shape; retain the separate global scale. Zero-mass
+cells are omitted, so observations absent from the table require a support audit.
+No amino-acid-position selection parameters or sampled background are used.
+``threads=0`` selects the allocation; the query/mask and live-DP memory estimate
+is checked before materialization. Reference masses are computed fresh per call.
+
+
+Modern ALICE (including ``tcrnet --mode alice``) selects the calibrated factor
+for its model, species and locus by default. The current isalgo factors are:
+
+.. list-table:: Effective global Q (display rounded; full coefficients are shipped)
+   :header-rows: 1
+
+   * - Species
+     - Locus
+     - Q multiplier
+     - Exposure events (N)
+     - Unsupported AA junctions
+   * - Human
+     - TRA
+     - 3.47
+     - 5948022
+     - 2122 of 2192561
+   * - Human
+     - TRB
+     - 6.59
+     - 1000000
+     - 0 of 881364
+   * - Mouse
+     - TRA
+     - 4.25
+     - 876336
+     - 869 of 256668
+   * - Mouse
+     - TRB
+     - 5.36
+     - 1000000
+     - 78 of 550166
+
+The human TRA full-pool fit is preserved. The other contexts used up to one
+million eligible NT-incidence events, sampled without replacement with seed 42;
+mouse TRA had fewer eligible events and used its full pool. Zero-model-mass
+observations are audited and excluded from the fit. These effective multiplicity
+factors are not measured thymic survival probabilities.
+
+``alice(..., selection_q=None)`` uses this checked lookup. ``--q`` overrides it.
+``--legacy`` restores historical exposure and Q=9.41; choose
+``--source olga-legacy`` explicitly when reproducing the frozen human OLGA model.
+Supplied model objects and uncalibrated contexts require explicit Q. Empirical
+TCRnet never receives this multiplier. ``tcrnet(..., mode="alice")`` delegates to
+ALICE's closed-ball, minimum-count and minimum-degree behavior; its
+``selection_q``, ``source`` and ``legacy`` arguments are available in that mode.
+
+
+ALICE exposure convention
+-------------------------
+
+Modern ALICE multiplies joint V/J neighbourhood generation mass by the total
+eligible nucleotide-clonotype count in the locus, then by Q. ``n_group`` remains
+the descriptive V/J subgroup count; ``n_exposure`` records the actual multiplier.
+``legacy=True`` (CLI ``--legacy``) restores the historical subgroup-sized
+exposure with joint probability. ``probability_convention`` and ``selection_q``
+make the choice explicit in output. Model source remains a separate choice.
+Rows without V or J do not contribute to either the degree or exposure population.
+
+Gene-aware joint Pgen uses ``model.native.pgen_aa_gene_batch(model, sequences, v, j)``.
+It sums model alleles for gene calls in one native batch, retains input order,
+rejects unknown calls, and accepts mismatches=0 (exact) or 1 (closed ball).
+ALICE and repertoire annotation share this implementation.
+
+``model.selection_factor(locus, organism="human", source="isalgo")`` returns
+a bundled effective selection multiplier only when every calibrated model-file
+hash matches. Unsupported contexts and changed models require explicit Q or
+recalibration. ``selection_mass`` applies Q once; empirical control frequencies
+already contain selection and must not be multiplied again.
+
+Opt-in coarse selection profiles
+--------------------------------
+
+``calibrate-selection --profile length`` fits a shared smooth AA-length factor.
+``--profile vj-length`` fits a joint V/J factor times that shared length factor.
+Lengths include the conserved C and F/W anchors. Both are explicit alternatives
+to the global-only default; neither adds amino-acid-position features. This is a
+reduced form of the selection-factor model in
+`Elhanati et al. (2014) <https://doi.org/10.1073/pnas.1409572111>`_.
+
+For an eligible junction of length :math:`L`, V gene :math:`v` and J gene :math:`j`,
+the fitted shape is
+
+.. math::
+
+   S(v,j,L) = \exp[a_{vj}+b_L]/Z,\qquad
+   Z = \sum_{v,j,L} P_0(v,j,L)\exp[a_{vj}+b_L].
+
+:math:`P_0` is the exact model distribution conditioned on anchored, stop-free
+junctions. The length-only model sets :math:`a_{vj}=0`. The log length curve
+:math:`b_L` has a squared second-difference penalty (``--smoothing``, default 1).
+A positive squared-log-weight penalty (``--shrinkage``, default 1) fixes the
+parameter gauges and regularizes sparse cells. Penalties use event-count
+likelihood units. Missing or ambiguous gene calls are marginalized; incompatible
+preliminary calls are reconsidered at the same length. Reports record these
+counts and genuinely unsupported lengths. The finite model support is exact;
+there is no simulated reference or persisted computed reference cache.
+
+The fit subsequently estimates a separate global Q from AA event multiplicities
+using the exact marginal mass :math:`\sum_{v,j}P_{gen}(\sigma,v,j)S(v,j,L)`.
+Gene factors are inside this sum. The input sampler preserves V/J strata and
+samples receptor events before aggregation, with bounded raw batches and two
+fresh passes. Event subsampling requires fewer than one billion population
+events (the NumPy marginal sampler limit); full-pool totals must be below
+``2**53``. The report records input/model hashes, event counts, sampling seed,
+penalties, optimization diagnostics and unsupported mass observations.
+
+``alice --selection-profile length`` or ``--selection-profile vj-length`` selects
+a shipped model-bound profile. A fresh report path is also accepted.
+``alice --selection-profile fitted.json`` and
+``tcrnet --mode alice --selection-profile fitted.json`` apply the report's Q and
+shape. A Q override remains available. ALICE's fixed-V/J substitution ball has
+one length, so its shape factor can multiply the joint ball once. Only eligible
+C-first/F/W-last neighbors enter a profiled ball. A complete parameter identity
+check prevents applying a profile to a different model. Legacy mode rejects
+profiles. ``selection_q`` in profiled output records the complete per-query
+multiplier, including the shape.
+
+Selected native batches keep one immutable packed model and small J-dependent
+V-choice arrays, preserving each gene factor inside the latent sum. Memory
+admission includes packed capacities, weights and label buffers, query lengths,
+and the selected workers' live DP storage; it rejects an allocation that exceeds
+the existing available-memory guard before constructing the weighted batch.
+
+The Python APIs are ``fit_selection_profile``, ``selection_profile_factors``,
+``load_selection_profile`` and ``selection_pgen_aa_batch`` in ``vdjtools.model``.
+The latter returns shape-weighted mass without global Q and leaves the source
+recombination model unchanged. Ordinary Pgen remains exact and unselected.
+
+The shipped optional profiles use fresh up-to-one-million-event fits (seed 42).
+Their separate global Q values are refitted against the selected marginal mass:
+
+.. list-table:: Global scale with each opt-in shape (display rounded)
+   :header-rows: 1
+
+   * - Species
+     - Locus
+     - Length-only Q
+     - V/J-length Q
+     - Exposure events
+     - Zero-mass AA junctions
+     - Zero-mass events
+   * - Human
+     - TRA
+     - 3.1817
+     - 3.4155
+     - 1000000
+     - 395
+     - 418
+   * - Human
+     - TRB
+     - 6.0059
+     - 5.6265
+     - 1000000
+     - 0
+     - 0
+   * - Mouse
+     - TRA
+     - 3.8856
+     - 3.7987
+     - 876336
+     - 869
+     - 883
+   * - Mouse
+     - TRB
+     - 4.6770
+     - 4.6094
+     - 1000000
+     - 75
+     - 76
+
+Zero-mass counts apply to both shapes within each row. Human TRA has ten events
+outside the coarse length support; the remaining zero-mass observations have a
+supported length but no compatible AA history. All other contexts' lengths are
+supported. Full fit audits and optimizer diagnostics accompany the shipped
+parameters. Global-only defaults keep their separately calibrated values above.
+The eight complete fits took 46.11--336.28 seconds each including process
+startup/resource monitoring, with at most 1.254 GB summed process-tree RSS.
+They used 40 allocated CPUs; sampled active CPU use peaked near 40 cores.
+Live threads peaked at 130 because native/Polars/BLAS pools remain resident
+between sequential phases; that count does not mean 130 simultaneously active
+compute threads. The optimizer's vector reductions limit scaling in some fits.
+
+
+Optional approximation of tandem histories
+------------------------------------------
+
+Exact Pgen remains the default. For supported joint-history models with positive
+weights on every off-diagonal functional D pair and more D than J templates,
+``native.pgen_aa_batch(..., approximate_tandem=True)`` replaces only the tandem
+history coefficients by positive rank-one factors with the forbidden diagonal
+removed. Human isalgo IGH supports this mode. Unsupported model structures,
+nucleotide input and Hamming-1 approximation requests raise an error.
+
+The original model parameters remain unchanged. Each J retains its original total
+tandem-history weight, and every supported D pair remains positive. First-base
+bias, insertion lengths, trimming and codon constraints are evaluated as before.
+Factors are prepared once per batch, freed with the call, and never cache Pgen.
+
+For a one-time AA file calculation::
+
+    vdjtools pgen input.tsv --model IGH --type aa --approximate-tandem --out scored.tsv
+
+This output and ``pgen_frame(..., approximate_tandem=True)`` include
+``pgen_method=rank1``. Default output schemas retain exact scoring.
+
+**Accuracy and scope.** The integrated API on a fresh 10,000-positive-query IGH panel plus one zero-mass
+query, seed 226, measured normalized RMS log-Pgen error 0.00619 (0.619%), with no
+support mismatch. The metric is
+``sqrt(sum((log(p_approx)-log(p_exact))**2) / sum(log(p_exact)**2))`` over positive
+exact probabilities; exact zeros are counted separately. Three 40-CPU rounds
+measured 8.183 to 7.880 seconds (1.04x), including coefficient preparation.
+This is an empirical panel result, not a per-query or universal 5% guarantee,
+and does not establish unchanged downstream statistical decisions. NT scoring,
+generation, inference, selected-mass normalization and Hamming neighborhoods
+retain their exact paths. Use exact mode when those guarantees are required.
+
+Exact tandem-D performance (#226)
+---------------------------------
+
+Query-local V/VD, D/DD and J/DJ messages are shared by linear contraction.
+Retained D prefixes, compatible boundary states and right-boundary coefficients
+are reused. The contraction order uses active first-D/J support dimensions. These are
+algebraic changes: all supported one-nucleotide D fragments and all nonzero
+history weights remain. No model parameter, minimum D2 length or cutoff changes.
+
+The DD insertion interior uses exact 4/4/16 codon-phase states while retaining
+the last inserted nucleotide for its Markov transition. Its first nucleotide
+uses the fitted first-base bias; zero insertion and every supported insertion
+length retain their original mass. Endpoint states project to the existing
+1/4/16 fixed-D boundary representation. Ordinary exact AA batches and selected
+batches own bounded worker scratch; other entry points own query-local scratch.
+Pgen calls and results are never cached.
+
+The following recorded measurements precede this state-compression refinement.
+
+A matched Linux run used 40 allocated logical CPUs and 1,000 native-generated
+productive AA junctions per human locus (seed 226), with V/J marginalized:
+
+.. list-table:: Wall time for the same 1,000 queries (seconds; lower is better)
+   :header-rows: 1
+
+   * - Locus
+     - Original exact
+     - Optimized exact
+     - Original / optimized
+     - Single-D diagnostic
+   * - TRB
+     - 1.1591
+     - 0.0968
+     - 12.0x
+     - 0.0445
+   * - TRD
+     - 0.7889
+     - 0.0776
+     - 10.2x
+     - 0.0414
+   * - IGH
+     - 431.1414
+     - 1.1125
+     - 387.5x
+     - 0.2707
+
+The single-D column temporarily disables tandem probability and restores it;
+that diagnostic omits real mass and is not an optimization. Full exact scoring
+still takes about 2.2x, 1.9x and 4.1x those diagnostic times respectively.
+That optimized checkpoint scored 100,000 queries in 3.90/6.09/105.37 seconds
+for TRB/TRD/IGH, with at most 159204 KiB process peak RSS. An earlier optimized
+kernel completed one million IGH queries in 1425.83 seconds, using 688684 KiB
+peak RSS; that large run predates the final boundary-coefficient refinement.
+
+TRB/TRD matched-probability relative differences were at most 1.6e-15/2.5e-14.
+For 32 of the 1,000 IGH queries, old double accumulation differed by more than
+1e-12. Checking those cases against the original kernel with its final tandem
+accumulator promoted to long double bounded the optimized relative error by
+4.75e-13. Focused tests also enumerate complete tiny-model histories and compare
+NT, AA, degenerate and Hamming-1 calls. Thread count preserves batch outputs.
+
+A bounded exploratory minimum-D2=2 diagnostic lost up to 1.70%/3.22% relative
+mass among 128 TRB/128 TRD queries; it yielded only 1.23x/1.17x speed gains in
+that small timing probe. Raising the minimum to six lost up to 89.1%/97.8%.
+Those cutoffs are not shipped. Absolute Pgen scale does not guarantee a small
+relative error after removing short-D histories.

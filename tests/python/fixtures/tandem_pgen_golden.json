@@ -1,0 +1,164 @@
+{
+  "TRB": {
+    "data": {
+      "junction_nt": [
+        "TGTGCCAGTAGTAGGGCGGGAGACTGGACCTACGAGCAGTACTTC",
+        "TGTGCCAGTAGGGACAGGGTCTCCTACGAGCAGTACTTC",
+        "TGCGCCAGCAGCCAACCAGACAGGGGCGACTACAGTGCTGGAAACACCATATATTTT",
+        "TGTGCCTGGCATAAACAGGGGGCGCCACACTCCTACGAGCAGTACTTC"
+      ],
+      "junction_aa": [
+        "CASSRAGDWTYEQYF",
+        "CASRDRVSYEQYF",
+        "CASSQPDRGDYSAGNTIYF",
+        "CAWHKQGAPHSYEQYF"
+      ],
+      "v_call": [
+        "TRBV19*01",
+        "TRBV19*01",
+        "TRBV4-1*01",
+        "TRBV30*01"
+      ],
+      "j_call": [
+        "TRBJ2-7*01",
+        "TRBJ2-7*01",
+        "TRBJ1-3*01",
+        "TRBJ2-7*01"
+      ]
+    },
+    "pgen": {
+      "aa_False": [
+        4.464035922945339e-10,
+        4.073958893901301e-07,
+        9.752435425674968e-14,
+        7.463231770313833e-14
+      ],
+      "aa_True": [
+        2.0885040197621447e-10,
+        1.9353720370334028e-07,
+        1.9179714374261057e-14,
+        7.42662598888105e-14
+      ],
+      "nt_False": [
+        3.323696757164161e-12,
+        3.860416869834549e-08,
+        4.1782603945260174e-17,
+        2.222536901254571e-15
+      ],
+      "nt_True": [
+        3.3236308881609017e-12,
+        3.8395531360205586e-08,
+        9.401954276770356e-18,
+        2.2183227672759722e-15
+      ]
+    }
+  },
+  "TRD": {
+    "data": {
+      "junction_nt": [
+        "TGTGCTCTTGGGGAAATCTCTACGTCTGGGGGTCGCACCGATAAACTCATCTTT",
+        "TGTGCCTGTGACACGCGACGTCCGCCTCTGGGGGATACCAAGTACACCGATAAACTCATCTTT",
+        "TGTGCTCTTGGGGAAATAAGAGTGGGATGCCTCTTT",
+        "TGTGCCTACCTAAGGGGCCCCACCGATAAACTCATCTTT"
+      ],
+      "junction_aa": [
+        "CALGEISTSGGRTDKLIF",
+        "CACDTRRPPLGDTKYTDKLIF",
+        "CALGEIRVGCLF",
+        "CAYLRGPTDKLIF"
+      ],
+      "v_call": [
+        "TRDV1*01",
+        "TRDV2*01",
+        "TRDV1*01",
+        "TRDV3*01"
+      ],
+      "j_call": [
+        "TRDJ1*01",
+        "TRDJ1*01",
+        "TRDJ1*01",
+        "TRDJ1*01"
+      ]
+    },
+    "pgen": {
+      "aa_False": [
+        8.477894174285342e-11,
+        1.7067338142994073e-11,
+        1.3650760347413618e-12,
+        5.563695232956329e-09
+      ],
+      "aa_True": [
+        8.476564448757316e-11,
+        1.7067253439401498e-11,
+        8.376360041131952e-13,
+        2.477891955722151e-09
+      ],
+      "nt_False": [
+        2.0259898559114052e-13,
+        1.0242473224395585e-16,
+        1.4032691772118283e-15,
+        1.0992173938847846e-11
+      ],
+      "nt_True": [
+        2.0259897683881122e-13,
+        1.02424592737748e-16,
+        1.188785837826407e-15,
+        9.626315922242178e-12
+      ]
+    }
+  },
+  "IGH": {
+    "data": {
+      "junction_nt": [
+        "TGTGCGAGGGTACAGGGAGACTACTGG",
+        "TGTGCGAGGAGCCGAGGGGCGGCTTCCGACTACTGG",
+        "TGTGCGAGAGGCAGTGGGCTGGAACTACATGCTTTTGATGTCTGG",
+        "TGTGCGAGAAGCTACCTACCAGCTGCGCCCTGGTTCGACTCCTGG"
+      ],
+      "junction_aa": [
+        "CARVQGDYW",
+        "CARSRGAASDYW",
+        "CARGSGLELHAFDVW",
+        "CARSYLPAAPWFDSW"
+      ],
+      "v_call": [
+        "IGHV1-46*01",
+        "IGHV4-31*01",
+        "IGHV3-33*01",
+        "IGHV4-59*01"
+      ],
+      "j_call": [
+        "IGHJ4*01",
+        "IGHJ4*01",
+        "IGHJ3*01",
+        "IGHJ5*01"
+      ]
+    },
+    "pgen": {
+      "aa_False": [
+        6.478494322185691e-08,
+        2.358150061666513e-10,
+        3.7152282428214934e-10,
+        7.735893933296117e-12
+      ],
+      "aa_True": [
+        5.439095280696728e-09,
+        8.887057889633153e-12,
+        4.476018395428919e-12,
+        1.6615506743091612e-13
+      ],
+      "nt_False": [
+        1.8772261487563196e-10,
+        7.980636414014568e-15,
+        1.161011425357774e-12,
+        2.2362145175701886e-14
+      ],
+      "nt_True": [
+        2.8051111233189602e-11,
+        4.0773907992229e-16,
+        9.919172287160719e-15,
+        5.40792892626548e-16
+      ]
+    }
+  }
+}

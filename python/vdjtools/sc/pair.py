@@ -324,3 +324,24 @@ def flag_mispairing(
     if drop:
         return work.filter(~pl.col("mispairing_flag")).drop("mispairing_flag", "mispairing_reason")
     return work
+
+
+def chain_support(hits: pl.DataFrame, *, by: list[str]) -> pl.DataFrame:
+    """Reduce chain hits to separate, union and intersection support per key.
+
+    ``by`` must identify the receptor and complete target context, including
+    sample when receptor IDs are sample-local. Duplicate hits cannot multiply
+    support. A missing chain is false, never inferred from another receptor.
+    Only keys present in hits are returned; callers retain no-hit denominators.
+    """
+    flags = ["tra_supported", "trb_supported", "union_supported", "intersection_supported"]
+    if not by or len(set(by)) != len(by) or set(by) & {*flags, "locus"}:
+        raise ValueError("distinct nonempty identity columns required")
+    if not {*by, "locus"} <= set(hits.columns):
+        raise ValueError("identity and locus columns required")
+    if any(hits[c].null_count() for c in [*by, "locus"]) or not set(hits["locus"]) <= {"TRA", "TRB"}:
+        raise ValueError("non-null identities and TRA/TRB loci required")
+    result = hits.group_by(by).agg((pl.col("locus") == "TRA").any().alias("tra_supported"),
+                                   (pl.col("locus") == "TRB").any().alias("trb_supported"))
+    return result.with_columns((pl.col("tra_supported") | pl.col("trb_supported")).alias("union_supported"),
+                               (pl.col("tra_supported") & pl.col("trb_supported")).alias("intersection_supported"))

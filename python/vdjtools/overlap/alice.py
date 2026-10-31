@@ -5,13 +5,13 @@ ALICE (Pogorelyy et al., PLoS Biol 2019) asks the same question as :mod:`vdjtool
 **generation model** rather than from a control repertoire. For each amino-acid CDR3 ``σ`` within
 one V–J class::
 
-    λ_σ  =  n · Σ_{σ' : Hamming(σ,σ') ≤ 1}  Q · Pgen(σ')
+    λ_σ  =  N · Σ_{σ' : Hamming(σ,σ') ≤ 1}  Q · Pgen(σ', V, J)
     p    =  P(Poisson(λ_σ) ≥ d(σ))
 
-where ``n`` is the number of unique **nucleotide** clonotypes in that V–J class, ``d(σ)`` counts
+where ``N`` is the number of eligible unique **nucleotide** clonotypes in the locus, ``d(σ)`` counts
 the nucleotide clonotypes whose CDR3aa lies within one mismatch of ``σ`` (σ included — different
-nucleotide variants of one amino-acid sequence are genuine neighbours), and ``Q`` rescales for
-thymic selection, which removes a fraction ``1 − 1/Q`` of generated sequences.
+nucleotide variants of one amino-acid sequence are genuine neighbours), and ``Q`` is an explicit effective post-selection generation-mass multiplier.
+A fitted multiplier is not itself a measured thymic survival probability.
 
 The two nulls are complements, not rivals, and that is why both are here: ALICE's generative null
 controls for the intrinsic biases of V(D)J recombination but knows nothing about selection or
@@ -37,45 +37,23 @@ import polars as pl
 from scipy.stats import poisson
 
 from ..biomarker.stats import fdr_bh
+from ..model.selection import ALICE_TRB_SELECTION_Q, selection_mass, selection_factor, load_selection_profile, selection_profile_factors
+from ..model.native import _alleles_for as _alleles_for
 from ..io.schema import COUNT, J_CALL, JUNCTION_AA, JUNCTION_NT, LOCUS, V_CALL, add_locus
 
-#: ALICE's default thymic-selection factor — the paper's average over V–J combinations.
-DEFAULT_Q = 9.41
+#: Explicit historical factor; modern defaults use model-specific calibration.
+DEFAULT_Q = ALICE_TRB_SELECTION_Q
 
 _COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_group", "pgen_ball",
-         "E", "p_enrichment", "q_value", LOCUS]
+         "E", "p_enrichment", "q_value", "n_exposure", "selection_q", "probability_convention", LOCUS]
 
 
-def _alleles_for(idx_of: dict[str, int], name: str) -> list[str]:
-    """The model alleles a V/J call denotes: itself if it is one, else the gene's alleles.
 
-    Real repertoires carry gene-level calls (``TRBV19``); the model is keyed by allele. Passing a
-    gene straight to the native Pgen raises (it used to silently marginalise over *every* allele —
-    measured 183x too high). Summing a gene's alleles is not an approximation: ``Σ_a Pgen(σ, V=a)``
-    over a gene's alleles *is* the gene marginal, verified to ratio 1.0000000000 against the
-    all-allele sum.
-    """
-    if name in idx_of:
-        return [name]
-    alleles = sorted(a for a in idx_of if a.split("*")[0] == name)
-    if not alleles:
-        raise KeyError(f"V/J call {name!r} is not in the model and is not a gene of any of its "
-                       f"{len(idx_of)} alleles")
-    return alleles
-
-
-def _ball_pgen(model, seqs: list[str], v: str, j: str, threads: int) -> np.ndarray:
-    """Σ Pgen over the closed Hamming-1 ball of each ``seq``, at gene *or* allele resolution."""
-    from ..model.native import pack, pgen_aa_batch
-
-    _, vi, ji = pack(model)
-    vs, js = _alleles_for(vi, v), _alleles_for(ji, j)
-    total = np.zeros(len(seqs), dtype=float)
-    for va in vs:                       # a gene-level call sums over its alleles (exact)
-        for ja in js:
-            total += np.asarray(pgen_aa_batch(model, seqs, [va] * len(seqs), [ja] * len(seqs),
-                                              mismatches=1, threads=kernel_threads(threads)))
-    return total
+def _ball_pgen(model, seqs: list[str], v: str, j: str, threads: int, *, anchored_only=False) -> np.ndarray:
+    """Closed Hamming-1 joint mass, summing the alleles of each gene."""
+    from ..model.native import pgen_aa_gene_batch
+    return np.asarray(pgen_aa_gene_batch(model, seqs, [v]*len(seqs), [j]*len(seqs),
+                                       mismatches=1, threads=threads, anchored_only=anchored_only))
 
 
 def _degrees(unique_aa: list[str], expanded_aa: list[str], scope: str, threads: int) -> np.ndarray:
@@ -96,8 +74,9 @@ def _degrees(unique_aa: list[str], expanded_aa: list[str], scope: str, threads: 
 
 
 def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
-          source: str = "isalgo", scope: str = "1,0,0,1", selection_q: float = DEFAULT_Q,
-          min_degree: int = 3, min_count: int = 2, threads: int = 0) -> pl.DataFrame:
+          source: str = "isalgo", scope: str = "1,0,0,1", selection_q: float | None = None,
+          min_degree: int = 3, min_count: int = 2, threads: int = 0,
+          organism: str = "human", legacy: bool = False, selection_profile=None) -> pl.DataFrame:
     """Per-clonotype neighbourhood enrichment against a V(D)J generation model.
 
     Args:
@@ -110,9 +89,16 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
         source: Bundled model source, ``"isalgo"`` by default. Select ``"olga-legacy"`` explicitly
             to reproduce the historical model and its Pgen scale.
         scope: vdjmatch edit scope defining the neighbourhood (default one substitution).
-        selection_q: Thymic-selection factor ``Q``. The default is the paper's average over V–J
-            combinations; it is calibrated on OLGA's **TRB** Pgen scale and there is no evidence
-            it transfers to the other loci, so the benchmark titrates it per locus.
+        selection_q: Explicit positive effective multiplier. ``None`` looks up the
+            calibrated factor for each bundled model/species/locus, checking model hashes.
+            Supplied models and uncalibrated contexts require explicit Q. ``legacy=True``
+            restores the historical 9.41 default; model source remains explicit.
+        selection_profile: Optional calibration report or JSON path. Applies the fitted
+            joint V/J and shared length shape inside the eligible closed ball. The report
+            supplies global Q unless overridden; complete model identity is verified.
+        organism: Species of the bundled model (human or mouse).
+        legacy: Preserve the historical subgroup-sized exposure with joint mass.
+            Modern mode uses total eligible locus exposure; model choice remains explicit.
         min_degree: Only clonotypes with at least this many neighbours (self included) are
             tested; the rest are dropped. ALICE tests ``d(σ) > 2``.
         min_count: Clonotypes below this count do not participate at all. Low-count variants of
@@ -135,6 +121,14 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
     """
     from ..model.bundled import load_bundled
 
+    if selection_profile is not None and scope != '1,0,0,1':
+        raise ValueError('selection profiles require the Hamming-1 substitution scope')
+    if legacy and selection_profile is not None:
+        raise ValueError('selection profiles require modern ALICE mode')
+    if selection_q is not None:
+        selection_mass(0., selection_q)
+    elif model is not None and not legacy and selection_profile is None:
+        raise ValueError('supplied models require explicit selection_q')
     df = sample.filter(pl.col(COUNT) >= min_count)
     if df.is_empty():
         raise ValueError(f"no clonotypes with duplicate_count >= {min_count}")
@@ -144,11 +138,18 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
     if df.is_empty():
         raise ValueError("cannot infer locus from v_call; pass locus=")
 
+    if selection_profile is not None and not df[JUNCTION_AA].str.contains(
+            r'^C[ACDEFGHIKLMNPQRSTVWY]*[FW]$').fill_null(False).all():
+        raise ValueError('selection profiles require anchored stop-free AA junctions')
     parts = []
     for loc in sorted(df[LOCUS].unique().to_list()):
-        mdl = model if model is not None else load_bundled(loc, source)
+        mdl = model if model is not None else load_bundled(loc, source, organism=organism,
+                                                           collapse=selection_profile is None)
+        profile, profile_q = load_selection_profile(selection_profile, mdl) if selection_profile is not None else (None, None)
+        q = selection_q if selection_q is not None else (profile_q if profile_q is not None else (
+            DEFAULT_Q if legacy else selection_factor(loc, organism=organism, source=source)))
         parts.append(_score_locus(df.filter(pl.col(LOCUS) == loc), mdl, loc, scope,
-                                  selection_q, min_degree, threads))
+                                  q, min_degree, threads, legacy=legacy, profile=profile))
     out = pl.concat([p for p in parts if not p.is_empty()]) if any(
         not p.is_empty() for p in parts) else parts[0]
     if out.is_empty():
@@ -158,11 +159,11 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
 
 
 def _score_locus(df: pl.DataFrame, model, loc: str, scope: str, selection_q: float,
-                 min_degree: int, threads: int) -> pl.DataFrame:
+                 min_degree: int, threads: int, *, legacy: bool = False, profile=None) -> pl.DataFrame:
     """Score one locus, V–J class by V–J class (ALICE's null is defined per V–J)."""
     has_nt = JUNCTION_NT in df.columns and df[JUNCTION_NT].null_count() < df.height
     nt_key = [JUNCTION_NT, JUNCTION_AA, V_CALL, J_CALL] if has_nt else [JUNCTION_AA, V_CALL, J_CALL]
-    nt = df.group_by(nt_key).agg(pl.col(COUNT).sum())      # unique nucleotide clonotypes
+    nt = df.filter(pl.col(V_CALL).is_not_null() & pl.col(J_CALL).is_not_null()).group_by(nt_key).agg(pl.col(COUNT).sum())      # unique nucleotide clonotypes
 
     rows = []
     for (v, j), grp in nt.group_by([V_CALL, J_CALL]):
@@ -177,13 +178,20 @@ def _score_locus(df: pl.DataFrame, model, loc: str, scope: str, selection_q: flo
         if not keep.any():
             continue
         seqs = [s for s, k in zip(uniq, keep) if k]
-        ball = _ball_pgen(model, seqs, v, j, threads)
-        lam = len(expanded) * selection_q * ball
+        ball = (_ball_pgen(model, seqs, v, j, threads, anchored_only=True) if profile is not None
+                else _ball_pgen(model, seqs, v, j, threads))
+        q = selection_q if profile is None else selection_q * selection_profile_factors(
+            profile, [len(s) for s in seqs], [v]*len(seqs), [j]*len(seqs))
+        exposure = len(expanded) if legacy else nt.height
+        lam = len(expanded) * selection_q * ball if legacy else exposure * selection_mass(ball, q)
         rows.append(agg.filter(pl.Series(keep)).with_columns(
             pl.Series("n_neighbors", deg[keep]),
             pl.lit(len(expanded), dtype=pl.Int64).alias("n_group"),
             pl.Series("pgen_ball", ball),
             pl.Series("E", lam),
+            pl.lit(exposure).alias("n_exposure"),
+            pl.Series("selection_q", np.full(len(seqs), q) if np.ndim(q) == 0 else q),
+            pl.lit("legacy-subgroup-times-joint" if legacy else "locus-total-times-joint").alias("probability_convention"),
             pl.Series("p_enrichment", poisson.sf(deg[keep] - 1, lam)),
             pl.lit(v).alias(V_CALL), pl.lit(j).alias(J_CALL),
         ))

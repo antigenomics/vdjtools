@@ -104,7 +104,9 @@ def _score(agg, control, params, exclude_exact, threads, evalue, seqtree, locus)
 
 def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
            locus: str | None = None, species: str = "human",
-           exclude_exact: bool = True, threads: int = 0) -> pl.DataFrame:
+           exclude_exact: bool = True, threads: int = 0, *, mode: str = "empirical",
+           source: str = "isalgo", selection_q: float | None = None,
+           legacy: bool = False, selection_profile=None) -> pl.DataFrame:
     """Per-clonotype neighbourhood-enrichment (TCRnet) test for one sample.
 
     Collapses the sample to unique CDR3s, builds a fuzzy ``seqtree.Index`` over them
@@ -130,6 +132,12 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
             control and a distance-0 control hit is a genuine public-clone background
             neighbour. Set ``False`` for the closed-ball convention ALICE uses.
         threads: Worker threads for the native search (``0`` = all cores).
+        mode: ``"empirical"`` uses the control repertoire. ``"alice"`` delegates
+            to :func:`alice`, with its closed ball and minimum-count/degree defaults.
+        source: Bundled recombination model source for ALICE mode.
+        selection_q: Explicit ALICE multiplier; ``None`` uses model-specific calibration.
+        selection_profile: Optional model-bound ALICE calibration report or JSON path.
+        legacy: Historical ALICE exposure and 9.41 default. Model source stays explicit.
 
     Returns:
         One row per unique clonotype (per locus) with columns ``junction_aa, v_call,
@@ -143,6 +151,16 @@ def tcrnet(sample: pl.DataFrame, control=None, scope: str = "1,0,0,1",
         ValueError: If ``control`` and ``locus`` are ``None`` and no clonotype has a
             resolvable locus.
     """
+    if mode not in {"empirical", "alice"}:
+        raise ValueError('mode must be empirical or alice')
+    if mode == "alice":
+        if control is not None:
+            raise ValueError('control is only supported by empirical TCRnet')
+        from .alice import alice
+        return alice(sample, locus=locus, organism=species, source=source, scope=scope,
+                     selection_q=selection_q, threads=threads, legacy=legacy, selection_profile=selection_profile)
+    if selection_q is not None or selection_profile is not None or legacy or source != "isalgo":
+        raise ValueError('selection_q, selection_profile, source and legacy options require ALICE mode')
     import vdjmatch.evalue as evalue
     from vdjmatch.match.scope import search_params
 

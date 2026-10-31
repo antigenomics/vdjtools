@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <climits>
+#include <stdexcept>
 #include "vdjtools/core.hpp"
 #include "vdjtools/inext.hpp"
 #include "vdjtools/kmer.hpp"
@@ -92,10 +95,75 @@ PYBIND11_MODULE(_core, m) {
           "bitwise-identical to the per-query calls; threads=0 -> serial (Python APIs resolve allocation).");
     m.def("pgen_aa_batch", &vdjtools::pgen_aa_batch, py::arg("model"), py::arg("seqs"),
           py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
-          py::arg("mismatches") = 0, py::arg("threads") = 0,
+          py::arg("mismatches") = 0, py::arg("threads") = 0, py::arg("anchored_only") = false,
+          py::arg("approximate_tandem") = false,
           py::call_guard<py::gil_scoped_release>(),
           "Batch aa Pgen over many CDR3s, parallelized across sequences (mismatches=1 -> Hamming-1 "
-          "ball). Bitwise-identical to per-sequence pgen_aa/pgen_aa_hamming1; threads=0 -> serial (Python APIs resolve allocation).");
+          "ball). Exact by default; approximate_tandem explicitly requests supported rank-one history weights. "
+          "Threads preserve outputs within a mode; threads=0 -> serial (Python APIs resolve allocation).");
+
+    // Admission counts packed capacities and all simultaneously live DP families.
+    // The model already exists: including it is conservative for remaining-memory guards.
+    m.def("_selection_workspace_bytes", [](const PackedModel& model, size_t max_aa,
+                                           size_t queries, int threads) {
+        if (threads < 0 || max_aa > static_cast<size_t>(INT_MAX / 3))
+            throw std::invalid_argument("invalid selection workspace dimensions");
+        size_t total = sizeof(PackedModel);
+        auto add = [&](size_t count, size_t width) {
+            if (width && count > (SIZE_MAX - total) / width)
+                throw std::length_error("selection workspace size overflows");
+            total += count * width;
+        };
+        auto product = [](size_t a, size_t b) {
+            if (b && a > SIZE_MAX / b) throw std::length_error("selection workspace size overflows");
+            return a * b;
+        };
+        auto vector_bytes = [&](const auto& values) { add(values.capacity(), sizeof(values[0])); };
+        for (const auto* v : {&model.pv, &model.pj, &model.pjv, &model.pd_given_j,
+             &model.del_v, &model.del_j, &model.del_d, &model.ins_vd, &model.ins_dj,
+             &model.ins_vj, &model.R_vd, &model.R_dj, &model.R_vj, &model.bias_vd,
+             &model.bias_dj, &model.bias_vj, &model.q_tandem, &model.del_d_tandem,
+             &model.pd2_given_d1, &model.del_d2, &model.ins_dd, &model.R_dd, &model.bias_dd})
+            vector_bytes(*v);
+        vector_bytes(model.func_v); vector_bytes(model.func_j); vector_bytes(model.func_d);
+        vector_bytes(model.tandem_forbidden_dj); vector_bytes(model.tandem_forbidden_dd);
+        size_t longest_d = 0;
+        for (const auto* cuts : {&model.cut_v, &model.cut_j, &model.cut_d}) {
+            vector_bytes(*cuts);
+            for (const auto& cut : *cuts) vector_bytes(cut);
+        }
+        for (const auto& cut : model.cut_d) longest_d = std::max(longest_d, cut.size());
+        // Prefix tables and the retained-D table still use signed-int indices.
+        if (max_aa * 3 + 1 > static_cast<size_t>(INT_MAX) / std::max(size_t{100}, longest_d + 1))
+            throw std::invalid_argument("selection query exceeds kernel indexing capacity");
+        const size_t V = model.nV(), J = model.nJ(), D = model.nD();
+        // Python cross-join/weights plus native input and J-specific V choices.
+        add(product(V, J), 128 + sizeof(double) * 2);
+        add(product(J, D), sizeof(double) * 2);
+        add(D, sizeof(long double) * 2);
+        // Python/native strings, masks, output vectors and list/array elements.
+        add(queries, max_aa * 16 + 512);
+        const size_t boundaries = max_aa * 3 + 1;
+        const size_t workers = std::min(queries, static_cast<size_t>(std::max(1, threads)));
+        // Left/right/seed/middle/coefficient matrices, two prefix preparations,
+        // single-D retained-length table, reductions and per-boundary flags.
+        // Sum the sequential phase families rather than assuming they overlap less.
+        const size_t doubles_per_boundary = 25 * (D + J + 12) + 2 * 116 + longest_d + 1 + 21 + 4;
+        const size_t bytes_before_workers = total;
+        add(boundaries, doubles_per_boundary * sizeof(double) + 128);
+        add(D + J + 64, 256);
+        add(longest_d + 1, 32);
+        add(1, 16384);
+        const size_t per_worker = total - bytes_before_workers;
+        total = bytes_before_workers;
+        add(workers, per_worker);
+        return total;
+    }, py::arg("model"), py::arg("max_aa"), py::arg("queries"), py::arg("threads"));
+
+    m.def("selection_pgen_aa_batch", &vdjtools::selection_pgen_aa_batch,
+          py::arg("model"), py::arg("seqs"), py::arg("vj_weights"), py::arg("threads") = 0,
+          py::call_guard<py::gil_scoped_release>(),
+          "Gene-selection-weighted AA mass in one batch; source parameters remain unchanged.");
 
     py::class_<vdjtools::AaScenario>(m, "AaScenario")
         .def_readonly("w", &vdjtools::AaScenario::w)

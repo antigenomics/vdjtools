@@ -24,7 +24,7 @@ from .convert import (
     read_vidjil,
     translate_junctions,
 )
-from .read import read_airr, read_parquet, read_vdjtools
+from .read import iter_table_batches, read_airr, read_parquet, read_vdjtools
 from .schema import (
     C_CALL,
     JUNCTION_AA,
@@ -74,6 +74,7 @@ __all__ = [
     "read_metadata",
     "read_samples",
     "iter_samples",
+    "iter_table_batches",
     "map_samples",
     "ingest_cohort",
     "scan_cohort",

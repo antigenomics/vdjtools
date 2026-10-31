@@ -187,3 +187,18 @@ mouse TRA/TRB/IGH/IGK/IGL. All twelve fitted models ship in the package; see the
 for exact Pgen support and fixed-model observation likelihood. `olga-legacy` selects frozen OLGA models
 (`olga` is its alias). `learned` and `arda` alias fresh `isalgo`; their previous
 parameter families require a pinned previous release.
+
+For a sample too large to hold in memory, `vdjtools.io.iter_table_batches` yields
+ordered raw CSV/TSV/gzip/Parquet batches with optional column projection. It does
+not collapse clonotypes or calculate chunk-local frequencies; consumers retain
+whole-sample counting semantics. Prefer `iter_samples` when one sample fits.
+
+For joint junction/V/J probabilities with gene-level calls, use
+`vdjtools.model.native.pgen_aa_gene_batch`: one native batch sums the model alleles
+and supports exact or closed Hamming-1 mass. ALICE uses the same helper.
+
+``model.selection_factor(locus, organism="human", source="isalgo")`` returns
+a bundled effective selection multiplier only when every calibrated model-file
+hash matches. Unsupported contexts and changed models require explicit Q or
+recalibration. ``selection_mass`` applies Q once; empirical control frequencies
+already contain selection and must not be multiplied again.

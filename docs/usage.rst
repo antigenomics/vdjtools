@@ -858,3 +858,20 @@ remain independent of worker assignment.
 Native worker exceptions are rethrown after joining workers. Thread creation failures
 also join workers already started and raise to Python, rather than terminating the
 interpreter while destroying a joinable thread.
+
+
+Read a large sample in bounded batches
+--------------------------------------
+
+``vdjtools.io.iter_table_batches(path, batch_size=65536, columns=None)``
+yields ordered raw CSV/TSV (including gzip) or Parquet frames using the native
+Polars streaming engine. Column projection happens before collection. Text
+identifiers retain leading zeros; Parquet retains its types. Consume and discard
+each frame instead of collecting the iterator into a list.
+
+This low-level reader does not normalize or collapse receptors. Keep whole-sample
+statistics separate from chunk statistics: do not compute frequencies from a
+chunk denominator, impute genes using chunk-local modes, or assume paired chains
+share a batch. ``iter_samples`` remains the simpler choice when one complete
+sample fits comfortably in RAM; TCRnet needs sample-wide neighbourhoods.
+The batch size bounds emitted rows, not parser buffers or downstream indexes.
