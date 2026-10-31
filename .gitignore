@@ -88,9 +88,12 @@ screpertoire_airr.tsv
 # (`/appendix` is already excluded from the sdist, so nothing about the wheel changes.)
 /appendix/*.md
 
-# Local prose and agent state; only README files are public Markdown.
+# Local prose and agent state; public Markdown exceptions are listed below.
 *.md
 !README.md
 !readme.md
 .agents/
 .codex/
+
+# Public, reusable agent skills and their Markdown references.
+!skills/**/*.md

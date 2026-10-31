@@ -144,6 +144,13 @@ For file-backed Python-heavy summaries, select `--backend process` (or
 thread backend shares resources and supports closures; process startup can dominate
 small cohorts.
 
+## Agent skill
+
+The repository includes a reusable [vdjtools skill](skills/vdjtools/SKILL.md) for
+AIRR analysis, features, signatures, models and single-cell workflows. Install the
+`skills/vdjtools` directory into your agent's skill directory, or read it directly
+when working in this checkout. It links to the maintained API and workflow guides.
+
 ## Development
 
 ```bash
