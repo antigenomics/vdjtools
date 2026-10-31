@@ -112,10 +112,15 @@ std::vector<double> pgen_nt_batch(const PackedModel& m, const std::vector<std::s
 
 // Batch aa Pgen over many sequences, parallelized across sequences (mismatches: 0 = exact,
 // 1 = Hamming-1 ball). Bitwise-identical to the per-sequence calls. Per-sequence v/j indices;
-// empty v_idxs/j_idxs → all -1 (gene-agnostic). nthreads=0 → auto (hw-2).
+// empty v_idxs/j_idxs → all -1 (gene-agnostic). nthreads=0 → serial; Python resolves allocation.
 std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::string>& seqs,
                                   const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
-                                  int mismatches, int nthreads);
+                                  int mismatches, int nthreads, bool anchored_only = false);
+
+// Unnormalized selection-weighted AA mass, allele weights[v*nJ+j].
+// The source model is immutable and workers share variants.
+std::vector<double> selection_pgen_aa_batch(const PackedModel& m,
+    const std::vector<std::string>& seqs, const std::vector<double>& weights, int nthreads);
 
 // One recombination scenario for an amino-acid CDR3: the argmax counterpart of what ``pgen_aa``
 // sums over. Coordinates are 0-based, half-open, in CDR3 nucleotide space. ``d < 0`` for a VJ

@@ -340,6 +340,7 @@ def pgen_aa_batch(
     j: list[str | None] | None = None,
     mismatches: int = 0,
     threads: int = 0,
+    anchored_only: bool = False,
 ) -> list[float]:
     """Batch amino-acid Pgen over many CDR3s, parallelized across sequences in native code.
 
@@ -376,6 +377,8 @@ def pgen_aa_batch(
         raise ValueError("v must have the same length as cdr3_aas")
     if j_idxs and len(j_idxs) != len(seqs):
         raise ValueError("j must have the same length as cdr3_aas")
+    if anchored_only:
+        return _batch(pm, seqs, v_idxs, j_idxs, mismatches, kernel_threads(threads), True)
     return _batch(pm, seqs, v_idxs, j_idxs, mismatches, kernel_threads(threads))
 
 
@@ -670,7 +673,7 @@ def _alleles_for(idx_of: dict[str, int], name: str) -> list[str]:
 
 
 
-def pgen_aa_gene_batch(model, cdr3_aas, v, j, *, mismatches=0, threads=0):
+def pgen_aa_gene_batch(model, cdr3_aas, v, j, *, mismatches=0, threads=0, anchored_only=False):
     """Joint junction/V/J mass for gene or allele calls in one native batch.
 
     Gene calls sum all matching model alleles; allele calls select that allele.
@@ -680,16 +683,19 @@ def pgen_aa_gene_batch(model, cdr3_aas, v, j, *, mismatches=0, threads=0):
     import polars as pl
     if len(v)!=len(cdr3_aas) or len(j)!=len(cdr3_aas):
         raise ValueError('v and j must have the same length as cdr3_aas')
-    if mismatches not in (0,1):raise ValueError('mismatches must be 0 or 1')
-    if not len(cdr3_aas):return []
+    if mismatches not in (0,1):
+        raise ValueError('mismatches must be 0 or 1')
+    if not len(cdr3_aas):
+        return []
     _,vi,ji=pack(model)
     rows=pl.DataFrame({'junction_aa':cdr3_aas,'v':v,'j':j}).with_row_index('_key')
     expanded=rows
     for column,index in [('v',vi),('j',ji)]:
         names=rows[column].unique().sort().to_list()
-        mapping=pl.DataFrame({column:names,column+'_allele':[_alleles_for(index,n) for n in names]}).explode(column+'_allele')
+        mapping=pl.DataFrame({column:names,column+'_allele':[_alleles_for(index,n) for n in names]}).explode(column+'_allele', empty_as_null=True)
         expanded=expanded.join(mapping,on=column,validate='m:m')
     values=pgen_aa_batch(model,expanded['junction_aa'].to_list(),expanded['v_allele'].to_list(),
-                        expanded['j_allele'].to_list(),mismatches=mismatches,threads=threads)
+                        expanded['j_allele'].to_list(),mismatches=mismatches,threads=threads,
+                        **({'anchored_only': True} if anchored_only else {}))
     return expanded.select('_key').with_columns(pl.Series('pgen',values)).group_by('_key').agg(
         pl.col('pgen').sum()).sort('_key')['pgen'].to_list()

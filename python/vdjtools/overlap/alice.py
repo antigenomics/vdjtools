@@ -37,24 +37,23 @@ import polars as pl
 from scipy.stats import poisson
 
 from ..biomarker.stats import fdr_bh
-from ..model.selection import ALICE_TRB_SELECTION_Q, selection_mass
+from ..model.selection import ALICE_TRB_SELECTION_Q, selection_mass, selection_factor, load_selection_profile, selection_profile_factors
+from ..model.native import _alleles_for as _alleles_for
 from ..io.schema import COUNT, J_CALL, JUNCTION_AA, JUNCTION_NT, LOCUS, V_CALL, add_locus
 
-#: ALICE's default thymic-selection factor — the paper's average over V–J combinations.
+#: Explicit historical factor; modern defaults use model-specific calibration.
 DEFAULT_Q = ALICE_TRB_SELECTION_Q
 
 _COLS = [JUNCTION_AA, V_CALL, J_CALL, COUNT, "n_neighbors", "n_group", "pgen_ball",
          "E", "p_enrichment", "q_value", "n_exposure", "selection_q", "probability_convention", LOCUS]
 
 
-from ..model.native import _alleles_for
 
-
-def _ball_pgen(model, seqs: list[str], v: str, j: str, threads: int) -> np.ndarray:
+def _ball_pgen(model, seqs: list[str], v: str, j: str, threads: int, *, anchored_only=False) -> np.ndarray:
     """Closed Hamming-1 joint mass, summing the alleles of each gene."""
     from ..model.native import pgen_aa_gene_batch
     return np.asarray(pgen_aa_gene_batch(model, seqs, [v]*len(seqs), [j]*len(seqs),
-                                       mismatches=1, threads=threads))
+                                       mismatches=1, threads=threads, anchored_only=anchored_only))
 
 
 def _degrees(unique_aa: list[str], expanded_aa: list[str], scope: str, threads: int) -> np.ndarray:
@@ -75,9 +74,9 @@ def _degrees(unique_aa: list[str], expanded_aa: list[str], scope: str, threads: 
 
 
 def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
-          source: str = "isalgo", scope: str = "1,0,0,1", selection_q: float = DEFAULT_Q,
+          source: str = "isalgo", scope: str = "1,0,0,1", selection_q: float | None = None,
           min_degree: int = 3, min_count: int = 2, threads: int = 0,
-          organism: str = "human", legacy: bool = False) -> pl.DataFrame:
+          organism: str = "human", legacy: bool = False, selection_profile=None) -> pl.DataFrame:
     """Per-clonotype neighbourhood enrichment against a V(D)J generation model.
 
     Args:
@@ -90,9 +89,13 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
         source: Bundled model source, ``"isalgo"`` by default. Select ``"olga-legacy"`` explicitly
             to reproduce the historical model and its Pgen scale.
         scope: vdjmatch edit scope defining the neighbourhood (default one substitution).
-        selection_q: Thymic-selection factor ``Q``. The default is the paper's average over V–J
-            combinations; it is calibrated on OLGA's **TRB** Pgen scale and there is no evidence
-            it transfers to the other loci, so the benchmark titrates it per locus.
+        selection_q: Explicit positive effective multiplier. ``None`` looks up the
+            calibrated factor for each bundled model/species/locus, checking model hashes.
+            Supplied models and uncalibrated contexts require explicit Q. ``legacy=True``
+            restores the historical 9.41 default; model source remains explicit.
+        selection_profile: Optional calibration report or JSON path. Applies the fitted
+            joint V/J and shared length shape inside the eligible closed ball. The report
+            supplies global Q unless overridden; complete model identity is verified.
         organism: Species of the bundled model (human or mouse).
         legacy: Preserve the historical subgroup-sized exposure with joint mass.
             Modern mode uses total eligible locus exposure; model choice remains explicit.
@@ -118,6 +121,14 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
     """
     from ..model.bundled import load_bundled
 
+    if selection_profile is not None and scope != '1,0,0,1':
+        raise ValueError('selection profiles require the Hamming-1 substitution scope')
+    if legacy and selection_profile is not None:
+        raise ValueError('selection profiles require modern ALICE mode')
+    if selection_q is not None:
+        selection_mass(0., selection_q)
+    elif model is not None and not legacy and selection_profile is None:
+        raise ValueError('supplied models require explicit selection_q')
     df = sample.filter(pl.col(COUNT) >= min_count)
     if df.is_empty():
         raise ValueError(f"no clonotypes with duplicate_count >= {min_count}")
@@ -127,11 +138,18 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
     if df.is_empty():
         raise ValueError("cannot infer locus from v_call; pass locus=")
 
+    if selection_profile is not None and not df[JUNCTION_AA].str.contains(
+            r'^C[ACDEFGHIKLMNPQRSTVWY]*[FW]$').fill_null(False).all():
+        raise ValueError('selection profiles require anchored stop-free AA junctions')
     parts = []
     for loc in sorted(df[LOCUS].unique().to_list()):
-        mdl = model if model is not None else load_bundled(loc, source, organism=organism)
+        mdl = model if model is not None else load_bundled(loc, source, organism=organism,
+                                                           collapse=selection_profile is None)
+        profile, profile_q = load_selection_profile(selection_profile, mdl) if selection_profile is not None else (None, None)
+        q = selection_q if selection_q is not None else (profile_q if profile_q is not None else (
+            DEFAULT_Q if legacy else selection_factor(loc, organism=organism, source=source)))
         parts.append(_score_locus(df.filter(pl.col(LOCUS) == loc), mdl, loc, scope,
-                                  selection_q, min_degree, threads, legacy=legacy))
+                                  q, min_degree, threads, legacy=legacy, profile=profile))
     out = pl.concat([p for p in parts if not p.is_empty()]) if any(
         not p.is_empty() for p in parts) else parts[0]
     if out.is_empty():
@@ -141,7 +159,7 @@ def alice(sample: pl.DataFrame, model=None, *, locus: str | None = None,
 
 
 def _score_locus(df: pl.DataFrame, model, loc: str, scope: str, selection_q: float,
-                 min_degree: int, threads: int, *, legacy: bool = False) -> pl.DataFrame:
+                 min_degree: int, threads: int, *, legacy: bool = False, profile=None) -> pl.DataFrame:
     """Score one locus, V–J class by V–J class (ALICE's null is defined per V–J)."""
     has_nt = JUNCTION_NT in df.columns and df[JUNCTION_NT].null_count() < df.height
     nt_key = [JUNCTION_NT, JUNCTION_AA, V_CALL, J_CALL] if has_nt else [JUNCTION_AA, V_CALL, J_CALL]
@@ -160,16 +178,19 @@ def _score_locus(df: pl.DataFrame, model, loc: str, scope: str, selection_q: flo
         if not keep.any():
             continue
         seqs = [s for s, k in zip(uniq, keep) if k]
-        ball = _ball_pgen(model, seqs, v, j, threads)
+        ball = (_ball_pgen(model, seqs, v, j, threads, anchored_only=True) if profile is not None
+                else _ball_pgen(model, seqs, v, j, threads))
+        q = selection_q if profile is None else selection_q * selection_profile_factors(
+            profile, [len(s) for s in seqs], [v]*len(seqs), [j]*len(seqs))
         exposure = len(expanded) if legacy else nt.height
-        lam = len(expanded) * selection_q * ball if legacy else exposure * selection_mass(ball, selection_q)
+        lam = len(expanded) * selection_q * ball if legacy else exposure * selection_mass(ball, q)
         rows.append(agg.filter(pl.Series(keep)).with_columns(
             pl.Series("n_neighbors", deg[keep]),
             pl.lit(len(expanded), dtype=pl.Int64).alias("n_group"),
             pl.Series("pgen_ball", ball),
             pl.Series("E", lam),
             pl.lit(exposure).alias("n_exposure"),
-            pl.lit(float(selection_q)).alias("selection_q"),
+            pl.Series("selection_q", np.full(len(seqs), q) if np.ndim(q) == 0 else q),
             pl.lit("legacy-subgroup-times-joint" if legacy else "locus-total-times-joint").alias("probability_convention"),
             pl.Series("p_enrichment", poisson.sf(deg[keep] - 1, lam)),
             pl.lit(v).alias(V_CALL), pl.lit(j).alias(J_CALL),

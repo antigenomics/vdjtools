@@ -33,7 +33,9 @@ from .reference import (
     validate_germline,
 )
 from .rescale import rescale_usage
-from .selection import ALICE_TRB_SELECTION_Q, selection_mass, fit_selection_factor, selection_factor
+from .selection import (ALICE_TRB_SELECTION_Q, selection_mass, fit_selection_factor,
+                        selection_factor, selection_reference, fit_selection_profile,
+                        selection_profile_factors, load_selection_profile, selection_pgen_aa_batch)
 from .schema import Manifest
 from .stitch import stitch_contig, stitch_frame
 from .viterbi import Scenario, best_scenario, infer_nt, infer_nt_batch
@@ -42,6 +44,11 @@ __all__ = [
     "ALICE_TRB_SELECTION_Q",
     "selection_mass",
     "selection_factor",
+    "selection_reference",
+    "fit_selection_profile",
+    "selection_profile_factors",
+    "load_selection_profile",
+    "selection_pgen_aa_batch",
     "fit_selection_factor",
     "analyze",
     "check",

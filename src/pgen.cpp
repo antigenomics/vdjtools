@@ -551,6 +551,48 @@ double combine_tm(const double* dp, const double* rb, int p, const uint64_t* all
     return tot;
 }
 
+// Adjoint of the codon boundary join: a fixed right message becomes one
+// coefficient per left state, shared by every retained D2 prefix.
+std::vector<double> right_coefficients(const std::vector<double>& right, int N,
+                                       const uint64_t* allowed) {
+    std::vector<double> out((N + 1) * 25);
+    for (int q = 1; q < N; ++q) {
+        const double* rb = right.data() + q * 25;
+        double* target = out.data() + q * 25;
+        if (q % 3 == 0) {
+            double sum = 0.0;
+            for (int s = 0; s < 25; ++s) sum += rb[s];
+            std::fill_n(target, 25, sum);
+        } else if (q % 3 == 1) {
+            for (int a = 0; a < 4; ++a) {
+                double sum = 0.0;
+                for (int c = 0; c < 4; ++c)
+                    for (int d = 0; d < 4; ++d)
+                        if (ok_codon(allowed[q / 3], a * 16 + c * 4 + d))
+                            sum += rb[sidx(c, d)];
+                std::fill_n(target + sidx(a, -1), 5, sum);
+            }
+        } else {
+            double next[4] = {};
+            for (int s = 0; s < 25; ++s)
+                if (s / 5 > 0) next[s / 5 - 1] += rb[s];
+            for (int a = 0; a < 4; ++a)
+                for (int b = 0; b < 4; ++b)
+                    for (int c = 0; c < 4; ++c)
+                        if (ok_codon(allowed[q / 3], b * 16 + a * 4 + c))
+                            target[sidx(a, b)] += next[c];
+        }
+    }
+    return out;
+}
+
+double contract_right(const double* state, const double* coefficients, int sole) {
+    if (sole >= 0) return state[sole] * coefficients[sole];
+    double result = 0.0;
+    for (int s = 0; s < 25; ++s) result += state[s] * coefficients[s];
+    return result;
+}
+
 // One fixed germline nucleotide ``nt`` at CDR3 position ``mm``, through the 25-state DP. False
 // when the codon masks leave no mass: every longer prefix is then zero too, so callers break.
 inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt, int mm,
@@ -572,14 +614,19 @@ inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt
     return any;
 }
 
-double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
+double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
+                    const std::vector<double>* shared_left = nullptr,
+                    const std::vector<char>* shared_any = nullptr) {
     int N = 3 * alen;
-    std::vector<double> Lf, Rb, res, reduced((N + 1) * 4);
+    std::vector<double> local_left, Rb, res, reduced((N + 1) * 4);
     std::vector<uint64_t> right_terms(N + 1);
     std::vector<double> short_results((N + 1) * 21);
     std::vector<int> first, last;
-    std::vector<char> lf_any, rb_any, live;
-    mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);
+    std::vector<char> local_any, rb_any, live;
+    if (!shared_left)
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, local_left, local_any);
+    const auto& Lf = shared_left ? *shared_left : local_left;
+    const auto& lf_any = shared_any ? *shared_any : local_any;
     double total = 0.0;
     std::vector<double> dp(25), ndp(25);
     // The first two emitted D bases depend only on Lf and those bases, not on
@@ -714,8 +761,24 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
 void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64_t* allowed,
                      const std::vector<double>& pins, const std::vector<double>& R,
                      const std::vector<double>& bias, std::vector<double>& Mf) {
-    if (!pins.empty() && pins[0] != 0.0)
-        for (int s = 0; s < 25; ++s) Mf[q0 * 25 + s] += pins[0] * dp0[s];
+    // At an insertion END the next block is fixed germline. Completed
+    // codons need no past bases; a one-base partial codon needs only that
+    // base. Keep the full state in cur for the insertion Markov recurrence.
+    auto accumulate = [&](int q, const std::vector<double>& state, double weight) {
+        if (q % 3 == 0) {
+            double mass = 0.0;
+            for (double w : state) mass += w;
+            Mf[q * 25] += weight * mass;
+        } else if (q % 3 == 1) {
+            for (int s = 0; s < 25; ++s) {
+                int a = s / 5 - 1;
+                if (a >= 0) Mf[q * 25 + sidx(a, -1)] += weight * state[s];
+            }
+        } else {
+            for (int s = 0; s < 25; ++s) Mf[q * 25 + s] += weight * state[s];
+        }
+    };
+    if (!pins.empty() && pins[0] != 0.0) accumulate(q0, dp0, pins[0]);
     std::vector<double> cur(dp0), ncur(25);
     for (int ell = 1; q0 + ell <= N && ell < (int)pins.size(); ++ell) {
         int mm = q0 + ell - 1;
@@ -737,8 +800,7 @@ void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64
         }
         cur.swap(ncur);
         if (!any) break;
-        if (pins[ell] != 0.0)
-            for (int s = 0; s < 25; ++s) Mf[(q0 + ell) * 25 + s] += pins[ell] * cur[s];
+        if (pins[ell] != 0.0) accumulate(q0 + ell, cur, pins[ell]);
     }
 }
 
@@ -747,10 +809,34 @@ void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64
 template<class Emit>
 void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletions,
                 const std::vector<double>& left, int end, const uint64_t* allowed, Emit emit) {
+    if (end < 2) return;  // no placement leaves a nonempty V and retained D
     const auto& cut = m.cut_d[d];
     const int L = cut.size();
     const double* row = deletions.data() + d * m.nbins_d5 * m.nbins_d3;
-    std::vector<double> dp(25), ndp(25);
+    std::vector<double> dp(25), ndp(25), first((end + 1) * 4 * 25);
+    std::vector<double> second((end + 1) * 16);
+    std::vector<char> first_any((end + 1) * 4);
+    // Initial fixed bases depend on placement and emitted bases, not on the
+    // D template's 5-prime cut. Reuse them across every retained prefix.
+    for (int pos = 1; pos < end; ++pos) {
+        const double* seed = left.data() + pos * 25;
+        if (std::none_of(seed, seed + 25, [](double w) { return w != 0.0; })) continue;
+        for (int a = 0; a < 4; ++a) {
+            std::copy_n(seed, 25, dp.begin());
+            if (!thread_one(dp, ndp, a, pos, allowed)) continue;
+            first_any[pos * 4 + a] = 1;
+            std::copy_n(dp.data(), 25, first.data() + (pos * 4 + a) * 25);
+            if (pos + 1 >= end) continue;
+            for (int b = 0; b < 4; ++b) {
+                if (!(codon_nt_mask(allowed[(pos + 1) / 3], (pos + 1) % 3) & (1u << b))) continue;
+                double w = 0.0;
+                for (int c = -1; c < 4; ++c)
+                    if ((pos + 1) % 3 != 2 || (c >= 0 && ok_codon(allowed[(pos + 1) / 3], c * 16 + a * 4 + b)))
+                        w += dp[sidx(a, c)];
+                second[pos * 16 + a * 4 + b] = w;
+            }
+        }
+    }
     for (int i5 = 0; i5 < L && i5 < m.nbins_d5; ++i5) {
         int longest = 0;
         for (int i3 = 0; i3 < m.nbins_d3 && i3 < L - i5; ++i3)
@@ -760,29 +846,31 @@ void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletion
             }
         if (!longest) continue;
         for (int pos = 1; pos < end; ++pos) {
-            const double* seed = left.data() + pos * 25;
-            if (std::none_of(seed, seed + 25, [](double w) { return w != 0.0; })) continue;
-            std::copy_n(seed, 25, dp.begin());
+            const int a = cut[i5];
+            if (!first_any[pos * 4 + a]) continue;
+            const double* state = first.data() + (pos * 4 + a) * 25;
             int sole = -1;
             for (int len = 1; len <= longest && pos + len <= end; ++len) {
                 const int nt = cut[i5 + len - 1], mm = pos + len - 1;
-                if (sole < 0) {
-                    if (!thread_one(dp, ndp, nt, mm, allowed)) break;
-                    if (len == 2) sole = sidx(nt, cut[i5]);
-                } else {
+                if (len == 2) {
+                    const double w = second[pos * 16 + a * 4 + nt];
+                    if (w == 0.0) break;
+                    sole = sidx(nt, a);
+                    dp[sole] = w;
+                    state = dp.data();
+                } else if (len > 2) {
                     const int p1 = sole / 5 - 1, p2 = sole % 5 - 1;
                     if (!(codon_nt_mask(allowed[mm / 3], mm % 3) & (1u << nt)) ||
                         (mm % 3 == 2 && !ok_codon(allowed[mm / 3], p2 * 16 + p1 * 4 + nt))) break;
                     const double w = dp[sole];
                     sole = sidx(nt, p1);
-                    // Clear the old state: the callback may inspect the whole message.
-                    std::fill(dp.begin(), dp.end(), 0.0);
+                    // Only this slot is valid; every consumer uses sole.
                     dp[sole] = w;
                 }
                 const int i3 = L - i5 - len;
                 if (i3 >= m.nbins_d3) continue;
                 const double weight = row[i5 * m.nbins_d3 + i3];
-                if (weight != 0.0) emit(pos + len, dp, weight, sole);
+                if (weight != 0.0) emit(pos + len, state, weight, sole);
             }
         }
     }
@@ -790,17 +878,32 @@ void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletion
 
 // D1->DD messages do not depend on J. Mix J-dependent history weights into
 // the right message before walking D2; linearity preserves every history.
-double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx) {
+double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int j_idx,
+                       const std::vector<double>& Lf) {
     const int N = 3 * alen, width = (N + 1) * 25;
-    std::vector<double> Lf, Rb, Mf(width), seeds(width), dp(25);
-    std::vector<char> lf_any, rb_any;
-    mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, Lf, lf_any);
+    std::vector<double> Rb, Mf(width), seeds(width), dp(25);
+    std::vector<char> rb_any;
     const auto js = mask_or_all(j_idx, m.func_j);
     std::vector<std::vector<double>> rights(js.size());
     for (size_t k = 0; k < js.size(); ++k)
         if (m.pj[js[k]] != 0.0)
             mk_right_tm(m, allowed, N, -1, js[k], rights[k], rb_any);
     double total = 0.0;
+    // Only codon-compatible canonical boundary states can carry mass.
+    std::vector<int> cells;
+    for (int q = 2; q <= N - 2; ++q) {
+        if (q % 3 == 0) cells.push_back(q * 25);
+        else if (q % 3 == 1) {
+            unsigned bases = codon_nt_mask(allowed[q / 3], 0);
+            for (int a = 0; a < 4; ++a)
+                if (bases & (1u << a)) cells.push_back(q * 25 + sidx(a, -1));
+        } else {
+            for (int a = 0; a < 4; ++a)
+                for (int b = 0; b < 4; ++b)
+                    if (allowed[q / 3] & (0xFULL << (b * 16 + a * 4)))
+                        cells.push_back(q * 25 + sidx(a, b));
+        }
+    }
     const bool mix_left = js.size() < m.func_d.size();
     std::vector<std::vector<double>> middles(mix_left ? m.nD() : 0);
     for (int d1 : m.func_d) {
@@ -813,7 +916,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
         if (!active) continue;
         std::fill(seeds.begin(), seeds.end(), 0.0);
         d_prefixes(m, d1, tandem_first_deletions(m), Lf, N - 2, allowed,
-            [&](int q, const std::vector<double>& state, double w, int sole) {
+            [&](int q, const double* state, double w, int sole) {
                 if (sole >= 0) seeds[q * 25 + sole] += w * state[sole];
                 else for (int s = 0; s < 25; ++s) seeds[q * 25 + s] += w * state[s];
             });
@@ -840,10 +943,10 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
                 for (int i = 0; i < width; ++i) Rb[i] += w * rights[k][i];
             }
             if (!live) continue;
+            const auto coefficients = right_coefficients(Rb, N, allowed);
             d_prefixes(m, d2, m.del_d2, Mf, N - 1, allowed,
-                [&](int q, const std::vector<double>& state, double w, int sole) {
-                    total += w * combine_tm(state.data(), Rb.data() + q * 25, q, allowed,
-                                             nullptr, sole);
+                [&](int q, const double* state, double w, int sole) {
+                    total += w * contract_right(state, coefficients.data() + q * 25, sole);
                 });
         }
     }
@@ -853,6 +956,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
     if (mix_left) for (size_t k = 0; k < js.size(); ++k) {
         if (rights[k].empty()) continue;
         const int j = js[k];
+        const auto coefficients = right_coefficients(rights[k], N, allowed);
         for (int d2 : m.func_d) {
             std::fill(Mf.begin(), Mf.end(), 0.0);
             bool live = false;
@@ -861,13 +965,12 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
                 const double w = tandem_first_weight(m, j, d1) * tandem_pair_weight(m, j, d1, d2);
                 if (w == 0.0) continue;
                 live = true;
-                for (int i = 0; i < width; ++i) Mf[i] += w * middles[d1][i];
+                for (int i : cells) Mf[i] += w * middles[d1][i];
             }
             if (!live) continue;
             d_prefixes(m, d2, m.del_d2, Mf, N - 1, allowed,
-                [&](int q, const std::vector<double>& state, double w, int sole) {
-                    total += w * combine_tm(state.data(), rights[k].data() + q * 25, q, allowed,
-                                             nullptr, sole);
+                [&](int q, const double* state, double w, int sole) {
+                    total += w * contract_right(state, coefficients.data() + q * 25, sole);
                 });
         }
     }
@@ -945,9 +1048,14 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
 
 double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int v_idx, int j_idx) {
     if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx);
-    // n_D mixture: P(n_D≤1)·single-D + P(n_D=2)·tandem. Non-D-D models have p_nd1=1, p_nd2=0.
-    double r = m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx);
-    if (m.dd && m.p_nd2 > 0.0) r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, v_idx, j_idx);
+    // Share the V+VD message across both branches of the exact n_D mixture.
+    if (!m.dd || !(m.p_nd2 > 0.0))
+        return m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx);
+    std::vector<double> left;
+    std::vector<char> any;
+    mk_left_tm(m, allowed, 3 * L, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left, any);
+    double r = m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, &left, &any);
+    r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, j_idx, left);
     return r;
 }
 
@@ -962,9 +1070,11 @@ double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx
 // substitution). By inclusion-exclusion this is  sum_k Pgen(a with position k wildcarded)
 //   - (L-1) Pgen(a)  (OLGA's identity), but each term here is one fast transfer-matrix pass and the
 // wildcard is a single mask (no 19x enumeration). Done entirely in C++ so the packed model is reused.
-double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, int j_idx) {
+static double aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, int j_idx,
+                          bool anchored_only) {
     int L = aa.size();
-    if (L == 0) return 0.0;
+    if (L == 0 || (anchored_only && (L < 2 || aa.front() != 'C' ||
+                                    (aa.back() != 'F' && aa.back() != 'W')))) return 0.0;
     std::vector<uint64_t> allowed(L);
     for (int c = 0; c < L; ++c) allowed[c] = mask_for_aa(aa[c]);
     double base = pgen_aa_masked(m, allowed.data(), L, v_idx, j_idx);
@@ -972,11 +1082,16 @@ double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, 
     double total = 0.0;
     for (int k = 0; k < L; ++k) {
         uint64_t save = allowed[k];
-        allowed[k] = wild;
+        allowed[k] = anchored_only && k == 0 ? mask_for_aa('C') :
+                     anchored_only && k == L - 1 ? mask_for_aa('F') | mask_for_aa('W') : wild;
         total += pgen_aa_masked(m, allowed.data(), L, v_idx, j_idx);
         allowed[k] = save;
     }
     return total - (L - 1) * base;
+}
+
+double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, int j_idx) {
+    return aa_hamming1(m, aa, v_idx, j_idx, false);
 }
 
 namespace {
@@ -1031,13 +1146,45 @@ auto run_batch(size_t n, int nthreads, F&& one, bool expensive = false)
 // shared read-only across threads. Per-sequence v_idxs/j_idxs (empty → all -1 = gene-agnostic).
 std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::string>& seqs,
                                   const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
-                                  int mismatches, int nthreads) {
+                                  int mismatches, int nthreads, bool anchored_only) {
     auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
     return run_batch(seqs.size(), nthreads, [&](size_t i) {
-        return mismatches == 1 ? pgen_aa_hamming1(m, seqs[i], vi(i), ji(i))
-                               : pgen_aa(m, seqs[i], vi(i), ji(i));
+        const auto& aa = seqs[i];
+        if (anchored_only && (aa.size() < 2 || aa.front() != 'C' ||
+                             (aa.back() != 'F' && aa.back() != 'W'))) return 0.0;
+        return mismatches == 1 ? aa_hamming1(m, aa, vi(i), ji(i), anchored_only)
+                               : pgen_aa(m, aa, vi(i), ji(i));
     }, m.vdj || mismatches == 1);
+}
+
+// Gene-dependent selection is linear in P(V). Prepare immutable J-specific
+// model views once, then score all observations in one shared native batch.
+std::vector<double> selection_pgen_aa_batch(const PackedModel& m,
+    const std::vector<std::string>& seqs, const std::vector<double>& weights, int nthreads) {
+    if (weights.size() != static_cast<size_t>(m.nV()) * m.nJ())
+        throw std::invalid_argument("selection weights must have shape V by J");
+    for (double w : weights)
+        if (!std::isfinite(w) || w < 0.0)
+            throw std::invalid_argument("selection weights must be finite and nonnegative");
+    std::vector<PackedModel> variants;
+    std::vector<int> js;
+    variants.reserve(m.func_j.size());
+    for (int j : m.func_j) {
+        bool active = false;
+        for (int v : m.func_v) active |= weights[v * m.nJ() + j] > 0.0;
+        if (!active) continue;
+        variants.push_back(m);
+        js.push_back(j);
+        for (int v = 0; v < m.nV(); ++v)
+            variants.back().pv[v] *= weights[v * m.nJ() + j];
+    }
+    return run_batch(seqs.size(), nthreads, [&](size_t i) {
+        double total = 0.0;
+        for (size_t k = 0; k < variants.size(); ++k)
+            total += pgen_aa(variants[k], seqs[i], -1, js[k]);
+        return total;
+    }, true);
 }
 
 // Batch nucleotide Pgen, parallelized across sequences exactly as ``pgen_aa_batch`` is. The

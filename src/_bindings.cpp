@@ -92,10 +92,15 @@ PYBIND11_MODULE(_core, m) {
           "bitwise-identical to the per-query calls; threads=0 -> serial (Python APIs resolve allocation).");
     m.def("pgen_aa_batch", &vdjtools::pgen_aa_batch, py::arg("model"), py::arg("seqs"),
           py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
-          py::arg("mismatches") = 0, py::arg("threads") = 0,
+          py::arg("mismatches") = 0, py::arg("threads") = 0, py::arg("anchored_only") = false,
           py::call_guard<py::gil_scoped_release>(),
           "Batch aa Pgen over many CDR3s, parallelized across sequences (mismatches=1 -> Hamming-1 "
           "ball). Bitwise-identical to per-sequence pgen_aa/pgen_aa_hamming1; threads=0 -> serial (Python APIs resolve allocation).");
+
+    m.def("selection_pgen_aa_batch", &vdjtools::selection_pgen_aa_batch,
+          py::arg("model"), py::arg("seqs"), py::arg("vj_weights"), py::arg("threads") = 0,
+          py::call_guard<py::gil_scoped_release>(),
+          "Gene-selection-weighted AA mass in one batch; source parameters remain unchanged.");
 
     py::class_<vdjtools::AaScenario>(m, "AaScenario")
         .def_readonly("w", &vdjtools::AaScenario::w)

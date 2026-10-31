@@ -17,6 +17,8 @@ from vdjtools.model import load_bundled, native
 def test_complete_tandem_pgen_golden(locus):
     golden = json.loads((Path(__file__).parent / 'fixtures' / 'tandem_pgen_golden.json').read_text())[locus]
     model = load_bundled(locus)
+    assert native.pgen_aa(model, '') == 0
+    assert native.pgen_aa_degenerate(model, []) == 0
     data = golden['data']
     for kind in ('aa', 'nt'):
         for masked in (False, True):

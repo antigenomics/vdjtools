@@ -7,7 +7,8 @@ def test_scaling_and_validation():
     assert selection_mass(.1)==.1
     assert ALICE_TRB_SELECTION_Q==9.41
     for mass,q in [(-1,1),(float('nan'),1),(.1,0),(.1,float('inf'))]:
-        with pytest.raises(ValueError):selection_mass(mass,q)
+        with pytest.raises(ValueError):
+            selection_mass(mass,q)
 
 
 def test_selection_fit_conditions_on_observation():
@@ -78,3 +79,71 @@ def test_control_subsample_preserves_events_and_seed(tmp_path):
     assert full["events"].sum() == audit["retained_events"] == 600
     with pytest.raises(ValueError, match="positive"):
         control_event_counts(path, max_events=0)
+
+
+def test_four_context_selection_factors_are_model_specific():
+    from vdjtools.model import selection_factor
+    expected = {('human', 'TRA'): 3.46977501091145,
+                ('human', 'TRB'): 6.5945522588448275,
+                ('mouse', 'TRA'): 4.249595300676978,
+                ('mouse', 'TRB'): 5.356167549507866}
+    for (species, locus), q in expected.items():
+        assert selection_factor(locus, organism=species) == pytest.approx(q, rel=1e-12)
+
+
+def test_tcrnet_cli_alice_uses_new_default(tmp_path):
+    import polars as pl
+    from typer.testing import CliRunner
+    from vdjtools.cli import app
+    from vdjtools.model import selection_factor
+    sample = tmp_path / 'sample.tsv'
+    pl.DataFrame({'junction_aa': ['CASSF', 'CATSF', 'CATTF'],
+                  'v_call': ['TRBV19'] * 3, 'j_call': ['TRBJ2-1'] * 3,
+                  'duplicate_count': [5] * 3}).write_csv(sample, separator='\t')
+    out = tmp_path / 'result.tsv'
+    result = CliRunner().invoke(app, ['tcrnet', str(sample), '--mode', 'alice',
+        '--locus', 'TRB', '--threads', '1', '--out', str(out)])
+    assert result.exit_code == 0, result.output
+    scored = pl.read_csv(out, separator='\t')
+    assert scored.height > 0
+    assert scored['selection_q'].to_list() == [selection_factor('TRB')] * scored.height
+
+
+def test_streamed_profile_events_keep_gene_strata_and_sampling_units(tmp_path):
+    from vdjtools.model.selection import control_event_counts
+    path = tmp_path / 'control.tsv'
+    path.write_text('cdr3aa\tv\tj\tincidence\nCASSF\tV1\tJ1\t100\nCASSF\tV2\tJ1\t200\nCATSF\tV1\tJ2\t300\n')
+    first, audit = control_event_counts(path, max_events=100, seed=42, preserve_vj=True)
+    second, _ = control_event_counts(path, max_events=100, seed=42, preserve_vj=True)
+    assert first.equals(second)
+    assert first['events'].sum() == 100
+    assert audit['population_events'] == 600 and audit['retained_events'] == 100
+    assert audit['observed_junctions'] == first['junction_aa'].n_unique()
+    assert audit['observed_strata'] == first.height
+    assert set(first.select('v_call', 'j_call').iter_rows()) == {('V1', 'J1'), ('V2', 'J1'), ('V1', 'J2')}
+    full, _ = control_event_counts(path, max_events=1000, seed=42, preserve_vj=True)
+    assert full['events'].to_list() == [100, 200, 300]
+    missing = tmp_path / 'missing.tsv'
+    missing.write_text('cdr3aa\tincidence\nCASSF\t3\n')
+    retained, _ = control_event_counts(missing, preserve_vj=True)
+    assert retained['events'].sum() == 3 and retained['v_call'].null_count() == 1
+
+
+@pytest.mark.parametrize('preserve_vj', [False, True])
+def test_control_sampler_reports_large_population_limit(tmp_path, preserve_vj):
+    from vdjtools.model.selection import control_event_counts
+    path=tmp_path/'large.tsv'
+    path.write_text('cdr3aa\tincidence\nCASSF\t2000000000\nCATSF\t2000000000\n')
+    with pytest.raises(ValueError, match='subsampling requires population below 1000000000'):
+        control_event_counts(path,max_events=100,preserve_vj=preserve_vj)
+    full,_=control_event_counts(path,preserve_vj=preserve_vj)
+    assert full['events'].sum()==4000000000
+
+
+def test_full_profile_pool_bypasses_sampling_across_large_batches(tmp_path):
+    from vdjtools.model.selection import control_event_counts
+    path=tmp_path/'large-full.tsv'
+    path.write_text('cdr3aa\tincidence\n'+'CASSF\t40000\n'*65536+'CATSF\t40000\n')
+    counts,audit=control_event_counts(path,preserve_vj=True)
+    assert counts['events'].sum()==65537*40000
+    assert audit['retained_events']==audit['population_events']==65537*40000
