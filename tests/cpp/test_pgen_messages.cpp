@@ -98,6 +98,22 @@ int main() {
                     return 3;
                 }
         }
+    PackedModel history;
+    history.vdj = history.dd = history.joint_history = true;
+    history.p_nd2 = 1.; history.cut_d.resize(3); history.cut_j.resize(1);
+    history.func_d = {0, 1, 2}; history.func_j = {0}; history.pj = {1.};
+    history.q_tandem = {0., .2, .3, .1, 0., .05, .25, .1, 0.};
+    const auto original_history = history.q_tandem;
+    const auto factors = rank_one_history(history);
+    double approximate_mass = 0.0;
+    for (int d = 0; d < 3; ++d) for (int e = 0; e < 3; ++e)
+        if (d != e) approximate_mass += factors.u[d] * factors.v[e];
+    if (std::abs(approximate_mass - 1.) > 1e-14 || history.q_tandem != original_history) return 4;
+    const std::vector<double> cancellation_weights = {1., 1., 1.};
+    std::vector<std::vector<double>> middle = {{1e300}, {1e-200}, {0.}};
+    if (rank_one_residual(1e300, 1e300, cancellation_weights.data(), 0, 0, history.func_d, middle) != 1e-200) return 5;
+    middle[1][0] = 0.;
+    if (rank_one_residual(1e300, 1e300, cancellation_weights.data(), 0, 0, history.func_d, middle) != 0.) return 6;
     // Reusing preparation after a shorter/zero input must clear all active cells.
     PrefixPreparation prepared;
     std::vector<double> seeds((N + 1) * 25, 0.25);

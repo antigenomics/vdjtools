@@ -1099,6 +1099,39 @@ between sequential phases; that count does not mean 130 simultaneously active
 compute threads. The optimizer's vector reductions limit scaling in some fits.
 
 
+Optional approximation of tandem histories
+------------------------------------------
+
+Exact Pgen remains the default. For supported joint-history models with positive
+weights on every off-diagonal functional D pair and more D than J templates,
+``native.pgen_aa_batch(..., approximate_tandem=True)`` replaces only the tandem
+history coefficients by positive rank-one factors with the forbidden diagonal
+removed. Human isalgo IGH supports this mode. Unsupported model structures,
+nucleotide input and Hamming-1 approximation requests raise an error.
+
+The original model parameters remain unchanged. Each J retains its original total
+tandem-history weight, and every supported D pair remains positive. First-base
+bias, insertion lengths, trimming and codon constraints are evaluated as before.
+Factors are prepared once per batch, freed with the call, and never cache Pgen.
+
+For a one-time AA file calculation::
+
+    vdjtools pgen input.tsv --model IGH --type aa --approximate-tandem --out scored.tsv
+
+This output and ``pgen_frame(..., approximate_tandem=True)`` include
+``pgen_method=rank1``. Default output schemas retain exact scoring.
+
+**Accuracy and scope.** The integrated API on a fresh 10,000-positive-query IGH panel plus one zero-mass
+query, seed 226, measured normalized RMS log-Pgen error 0.00619 (0.619%), with no
+support mismatch. The metric is
+``sqrt(sum((log(p_approx)-log(p_exact))**2) / sum(log(p_exact)**2))`` over positive
+exact probabilities; exact zeros are counted separately. Three 40-CPU rounds
+measured 8.183 to 7.880 seconds (1.04x), including coefficient preparation.
+This is an empirical panel result, not a per-query or universal 5% guarantee,
+and does not establish unchanged downstream statistical decisions. NT scoring,
+generation, inference, selected-mass normalization and Hamming neighborhoods
+retain their exact paths. Use exact mode when those guarantees are required.
+
 Exact tandem-D performance (#226)
 ---------------------------------
 

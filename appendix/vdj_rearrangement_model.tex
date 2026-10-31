@@ -478,6 +478,32 @@ maximum relative errors $4.8\times10^{-13}$ for the optimized contraction and
 $5.9\times10^{-12}$ for the original double result. No probability cutoff was
 introduced to obtain this agreement.
 
+\paragraph{Explicit approximation of tandem histories}
+The preceding algorithm is exact by default. An opt-in AA-batch mode approximates
+only the joint history matrix when every off-diagonal functional D pair has positive
+weight and the D count exceeds the J count. For a fixed J, write
+$r_d=\sum_e H_{jde}$, $c_e=\sum_d H_{jde}$ and $z=\sum_{d,e}H_{jde}$.
+Define positive factors $u_d=r_d/z$ and
+$v_e=c_e z/\sum_{a,b:\,a\ne b}u_ac_b$. The approximated matrix is
+\begin{equation}
+ \widehat H_{jde}=u_dv_e\,\mathbf{1}\{d\ne e\},\qquad
+ \sum_{d,e}\widehat H_{jde}=z.
+\end{equation}
+Thus the original per-J tandem mass and structural support are retained without
+changing the stored parameters. The mixed D2 input becomes
+$v_e(\sum_d u_dM_d-u_eM_e)$. If diagonal subtraction is cancellation-prone, the
+code recomputes that cell as a positive off-diagonal sum; it never drops small
+history terms. The insertion and retained-D recurrences are unchanged.
+Factors are owned by one batch and no Pgen result is cached.
+
+Accuracy is evaluated empirically as
+$\sqrt{\sum_i(\log\widehat p_i-\log p_i)^2/\sum_i(\log p_i)^2}$ over queries
+with positive exact probability, counting exact zeros and support failures
+separately. This aggregate metric is neither a uniform relative-probability bound
+nor a guarantee of unchanged downstream decisions. The exact mode remains the
+default; nucleotide, inference, generation and selected-normalization paths do
+not use this option.
+
 \section{Optional coarse post-selection calibration}
 
 The recombination model and its error-free generation probabilities remain

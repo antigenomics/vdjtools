@@ -2,7 +2,8 @@
 
 ``pack`` reconstructs the model's dense arrays (gene choice, deletion, insertion, dinucleotide)
 and germline cut segments into a C++ :class:`PackedModel`; ``pgen_nt`` calls the native Pgen.
-The result matches the pure-Python reference (and OLGA) exactly — the native path is just faster.
+The default result matches the pure-Python reference (and OLGA) exactly.
+AA batches additionally expose an explicitly requested tandem-history approximation.
 """
 from __future__ import annotations
 
@@ -341,13 +342,15 @@ def pgen_aa_batch(
     mismatches: int = 0,
     threads: int = 0,
     anchored_only: bool = False,
+    approximate_tandem: bool = False,
 ) -> list[float]:
     """Batch amino-acid Pgen over many CDR3s, parallelized across sequences in native code.
 
-    Computes the same value as calling :func:`pgen_aa` per sequence, but releases the GIL and
+    By default, computes the same value as calling :func:`pgen_aa` per sequence, but releases the GIL and
     partitions the sequences across worker threads — the clean, exact speedup for the real
-    workload (Pgen / 1-mismatch matching over many clonotypes). The result is bitwise-identical
-    to the serial per-sequence computation for any ``threads``.
+    workload (Pgen / 1-mismatch matching over many clonotypes). In exact mode the result is
+    bitwise-identical to the serial per-sequence computation for any ``threads``.
+    The optional approximation is also invariant to thread count, but is not exact Pgen.
 
     Args:
         model: A recombination :class:`Model`.
@@ -358,6 +361,10 @@ def pgen_aa_batch(
             :class:`KeyError` (see :func:`pgen_aa`).
         j: Optional per-sequence J alleles (as ``v``).
         mismatches: ``0`` for exact Pgen, ``1`` for the Hamming-1 ball (as :func:`pgen_aa`).
+        approximate_tandem: Explicitly approximate dense off-diagonal joint tandem history
+            weights by positive rank-one factors. Only supported dense tandem models and
+            ``mismatches=0`` are accepted. Original parameters and exact defaults are unchanged.
+            The empirical log-Pgen error is not a per-query bound. No Pgen result is cached.
         threads: Worker threads; ``0`` = auto (the available CPU allocation).
             VDJ or Hamming-1 batches use workers from two sequences; cheaper exact
             VJ batches stay serial below 64 sequences.
@@ -365,6 +372,10 @@ def pgen_aa_batch(
     Returns:
         Per-sequence Pgen in input order.
     """
+    if not isinstance(approximate_tandem, bool):
+        raise TypeError("approximate_tandem must be a bool")
+    if approximate_tandem and mismatches != 0:
+        raise ValueError("rank-one tandem approximation requires mismatches=0")
     if mismatches not in (0, 1):
         raise ValueError("mismatches must be 0 or 1")
     from .._core import pgen_aa_batch as _batch
@@ -377,9 +388,16 @@ def pgen_aa_batch(
         raise ValueError("v must have the same length as cdr3_aas")
     if j_idxs and len(j_idxs) != len(seqs):
         raise ValueError("j must have the same length as cdr3_aas")
+    budget = kernel_threads(threads)
+    if approximate_tandem:
+        from ..cores import require_memory
+        from .._core import _selection_workspace_bytes
+        require_memory(_selection_workspace_bytes(pm, max(map(len, seqs), default=0), len(seqs), budget),
+                       'rank-one tandem Pgen')
+        return _batch(pm, seqs, v_idxs, j_idxs, mismatches, budget, anchored_only, True)
     if anchored_only:
-        return _batch(pm, seqs, v_idxs, j_idxs, mismatches, kernel_threads(threads), True)
-    return _batch(pm, seqs, v_idxs, j_idxs, mismatches, kernel_threads(threads))
+        return _batch(pm, seqs, v_idxs, j_idxs, mismatches, budget, True)
+    return _batch(pm, seqs, v_idxs, j_idxs, mismatches, budget)
 
 
 def pgen_nt_batch(model: Model, cdr3_nts: list[str], v: list | None = None,

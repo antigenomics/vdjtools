@@ -113,9 +113,11 @@ std::vector<double> pgen_nt_batch(const PackedModel& m, const std::vector<std::s
 // Batch aa Pgen over many sequences, parallelized across sequences (mismatches: 0 = exact,
 // 1 = Hamming-1 ball). Bitwise-identical to the per-sequence calls. Per-sequence v/j indices;
 // empty v_idxs/j_idxs → all -1 (gene-agnostic). nthreads=0 → serial; Python resolves allocation.
+// approximate_tandem opts into supported rank-one history weights; default remains exact.
 std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::string>& seqs,
                                   const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
-                                  int mismatches, int nthreads, bool anchored_only = false);
+                                  int mismatches, int nthreads, bool anchored_only = false,
+                                  bool approximate_tandem = false);
 
 // Unnormalized selection-weighted AA mass, allele weights[v*nJ+j].
 // The source model is immutable and workers share only immutable model parameters and small V-weight views.

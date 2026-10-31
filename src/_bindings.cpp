@@ -96,9 +96,11 @@ PYBIND11_MODULE(_core, m) {
     m.def("pgen_aa_batch", &vdjtools::pgen_aa_batch, py::arg("model"), py::arg("seqs"),
           py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
           py::arg("mismatches") = 0, py::arg("threads") = 0, py::arg("anchored_only") = false,
+          py::arg("approximate_tandem") = false,
           py::call_guard<py::gil_scoped_release>(),
           "Batch aa Pgen over many CDR3s, parallelized across sequences (mismatches=1 -> Hamming-1 "
-          "ball). Bitwise-identical to per-sequence pgen_aa/pgen_aa_hamming1; threads=0 -> serial (Python APIs resolve allocation).");
+          "ball). Exact by default; approximate_tandem explicitly requests supported rank-one history weights. "
+          "Threads preserve outputs within a mode; threads=0 -> serial (Python APIs resolve allocation).");
 
     // Admission counts packed capacities and all simultaneously live DP families.
     // The model already exists: including it is conservative for remaining-memory guards.
@@ -137,6 +139,8 @@ PYBIND11_MODULE(_core, m) {
         const size_t V = model.nV(), J = model.nJ(), D = model.nD();
         // Python cross-join/weights plus native input and J-specific V choices.
         add(product(V, J), 128 + sizeof(double) * 2);
+        add(product(J, D), sizeof(double) * 2);
+        add(D, sizeof(long double) * 2);
         // Python/native strings, masks, output vectors and list/array elements.
         add(queries, max_aa * 16 + 512);
         const size_t boundaries = max_aa * 3 + 1;

@@ -165,6 +165,8 @@ def pgen(
     j_col: Optional[str] = typer.Option(None, "--j-col", help="J-allele column to condition on (default: marginalize)."),
     seq_type: str = typer.Option("auto", "--type", help="auto | aa | nt."),
     mismatches: int = typer.Option(0, help="Amino-acid Hamming ball: 0 exact, 1 sums all single-substitution neighbours."),
+    approximate_tandem: bool = typer.Option(False, "--approximate-tandem",
+        help="Opt in to rank-one AA tandem-history approximation; exact scoring is the default."),
     no_header: bool = typer.Option(False, "--no-header", help="Input is a bare sequence list (no header row)."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout)."),
 ) -> None:
@@ -192,15 +194,24 @@ def pgen(
     for i, s in enumerate(seqs):
         if s:
             groups[_is_nt(s) if seq_type == "auto" else (seq_type == "nt")].append(i)
+    if approximate_tandem and (groups[True] or mismatches != 0):
+        _err("--approximate-tandem requires amino-acid input and --mismatches 0")
     for is_nt, idx in groups.items():
         if not idx:
             continue
         sub, subv, subj = [seqs[i] for i in idx], [vs[i] for i in idx], [js[i] for i in idx]
-        got = (native.pgen_nt_batch(m, sub, subv, subj) if is_nt else
-               native.pgen_aa_batch(m, sub, subv, subj, mismatches=mismatches))
+        try:
+            got = (native.pgen_nt_batch(m, sub, subv, subj) if is_nt else
+                   native.pgen_aa_batch(m, sub, subv, subj, mismatches=mismatches,
+                       **({"approximate_tandem": True} if approximate_tandem else {})))
+        except (ValueError, KeyError, MemoryError) as error:
+            _err(str(error))
         for i, p in zip(idx, got):
             pg[i] = p
-    _write(df.with_columns(pl.Series("pgen", pg)), out)
+    result = df.with_columns(pl.Series("pgen", pg))
+    if approximate_tandem or "pgen_method" in result.columns:
+        result = result.with_columns(pl.lit("rank1" if approximate_tandem else "exact").alias("pgen_method"))
+    _write(result, out)
 
 
 @app.command()

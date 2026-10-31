@@ -927,10 +927,66 @@ void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletion
     }
 }
 
+// Call-owned coefficient approximation; never changes the packed source model.
+struct RankOneHistory {
+    std::vector<double> u, v;
+};
+
+RankOneHistory rank_one_history(const PackedModel& m) {
+    const int D = m.nD(), J = m.nJ();
+    auto unsupported = [] { throw std::invalid_argument(
+        "rank-one tandem approximation is unavailable for this model; use exact scoring"); };
+    if (!m.vdj || !m.dd || !m.joint_history || !(m.p_nd2 > 0.0) ||
+        m.func_d.size() <= m.func_j.size() || m.func_d.size() < 2 ||
+        m.q_tandem.size() != static_cast<size_t>(J) * D * D) unsupported();
+    RankOneHistory out;
+    out.u.resize(static_cast<size_t>(J) * D);
+    out.v.resize(out.u.size());
+    for (int j : m.func_j) {
+        if (m.pj[j] == 0.0) continue;
+        std::vector<long double> rows(D), cols(D);
+        long double total = 0.0;
+        for (int d : m.func_d) for (int e : m.func_d) {
+            const double w = m.q_tandem[(j * D + d) * D + e];
+            if (d == e) { if (w != 0.0) unsupported(); continue; }
+            if (!tandem_allowed(m, j, d, e) || !std::isfinite(w) || !(w > 0.0)) unsupported();
+            rows[d] += w; cols[e] += w; total += w;
+        }
+        if (!(total > 0.0) || !std::isfinite(total)) unsupported();
+        long double mass = 0.0;
+        for (int d : m.func_d) for (int e : m.func_d)
+            if (d != e) mass += (rows[d] / total) * cols[e];
+        if (!(mass > 0.0) || !std::isfinite(mass)) unsupported();
+        for (int d : m.func_d) {
+            out.u[j * D + d] = rows[d] / total;
+            out.v[j * D + d] = cols[d] * (total / mass);
+            if (!std::isfinite(out.u[j * D + d]) || !std::isfinite(out.v[j * D + d])) unsupported();
+        }
+        for (int d : m.func_d) for (int e : m.func_d)
+            if (d != e && !(out.u[j * D + d] * out.v[j * D + e] > 0.0)) unsupported();
+    }
+    return out;
+}
+
+// Recompute small residuals as positive sums: diagonal cancellation must not
+// create false support or erase the only nonzero off-diagonal contribution.
+double rank_one_residual(double sum, double diagonal, const double* weights,
+                         int excluded, int cell, const std::vector<int>& active,
+                         const std::vector<std::vector<double>>& middles) {
+    double rest = sum - diagonal;
+    if (rest <= 1e-12 * sum) {
+        rest = 0.0;
+        for (int d : active) if (d != excluded)
+            rest += weights[d] * middles[d][cell];
+    }
+    return rest;
+}
+
 // D1->DD messages do not depend on J. Mix J-dependent history weights into
 // the right message before walking D2; linearity preserves every history.
 double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int j_idx,
-                       const std::vector<double>& Lf, TandemScratch& scratch) {
+                       const std::vector<double>& Lf, TandemScratch& scratch,
+                       const RankOneHistory* rank1 = nullptr) {
     const int N = 3 * alen, width = (N + 1) * 25;
     std::vector<double> Rb, Mf(width), seeds(width), dp(25);
     std::vector<char> rb_any;
@@ -1024,10 +1080,23 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
         if (rights[k].empty()) continue;
         const int j = js[k];
         const auto coefficients = right_coefficients(rights[k], N, allowed);
+        std::vector<double> rank_mix(rank1 ? width : 0);
+        if (rank1) for (int d1 : active_d) {
+            const double u = rank1->u[j * m.nD() + d1];
+            for (int i : cells) rank_mix[i] += u * middles[d1][i];
+        }
         for (int d2 : m.func_d) {
             std::fill(Mf.begin(), Mf.end(), 0.0);
             bool live = false;
-            for (int d1 : m.func_d) {
+            if (rank1) {
+                const double* weights = rank1->u.data() + j * m.nD();
+                const double u = weights[d2], v = rank1->v[j * m.nD() + d2];
+                const double* diagonal = middles[d2].data();
+                for (int i : cells)
+                    Mf[i] = v * rank_one_residual(rank_mix[i], u * diagonal[i], weights,
+                                                   d2, i, active_d, middles);
+                live = true;
+            } else for (int d1 : m.func_d) {
                 if (middles[d1].empty() || !tandem_allowed(m, j, d1, d2)) continue;
                 const double w = tandem_first_weight(m, j, d1) * tandem_pair_weight(m, j, d1, d2);
                 if (w == 0.0) continue;
@@ -1117,7 +1186,8 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
 
 static double pgen_aa_masked_scratch(const PackedModel& m, const uint64_t* allowed, int L,
                                      int v_idx, int j_idx, TandemScratch& scratch,
-                                     const double* pv_override = nullptr) {
+                                     const double* pv_override = nullptr,
+                                     const RankOneHistory* rank1 = nullptr) {
     if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx, pv_override);
     // Share the V+VD message across both branches of the exact n_D mixture.
     if (!m.dd || !(m.p_nd2 > 0.0))
@@ -1127,7 +1197,7 @@ static double pgen_aa_masked_scratch(const PackedModel& m, const uint64_t* allow
     mk_left_tm(m, allowed, 3 * L, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left, any, pv_override);
     double r = m.p_nd1 == 0.0 ? 0.0 :
         m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, &left, &any);
-    r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, j_idx, left, scratch);
+    r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, j_idx, left, scratch, rank1);
     return r;
 }
 
@@ -1229,10 +1299,19 @@ auto run_batch(size_t n, int nthreads, F&& one, bool expensive = false)
 // shared read-only across threads. Per-sequence v_idxs/j_idxs (empty → all -1 = gene-agnostic).
 std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::string>& seqs,
                                   const std::vector<int>& v_idxs, const std::vector<int>& j_idxs,
-                                  int mismatches, int nthreads, bool anchored_only) {
+                                  int mismatches, int nthreads, bool anchored_only, bool approximate_tandem) {
     auto vi = [&](size_t i) { return v_idxs.empty() ? -1 : v_idxs[i]; };
     auto ji = [&](size_t i) { return j_idxs.empty() ? -1 : j_idxs[i]; };
     if (nthreads < 0) throw std::invalid_argument("threads must be non-negative");
+    if (approximate_tandem && mismatches != 0)
+        throw std::invalid_argument("rank-one tandem approximation requires mismatches=0");
+    RankOneHistory factors;
+    if (approximate_tandem) {
+        factors = rank_one_history(m);
+        for (int j : j_idxs)
+            if (j >= 0 && std::find(m.func_j.begin(), m.func_j.end(), j) == m.func_j.end())
+                throw std::invalid_argument("rank-one tandem approximation requires functional J calls");
+    }
     const size_t workers = std::min(seqs.size(), static_cast<size_t>(std::max(1, nthreads)));
     std::vector<TandemScratch> scratch(workers);
     return run_batch(seqs.size(), nthreads, [&](size_t i, int worker) {
@@ -1242,7 +1321,8 @@ std::vector<double> pgen_aa_batch(const PackedModel& m, const std::vector<std::s
         if (mismatches == 1) return aa_hamming1(m, aa, vi(i), ji(i), anchored_only);
         std::vector<uint64_t> allowed(aa.size());
         for (size_t c = 0; c < aa.size(); ++c) allowed[c] = mask_for_aa(aa[c]);
-        return pgen_aa_masked_scratch(m, allowed.data(), aa.size(), vi(i), ji(i), scratch[worker]);
+        return pgen_aa_masked_scratch(m, allowed.data(), aa.size(), vi(i), ji(i), scratch[worker],
+                                      nullptr, approximate_tandem ? &factors : nullptr);
     }, m.vdj || mismatches == 1);
 }
 

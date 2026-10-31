@@ -162,7 +162,7 @@ def _pgen_nt_many(model: Model, seqs: list[str], vres: list, jres: list,
 def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
                use_calls: bool = True, on_unknown: str = "error", threads: int = 0,
                seq_col: str | None = None, v_col: str | None = None,
-               j_col: str | None = None) -> pl.DataFrame:
+               j_col: str | None = None, approximate_tandem: bool = False) -> pl.DataFrame:
     """Generation probability of each sequence under ``model``, as a tidy frame.
 
     Args:
@@ -182,6 +182,8 @@ def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
         seq_col: Explicit sequence column, when ``sequences`` is a frame.
         v_col: Explicit V-call column, when ``sequences`` is a frame.
         j_col: Explicit J-call column, when ``sequences`` is a frame.
+        approximate_tandem: Explicit rank-one tandem-history approximation for AA batches;
+            adds ``pgen_method="rank1"`` to the output. Exact scoring is the default.
 
     Returns:
         ``sequence, v_call, j_call, kind, pgen, log_pgen, log10_pgen, scoreable`` — one row per
@@ -201,6 +203,8 @@ def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
             kind = "aa"
     seqs, vs, js = _unpack(sequences, v, j, seq_col, v_col, j_col)
     kind = _resolve_kind(seqs, kind)
+    if approximate_tandem and kind != "aa":
+        raise ValueError("rank-one tandem approximation requires amino-acid input")
     if kind == "nt":
         from ..io.schema import normalize_nt
 
@@ -215,7 +219,8 @@ def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
         vres = jres = [None] * len(seqs)
 
     if kind == "aa":
-        pgens = native.pgen_aa_batch(model, seqs, v=vres, j=jres, threads=threads)
+        pgens = native.pgen_aa_batch(model, seqs, v=vres, j=jres, threads=threads,
+                                     **({"approximate_tandem": True} if approximate_tandem else {}))
     else:
         pgens = _pgen_nt_many(model, seqs, vres, jres, threads)
 
@@ -223,7 +228,7 @@ def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
     ok = p > 0
     logp = np.full(len(p), np.nan)
     logp[ok] = np.log(p[ok])
-    return pl.DataFrame({
+    result = pl.DataFrame({
         "sequence": seqs,
         "v_call": vres,
         "j_call": jres,
@@ -236,6 +241,8 @@ def pgen_frame(model: Model, sequences, *, v=None, j=None, kind: str = "auto",
         pl.when(pl.col("scoreable")).then(pl.col("log_pgen")).otherwise(None).alias("log_pgen"),
         pl.when(pl.col("scoreable")).then(pl.col("log10_pgen")).otherwise(None).alias("log10_pgen"),
     )
+
+    return result.with_columns(pl.lit("rank1").alias("pgen_method")) if approximate_tandem else result
 
 
 def free_params(model: Model, *, by_event: bool = False, eps: float = 0.0, tol: float = 1e-9,
