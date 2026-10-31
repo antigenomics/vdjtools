@@ -29,3 +29,23 @@ def test_complete_tandem_pgen_golden(locus):
             actual = fn(model, data[f'junction_{kind}'], threads=1, **kw)
             np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=0)
             assert fn(model, data[f'junction_{kind}'], threads=2, **kw) == actual
+
+
+@pytest.mark.parametrize('locus', ['TRB', 'TRD', 'IGH'])
+def test_tandem_worker_scratch_mixed_lengths_and_models(locus):
+    golden = json.loads((Path(__file__).parent / 'fixtures' / 'tandem_pgen_golden.json').read_text())[locus]
+    model = load_bundled(locus)
+    # Long, short and empty queries exercise every reused worker buffer.
+    order = sorted(range(len(golden['data']['junction_aa'])),
+                   key=lambda i: -len(golden['data']['junction_aa'][i]))
+    sequences = [golden['data']['junction_aa'][i] for i in order]
+    expected = [golden['pgen']['aa_False'][i] for i in order]
+    sequences = (sequences + ['', 'C', 'WWWWWW']) * 4
+    expected = (expected + [0.0, native.pgen_aa(model, 'C'), native.pgen_aa(model, 'WWWWWW')]) * 4
+    for threads in (1, 2):
+        actual = native.pgen_aa_batch(model, sequences, threads=threads)
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=0)
+    other = load_bundled('TRA')
+    assert native.pgen_aa_batch(other, [''], threads=2) == [0.0]
+    np.testing.assert_allclose(native.pgen_aa_batch(model, sequences, threads=2),
+                               expected, rtol=1e-12, atol=0)
