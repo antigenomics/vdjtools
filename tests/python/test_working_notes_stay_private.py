@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # Filenames whose content is internal by design. Matched against the basename, case-insensitively.
 PRIVATE = re.compile(r"^(?!readme\.md$).*\.md$", re.IGNORECASE)
+PUBLIC_SKILLS = {"skills/vdjtools/SKILL.md", "skills/vdjtools/references/caveats.md"}
 
 
 # Every working-note name, as the sdist exclude and the gitignore must both spell them.
@@ -46,7 +47,7 @@ def _git(*args: str) -> str:
 
 def test_no_working_note_is_tracked_by_git():
     tracked = [p for p in _git("ls-files").split("\n") if p]
-    leaked = sorted(p for p in tracked if PRIVATE.match(Path(p).name))
+    leaked = sorted(p for p in tracked if p not in PUBLIC_SKILLS and PRIVATE.match(Path(p).name))
     assert not leaked, (
         f"working notes are tracked and would be published: {leaked}. "
         f"Run `git rm --cached <file>` and confirm .gitignore covers it."
