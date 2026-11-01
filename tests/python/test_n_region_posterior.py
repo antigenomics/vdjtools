@@ -19,7 +19,8 @@ def toy():
     tables['v_3_del']=tables['v_3_del'].with_columns(p=pl.when(pl.col('ndel').is_in([-1,0])).then(.5).otherwise(0.))
     tables['j_5_del']=tables['j_5_del'].with_columns(p=(pl.col('ndel')==0).cast(pl.Float64))
     tables['vj_ins']=tables['vj_ins'].with_columns(p=pl.when(pl.col('length').is_in([2,3])).then(.5).otherwise(0.))
-    for name in ['vj_dinucl','vj_first_nt']:tables[name]=tables[name].with_columns(p=pl.lit(.25))
+    for name in ['vj_dinucl','vj_first_nt']:
+        tables[name]=tables[name].with_columns(p=pl.lit(.25))
     return Model(manifest=model.manifest,tables=tables,genomic=model.genomic).validate()
 
 
@@ -38,11 +39,16 @@ def test_vj_threaded_path_and_validation(toy):
     seqs=['CKF']*64;positions=[[0,1,2]]*64
     assert n_region_posterior_batch(toy,seqs,positions,threads=1).equals(
         n_region_posterior_batch(toy,seqs,positions,threads=4))
-    with pytest.raises(ValueError):n_region_posterior_batch(toy,['CKF'],[[-1]])
-    with pytest.raises(ValueError):n_region_posterior_batch(toy,['CKF'],[[3]])
-    with pytest.raises(ValueError):n_region_posterior_batch(toy,['CKF'],[])
-    with pytest.raises(ValueError):n_region_posterior_batch(toy,['CKF'],v=[])
-    with pytest.raises(KeyError):n_region_posterior_batch(toy,['CKF'],v=['missing'])
+    with pytest.raises(ValueError):
+        n_region_posterior_batch(toy,['CKF'],[[-1]])
+    with pytest.raises(ValueError):
+        n_region_posterior_batch(toy,['CKF'],[[3]])
+    with pytest.raises(ValueError):
+        n_region_posterior_batch(toy,['CKF'],[])
+    with pytest.raises(ValueError):
+        n_region_posterior_batch(toy,['CKF'],v=[])
+    with pytest.raises(KeyError):
+        n_region_posterior_batch(toy,['CKF'],v=['missing'])
 
 
 @pytest.mark.parametrize('locus',['TRB','TRD','IGH'])

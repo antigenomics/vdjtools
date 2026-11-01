@@ -355,7 +355,8 @@ def n_region_posterior_batch(model: Model, cdr3_aas: list[str],
     import polars as pl
     from .._core import n_region_posterior_batch as _batch
     seqs=[s.upper() for s in cdr3_aas]
-    if positions is None:positions=[list(range(len(s))) for s in seqs]
+    if positions is None:
+        positions=[list(range(len(s))) for s in seqs]
     if len(positions)!=len(seqs) or (v is not None and len(v)!=len(seqs)) or (j is not None and len(j)!=len(seqs)):
         raise ValueError("query, position and gene-call batch lengths must match")
     pm,vi,ji=pack(model)
