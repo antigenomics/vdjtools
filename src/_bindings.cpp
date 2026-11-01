@@ -93,6 +93,11 @@ PYBIND11_MODULE(_core, m) {
           py::call_guard<py::gil_scoped_release>(),
           "Batch pgen_aa_degenerate over many motifs, parallelized across queries and "
           "bitwise-identical to the per-query calls; threads=0 -> serial (Python APIs resolve allocation).");
+    m.def("n_region_posterior_batch", &vdjtools::n_region_posterior_batch,
+          py::arg("model"), py::arg("seqs"), py::arg("positions"),
+          py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
+          py::arg("threads") = 0, py::call_guard<py::gil_scoped_release>(),
+          "Exact pure-N codon posterior from existing sum-product recurrences; NaN for unsupported AA queries.");
     m.def("pgen_aa_batch", &vdjtools::pgen_aa_batch, py::arg("model"), py::arg("seqs"),
           py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},
           py::arg("mismatches") = 0, py::arg("threads") = 0, py::arg("anchored_only") = false,

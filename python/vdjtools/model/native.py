@@ -334,6 +334,42 @@ def pgen_aa_degenerate_batch(
     return _batch(pm, sets, v_idxs, j_idxs, kernel_threads(threads))
 
 
+def n_region_posterior_batch(model: Model, cdr3_aas: list[str],
+                             positions: list[list[int]] | None = None,
+                             v: list[str | None] | None = None,
+                             j: list[str | None] | None = None,
+                             threads: int = 0):
+    """Exact P(all three codon bases are N additions | AA junction, V/J).
+
+    Reuses the native sum-product engine, including tandem-D histories. P-extended
+    templates are not N; a non-N result does not distinguish germline/P/mixed
+    boundary origins. No mutation/error likelihood or fitted-model update occurs.
+
+    ``positions`` are zero-based junction AA coordinates; omitted means all sites.
+    The flat frame retains every requested row/position, including duplicates.
+    Zero model likelihood yields null ``n_probability`` and ``supported=False``.
+    Unknown V/J calls raise exactly as in ``pgen_aa_batch``. No Pgen is cached or
+    exported. Threads are handled by the existing native batch runner.
+    """
+    import numpy as np
+    import polars as pl
+    from .._core import n_region_posterior_batch as _batch
+    seqs=[s.upper() for s in cdr3_aas]
+    if positions is None:positions=[list(range(len(s))) for s in seqs]
+    if len(positions)!=len(seqs) or (v is not None and len(v)!=len(seqs)) or (j is not None and len(j)!=len(seqs)):
+        raise ValueError("query, position and gene-call batch lengths must match")
+    pm,vi,ji=pack(model)
+    vs=[_gene_idx(vi,x,"V") for x in v] if v is not None else []
+    js=[_gene_idx(ji,x,"J") for x in j] if j is not None else []
+    values=_batch(pm,seqs,positions,vs,js,kernel_threads(threads))
+    sizes=[len(p) for p in positions]
+    return pl.DataFrame({
+        "row":pl.Series(np.repeat(np.arange(len(seqs)),sizes),dtype=pl.Int64),
+        "position":pl.Series([p for row in positions for p in row],dtype=pl.Int64),
+        "n_probability":pl.Series([p for row in values for p in row],dtype=pl.Float64).fill_nan(None),
+    }).with_columns(pl.col("n_probability").is_not_null().alias("supported"))
+
+
 def pgen_aa_batch(
     model: Model,
     cdr3_aas: list[str],

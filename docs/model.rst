@@ -856,6 +856,44 @@ Packed-model state is bounded; successive EM iterations do not retain an unbound
 ``j_canonical`` fields. Consumers can reuse the repair classifications without rerunning markup.
 The repaired amino-acid junction remains authoritative when applying nucleotide flanks.
 
+Pure-N codon origin probabilities
+--------------------------------
+
+``n_region_posterior_batch`` computes the conditional probability that **all three
+bases** of a codon come from stochastic N additions, given an amino-acid junction
+and optional V/J calls::
+
+   from vdjtools.model import load_bundled, n_region_posterior_batch
+
+   model = load_bundled("TRB", source="isalgo", organism="human")
+   origins = n_region_posterior_batch(
+       model, ["CASSVGLYSTDTQYF"], positions=[[5, 6]], threads=0)
+
+The output is a flat table with ``row``, ``position``, ``n_probability`` and
+``supported``. Positions are zero-based amino-acid coordinates in the
+anchor-inclusive junction. Omit ``positions`` to request every codon; requesting
+only the sites needed by an analysis avoids unnecessary probability sums.
+Requested order and duplicate positions are preserved. An amino-acid query with
+zero model probability returns null probabilities and ``supported=False``;
+unknown gene names and invalid positions raise instead of silently changing the
+conditioning population.
+
+This is an exact sum-product calculation over compatible histories, including
+single- and tandem-D branches. Palindromic P extensions belong to template
+contributions and cannot be counted as N. Retained germline is immutable under
+the generation model; the training error model is not applied. A probability
+below one does **not** identify the complement as pure germline: P and mixed
+boundary codons remain possible. Likewise, random N additions do not imply
+uniform amino-acid frequencies.
+
+The native batch runner shares the packed model read-only, releases the GIL and
+preserves results across thread counts. It evaluates one total AA normalization
+per query and one constrained sum per requested position. It neither fits model
+parameters nor caches/exports generation probabilities. For independent scoring
+or posterior interpretation, retain the model identity and the conditioning
+V/J calls. The returned origin is a model posterior, not observed nucleotide
+history or evidence of antigen recognition.
+
 Native sampling from the command line
 -------------------------------------
 

@@ -57,6 +57,64 @@ void extend_ins_reference(const std::vector<double>& dp0, int q0, int N, const u
 
 int main() {
     using namespace vdjtools;
+    // Pure-N mass is an exact constrained sum, not a top-k history label.
+    PackedModel origin;
+    origin.cut_v = {{3,2,3}}; origin.cut_j = {{3,3,3}}; // Cys ... Phe
+    origin.func_v = origin.func_j = {0};
+    origin.pv = origin.pjv = origin.pj = {1.};
+    origin.nbins_v = origin.nbins_j = 1;
+    origin.del_v = origin.del_j = {1.};
+    origin.ins_vj = origin.ins_vd = {0.,0.,0.,1.};
+    origin.ins_dj = {1.};
+    origin.R_vj = origin.R_vd = origin.R_dj = std::vector<double>(16,.25);
+    origin.bias_vj = origin.bias_vd = origin.bias_dj = std::vector<double>(4,.25);
+    auto check_origin = [&](const PackedModel& model, const std::string& aa,
+                            const std::vector<int>& pure) {
+        const double total = pgen_aa(model,aa,-1,-1);
+        if (!(total > 0.)) return false;
+        for (int position=0; position<static_cast<int>(aa.size()); ++position) {
+            const double mass = pgen_aa_n_codon(model,aa,position,-1,-1);
+            const double expected = std::find(pure.begin(),pure.end(),position)==pure.end() ? 0. : total;
+            if (std::abs(mass-expected)>1e-12*total) return false;
+        }
+        return true;
+    };
+    if (!check_origin(origin,"CAF",{1}) || std::abs(pgen_aa(origin,"CAF",-1,-1)-1./16)>1e-14) return 10;
+    auto boundary=origin;
+    boundary.cut_v={{3,2,3,0}}; boundary.maxpal_v3=1; // retained palindromic A
+    boundary.ins_vj={0.,0.,1.};
+    if (!check_origin(boundary,"CKF",{})) return 11;
+    auto ambiguous=boundary;
+    ambiguous.nbins_v=2; ambiguous.del_v={.5,.5};
+    ambiguous.ins_vj={0.,0.,.5,.5};
+    const double ambiguous_mass=pgen_aa(ambiguous,"CKF",-1,-1);
+    const double n_mass=pgen_aa_n_codon(ambiguous,"CKF",1,-1,-1);
+    // The same AA admits P+N (4/5 posterior) and pure-N (1/5) histories.
+    if (std::abs(ambiguous_mass-5./128)>1e-14 || std::abs(n_mass/ambiguous_mass-.2)>1e-13) return 16;
+    boundary=origin; boundary.cut_j={{0,3,3,3}}; boundary.maxpal_j5=1;
+    boundary.ins_vj={0.,0.,1.};
+    if (!check_origin(boundary,"CKF",{})) return 12;
+    origin.vdj=true; origin.cut_d={{2,2,3},{3,1,3}}; // Gly and Ser
+    origin.func_d={0,1}; origin.nbins_d5=origin.nbins_d3=1;
+    origin.del_d={1.,1.}; origin.pd_given_j={1.,0.};
+    if (!check_origin(origin,"CAGF",{1})) return 13;
+    auto alternate=origin;
+    alternate.cut_d={{2,2,3},{2,1,3}}; // Gly versus Ala from different D histories
+    alternate.pd_given_j={.5,.5};
+    alternate.ins_vd=alternate.ins_dj={.5,0.,0.,.5};
+    const double alternate_mass=pgen_aa(alternate,"CAGF",-1,-1);
+    if (std::abs(alternate_mass-1./64)>1e-14) return 17;
+    for (int pos : {1,2})
+        if (std::abs(pgen_aa_n_codon(alternate,"CAGF",pos,-1,-1)/alternate_mass-.5)>1e-13) return 18;
+    origin.dd=origin.joint_history=true; origin.p_nd1=0.; origin.p_nd2=1.;
+    origin.q_tandem={0.,1.,0.,0.};
+    origin.del_d_tandem=origin.del_d2={1.,1.};
+    origin.ins_dd={0.,0.,0.,1.}; origin.R_dd=std::vector<double>(16,.25);
+    origin.bias_dd=std::vector<double>(4,.25);
+    if (!check_origin(origin,"CAGASF",{1,3})) return 14;
+    // Exercise the alternative left-mixture contraction as well.
+    origin.q_tandem={0.,.5,.5,0.};
+    if (!check_origin(origin,"CAGASF",{1,3})) return 15;
     constexpr int N = 12;
     const uint64_t masks[] = {mask_for_aa('A'), mask_for_aa('R'), mask_wildcard(), mask_for_aa('G')};
     std::vector<double> right((N + 1) * 25), left(25);
