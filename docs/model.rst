@@ -857,7 +857,7 @@ Packed-model state is bounded; successive EM iterations do not retain an unbound
 The repaired amino-acid junction remains authoritative when applying nucleotide flanks.
 
 Pure-N codon origin probabilities
---------------------------------
+---------------------------------
 
 ``n_region_posterior_batch`` computes the conditional probability that **all three
 bases** of a codon come from stochastic N additions, given an amino-acid junction
