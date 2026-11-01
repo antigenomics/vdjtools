@@ -343,7 +343,7 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
                 const std::vector<double>& pins, const std::vector<double>& R,
                 const std::vector<double>& bias, int jbind,
                 std::vector<double>& Lf, std::vector<char>& lf_any,
-                const double* pv_override = nullptr) {
+                const double* pv_override = nullptr, int n_codon = -1) {
     Lf.assign((N + 1) * 25, 0.0);
     std::vector<double> seed((N + 1) * 25, 0.0);
     std::vector<char> has_seed(N + 1, 0);
@@ -358,6 +358,7 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
         const auto& gv = m.cut_v[v];
         int Lv = gv.size();
         for (int len_v = 1; len_v <= std::min(Lv, N); ++len_v) {
+            if (n_codon >= 0 && len_v > 3*n_codon) continue;
             int div = Lv - len_v;
             if (div < 0 || div >= m.nbins_v) continue;
             double pdv = m.del_v[v * m.nbins_v + div];
@@ -419,7 +420,7 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
 // state s = (nt[p], nt[p+1]); Pins(DJ) + bias baked in; complete codons in [p,N) constrained. The
 // DJ Markov reads 3'->5', so the backward pass extends leftward from the J boundary.
 void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, int j_idx,
-                 std::vector<double>& Rb, std::vector<char>& rb_any) {
+                 std::vector<double>& Rb, std::vector<char>& rb_any, int n_codon = -1) {
     Rb.assign((N + 1) * 25, 0.0);
     const auto& pins = m.ins_dj;
     const auto& R = m.R_dj;
@@ -436,6 +437,7 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
         int Lj = gj.size();
         for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
             int right = N - len_j, idxj = Lj - len_j;
+            if (n_codon >= 0 && right < 3*n_codon+3) continue;
             if (idxj < 0 || idxj >= m.nbins_j) continue;
             double pdj = m.del_j[j * m.nbins_j + idxj];
             if (pdj == 0.0) continue;
@@ -619,7 +621,7 @@ inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt
 double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
                     const std::vector<double>* shared_left = nullptr,
                     const std::vector<char>* shared_any = nullptr,
-                    const double* pv_override = nullptr) {
+                    const double* pv_override = nullptr, int n_codon = -1) {
     int N = 3 * alen;
     std::vector<double> local_left, Rb, res, reduced((N + 1) * 4);
     std::vector<uint64_t> right_terms(N + 1);
@@ -627,7 +629,7 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
     std::vector<int> first, last;
     std::vector<char> local_any, rb_any, live;
     if (!shared_left)
-        mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, local_left, local_any, pv_override);
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, local_left, local_any, pv_override, n_codon);
     const auto& Lf = shared_left ? *shared_left : local_left;
     const auto& lf_any = shared_any ? *shared_any : local_any;
     double total = 0.0;
@@ -653,7 +655,7 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
         }
     }
     for (int D : m.func_d) {
-        mk_right_tm(m, allowed, N, D, j_idx, Rb, rb_any);
+        mk_right_tm(m, allowed, N, D, j_idx, Rb, rb_any, n_codon);
         // Empty, one-base and two-base prefixes recur across cuts of this D.
         // Their nonnegative boundary probabilities are local to this query/D.
         std::fill(short_results.begin(), short_results.end(), -1.0);
@@ -751,7 +753,10 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
                 int ld = Ld - idx5 - idx3;
                 const double* r = &res[ld * (N + 1)];
                 // Outside this interval every contribution is exactly zero.
-                for (int pos = first[ld]; pos <= last[ld]; ++pos) total += pdel * r[pos];
+                for (int pos = first[ld]; pos <= last[ld]; ++pos) {
+                    if (n_codon >= 0 && ld > 0 && pos < 3*n_codon+3 && pos+ld > 3*n_codon) continue;
+                    total += pdel * r[pos];
+                }
             }
         }
     }
@@ -879,7 +884,7 @@ struct TandemScratch {
 // After two fixed bases the 25-state message has exactly one possible state.
 template<class Emit>
 void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletions,
-                PrefixPreparation& prepared, int end, const uint64_t* allowed, Emit emit) {
+                PrefixPreparation& prepared, int end, const uint64_t* allowed, Emit emit, int n_codon = -1) {
     if (end < 2) return;
     const auto& cut = m.cut_d[d];
     const int L = cut.size();
@@ -921,7 +926,8 @@ void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletion
                 const int i3 = L - i5 - len;
                 if (i3 >= m.nbins_d3) continue;
                 const double weight = row[i5 * m.nbins_d3 + i3];
-                if (weight != 0.0) emit(pos + len, state, weight, sole);
+                if (weight != 0.0 && !(n_codon >= 0 && pos < 3*n_codon+3 && pos+len > 3*n_codon))
+                    emit(pos + len, state, weight, sole);
             }
         }
     }
@@ -986,7 +992,7 @@ double rank_one_residual(double sum, double diagonal, const double* weights,
 // the right message before walking D2; linearity preserves every history.
 double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int j_idx,
                        const std::vector<double>& Lf, TandemScratch& scratch,
-                       const RankOneHistory* rank1 = nullptr) {
+                       const RankOneHistory* rank1 = nullptr, int n_codon = -1) {
     const int N = 3 * alen, width = (N + 1) * 25;
     std::vector<double> Rb, Mf(width), seeds(width), dp(25);
     std::vector<char> rb_any;
@@ -1013,7 +1019,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
     if (active_d.empty()) return 0.0;
     for (size_t k = 0; k < js.size(); ++k)
         if (active_j[k])
-            mk_right_tm(m, allowed, N, -1, js[k], rights[k], rb_any);
+            mk_right_tm(m, allowed, N, -1, js[k], rights[k], rb_any, n_codon);
     auto& first_prepared = scratch.first;
     first_prepared.prepare(Lf, N - 2, allowed);
     double total = 0.0;
@@ -1041,7 +1047,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
             [&](int q, const double* state, double w, int sole) {
                 if (sole >= 0) seeds[q * 25 + sole] += w * state[sole];
                 else for (int s = 0; s < 25; ++s) seeds[q * 25 + s] += w * state[s];
-            });
+            }, n_codon);
         std::fill(Mf.begin(), Mf.end(), 0.0);
         for (int q = 1; q < N - 1; ++q) {
             const double* seed = seeds.data() + q * 25;
@@ -1070,7 +1076,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
             d_prefixes(m, d2, m.del_d2, second_prepared, N - 1, allowed,
                 [&](int q, const double* state, double w, int sole) {
                     total += w * contract_right(state, coefficients.data() + q * 25, sole);
-                });
+                }, n_codon);
         }
     }
     // With many D genes (IGH), mix D1 histories on the left instead. This
@@ -1108,7 +1114,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
             d_prefixes(m, d2, m.del_d2, second_prepared, N - 1, allowed,
                 [&](int q, const double* state, double w, int sole) {
                     total += w * contract_right(state, coefficients.data() + q * 25, sole);
-                });
+                }, n_codon);
         }
     }
     return total;
@@ -1119,7 +1125,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
 // the fixed J germline suffix over [N-len_j, N) and sum. O(nJ * N * 25) — replaces the old
 // per-scenario enumeration, which was ~1000x slower on VJ loci with many V/J alleles.
 double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
-                  const double* pv_override = nullptr) {
+                  const double* pv_override = nullptr, int n_codon = -1) {
     int N = 3 * alen;
     double total = 0.0;
     std::vector<double> Lf, dp(25), ndp(25);
@@ -1147,9 +1153,10 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
             }
         }
         if (!possible) continue;
-        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any, pv_override);
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any, pv_override, n_codon);
         for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
             int p = N - len_j, idxj = Lj - len_j;
+            if (n_codon >= 0 && p < 3*n_codon+3) continue;
             if (p < 1 || !lf_any[p]) continue;  // >=1 V/insertion nt before J
             if (idxj < 0 || idxj >= m.nbins_j) continue;
             double pdj = m.del_j[j * m.nbins_j + idxj];
@@ -1187,17 +1194,17 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
 static double pgen_aa_masked_scratch(const PackedModel& m, const uint64_t* allowed, int L,
                                      int v_idx, int j_idx, TandemScratch& scratch,
                                      const double* pv_override = nullptr,
-                                     const RankOneHistory* rank1 = nullptr) {
-    if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx, pv_override);
+                                     const RankOneHistory* rank1 = nullptr, int n_codon = -1) {
+    if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx, pv_override, n_codon);
     // Share the V+VD message across both branches of the exact n_D mixture.
     if (!m.dd || !(m.p_nd2 > 0.0))
-        return m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, nullptr, nullptr, pv_override);
+        return m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, nullptr, nullptr, pv_override, n_codon);
     std::vector<double> left;
     std::vector<char> any;
-    mk_left_tm(m, allowed, 3 * L, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left, any, pv_override);
+    mk_left_tm(m, allowed, 3 * L, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left, any, pv_override, n_codon);
     double r = m.p_nd1 == 0.0 ? 0.0 :
-        m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, &left, &any);
-    r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, j_idx, left, scratch, rank1);
+        m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, &left, &any, nullptr, n_codon);
+    r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, j_idx, left, scratch, rank1, n_codon);
     return r;
 }
 
@@ -1211,6 +1218,20 @@ double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx
     std::vector<uint64_t> allowed(L);
     for (int c = 0; c < L; ++c) allowed[c] = mask_for_aa(aa[c]);
     return pgen_aa_masked(m, allowed.data(), L, v_idx, j_idx);
+}
+
+// Joint AA mass with one complete codon contributed only by N additions.
+// Reuse the exact sum-product engine, including both tandem-D branches. Template
+// contributions include P extensions, so these cannot be mislabelled as N.
+double pgen_aa_n_codon(const PackedModel& m, const std::string& aa, int position,
+                       int v_idx, int j_idx) {
+    const int L = aa.size();
+    if (position < 0 || position >= L) throw std::invalid_argument("N-origin position outside junction");
+    std::vector<uint64_t> allowed(L);
+    for (int c = 0; c < L; ++c) allowed[c] = mask_for_aa(aa[c]);
+    TandemScratch scratch;
+    return pgen_aa_masked_scratch(m, allowed.data(), L, v_idx, j_idx, scratch,
+                                 nullptr, nullptr, position);
 }
 
 // Total Pgen of the amino-acid CDR3 and every sequence within Hamming distance 1 of it (one aa
@@ -1290,6 +1311,39 @@ auto run_batch(size_t n, int nthreads, F&& one, bool expensive = false)
 }
 
 }  // namespace
+
+// Exact requested-codon pure-N posterior; reuse the existing native batch runner.
+std::vector<std::vector<double>> n_region_posterior_batch(
+    const PackedModel& m, const std::vector<std::string>& seqs,
+    const std::vector<std::vector<int>>& positions,
+    const std::vector<int>& v_idxs, const std::vector<int>& j_idxs, int nthreads) {
+    if (positions.size()!=seqs.size() || (!v_idxs.empty() && v_idxs.size()!=seqs.size()) ||
+        (!j_idxs.empty() && j_idxs.size()!=seqs.size()))
+        throw std::invalid_argument("query, position and gene-call batch lengths must match");
+    for (size_t i=0; i<seqs.size(); ++i) {
+        for (int p : positions[i])
+            if (p<0 || p>=static_cast<int>(seqs[i].size()))
+                throw std::invalid_argument("N-origin position outside junction");
+        if ((!v_idxs.empty() && (v_idxs[i]<-1 || v_idxs[i]>=m.nV())) ||
+            (!j_idxs.empty() && (j_idxs[i]<-1 || j_idxs[i]>=m.nJ())))
+            throw std::invalid_argument("gene index outside model");
+    }
+    return run_batch(seqs.size(),nthreads,[&](size_t i) {
+        const int v=v_idxs.empty() ? -1 : v_idxs[i], j=j_idxs.empty() ? -1 : j_idxs[i];
+        std::vector<double> out(positions[i].size(),std::numeric_limits<double>::quiet_NaN());
+        if (out.empty()) return out;
+        const double total=pgen_aa(m,seqs[i],v,j);
+        if (!(total>0.) || !std::isfinite(total)) return out;
+        for (size_t k=0; k<out.size(); ++k) {
+            const double mass=pgen_aa_n_codon(m,seqs[i],positions[i][k],v,j);
+            const double probability=mass/total;
+            if (!std::isfinite(probability) || probability<0. || probability>1.+1e-10)
+                throw std::runtime_error("N-origin joint mass exceeds total AA mass");
+            out[k]=std::min(1.,probability);
+        }
+        return out;
+    },m.vdj);
+}
 
 // Batch aa Pgen over many sequences, parallelized across sequences. Each output is the exact
 // per-sequence pgen_aa (mismatches=0) or pgen_aa_hamming1 (mismatches=1) — the parallelism is

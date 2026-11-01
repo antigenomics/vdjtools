@@ -22,7 +22,7 @@ from .io import (
     set_marginals,
 )
 from .model import Model
-from .native import best_aa_scenarios, best_aa_scenarios_batch, gene_to_allele, pgen_aa, pgen_aa_batch
+from .native import n_region_posterior_batch, best_aa_scenarios, best_aa_scenarios_batch, gene_to_allele, pgen_aa, pgen_aa_batch
 from .reference import (
     cut_segment,
     load_germline,
@@ -87,6 +87,7 @@ __all__ = [
     "infer_nt_batch",
     "best_aa_scenarios",
     "best_aa_scenarios_batch",
+    "n_region_posterior_batch",
     "gene_to_allele",
     "pgen_aa",
     "pgen_aa_batch",

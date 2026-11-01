@@ -75,6 +75,15 @@ double pgen_nt(const PackedModel& m, const std::vector<int8_t>& cdr3, int v_idx,
 // Generation probability of an amino-acid CDR3 (codon-marginalizing transfer matrix). ``aa`` is the
 // CDR3 amino-acid string; v_idx/j_idx as for ``pgen_nt`` (-1 = agnostic / sum over all genes).
 double pgen_aa(const PackedModel& m, const std::string& aa, int v_idx, int j_idx);
+// Joint mass of the AA query and a pure-N codon, not a top-k approximation.
+double pgen_aa_n_codon(const PackedModel& m, const std::string& aa, int position, int v_idx, int j_idx);
+// Exact conditional probability of a pure-N codon at requested query positions.
+// NaN marks zero total AA mass; rows/positions and duplicates retain input order.
+std::vector<std::vector<double>> n_region_posterior_batch(
+    const PackedModel& m, const std::vector<std::string>& seqs,
+    const std::vector<std::vector<int>>& positions,
+    const std::vector<int>& v_idxs, const std::vector<int>& j_idxs, int nthreads);
+
 
 // Total Pgen of ``aa`` and all its Hamming-distance-1 amino-acid neighbours (one substitution),
 // via the inclusion-exclusion identity over per-position wildcards. v_idx/j_idx as above.
