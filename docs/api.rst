@@ -230,7 +230,11 @@ Leinster-Cobbold similarity-aware diversity profile + Rao's quadratic entropy.
 ``vdjtools.stats.rarefaction``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Rarefaction / extrapolation curves.
+Rarefaction / extrapolation curves. ``subset_rarefaction_batch`` measures expected
+matched-subset richness at whole-library integer read depths using the native
+iNEXT engine. Population totals include unmatched reads; source clonotype rows
+remain separate. It supports interpolation only and returns ``sample``, ``m``
+and ``qD`` without uncertainty or subset-coverage estimates.
 
 .. automodule:: vdjtools.stats.rarefaction
    :members:

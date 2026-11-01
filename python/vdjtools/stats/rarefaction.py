@@ -75,3 +75,44 @@ def rarefaction(data, q=0, base="size", *, sizes=None, coverages=None,
         return inext_coverage(data, q, coverages=coverages, knots=knots,
                               se=se, nboot=nboot, conf=conf, seed=seed)
     raise ValueError(f"base must be 'size' or 'coverage', got {base!r}")
+
+
+def subset_rarefaction_batch(samples, population_sizes, *, sizes, threads=0):
+    """Expected subset richness at whole-population read depths.
+
+    Keep each input source clonotype separate. Unmatched reads form one temporary
+    category for the existing native iNEXT batch engine; subtract its hypergeometric
+    presence probability. Only interpolation at integer depths is supported.
+    Returns sample, m and qD; no subset coverage or extrapolation is implied.
+    """
+    import numpy as np
+    from scipy.stats import hypergeom
+
+    vectors = [np.asarray(x, dtype=float) for x in samples]
+    totals = np.asarray(population_sizes, dtype=float)
+    depths = np.asarray(sizes, dtype=float)
+    if totals.shape != (len(vectors),) or not len(vectors):
+        raise ValueError("one population size per nonempty batch required")
+    if (not np.isfinite(totals).all() or (totals <= 0).any()
+            or (totals != np.floor(totals)).any()):
+        raise ValueError("positive integer population sizes required")
+    if (depths.ndim != 1 or not len(depths) or not np.isfinite(depths).all()
+            or (depths < 0).any() or (depths > totals.min()).any()
+            or (depths != np.floor(depths)).any()):
+        raise ValueError("integer depths within every population required")
+    for x, n in zip(vectors, totals):
+        if (x.ndim != 1 or not np.isfinite(x).all() or (x <= 0).any()
+                or (x != np.floor(x)).any() or x.sum() > n):
+            raise ValueError("positive integer subset counts with sum <= population required")
+    other = totals - np.array([x.sum() for x in vectors])
+    augmented = [np.append(x, u) if u else x for x, u in zip(vectors, other)]
+    curve = inext_batch(augmented, q=0, sizes=depths, se=False, threads=threads)
+    idx = curve['sample'].cast(pl.Int64).to_numpy()
+    m = curve['m'].to_numpy()
+    presence = hypergeom.sf(0, totals[idx], other[idx], m)
+    values = np.maximum(0., curve['qD'].to_numpy() - presence)
+    result = curve.select('sample', 'm').with_columns(pl.Series('qD', values))
+    if 0 in depths:
+        zero = pl.DataFrame({'sample': range(len(vectors)), 'm': [0]*len(vectors), 'qD': [0.]*len(vectors)})
+        result = pl.concat([zero, result]).sort('sample', 'm')
+    return result

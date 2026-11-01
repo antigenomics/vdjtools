@@ -23,7 +23,7 @@ from .inext import (
     rarefaction_batch,
     sample_coverage,
 )
-from .rarefaction import rarefaction
+from .rarefaction import rarefaction, subset_rarefaction_batch
 from .shm import shm_entropy, shm_spectrum, shm_summary
 from .spectratype import spectratype, vj_spectratype
 from .usage import segment_usage, vj_usage
@@ -44,6 +44,7 @@ __all__ = [
     "d50",
     "functional_diversity",
     "rarefaction",
+    "subset_rarefaction_batch",
     "inext",
     "inext_batch",
     "rarefaction_batch",
