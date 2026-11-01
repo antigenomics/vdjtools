@@ -117,3 +117,13 @@ For source changes, use the repository environment and focused tests. For docs,
 install the docs extra in that environment and run `env -C docs make html` with
 zero warnings. Check examples against real signatures and CLI help. Do not rerun
 completed analyses or refit published corpora merely to update documentation.
+
+## Matched-subset discovery and abundance inequality
+
+`stats.subset_rarefaction_batch(samples, population_sizes, sizes=..., threads=...)`
+uses the existing native q=0 engine at whole-population integer depths. Inputs
+are positive source-clonotype count vectors, possibly empty; population totals
+include unmatched reads. It subtracts the temporary unmatched category through
+SciPy hypergeometric presence, and returns sample/m/qD. No extrapolation, SE or
+subset-coverage claim. `stats.gini_coefficient(counts)` is uncorrected abundance
+inequality (not Gini–Simpson); empty and single-species vectors return zero.

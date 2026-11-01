@@ -355,3 +355,19 @@ def diversity_cohort(cohort, extrapolate_to: int | None = None, *,
         for value in (spectrum[sample_col].min(), spectrum[sample_col].max())
     ], how="vertical_relaxed").schema[sample_col]
     return pl.DataFrame(rows).with_columns(pl.col(sample_col).cast(id_dtype))
+
+
+def gini_coefficient(counts: np.ndarray) -> float:
+    """Gini inequality of positive clonotype abundances (0 equal, <1 unequal).
+
+    Uncorrected population coefficient; empty and single-clonotype vectors give
+    zero. Zero-count species are absent rather than hypothetical unseen species.
+    """
+    x = np.asarray(counts, dtype=float)
+    if x.ndim != 1 or not np.isfinite(x).all() or (x < 0).any():
+        raise ValueError("finite nonnegative one-dimensional counts required")
+    x = np.sort(x[x > 0])
+    if not len(x):
+        return 0.0
+    return float(np.dot(2 * np.arange(1, len(x) + 1) - len(x) - 1, x)
+                 / (len(x) * x.sum()))
