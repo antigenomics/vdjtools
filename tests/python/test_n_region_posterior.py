@@ -6,6 +6,7 @@ import polars as pl
 import pytest
 from vdjtools.model import Model,load_bundled,n_region_posterior_batch
 from vdjtools.model.io import from_germline
+from vdjtools.cores import available_cores
 
 
 @pytest.fixture(scope='module')
@@ -38,7 +39,7 @@ def test_fractional_origin_and_input_order(toy):
 def test_vj_threaded_path_and_validation(toy):
     seqs=['CKF']*64;positions=[[0,1,2]]*64
     assert n_region_posterior_batch(toy,seqs,positions,threads=1).equals(
-        n_region_posterior_batch(toy,seqs,positions,threads=4))
+        n_region_posterior_batch(toy,seqs,positions,threads=min(4,available_cores())))
     with pytest.raises(ValueError):
         n_region_posterior_batch(toy,['CKF'],[[-1]])
     with pytest.raises(ValueError):
@@ -59,7 +60,7 @@ def test_current_tandem_models_thread_equality_and_immutable_anchors(locus):
     positions=[[0,len(s)//2,len(s)-1] for s in seqs]
     vs=golden['data']['v_call'][:4];js=golden['data']['j_call'][:4]
     serial=n_region_posterior_batch(model,seqs,positions,vs,js,threads=1)
-    parallel=n_region_posterior_batch(model,seqs,positions,vs,js,threads=4)
+    parallel=n_region_posterior_batch(model,seqs,positions,vs,js,threads=min(4,available_cores()))
     assert serial.equals(parallel) and serial['supported'].all()
     values=serial['n_probability'].to_numpy().reshape(-1,3)
     assert np.all(values>=0) and np.all(values<=1)
