@@ -210,8 +210,7 @@ Diversity estimators (observed, Chao1/ChaoE, Shannon/Simpson, d50, Efron-Thisted
 ``vdjtools.stats.diversity``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Point-estimate diversity indices, including the uncorrected abundance Gini
-coefficient (inequality, not Gini–Simpson diversity).
+Point-estimate diversity indices.
 
 .. automodule:: vdjtools.stats.diversity
    :members:

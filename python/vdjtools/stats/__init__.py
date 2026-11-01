@@ -1,7 +1,6 @@
 """vdjtools.stats — Repertoire statistics: diversity, rarefaction, spectratype, V/J/VJ usage, SHM."""
 from .diversity import (
     chao1,
-    gini_coefficient,
     chao_e,
     d50,
     diversity_cohort,
@@ -46,7 +45,6 @@ __all__ = [
     "functional_diversity",
     "rarefaction",
     "subset_rarefaction_batch",
-    "gini_coefficient",
     "inext",
     "inext_batch",
     "rarefaction_batch",

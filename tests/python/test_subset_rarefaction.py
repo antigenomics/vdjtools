@@ -2,7 +2,7 @@
 import math
 import numpy as np
 import pytest
-from vdjtools.stats import subset_rarefaction_batch, gini_coefficient
+from vdjtools.stats import subset_rarefaction_batch
 
 
 def test_subset_batch_matches_exact_sampling_and_endpoints():
@@ -13,10 +13,6 @@ def test_subset_batch_matches_exact_sampling_and_endpoints():
         got=curve.filter(curve['sample']==i)['qD'].to_numpy()
         want=[sum(1-(math.comb(8-c,m) if 8-c>=m else 0)/math.comb(8,m) for c in x) for m in range(9)]
         np.testing.assert_allclose(got,want,atol=1e-12)
-    assert gini_coefficient(np.array([1,1,1]))==0
-    assert gini_coefficient(np.array([1,1,4]))==pytest.approx(1/3)
-    assert gini_coefficient(np.array([]))==0
-    assert gini_coefficient(np.array([4]))==0
 
 
 @pytest.mark.parametrize('counts,total,depths', [([1.5],8,[1]),([9],8,[1]),([1],0,[0]),([1],8,[9]),([1],8,[.5]),([float('nan')],8,[1])])
