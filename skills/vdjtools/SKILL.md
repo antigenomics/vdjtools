@@ -76,6 +76,13 @@ gene-level calls, `model.native.pgen_aa_gene_batch` sums the appropriate model
 alleles in one batch. Unknown calls raise; do not catch errors and silently
 marginalize over genes. Explicit multi-allele models retain allele-specific scoring.
 
+`model.n_region_posterior_batch(model, cdr3_aas, positions=None, v=None, j=None,
+threads=0)` returns flat `row, position, n_probability, supported` rows. Positions
+are zero-based codons in anchor-inclusive junctions. It sums all compatible
+histories for pure-N codons; P extensions and mixed codons are excluded. Zero
+likelihood gives null probability/unsupported, not N origin. The complement does
+not distinguish germline, P and mixed origins. No Pgen result is cached.
+
 Pgen is exact and error-free by default. The explicit AA option
 `approximate_tandem=True` (CLI `--approximate-tandem`) uses rank-one tandem
 coefficients for supported dense joint-history models, including human isalgo IGH.
