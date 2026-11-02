@@ -255,11 +255,30 @@ def pgen_aa(
     raise ValueError("mismatches must be 0 or 1")
 
 
+def _n_region_bounds(region, length):
+    """Validate a half-open AA-codon interval; None leaves the motif unconstrained."""
+    if region is None:
+        return -1,-1
+    from numbers import Integral
+    try:
+        begin,end=region
+        if not isinstance(begin,Integral) or not isinstance(end,Integral) or isinstance(begin,bool) or isinstance(end,bool):
+            raise ValueError
+        begin,end=int(begin),int(end)
+    except (TypeError,ValueError):
+        raise ValueError("n_region requires two integer codon boundaries") from None
+    if not 0<=begin<end<=length:
+        raise ValueError("n_region must be a nonempty half-open codon interval within the motif")
+    return begin,end
+
+
 def pgen_aa_degenerate(
     model: Model,
     allowed: list[str],
     v: str | None = None,
     j: str | None = None,
+    *,
+    n_region: tuple[int, int] | None = None,
 ) -> float:
     """Total Pgen of every CDR3 matching a motif — a per-position set of permitted residues.
 
@@ -280,9 +299,15 @@ def pgen_aa_degenerate(
         v: V **allele** to condition on, or ``None`` to marginalize — as :func:`pgen_aa`, including
             the :class:`KeyError` on a gene-level or unknown name.
         j: J allele to condition on, or ``None`` to marginalize (as ``v``).
+        n_region: Optional nonempty half-open AA-codon interval ``(begin,end)``.
+            All nucleotides in that interval must be N additions in the same
+            complete history. Retained/P-extended templates and mixed codons
+            are excluded; this is a joint constraint, not a product of marginals.
 
     Returns:
-        Pgen as a float — the summed Pgen of all matching sequences.
+        Pgen as a float — the summed joint mass of matching sequences and the
+        requested origin event. It is not an origin posterior. Zero mass is
+        retained; no Pgen result is cached.
 
     Note:
         ``X`` means wildcard **here only**. :func:`pgen_aa` matches residues by exact character
@@ -292,8 +317,9 @@ def pgen_aa_degenerate(
     from .._core import pgen_aa_degenerate as _deg
 
     pm, vi, ji = pack(model)
-    return _deg(pm, [str(a).upper() for a in allowed],
-                _gene_idx(vi, v, "V"), _gene_idx(ji, j, "J"))
+    sets=[str(a).upper() for a in allowed]
+    begin,end=_n_region_bounds(n_region,len(sets))
+    return _deg(pm,sets,_gene_idx(vi,v,"V"),_gene_idx(ji,j,"J"),begin,end)
 
 
 def pgen_aa_degenerate_batch(
@@ -302,6 +328,8 @@ def pgen_aa_degenerate_batch(
     v: list[str | None] | None = None,
     j: list[str | None] | None = None,
     threads: int = 0,
+    *,
+    n_regions: list[tuple[int, int] | None] | None = None,
 ) -> list[float]:
     """Batch :func:`pgen_aa_degenerate` over many motifs, parallelized across queries.
 
@@ -315,6 +343,8 @@ def pgen_aa_degenerate_batch(
         v: Optional per-motif V **alleles** (same length as ``allowed``); ``None`` marginalizes
             over all V for every motif. Individual entries may be ``None``.
         j: Optional per-motif J alleles (as ``v``).
+        n_regions: Optional per-motif half-open pure-N codon intervals, as in
+            :func:`pgen_aa_degenerate`; an entry of ``None`` is unconstrained.
         threads: Worker threads; ``0`` = auto (the available CPU allocation). VDJ batches use
             workers from two motifs; cheaper VJ batches stay serial below 64 motifs.
 
@@ -327,11 +357,14 @@ def pgen_aa_degenerate_batch(
     sets = [[str(a).upper() for a in one] for one in allowed]
     v_idxs = [_gene_idx(vi, x, "V") for x in v] if v is not None else []
     j_idxs = [_gene_idx(ji, x, "J") for x in j] if j is not None else []
-    if v_idxs and len(v_idxs) != len(sets):
+    if v is not None and len(v_idxs) != len(sets):
         raise ValueError("v must have the same length as allowed")
-    if j_idxs and len(j_idxs) != len(sets):
+    if j is not None and len(j_idxs) != len(sets):
         raise ValueError("j must have the same length as allowed")
-    return _batch(pm, sets, v_idxs, j_idxs, kernel_threads(threads))
+    if n_regions is not None and len(n_regions)!=len(sets):
+        raise ValueError("n_regions must have the same length as allowed")
+    intervals=[] if n_regions is None else [_n_region_bounds(r,len(a)) for r,a in zip(n_regions,sets)]
+    return _batch(pm,sets,v_idxs,j_idxs,kernel_threads(threads),intervals)
 
 
 def n_region_posterior_batch(model: Model, cdr3_aas: list[str],

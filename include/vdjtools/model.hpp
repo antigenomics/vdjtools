@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vdjtools {
@@ -100,15 +101,18 @@ double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int 
 // containing 'X' means a wildcard (any of the 20 amino acids). One masked DP pass whatever the sets
 // contain — the sequences the motif matches are never enumerated. Throws std::invalid_argument on a
 // character the genetic code does not name (an empty mask would score a silent 0). v/j as above.
+// Optional half-open codon interval requires every interval base to be N in the same history;
+// (-1,-1) leaves origin unconstrained. The return is joint mass, not a posterior.
 double pgen_aa_degenerate(const PackedModel& m, const std::vector<std::string>& allowed,
-                          int v_idx, int j_idx);
+                          int v_idx, int j_idx, int n_region_start = -1, int n_region_end = -1);
 
 // Batch ``pgen_aa_degenerate``, parallelized across queries like ``pgen_aa_batch`` and
 // bitwise-identical to the per-query calls. Empty v_idxs/j_idxs → all -1 (gene-agnostic).
 std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
                                              const std::vector<std::vector<std::string>>& allowed,
                                              const std::vector<int>& v_idxs,
-                                             const std::vector<int>& j_idxs, int nthreads);
+                                             const std::vector<int>& j_idxs, int nthreads,
+                                             const std::vector<std::pair<int,int>>& n_regions = {});
 
 // Batch nucleotide Pgen over many sequences, parallelized across sequences exactly as
 // ``pgen_aa_batch`` is, and bitwise-identical to the per-sequence ``pgen_nt`` calls for any

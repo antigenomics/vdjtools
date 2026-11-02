@@ -83,6 +83,14 @@ histories for pure-N codons; P extensions and mixed codons are excluded. Zero
 likelihood gives null probability/unsupported, not N origin. The complement does
 not distinguish germline, P and mixed origins. No Pgen result is cached.
 
+For motif/alternative/gap opportunities, reuse
+``model.native.pgen_aa_degenerate_batch(..., n_regions=[(begin,end), ...])``.
+Intervals are nonempty half-open AA-codon coordinates. The return is joint motif
+and pure-N generation mass, not a posterior; use ``None`` for an unconstrained
+motif. All interval bases must be N in the same history, so this does not multiply
+single-site probabilities or enumerate AA sequences. Scalar form:
+``model.native.pgen_aa_degenerate(..., n_region=(begin,end))``.
+
 Pgen is exact and error-free by default. The explicit AA option
 `approximate_tandem=True` (CLI `--approximate-tandem`) uses rank-one tandem
 coefficients for supported dense joint-history models, including human isalgo IGH.

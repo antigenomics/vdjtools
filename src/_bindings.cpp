@@ -83,6 +83,7 @@ PYBIND11_MODULE(_core, m) {
           "Total Pgen of the amino-acid CDR3 and all its Hamming-1 neighbours (one substitution).");
     m.def("pgen_aa_degenerate", &vdjtools::pgen_aa_degenerate, py::arg("model"), py::arg("allowed"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1,
+          py::arg("n_region_start") = -1, py::arg("n_region_end") = -1,
           py::call_guard<py::gil_scoped_release>(),
           "Total Pgen of every amino-acid CDR3 matching a motif: allowed[c] is the string of "
           "residues permitted at position c ('' or a set containing 'X' = wildcard). The codon "
@@ -90,6 +91,7 @@ PYBIND11_MODULE(_core, m) {
     m.def("pgen_aa_degenerate_batch", &vdjtools::pgen_aa_degenerate_batch, py::arg("model"),
           py::arg("allowed"), py::arg("v_idxs") = std::vector<int>{},
           py::arg("j_idxs") = std::vector<int>{}, py::arg("threads") = 0,
+          py::arg("n_regions") = std::vector<std::pair<int,int>>{},
           py::call_guard<py::gil_scoped_release>(),
           "Batch pgen_aa_degenerate over many motifs, parallelized across queries and "
           "bitwise-identical to the per-query calls; threads=0 -> serial (Python APIs resolve allocation).");
