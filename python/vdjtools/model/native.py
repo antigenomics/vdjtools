@@ -157,6 +157,11 @@ def pack(model: Model):
     pm.maxpal_j5 = prep.maxpal["j_5"]
     pm.cut_v = [_encode(prep.cut["v"][a]) for a in v_alleles]
     pm.cut_j = [_encode(prep.cut["j"][a]) for a in j_alleles]
+    # Bounds come from the actual unextended reference, including clipped P maxima.
+    original_v=dict(model.genomic['genes_v'].select('v_allele','cdr3_segment').iter_rows()) if 'cdr3_segment' in model.genomic['genes_v'].columns else {}
+    original_j=dict(model.genomic['genes_j'].select('j_allele','cdr3_segment').iter_rows()) if 'cdr3_segment' in model.genomic['genes_j'].columns else {}
+    pm.germline_v_end=[len(original_v[a]) if a in original_v and prep.cut['v'][a][:len(original_v[a])]==original_v[a] else -1 for a in v_alleles]
+    pm.germline_j_start=[len(prep.cut['j'][a])-len(original_j[a]) if a in original_j and prep.cut['j'][a][len(prep.cut['j'][a])-len(original_j[a]):]==original_j[a] else -1 for a in j_alleles]
     pm.func_v = [vi[a] for a in prep.functional_v]
     pm.func_j = [ji[a] for a in prep.functional_j]
     pm.pv = [float(prep.p_v.get(a, 0.0)) for a in v_alleles]
@@ -167,6 +172,10 @@ def pack(model: Model):
         pm.maxpal_d5 = prep.maxpal["d_5"]
         pm.maxpal_d3 = prep.maxpal["d_3"]
         pm.cut_d = [_encode(prep.cut["d"][a]) for a in d_alleles]
+        original_d=dict(model.genomic['genes_d'].select('d_allele','cdr3_segment').iter_rows()) if 'cdr3_segment' in model.genomic['genes_d'].columns else {}
+        starts=[min(len(original_d[a]),prep.maxpal['d_5']) if a in original_d else -1 for a in d_alleles]
+        pm.germline_d_start=starts
+        pm.germline_d_end=[b+len(original_d[a]) if a in original_d and b>=0 and prep.cut['d'][a][b:b+len(original_d[a])]==original_d[a] else -1 for a,b in zip(d_alleles,starts)]
         pm.func_d = [di[a] for a in prep.functional_d]
         pm.pj = [float(prep.p_j.get(a, 0.0)) for a in j_alleles]
         pm.pd_given_j = [float(prep.p_d_given_j.get((j, d), 0.0)) for j in j_alleles for d in d_alleles]
@@ -272,6 +281,32 @@ def _n_region_bounds(region, length):
     return begin,end
 
 
+def _origin_codon_code(origin, length):
+    """Encode a latent local G/P/N pattern; '-' denotes a free N base."""
+    if origin is None:
+        return -1,-1
+    try:
+        position,roles,template=origin
+        from numbers import Integral
+        if not isinstance(position,Integral) or isinstance(position,bool):
+            raise ValueError
+        position=int(position)
+        if not 0<=position<length or not isinstance(roles,str) or not isinstance(template,str) or len(roles)!=3 or len(template)!=3:
+            raise ValueError
+        code=0
+        for k,(role,nt) in enumerate(zip(roles.upper(),template.upper())):
+            if role=='N' and nt=='-':
+                digit=0
+            elif role in ('G','P') and nt in 'ACGT':
+                digit=1+'ACGT'.index(nt)+(4 if role=='P' else 0)
+            else:
+                raise ValueError
+            code+=digit*9**k
+        return position,code
+    except (TypeError,ValueError):
+        raise ValueError("origin_codon must be (position, three G/P/N roles, immutable A/C/G/T with '-' at N bases)") from None
+
+
 def pgen_aa_degenerate(
     model: Model,
     allowed: list[str],
@@ -279,6 +314,7 @@ def pgen_aa_degenerate(
     j: str | None = None,
     *,
     n_region: tuple[int, int] | None = None,
+    origin_codon: tuple[int,str,str] | None = None,
 ) -> float:
     """Total Pgen of every CDR3 matching a motif — a per-position set of permitted residues.
 
@@ -303,6 +339,10 @@ def pgen_aa_degenerate(
             All nucleotides in that interval must be N additions in the same
             complete history. Retained/P-extended templates and mixed codons
             are excluded; this is a joint constraint, not a product of marginals.
+        origin_codon: Optional ``(position, roles, template_nt)`` local codon
+            constraint. Roles contain three G/P/N symbols; immutable G/P bases
+            require A/C/G/T and N bases require a dash, e.g. ``(5,"GGN","AT-")``.
+            Mutually exclusive with ``n_region``.
 
     Returns:
         Pgen as a float — the summed joint mass of matching sequences and the
@@ -319,7 +359,10 @@ def pgen_aa_degenerate(
     pm, vi, ji = pack(model)
     sets=[str(a).upper() for a in allowed]
     begin,end=_n_region_bounds(n_region,len(sets))
-    return _deg(pm,sets,_gene_idx(vi,v,"V"),_gene_idx(ji,j,"J"),begin,end)
+    position,pattern=_origin_codon_code(origin_codon,len(sets))
+    if begin>=0 and position>=0:
+        raise ValueError("choose n_region or origin_codon")
+    return _deg(pm,sets,_gene_idx(vi,v,"V"),_gene_idx(ji,j,"J"),begin,end,position,pattern)
 
 
 def pgen_aa_degenerate_batch(
@@ -330,6 +373,7 @@ def pgen_aa_degenerate_batch(
     threads: int = 0,
     *,
     n_regions: list[tuple[int, int] | None] | None = None,
+    origin_codons: list[tuple[int,str,str] | None] | None = None,
 ) -> list[float]:
     """Batch :func:`pgen_aa_degenerate` over many motifs, parallelized across queries.
 
@@ -345,6 +389,9 @@ def pgen_aa_degenerate_batch(
         j: Optional per-motif J alleles (as ``v``).
         n_regions: Optional per-motif half-open pure-N codon intervals, as in
             :func:`pgen_aa_degenerate`; an entry of ``None`` is unconstrained.
+        origin_codons: Optional per-motif local constraints, as in
+            :func:`pgen_aa_degenerate`; individual entries may be ``None``.
+            A motif may use a local constraint or an N interval, never both.
         threads: Worker threads; ``0`` = auto (the available CPU allocation). VDJ batches use
             workers from two motifs; cheaper VJ batches stay serial below 64 motifs.
 
@@ -364,7 +411,60 @@ def pgen_aa_degenerate_batch(
     if n_regions is not None and len(n_regions)!=len(sets):
         raise ValueError("n_regions must have the same length as allowed")
     intervals=[] if n_regions is None else [_n_region_bounds(r,len(a)) for r,a in zip(n_regions,sets)]
-    return _batch(pm,sets,v_idxs,j_idxs,kernel_threads(threads),intervals)
+    if origin_codons is not None and len(origin_codons)!=len(sets):
+        raise ValueError("origin_codons must have the same length as allowed")
+    local=[] if origin_codons is None else [_origin_codon_code(r,len(a)) for r,a in zip(origin_codons,sets)]
+    if intervals and local and any(n[0]>=0 and o[0]>=0 for n,o in zip(intervals,local)):
+        raise ValueError("choose an N interval or local origin condition per query")
+    return _batch(pm,sets,v_idxs,j_idxs,kernel_threads(threads),intervals,local)
+
+
+def codon_origin_posterior_batch(model: Model, cdr3_aas: list[str],
+                                  positions: list[list[int]] | None = None,
+                                  v: list[str | None] | None = None,
+                                  j: list[str | None] | None = None,
+                                  threads: int = 0):
+    """Exact posterior of local G/P/N roles and immutable template letters.
+
+    Sparse positive classes partition each requested codon. N bases have '-' in
+    template_nt; G/P letters are latent template constraints, not inferred observed
+    nucleotide sequences. Sum-product histories, including tandem D, are retained.
+    Unknown model likelihood has null class/probability and supported=False.
+    No generation mass or posterior is cached. Positions/rows retain input order.
+
+    Returns a Polars table with row, position, pattern (base-nine class identifier),
+    probability, origin, template_nt, codon_amino_acids and supported. Each base-nine
+    digit is N=0, G:A/C/G/T=1..4 or P:A/C/G/T=5..8, with the first base least
+    significant. codon_amino_acids lists genetic-code possibilities with immutable
+    letters fixed, before model-specific N probabilities or selection. It is not
+    a list of empirically observed alternatives. All class probabilities for a
+    supported requested site sum to one without truncation or renormalization.
+    """
+    import polars as pl
+    from numbers import Integral
+    from .._core import codon_origin_posterior_batch as _batch, codon_origin_amino_acids as _amino_acids
+    seqs=[s.upper() for s in cdr3_aas]
+    if positions is None:
+        positions=[list(range(len(s))) for s in seqs]
+    if len(positions)!=len(seqs) or (v is not None and len(v)!=len(seqs)) or (j is not None and len(j)!=len(seqs)):
+        raise ValueError("query, position and gene-call batch lengths must match")
+    if any(not isinstance(p,Integral) or isinstance(p,bool) for one in positions for p in one):
+        raise ValueError("origin positions must be integers")
+    pm,vi,ji=pack(model)
+    vs=[_gene_idx(vi,x,"V") for x in v] if v is not None else []
+    js=[_gene_idx(ji,x,"J") for x in j] if j is not None else []
+    frame=pl.DataFrame(_batch(pm,seqs,positions,vs,js,kernel_threads(threads))).with_columns(
+        pl.col('row').cast(pl.Int64),pl.col('position').cast(pl.Int64),pl.col('probability').fill_nan(None))
+    patterns=frame.filter(pl.col('pattern')>=0)['pattern'].unique().to_list()
+    choices=dict(zip(patterns,_amino_acids(patterns)))
+    role={0:'N',**{i:'G' for i in range(1,5)},**{i:'P' for i in range(5,9)}}
+    nt={0:'-',**{i:'ACGT'[(i-1)%4] for i in range(1,9)}}
+    def labels(mapping):
+        return pl.when(pl.col('pattern')>=0).then(pl.concat_str([
+            ((pl.col('pattern')//9**k)%9).replace_strict(mapping,default=None) for k in range(3)])).otherwise(None)
+    return frame.with_columns(labels(role).alias('origin'),labels(nt).alias('template_nt'),
+        pl.col('pattern').replace_strict(choices,default=None,return_dtype=pl.String).alias('codon_amino_acids'),
+        pl.col('probability').is_not_null().alias('supported'))
 
 
 def n_region_posterior_batch(model: Model, cdr3_aas: list[str],
