@@ -115,6 +115,20 @@ int main() {
     // Exercise the alternative left-mixture contraction as well.
     origin.q_tandem={0.,.5,.5,0.};
     if (!check_origin(origin,"CAGASF",{1,3})) return 15;
+    // Joint intervals exclude every retained template, including both D walks.
+    origin.ins_vd=origin.ins_dd={0.,0.,0.,0.,0.,0.,1.};
+    const std::string interval_aa="CAAGAASF";
+    std::vector<std::string> interval_motif;
+    for (char aa : interval_aa) interval_motif.push_back(std::string(1,aa));
+    for (const auto& history : {std::vector<double>{0.,1.,0.,0.}, std::vector<double>{0.,.5,.5,0.}}) {
+        origin.q_tandem=history;
+        const double total=pgen_aa(origin,interval_aa,-1,-1);
+        if (!(total>0.)) return 19;
+        if (std::abs(pgen_aa_degenerate(origin,interval_motif,-1,-1,1,3)-total)>1e-12*total ||
+            std::abs(pgen_aa_degenerate(origin,interval_motif,-1,-1,4,6)-total)>1e-12*total) return 20;
+        if (pgen_aa_degenerate(origin,interval_motif,-1,-1,1,4)!=0. ||
+            pgen_aa_degenerate(origin,interval_motif,-1,-1,4,7)!=0.) return 21;
+    }
     constexpr int N = 12;
     const uint64_t masks[] = {mask_for_aa('A'), mask_for_aa('R'), mask_wildcard(), mask_for_aa('G')};
     std::vector<double> right((N + 1) * 25), left(25);

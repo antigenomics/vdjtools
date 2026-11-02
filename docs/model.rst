@@ -894,6 +894,36 @@ or posterior interpretation, retain the model identity and the conditioning
 V/J calls. The returned origin is a model posterior, not observed nucleotide
 history or evidence of antigen recognition.
 
+Joint pure-N masses for residue sets and intervals
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The existing ``vdjtools.model.native.pgen_aa_degenerate`` and batch counterpart
+accept an optional origin constraint. ``n_region=(begin,end)`` is a nonempty,
+zero-based, half-open interval of AA codons; every nucleotide in those codons
+must be an N addition in the same complete history::
+
+   from vdjtools.model.native import pgen_aa_degenerate_batch
+
+   sequence = "CASSVGLYSTDTQYF"  # anchor-inclusive junction
+   allowed = list(sequence)
+   allowed[5] = "ACDEFGHIKLMNPQRSTVWY".replace(sequence[5], "")
+   alternative_N_mass = pgen_aa_degenerate_batch(
+       model, [allowed], n_regions=[(5, 6)], threads=0)
+
+This sums all 19 alternative residues in one masked DP pass. It is the **joint
+generation mass** of the motif and origin event, not an origin posterior.
+Divide by the motif's unconstrained mass only when that mass is positive.
+Zero joint mass remains zero; zero motif mass cannot establish an origin.
+V/J calls and model parameters retain their existing meanings.
+
+A multi-codon interval, such as ``(5,7)``, enforces the origin jointly across
+both codons. Multiplying their separate posteriors is generally incorrect,
+because trimming/P histories and N lengths correlate their origins. P extensions,
+retained templates and mixed boundary codons are excluded throughout the interval,
+including both tandem-D contractions. An entry of ``None`` in ``n_regions``
+leaves that motif unconstrained. Omitting the option preserves ordinary Pgen
+exactly. No generation probabilities are cached and no model is refitted.
+
 Native sampling from the command line
 -------------------------------------
 
