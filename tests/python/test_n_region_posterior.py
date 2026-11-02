@@ -117,3 +117,118 @@ def test_joint_N_interval_is_not_product_of_site_posteriors():
     assert np.isclose(joint,1/9,rtol=1e-12)
     assert 0<joint<1 and np.allclose(one,joint,rtol=1e-12)
     assert not np.isclose(joint,float(one.prod()))
+
+
+def test_local_pattern_distinguishes_palindromic_and_N_origin(toy):
+    from vdjtools.model.native import pgen_aa,pgen_aa_degenerate,pgen_aa_degenerate_batch
+    total=pgen_aa(toy,'CKF')
+    patterns=[(1,'PNN','A--'),(1,'NNN','---'),(0,'GGG','TGT'),(2,'GGG','TTT')]
+    values=pgen_aa_degenerate_batch(toy,[list('CKF')]*4,origin_codons=patterns,threads=1)
+    assert np.allclose(np.array(values)/total,[.8,.2,1.,1.],rtol=1e-12)
+    assert pgen_aa_degenerate(toy,list('CKF'),origin_codon=(1,'GNN','A--'))==0
+    assert pgen_aa_degenerate(toy,list('CKF'),origin_codon=(1,'PNN','C--'))==0
+
+
+@pytest.mark.parametrize('tail,allowed',[('AT',{'I':.75,'M':.25}),('TC',{'S':1.})])
+def test_mixed_codon_changes_only_its_N_base(tail,allowed):
+    from vdjtools.model.native import pgen_aa_degenerate
+    germline=pl.DataFrame([dict(allele=a,gene=a.split('*')[0],segment=k,
+        sequence=s,cdr3_anchor=-1,functional=True,full_germline='')
+        for a,k,s in [('TOYV1*01','V','TGT'+tail),('TOYJ1*01','J','TTT')]])
+    model=from_germline(germline,locus='TOY',ins_max=1,palindrome_max={'v_3':0,'j_5':0})
+    tables=dict(model.tables)
+    for name in ['v_3_del','j_5_del']:
+        tables[name]=tables[name].with_columns(p=(pl.col('ndel')==0).cast(pl.Float64))
+    tables['vj_ins']=tables['vj_ins'].with_columns(p=(pl.col('length')==1).cast(pl.Float64))
+    for name in ['vj_dinucl','vj_first_nt']:
+        tables[name]=tables[name].with_columns(p=pl.lit(.25))
+    model=Model(manifest=model.manifest,tables=tables,genomic=model.genomic).validate()
+    for residue,mass in allowed.items():
+        assert pgen_aa_degenerate(model,list('C'+residue+'F'),origin_codon=(1,'GGN',tail+'-'))==pytest.approx(mass)
+    assert pgen_aa_degenerate(model,['C',''.join(allowed),'F'],origin_codon=(1,'GGN',tail+'-'))==pytest.approx(1.)
+    alternatives=''.join(a for a in 'ACDEFGHIKLMNPQRSTVWY' if a not in allowed)
+    assert pgen_aa_degenerate(model,['C',alternatives,'F'],origin_codon=(1,'GGN',tail+'-'))==0
+    assert pgen_aa_degenerate(model,['C',''.join(allowed),'F'],n_region=(1,2))==0
+    from vdjtools.model import codon_origin_posterior_batch
+    row=codon_origin_posterior_batch(model,['C'+next(iter(allowed))+'F'],[[1]],threads=1).row(0,named=True)
+    assert row['codon_amino_acids']==''.join(sorted(allowed))
+
+
+def test_local_origin_posterior_partition_and_unknown_status(toy):
+    from vdjtools.model import codon_origin_posterior_batch
+    frame=codon_origin_posterior_batch(toy,['CKF','AAA'],positions=[[1,0],[1]],threads=1)
+    assert frame.filter(pl.col('supported')).group_by('row','position').agg(pl.col('probability').sum())['probability'].to_list()==pytest.approx([1.,1.])
+    middle=frame.filter((pl.col('row')==0)&(pl.col('position')==1)).sort('origin')
+    assert middle['origin'].to_list()==['NNN','PNN']
+    assert middle['template_nt'].to_list()==['---','A--']
+    assert middle['probability'].to_list()==pytest.approx([.2,.8])
+    unknown=frame.filter(pl.col('row')==1)
+    assert unknown.height==1 and unknown['probability'][0] is None and not unknown['supported'][0]
+    assert unknown['origin'][0] is None and unknown['template_nt'][0] is None
+    assert codon_origin_posterior_batch(toy,['CKF']*64,threads=1).equals(codon_origin_posterior_batch(toy,['CKF']*64,threads=min(4,available_cores())))
+    assert codon_origin_posterior_batch(toy,[]).is_empty()
+
+
+@pytest.mark.parametrize('locus',['TRB','TRD','IGH'])
+def test_local_origin_partition_matches_pure_N_marginal_in_tandem_models(locus):
+    from vdjtools.model import codon_origin_posterior_batch
+    golden=json.loads((Path(__file__).parent/'fixtures/tandem_pgen_golden.json').read_text())[locus]['data']
+    model=load_bundled(locus,source='isalgo')
+    seqs=golden['junction_aa'][:2];vs=golden['v_call'][:2];js=golden['j_call'][:2]
+    positions=[[0,len(s)//2,len(s)-1] for s in seqs]
+    full=codon_origin_posterior_batch(model,seqs,positions,vs,js,threads=1)
+    assert full['supported'].all()
+    assert np.allclose(full.group_by('row','position').agg(pl.col('probability').sum())['probability'],1.,rtol=1e-9,atol=0)
+    pure={(r['row'],r['position']):r['probability'] for r in full.filter(pl.col('origin')=='NNN').to_dicts()}
+    old=n_region_posterior_batch(model,seqs,positions,vs,js,threads=1)
+    assert np.allclose([pure.get((r['row'],r['position']),0.) for r in old.to_dicts()],old['n_probability'],rtol=1e-10,atol=0)
+
+
+@pytest.mark.parametrize('ndel5,ndel3,residue,origin,template',[(-1,0,'R','PGG','CGC'),(0,-1,'A','GGP','GCG')])
+def test_D_palindromes_have_P_origin(ndel5,ndel3,residue,origin,template):
+    from vdjtools.model import codon_origin_posterior_batch
+    germline=pl.DataFrame([dict(allele=a,gene=a.split('*')[0],segment=k,
+        sequence=s,cdr3_anchor=-1,functional=True,full_germline='') for a,k,s in
+        [('TOYV1*01','V','TGT'),('TOYD1*01','D','GC'),('TOYJ1*01','J','TTT')]])
+    model=from_germline(germline,locus='TOY',ins_max=0,
+        palindrome_max={'v_3':0,'j_5':0,'d_5':1,'d_3':1})
+    tables=dict(model.tables)
+    for name in ['v_3_del','j_5_del']:
+        tables[name]=tables[name].with_columns(p=(pl.col('ndel')==0).cast(pl.Float64))
+    tables['d_del']=tables['d_del'].with_columns(p=((pl.col('ndel5')==ndel5)&(pl.col('ndel3')==ndel3)).cast(pl.Float64))
+    model=Model(manifest=model.manifest,tables=tables,genomic=model.genomic).validate()
+    result=codon_origin_posterior_batch(model,['C'+residue+'F'],[[1]],threads=1)
+    assert result['origin'].to_list()==[origin] and result['template_nt'].to_list()==[template]
+    assert result['probability'].to_list()==pytest.approx([1.])
+
+
+def test_local_origin_validation_and_mixed_constraint_batch(toy):
+    from vdjtools.model import codon_origin_posterior_batch
+    from vdjtools.model.native import pgen_aa_degenerate,pgen_aa_degenerate_batch
+    motif=list('CKF');total=pgen_aa_degenerate(toy,motif)
+    assert pgen_aa_degenerate_batch(toy,[motif]*3,n_regions=[None,None,(1,2)],
+        origin_codons=[None,(1,'PNN','A--'),None])==pytest.approx([total,.8*total,.2*total])
+    for bad in [(True,'PNN','A--'),(3,'PNN','A--'),(1,'XNN','A--'),(1,'PNN','---'),(1,'NNN','A--'),(1,'GNN','R--')]:
+        with pytest.raises(ValueError):
+            pgen_aa_degenerate(toy,motif,origin_codon=bad)
+    with pytest.raises(ValueError):
+        pgen_aa_degenerate_batch(toy,[motif],origin_codons=[])
+    with pytest.raises(ValueError):
+        pgen_aa_degenerate(toy,motif,n_region=(1,2),origin_codon=(1,'NNN','---'))
+    for bad in [[[-1]],[[3]],[[1.5]],[[True]],[]]:
+        with pytest.raises(ValueError):
+            codon_origin_posterior_batch(toy,['CKF'],bad)
+    with pytest.raises(ValueError):
+        codon_origin_posterior_batch(toy,['CKF'],v=[])
+    with pytest.raises(KeyError):
+        codon_origin_posterior_batch(toy,['CKF'],v=['missing'])
+
+
+def test_missing_unextended_reference_does_not_break_ordinary_pgen(toy):
+    from vdjtools.model.native import pgen_aa, pgen_aa_degenerate
+    custom=Model(manifest=toy.manifest,tables=toy.tables,
+        genomic={name:frame.drop('cdr3_segment') if 'cdr3_segment' in frame.columns else frame
+                 for name,frame in toy.genomic.items()})
+    assert pgen_aa(custom,'CKF')==pgen_aa(toy,'CKF')
+    with pytest.raises(ValueError,match='unextended reference'):
+        pgen_aa_degenerate(custom,list('CKF'),origin_codon=(1,'NNN','---'))

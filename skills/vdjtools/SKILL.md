@@ -91,6 +91,16 @@ motif. All interval bases must be N in the same history, so this does not multip
 single-site probabilities or enumerate AA sequences. Scalar form:
 ``model.native.pgen_aa_degenerate(..., n_region=(begin,end))``.
 
+For mixed G/P/N codons, use `model.codon_origin_posterior_batch` with the same
+query/position/V/J/thread arguments. Sparse `origin`, `template_nt`, `probability`
+classes partition each supported codon; zero model mass is explicitly unknown.
+`codon_amino_acids` lists genetic-code choices with immutable G/P letters fixed,
+not model-positive alternatives or observations. TCN permits only S despite its
+N base. Classes coarsen histories; they do not infer observed nucleotide sequences.
+For matching alternative masses reuse `pgen_aa_degenerate_batch` with
+`origin_codons=[(position,"GGN","AT-"), ...]` (scalar: `origin_codon`). N bases
+require `-`, G/P bases A/C/G/T. Do not combine with an N interval on the same query.
+
 Pgen is exact and error-free by default. The explicit AA option
 `approximate_tandem=True` (CLI `--approximate-tandem`) uses rank-one tandem
 coefficients for supported dense joint-history models, including human isalgo IGH.
