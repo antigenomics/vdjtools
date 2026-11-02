@@ -20,6 +20,8 @@ struct PackedModel {
 
     // Germline: palindrome-extended CDR3-region cut segments, pre-encoded to 0..3.
     std::vector<std::vector<int8_t>> cut_v, cut_j, cut_d;
+    // Actual unextended-reference bounds within each cut; outside is palindromic P.
+    std::vector<int> germline_v_end, germline_j_start, germline_d_start, germline_d_end;
     std::vector<int> func_v, func_j, func_d;  // indices of functional (usable) genes
 
     // Gene choice.
@@ -86,6 +88,19 @@ std::vector<std::vector<double>> n_region_posterior_batch(
     const std::vector<int>& v_idxs, const std::vector<int>& j_idxs, int nthreads);
 
 
+// Exact latent local codon classes; N has no fixed letter, G/P retain their
+// template letter. Pattern base-nine digits: N=0, G:A/C/G/T=1..4, P:A/C/G/T=5..8.
+// Sparse positive classes; pattern=-1 and NaN probability mark unsupported sites.
+std::vector<std::string> codon_origin_amino_acids(const std::vector<int>& patterns);
+struct CodonOriginPosteriorBatch {
+    std::vector<int> row, position, pattern;
+    std::vector<double> probability;
+};
+CodonOriginPosteriorBatch codon_origin_posterior_batch(
+    const PackedModel& m, const std::vector<std::string>& seqs,
+    const std::vector<std::vector<int>>& positions,
+    const std::vector<int>& v_idxs, const std::vector<int>& j_idxs, int nthreads);
+
 // Total Pgen of ``aa`` and all its Hamming-distance-1 amino-acid neighbours (one substitution),
 // via the inclusion-exclusion identity over per-position wildcards. v_idx/j_idx as above.
 double pgen_aa_hamming1(const PackedModel& m, const std::string& aa, int v_idx, int j_idx);
@@ -104,7 +119,8 @@ double pgen_aa_masked(const PackedModel& m, const uint64_t* allowed, int L, int 
 // Optional half-open codon interval requires every interval base to be N in the same history;
 // (-1,-1) leaves origin unconstrained. The return is joint mass, not a posterior.
 double pgen_aa_degenerate(const PackedModel& m, const std::vector<std::string>& allowed,
-                          int v_idx, int j_idx, int n_region_start = -1, int n_region_end = -1);
+                          int v_idx, int j_idx, int n_region_start = -1, int n_region_end = -1,
+                          int origin_position = -1, int origin_pattern = -1);
 
 // Batch ``pgen_aa_degenerate``, parallelized across queries like ``pgen_aa_batch`` and
 // bitwise-identical to the per-query calls. Empty v_idxs/j_idxs → all -1 (gene-agnostic).
@@ -112,7 +128,8 @@ std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
                                              const std::vector<std::vector<std::string>>& allowed,
                                              const std::vector<int>& v_idxs,
                                              const std::vector<int>& j_idxs, int nthreads,
-                                             const std::vector<std::pair<int,int>>& n_regions = {});
+                                             const std::vector<std::pair<int,int>>& n_regions = {},
+                                             const std::vector<std::pair<int,int>>& origin_codons = {});
 
 // Batch nucleotide Pgen over many sequences, parallelized across sequences exactly as
 // ``pgen_aa_batch`` is, and bitwise-identical to the per-sequence ``pgen_nt`` calls for any

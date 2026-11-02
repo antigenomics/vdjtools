@@ -334,6 +334,40 @@ std::vector<int> mask_or_all(int idx, const std::vector<int>& all) {
 // trailing two nt (nt[i-1], nt[i-2]), encoded s = (a+1)*5 + (b+1) in [0,25). Matches OLGA exactly.
 inline int sidx(int a, int b) { return (a + 1) * 5 + (b + 1); }
 
+// Local latent codon class: base-nine digits N, G:A/C/G/T, P:A/C/G/T.
+// Immutable letters constrain the ordinary codon mask; these predicates only
+// classify placed template/N pieces. They do not enumerate new histories.
+struct LocalOrigin {
+    int begin;
+    std::array<int,3> role{}, nt{};
+    LocalOrigin(int position, int code) : begin(3*position) {
+        for (int k=0; k<3; ++k) {
+            const int digit=code%9; code/=9;
+            role[k]=digit==0 ? 0 : digit<=4 ? 1 : 2;
+            nt[k]=digit==0 ? -1 : (digit-1)%4;
+        }
+    }
+    bool insertion_ok(int q) const {
+        return q<begin || q>=begin+3 || role[q-begin]==0;
+    }
+    bool template_ok(int q, int ref, int length, int g_begin, int g_end) const {
+        if (g_begin<0 || g_end<g_begin)
+            throw std::invalid_argument("local origin requires the declared unextended reference bounds");
+        for (int t=std::max(q,begin); t<std::min(q+length,begin+3); ++t) {
+            const int r=ref+t-q, expected=(r>=g_begin && r<g_end) ? 1 : 2;
+            if (role[t-begin]!=expected) return false;
+        }
+        return true;
+    }
+    uint64_t codons() const {
+        uint64_t mask=~uint64_t{0};
+        if (nt[0]>=0) mask&=0xffffULL<<(16*nt[0]);
+        if (nt[1]>=0) mask&=0x000f000f000f000fULL<<(4*nt[1]);
+        if (nt[2]>=0) mask&=0x1111111111111111ULL<<nt[2];
+        return mask;
+    }
+};
+
 // Lf[p*25 + s] = weight of V germline (>=1 nt) + N1 insertion filling CDR3 nt positions [0,p),
 // trailing state s = (nt[p-1], nt[p-2]); Pins + first-nt bias baked in; complete codons in [0,p)
 // constrained. p is where the next segment (D for VDJ, J for VJ) starts. The insertion arrays are
@@ -343,7 +377,7 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
                 const std::vector<double>& pins, const std::vector<double>& R,
                 const std::vector<double>& bias, int jbind,
                 std::vector<double>& Lf, std::vector<char>& lf_any,
-                const double* pv_override = nullptr, int n_codon = -1) {
+                const double* pv_override = nullptr, int n_codon = -1, const LocalOrigin* origin = nullptr) {
     Lf.assign((N + 1) * 25, 0.0);
     std::vector<double> seed((N + 1) * 25, 0.0);
     std::vector<char> has_seed(N + 1, 0);
@@ -359,6 +393,7 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
         int Lv = gv.size();
         for (int len_v = 1; len_v <= std::min(Lv, N); ++len_v) {
             if (n_codon >= 0 && len_v > 3*n_codon) continue;
+            if (origin && !origin->template_ok(0,0,len_v,0,m.germline_v_end[v])) continue;
             int div = Lv - len_v;
             if (div < 0 || div >= m.nbins_v) continue;
             double pdv = m.del_v[v * m.nbins_v + div];
@@ -386,6 +421,7 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
             for (int s = 0; s < 25; ++s) Lf[q * 25 + s] += pins[0] * cur[s];
         for (int ell = 1; q + ell <= N && ell < (int)pins.size(); ++ell) {
             int mm = q + ell - 1;
+            if (origin && !origin->insertion_ok(mm)) break;
             bool ce = (mm % 3 == 2);
             uint64_t am = allowed[mm / 3];
             unsigned candidates = codon_nt_mask(am, mm % 3);
@@ -420,7 +456,7 @@ void mk_left_tm(const PackedModel& m, const uint64_t* allowed, int N, int v_idx,
 // state s = (nt[p], nt[p+1]); Pins(DJ) + bias baked in; complete codons in [p,N) constrained. The
 // DJ Markov reads 3'->5', so the backward pass extends leftward from the J boundary.
 void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, int j_idx,
-                 std::vector<double>& Rb, std::vector<char>& rb_any, int n_codon = -1, int n_codons = 1) {
+                 std::vector<double>& Rb, std::vector<char>& rb_any, int n_codon = -1, int n_codons = 1, const LocalOrigin* origin = nullptr) {
     Rb.assign((N + 1) * 25, 0.0);
     const auto& pins = m.ins_dj;
     const auto& R = m.R_dj;
@@ -438,6 +474,7 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
         for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
             int right = N - len_j, idxj = Lj - len_j;
             if (n_codon >= 0 && right < 3*(n_codon+n_codons)) continue;
+            if (origin && !origin->template_ok(right,idxj,len_j,m.germline_j_start[j],Lj)) continue;
             if (idxj < 0 || idxj >= m.nbins_j) continue;
             double pdj = m.del_j[j * m.nbins_j + idxj];
             if (pdj == 0.0) continue;
@@ -466,6 +503,7 @@ void mk_right_tm(const PackedModel& m, const uint64_t* allowed, int N, int D, in
             for (int s = 0; s < 25; ++s) Rb[right * 25 + s] += pins[0] * cur[s];
         for (int ell = 1; right - ell >= 0 && ell < (int)pins.size(); ++ell) {
             int mm = right - ell;
+            if (origin && !origin->insertion_ok(mm)) break;
             bool ce = (mm % 3 == 0);  // codon [mm,mm+1,mm+2] completes now
             uint64_t am = allowed[mm / 3];
             unsigned candidates = codon_nt_mask(am, mm % 3);
@@ -621,7 +659,7 @@ inline bool thread_one(std::vector<double>& dp, std::vector<double>& ndp, int nt
 double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
                     const std::vector<double>* shared_left = nullptr,
                     const std::vector<char>* shared_any = nullptr,
-                    const double* pv_override = nullptr, int n_codon = -1, int n_codons = 1) {
+                    const double* pv_override = nullptr, int n_codon = -1, int n_codons = 1, const LocalOrigin* origin = nullptr) {
     int N = 3 * alen;
     std::vector<double> local_left, Rb, res, reduced((N + 1) * 4);
     std::vector<uint64_t> right_terms(N + 1);
@@ -629,7 +667,7 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
     std::vector<int> first, last;
     std::vector<char> local_any, rb_any, live;
     if (!shared_left)
-        mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, local_left, local_any, pv_override, n_codon);
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, local_left, local_any, pv_override, n_codon, origin);
     const auto& Lf = shared_left ? *shared_left : local_left;
     const auto& lf_any = shared_any ? *shared_any : local_any;
     double total = 0.0;
@@ -655,7 +693,7 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
         }
     }
     for (int D : m.func_d) {
-        mk_right_tm(m, allowed, N, D, j_idx, Rb, rb_any, n_codon, n_codons);
+        mk_right_tm(m, allowed, N, D, j_idx, Rb, rb_any, n_codon, n_codons, origin);
         // Empty, one-base and two-base prefixes recur across cuts of this D.
         // Their nonnegative boundary probabilities are local to this query/D.
         std::fill(short_results.begin(), short_results.end(), -1.0);
@@ -755,6 +793,7 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
                 // Outside this interval every contribution is exactly zero.
                 for (int pos = first[ld]; pos <= last[ld]; ++pos) {
                     if (n_codon >= 0 && ld > 0 && pos < 3*(n_codon+n_codons) && pos+ld > 3*n_codon) continue;
+                    if (origin && !origin->template_ok(pos,idx5,ld,m.germline_d_start[D],m.germline_d_end[D])) continue;
                     total += pdel * r[pos];
                 }
             }
@@ -768,7 +807,7 @@ double pgen_aa_vdj(const PackedModel& m, const uint64_t* allowed, int alen, int 
 // q in [q0, N]. Same recurrence as mk_left_tm's insertion loop but seeded from an arbitrary state.
 void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64_t* allowed,
                      const std::vector<double>& pins, const std::vector<double>& R,
-                     const std::vector<double>& bias, std::vector<double>& Mf) {
+                     const std::vector<double>& bias, std::vector<double>& Mf, const LocalOrigin* origin = nullptr) {
     // At an insertion END the next block is fixed germline. Completed
     // codons need no past bases; a one-base partial codon needs only that
     // base. Keep the full state in cur for the insertion Markov recurrence.
@@ -787,7 +826,7 @@ void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64
         }
     };
     if (!pins.empty() && pins[0] != 0.0) accumulate(q0, dp0.data(), pins[0]);
-    if (pins.size() < 2 || q0 >= N) return;
+    if (pins.size() < 2 || q0 >= N || (origin && !origin->insertion_ok(q0))) return;
     // Inside an insertion, completed codons still retain the last Markov base.
     // Phases 0/1/2 need 4/4/16 states; insertion END projection remains 1/4/16.
     std::array<double, 16> first{}, second{};
@@ -819,7 +858,7 @@ void extend_ins_into(const std::vector<double>& dp0, int q0, int N, const uint64
                     Mf[q * 25 + sidx(a, b)] += pins[ell] * cur[a * 4 + b];
             }
         }
-        if (q == N || ell + 1 == (int)pins.size()) break;
+        if (q == N || ell + 1 == (int)pins.size() || (origin && !origin->insertion_ok(q))) break;
         std::fill_n(next, 16, 0.0);
         if (ph == 2) {
             for (int a = 0; a < 4; ++a) for (int b = 0; b < 4; ++b) {
@@ -884,7 +923,7 @@ struct TandemScratch {
 // After two fixed bases the 25-state message has exactly one possible state.
 template<class Emit>
 void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletions,
-                PrefixPreparation& prepared, int end, const uint64_t* allowed, Emit emit, int n_codon = -1, int n_codons = 1) {
+                PrefixPreparation& prepared, int end, const uint64_t* allowed, Emit emit, int n_codon = -1, int n_codons = 1, const LocalOrigin* origin = nullptr) {
     if (end < 2) return;
     const auto& cut = m.cut_d[d];
     const int L = cut.size();
@@ -926,7 +965,8 @@ void d_prefixes(const PackedModel& m, int d, const std::vector<double>& deletion
                 const int i3 = L - i5 - len;
                 if (i3 >= m.nbins_d3) continue;
                 const double weight = row[i5 * m.nbins_d3 + i3];
-                if (weight != 0.0 && !(n_codon >= 0 && pos < 3*(n_codon+n_codons) && pos+len > 3*n_codon))
+                if (weight != 0.0 && !(n_codon >= 0 && pos < 3*(n_codon+n_codons) && pos+len > 3*n_codon) &&
+                    (!origin || origin->template_ok(pos,i5,len,m.germline_d_start[d],m.germline_d_end[d])))
                     emit(pos + len, state, weight, sole);
             }
         }
@@ -992,7 +1032,7 @@ double rank_one_residual(double sum, double diagonal, const double* weights,
 // the right message before walking D2; linearity preserves every history.
 double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, int j_idx,
                        const std::vector<double>& Lf, TandemScratch& scratch,
-                       const RankOneHistory* rank1 = nullptr, int n_codon = -1, int n_codons = 1) {
+                       const RankOneHistory* rank1 = nullptr, int n_codon = -1, int n_codons = 1, const LocalOrigin* origin = nullptr) {
     const int N = 3 * alen, width = (N + 1) * 25;
     std::vector<double> Rb, Mf(width), seeds(width), dp(25);
     std::vector<char> rb_any;
@@ -1019,7 +1059,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
     if (active_d.empty()) return 0.0;
     for (size_t k = 0; k < js.size(); ++k)
         if (active_j[k])
-            mk_right_tm(m, allowed, N, -1, js[k], rights[k], rb_any, n_codon, n_codons);
+            mk_right_tm(m, allowed, N, -1, js[k], rights[k], rb_any, n_codon, n_codons, origin);
     auto& first_prepared = scratch.first;
     first_prepared.prepare(Lf, N - 2, allowed);
     double total = 0.0;
@@ -1047,13 +1087,13 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
             [&](int q, const double* state, double w, int sole) {
                 if (sole >= 0) seeds[q * 25 + sole] += w * state[sole];
                 else for (int s = 0; s < 25; ++s) seeds[q * 25 + s] += w * state[s];
-            }, n_codon, n_codons);
+            }, n_codon, n_codons, origin);
         std::fill(Mf.begin(), Mf.end(), 0.0);
         for (int q = 1; q < N - 1; ++q) {
             const double* seed = seeds.data() + q * 25;
             if (std::none_of(seed, seed + 25, [](double w) { return w != 0.0; })) continue;
             std::copy_n(seed, 25, dp.begin());
-            extend_ins_into(dp, q, N - 2, allowed, m.ins_dd, m.R_dd, m.bias_dd, Mf);
+            extend_ins_into(dp, q, N - 2, allowed, m.ins_dd, m.R_dd, m.bias_dd, Mf, origin);
         }
         if (mix_left) {
             middles[d1] = Mf;
@@ -1076,7 +1116,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
             d_prefixes(m, d2, m.del_d2, second_prepared, N - 1, allowed,
                 [&](int q, const double* state, double w, int sole) {
                     total += w * contract_right(state, coefficients.data() + q * 25, sole);
-                }, n_codon, n_codons);
+                }, n_codon, n_codons, origin);
         }
     }
     // With many D genes (IGH), mix D1 histories on the left instead. This
@@ -1114,7 +1154,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
             d_prefixes(m, d2, m.del_d2, second_prepared, N - 1, allowed,
                 [&](int q, const double* state, double w, int sole) {
                     total += w * contract_right(state, coefficients.data() + q * 25, sole);
-                }, n_codon, n_codons);
+                }, n_codon, n_codons, origin);
         }
     }
     return total;
@@ -1125,7 +1165,7 @@ double pgen_aa_vdj_dd(const PackedModel& m, const uint64_t* allowed, int alen, i
 // the fixed J germline suffix over [N-len_j, N) and sum. O(nJ * N * 25) — replaces the old
 // per-scenario enumeration, which was ~1000x slower on VJ loci with many V/J alleles.
 double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v_idx, int j_idx,
-                  const double* pv_override = nullptr, int n_codon = -1, int n_codons = 1) {
+                  const double* pv_override = nullptr, int n_codon = -1, int n_codons = 1, const LocalOrigin* origin = nullptr) {
     int N = 3 * alen;
     double total = 0.0;
     std::vector<double> Lf, dp(25), ndp(25);
@@ -1153,10 +1193,11 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
             }
         }
         if (!possible) continue;
-        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any, pv_override, n_codon);
+        mk_left_tm(m, allowed, N, v_idx, m.ins_vj, m.R_vj, m.bias_vj, j, Lf, lf_any, pv_override, n_codon, origin);
         for (int len_j = 1; len_j <= std::min(Lj, N); ++len_j) {
             int p = N - len_j, idxj = Lj - len_j;
             if (n_codon >= 0 && p < 3*(n_codon+n_codons)) continue;
+            if (origin && !origin->template_ok(p,idxj,len_j,m.germline_j_start[j],Lj)) continue;
             if (p < 1 || !lf_any[p]) continue;  // >=1 V/insertion nt before J
             if (idxj < 0 || idxj >= m.nbins_j) continue;
             double pdj = m.del_j[j * m.nbins_j + idxj];
@@ -1194,17 +1235,17 @@ double pgen_aa_vj(const PackedModel& m, const uint64_t* allowed, int alen, int v
 static double pgen_aa_masked_scratch(const PackedModel& m, const uint64_t* allowed, int L,
                                      int v_idx, int j_idx, TandemScratch& scratch,
                                      const double* pv_override = nullptr,
-                                     const RankOneHistory* rank1 = nullptr, int n_codon = -1, int n_codons = 1) {
-    if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx, pv_override, n_codon, n_codons);
+                                     const RankOneHistory* rank1 = nullptr, int n_codon = -1, int n_codons = 1, const LocalOrigin* origin = nullptr) {
+    if (!m.vdj) return pgen_aa_vj(m, allowed, L, v_idx, j_idx, pv_override, n_codon, n_codons, origin);
     // Share the V+VD message across both branches of the exact n_D mixture.
     if (!m.dd || !(m.p_nd2 > 0.0))
-        return m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, nullptr, nullptr, pv_override, n_codon, n_codons);
+        return m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, nullptr, nullptr, pv_override, n_codon, n_codons, origin);
     std::vector<double> left;
     std::vector<char> any;
-    mk_left_tm(m, allowed, 3 * L, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left, any, pv_override, n_codon);
+    mk_left_tm(m, allowed, 3 * L, v_idx, m.ins_vd, m.R_vd, m.bias_vd, -1, left, any, pv_override, n_codon, origin);
     double r = m.p_nd1 == 0.0 ? 0.0 :
-        m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, &left, &any, nullptr, n_codon, n_codons);
-    r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, j_idx, left, scratch, rank1, n_codon, n_codons);
+        m.p_nd1 * pgen_aa_vdj(m, allowed, L, v_idx, j_idx, &left, &any, nullptr, n_codon, n_codons, origin);
+    r += m.p_nd2 * pgen_aa_vdj_dd(m, allowed, L, j_idx, left, scratch, rank1, n_codon, n_codons, origin);
     return r;
 }
 
@@ -1560,11 +1601,35 @@ static void validate_n_region(int begin, int end, int length) {
         throw std::invalid_argument("N region must be a nonempty half-open codon interval within the motif");
 }
 
+static void validate_origin_metadata(const PackedModel& m) {
+    if (m.germline_v_end.size()!=m.cut_v.size() || m.germline_j_start.size()!=m.cut_j.size() ||
+        m.germline_d_start.size()!=m.cut_d.size() || m.germline_d_end.size()!=m.cut_d.size())
+        throw std::invalid_argument("local origin requires packed unextended-reference bounds");
+}
+
+static void validate_local_origin(const PackedModel& m, int position, int code, int length) {
+    if (position==-1 && code==-1) return;
+    if (position<0 || position>=length || code<0 || code>=729)
+        throw std::invalid_argument("local origin requires an in-range codon and base-nine pattern0..728");
+    validate_origin_metadata(m);
+}
+
 double pgen_aa_degenerate(const PackedModel& m, const std::vector<std::string>& allowed,
-                          int v_idx, int j_idx, int n_region_start, int n_region_end) {
+                          int v_idx, int j_idx, int n_region_start, int n_region_end,
+                          int origin_position, int origin_pattern) {
     std::vector<uint64_t> masks = masks_for_sets(allowed);
     const int length = static_cast<int>(masks.size());
     validate_n_region(n_region_start,n_region_end,length);
+    validate_local_origin(m,origin_position,origin_pattern,length);
+    if (origin_position>=0) {
+        if (n_region_start>=0) throw std::invalid_argument("choose an N interval or one local origin condition");
+        LocalOrigin origin(origin_position,origin_pattern);
+        masks[origin_position]&=origin.codons();
+        if (!masks[origin_position]) return 0.0;
+        TandemScratch scratch;
+        return pgen_aa_masked_scratch(m,masks.data(),length,v_idx,j_idx,scratch,
+                                     nullptr,nullptr,-1,1,&origin);
+    }
     if (n_region_start < 0) return pgen_aa_masked(m,masks.data(),length,v_idx,j_idx);
     TandemScratch scratch;
     return pgen_aa_masked_scratch(m,masks.data(),length,v_idx,j_idx,scratch,
@@ -1578,11 +1643,12 @@ std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
                                              const std::vector<std::vector<std::string>>& allowed,
                                              const std::vector<int>& v_idxs,
                                              const std::vector<int>& j_idxs, int nthreads,
-                                             const std::vector<std::pair<int,int>>& n_regions) {
+                                             const std::vector<std::pair<int,int>>& n_regions,
+                                             const std::vector<std::pair<int,int>>& origin_codons) {
     const size_t n = allowed.size();
     if ((!v_idxs.empty() && v_idxs.size()!=n) || (!j_idxs.empty() && j_idxs.size()!=n) ||
-        (!n_regions.empty() && n_regions.size()!=n))
-        throw std::invalid_argument("motif, gene-call and N-region batch lengths must match");
+        (!n_regions.empty() && n_regions.size()!=n) || (!origin_codons.empty() && origin_codons.size()!=n))
+        throw std::invalid_argument("motif, gene-call and origin-constraint batch lengths must match");
     std::vector<std::vector<uint64_t>> masks;
     masks.reserve(n);
     for (const auto& a : allowed) masks.push_back(masks_for_sets(a));
@@ -1592,8 +1658,25 @@ std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
         if (vi(i)<-1 || vi(i)>=m.nV() || ji(i)<-1 || ji(i)>=m.nJ())
             throw std::invalid_argument("gene index outside model");
         if (!n_regions.empty()) validate_n_region(n_regions[i].first,n_regions[i].second,masks[i].size());
+        if (!origin_codons.empty()) {
+            const auto [p,code]=origin_codons[i];
+            validate_local_origin(m,p,code,masks[i].size());
+            if (p>=0) {
+                if (!n_regions.empty() && n_regions[i].first>=0)
+                    throw std::invalid_argument("choose an N interval or one local origin condition per query");
+                masks[i][p]&=LocalOrigin(p,code).codons();
+            }
+        }
     }
     return run_batch(n, nthreads, [&](size_t i) {
+        if (!origin_codons.empty() && origin_codons[i].first>=0) {
+            const auto [p,code]=origin_codons[i];
+            LocalOrigin origin(p,code);
+            if (!masks[i][p]) return 0.0;
+            TandemScratch scratch;
+            return pgen_aa_masked_scratch(m,masks[i].data(),static_cast<int>(masks[i].size()),vi(i),ji(i),
+                                         scratch,nullptr,nullptr,-1,1,&origin);
+        }
         if (n_regions.empty() || n_regions[i].first<0)
             return pgen_aa_masked(m,masks[i].data(),static_cast<int>(masks[i].size()),vi(i),ji(i));
         const auto [begin,end] = n_regions[i];
@@ -1601,6 +1684,96 @@ std::vector<double> pgen_aa_degenerate_batch(const PackedModel& m,
         return pgen_aa_masked_scratch(m,masks[i].data(),static_cast<int>(masks[i].size()),vi(i),ji(i),
                                      scratch,nullptr,nullptr,begin,end-begin);
     }, m.vdj);
+}
+
+std::vector<std::string> codon_origin_amino_acids(const std::vector<int>& patterns) {
+    std::vector<std::string> out; out.reserve(patterns.size());
+    for (int code : patterns) {
+        if (code<0 || code>=729) throw std::invalid_argument("origin pattern must be0..728");
+        const uint64_t mask=LocalOrigin(0,code).codons();
+        std::string allowed;
+        for (char aa : std::string("ACDEFGHIKLMNPQRSTVWY"))
+            if (mask & mask_for_aa(aa)) allowed.push_back(aa);
+        out.push_back(std::move(allowed));
+    }
+    return out;
+}
+
+// Partition each requested codon by immutable-letter/role pattern. Candidate
+// keys come from the query's existing genetic-code mask (at most27*d_a keys),
+// not inferred observed nucleotides or a second rearrangement enumerator.
+CodonOriginPosteriorBatch codon_origin_posterior_batch(
+    const PackedModel& m, const std::vector<std::string>& seqs,
+    const std::vector<std::vector<int>>& positions,
+    const std::vector<int>& v_idxs, const std::vector<int>& j_idxs, int nthreads) {
+    if (positions.size()!=seqs.size() || (!v_idxs.empty() && v_idxs.size()!=seqs.size()) ||
+        (!j_idxs.empty() && j_idxs.size()!=seqs.size()))
+        throw std::invalid_argument("query, position and gene-call batch lengths must match");
+    if (!seqs.empty()) validate_origin_metadata(m);
+    for (size_t i=0; i<seqs.size(); ++i) {
+        for (int p : positions[i])
+            if (p<0 || p>=static_cast<int>(seqs[i].size()))
+                throw std::invalid_argument("origin position outside junction");
+        if ((!v_idxs.empty() && (v_idxs[i]<-1 || v_idxs[i]>=m.nV())) ||
+            (!j_idxs.empty() && (j_idxs[i]<-1 || j_idxs[i]>=m.nJ())))
+            throw std::invalid_argument("gene index outside model");
+    }
+    struct Entry { int position, pattern; double probability; };
+    auto rows=run_batch(seqs.size(),nthreads,[&](size_t i) {
+        std::vector<Entry> result;
+        if (positions[i].empty()) return result;
+        const int v=v_idxs.empty() ? -1 : v_idxs[i], j=j_idxs.empty() ? -1 : j_idxs[i];
+        const int length=static_cast<int>(seqs[i].size());
+        std::vector<uint64_t> masks(length);
+        for (int p=0; p<length; ++p) masks[p]=mask_for_aa(seqs[i][p]);
+        TandemScratch scratch;
+        const double total=pgen_aa_masked_scratch(m,masks.data(),length,v,j,scratch);
+        if (!(total>0.) || !std::isfinite(total)) {
+            for (int p : positions[i]) result.push_back({p,-1,std::numeric_limits<double>::quiet_NaN()});
+            return result;
+        }
+        for (int p : positions[i]) {
+            const uint64_t original=masks[p];
+            std::array<bool,729> candidate{};
+            for (uint64_t bits=original; bits; bits&=bits-1) {
+                const int codon=std::countr_zero(bits);
+                const std::array<int,3> nts{codon/16,(codon/4)%4,codon%4};
+                for (int roles=0; roles<27; ++roles) {
+                    int code=0, remaining=roles, factor=1;
+                    for (int k=0; k<3; ++k) {
+                        const int role=remaining%3; remaining/=3;
+                        const int digit=role==0 ? 0 : 1+nts[k]+4*(role-1);
+                        code+=factor*digit; factor*=9;
+                    }
+                    candidate[code]=true;
+                }
+            }
+            double partition=0.0;
+            for (int code=0; code<729; ++code) if (candidate[code]) {
+                LocalOrigin origin(p,code);
+                masks[p]=original & origin.codons();
+                const double mass=pgen_aa_masked_scratch(m,masks.data(),length,v,j,scratch,
+                                                        nullptr,nullptr,-1,1,&origin);
+                if (!std::isfinite(mass) || mass<0.)
+                    throw std::runtime_error("local origin mass must be finite and nonnegative");
+                partition+=mass;
+                if (mass>0.) result.push_back({p,code,mass/total});
+            }
+            masks[p]=original;
+            if (std::abs(partition/total-1.0)>1e-9)
+                throw std::runtime_error("local origin partition does not sum to AA mass at position "+std::to_string(p));
+        }
+        return result;
+    },true);
+    size_t count=0;
+    for (const auto& row : rows) count+=row.size();
+    CodonOriginPosteriorBatch out;
+    out.row.reserve(count); out.position.reserve(count); out.pattern.reserve(count); out.probability.reserve(count);
+    for (size_t i=0; i<rows.size(); ++i) for (const auto& entry : rows[i]) {
+        out.row.push_back(static_cast<int>(i)); out.position.push_back(entry.position);
+        out.pattern.push_back(entry.pattern); out.probability.push_back(entry.probability);
+    }
+    return out;
 }
 
 // ---- EM E-step ----------------------------------------------------------------------------

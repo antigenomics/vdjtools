@@ -29,6 +29,10 @@ PYBIND11_MODULE(_core, m) {
         .def_readwrite("maxpal_j5", &PackedModel::maxpal_j5)
         .def_readwrite("maxpal_d5", &PackedModel::maxpal_d5)
         .def_readwrite("maxpal_d3", &PackedModel::maxpal_d3)
+        .def_readwrite("germline_v_end", &PackedModel::germline_v_end)
+        .def_readwrite("germline_j_start", &PackedModel::germline_j_start)
+        .def_readwrite("germline_d_start", &PackedModel::germline_d_start)
+        .def_readwrite("germline_d_end", &PackedModel::germline_d_end)
         .def_readwrite("cut_v", &PackedModel::cut_v)
         .def_readwrite("cut_j", &PackedModel::cut_j)
         .def_readwrite("cut_d", &PackedModel::cut_d)
@@ -84,6 +88,7 @@ PYBIND11_MODULE(_core, m) {
     m.def("pgen_aa_degenerate", &vdjtools::pgen_aa_degenerate, py::arg("model"), py::arg("allowed"),
           py::arg("v_idx") = -1, py::arg("j_idx") = -1,
           py::arg("n_region_start") = -1, py::arg("n_region_end") = -1,
+          py::arg("origin_position") = -1, py::arg("origin_pattern") = -1,
           py::call_guard<py::gil_scoped_release>(),
           "Total Pgen of every amino-acid CDR3 matching a motif: allowed[c] is the string of "
           "residues permitted at position c ('' or a set containing 'X' = wildcard). The codon "
@@ -92,9 +97,30 @@ PYBIND11_MODULE(_core, m) {
           py::arg("allowed"), py::arg("v_idxs") = std::vector<int>{},
           py::arg("j_idxs") = std::vector<int>{}, py::arg("threads") = 0,
           py::arg("n_regions") = std::vector<std::pair<int,int>>{},
+          py::arg("origin_codons") = std::vector<std::pair<int,int>>{},
           py::call_guard<py::gil_scoped_release>(),
           "Batch pgen_aa_degenerate over many motifs, parallelized across queries and "
           "bitwise-identical to the per-query calls; threads=0 -> serial (Python APIs resolve allocation).");
+    m.def("codon_origin_amino_acids", &vdjtools::codon_origin_amino_acids,
+          py::arg("patterns"),py::call_guard<py::gil_scoped_release>(),
+          "Genetic-code possibilities under local immutable-letter patterns; no model probability or selection.");
+    m.def("codon_origin_posterior_batch",
+          [](const PackedModel& model, const std::vector<std::string>& seqs,
+             const std::vector<std::vector<int>>& positions, const std::vector<int>& v_idxs,
+             const std::vector<int>& j_idxs, int threads) {
+              CodonOriginPosteriorBatch b;
+              {
+                  py::gil_scoped_release nogil;
+                  b=vdjtools::codon_origin_posterior_batch(model,seqs,positions,v_idxs,j_idxs,threads);
+              }
+              py::dict out;
+              auto ints=[](const std::vector<int>& v) { return py::array_t<int>(v.size(),v.data()); };
+              out["row"]=ints(b.row); out["position"]=ints(b.position); out["pattern"]=ints(b.pattern);
+              out["probability"]=py::array_t<double>(b.probability.size(),b.probability.data());
+              return out;
+          }, py::arg("model"),py::arg("seqs"),py::arg("positions"),
+          py::arg("v_idxs")=std::vector<int>{},py::arg("j_idxs")=std::vector<int>{},py::arg("threads")=0,
+          "Exact sparse local G/P/N and immutable-letter posterior from the existing masked engine.");
     m.def("n_region_posterior_batch", &vdjtools::n_region_posterior_batch,
           py::arg("model"), py::arg("seqs"), py::arg("positions"),
           py::arg("v_idxs") = std::vector<int>{}, py::arg("j_idxs") = std::vector<int>{},

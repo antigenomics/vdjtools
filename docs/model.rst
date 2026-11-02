@@ -924,6 +924,44 @@ including both tandem-D contractions. An entry of ``None`` in ``n_regions``
 leaves that motif unconstrained. Omitting the option preserves ordinary Pgen
 exactly. No generation probabilities are cached and no model is refitted.
 
+Mixed codons and immutable template letters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``codon_origin_posterior_batch`` extends origin accounting to all G/P/N mixtures::
+
+   from vdjtools.model import codon_origin_posterior_batch
+
+   classes = codon_origin_posterior_batch(
+       model, [sequence], positions=[[5]], threads=0)
+
+Each positive row gives ``row``, ``position``, ``pattern``, ``probability``,
+``origin`` (three G/P/N roles), ``template_nt`` (fixed template letters, with
+``-`` for N bases), ``codon_amino_acids`` and ``supported``. Classes partition
+all compatible histories at that codon; their probabilities sum to one. Zero
+model likelihood instead gives a null class/probability and unsupported status.
+The class is a local coarsening of histories, not an observed nucleotide sequence
+or a shared whole rearrangement history. Germline boundaries come from the
+original reference segments, separating retained G from palindromic P extensions.
+The same exact masked DP handles VJ, single-D and both tandem-D contractions.
+
+``pattern`` encodes three base-nine digits, first base least significant:
+0 denotes N, 1--4 denote G:A/C/G/T, and 5--8 denote P:A/C/G/T.
+``codon_amino_acids`` lists genetic-code possibilities after fixing G/P letters,
+before applying model-specific N probabilities or selection. A stochastic N
+base does not ensure amino-acid variability: ``GGN`` with template ``TC-``
+allows only serine, whereas template ``AT-`` allows isoleucine and methionine.
+Models with zero N emissions can further restrict the positive-mass alternatives.
+
+Reuse the masked API for exact alternative masses conditioned on the same class::
+
+   masses = pgen_aa_degenerate_batch(
+       model, [allowed], origin_codons=[(5, "GGN", "AT-")], threads=0)
+
+The scalar keyword is ``origin_codon``. N bases require ``-``; G/P bases require
+A/C/G/T. Each query may use a local codon condition or a pure-N interval, not
+both. Batch entries of ``None`` remain unconstrained. Existing default Pgen and
+model parameters are unchanged; no generation masses or posteriors are cached.
+
 Native sampling from the command line
 -------------------------------------
 
