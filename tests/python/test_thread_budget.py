@@ -59,6 +59,87 @@ def test_nested_thread_workers_use_serial_kernels():
         assert kernel_threads(0) == 4
 
 
+@pytest.mark.parametrize('workers', [1, 2])
+def test_numerical_phase_cannot_overlap_sample_workers(workers):
+    from threading import Event, Thread
+    from vdjtools.cores import numerical_kernels
+
+    entered, release, worker_started = Event(), Event(), Event()
+    errors = []
+
+    def fit():
+        try:
+            with numerical_kernels(1):
+                entered.set()
+                assert release.wait(5)
+        except BaseException as exc:
+            errors.append(exc)
+
+    fitting = Thread(target=fit)
+    mapping = Thread(target=lambda: parallel_rows([0, 1], lambda _: worker_started.set(), workers))
+    fitting.start()
+    try:
+        assert entered.wait(5)
+        mapping.start()
+        assert not worker_started.wait(0.1), 'sample workers changed limits during numerical fitting'
+    finally:
+        release.set()
+        fitting.join(5)
+        if mapping.ident is not None:
+            mapping.join(5)
+    assert not fitting.is_alive() and not mapping.is_alive()
+    assert not errors
+    assert worker_started.is_set()
+
+
+def test_sample_worker_can_use_serial_numerical_phase():
+    from vdjtools.cores import configure_runtime, numerical_kernels
+
+    def work(i):
+        configure_runtime()  # A deferred mir import must not wait on its parent pool.
+        with numerical_kernels(0) as budget:
+            return i, budget
+
+    assert parallel_rows([0, 1], work, 2) == [(0, 1), (1, 1)]
+
+
+def test_numerical_phase_waits_for_running_sample_map():
+    from threading import Event, Thread
+    from vdjtools.cores import numerical_kernels
+
+    entered, release, fitting = Event(), Event(), Event()
+    errors = []
+
+    def work(i):
+        entered.set()
+        assert release.wait(5)
+        return i
+
+    def run_map():
+        try:
+            assert parallel_rows([0, 1], work, 2) == [0, 1]
+        except BaseException as exc:
+            errors.append(exc)
+
+    def fit():
+        with numerical_kernels(1):
+            fitting.set()
+
+    mapping, numerical = Thread(target=run_map), Thread(target=fit)
+    mapping.start()
+    try:
+        assert entered.wait(5)
+        numerical.start()
+        assert not fitting.wait(0.1)
+    finally:
+        release.set()
+        mapping.join(5)
+        if numerical.ident is not None:
+            numerical.join(5)
+    assert not mapping.is_alive() and not numerical.is_alive()
+    assert fitting.is_set() and not errors
+
+
 def test_pool_rejects_explicit_overallocation_even_for_small_inputs():
     with patch('vdjtools.cores.available_cores', return_value=2):
         with pytest.raises(ValueError):

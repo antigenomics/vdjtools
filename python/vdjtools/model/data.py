@@ -26,7 +26,7 @@ Example::
 """
 from __future__ import annotations
 
-from vdjtools.cores import kernel_threads, require_serial_pools
+from vdjtools.cores import kernel_threads
 
 import subprocess
 import sys
@@ -562,9 +562,6 @@ def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, o
     if n_workers > 1 and kw["threads"] != 1:
         raise ValueError("parallel builds require threads=1 per worker")
     kw["threads"] = kernel_threads(kw["threads"])
-    if n_workers > 1:
-        require_serial_pools()
-
     def one(job):
         group, chain = job
         key = f"{group}_{chain}"

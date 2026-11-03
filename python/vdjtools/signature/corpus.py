@@ -1852,9 +1852,7 @@ def _pooled(spans, fn, workers: int, n_samples: int, progress):
     """Run contiguous spans on bounded threads, reporting completed rows."""
     from .cohort import parallel_rows
 
-    from ..cores import require_serial_pools, serial_kernels
-
-    require_serial_pools()
+    from ..cores import serial_kernels
 
     def work(span):
         with serial_kernels():

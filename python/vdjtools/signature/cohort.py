@@ -45,7 +45,7 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
     from multiprocessing.pool import ThreadPool
     from threading import Lock
 
-    from ..cores import kernel_threads, require_serial_pools, serial_kernels
+    from ..cores import kernel_threads, serial_runtime, require_serial_pools, serial_kernels
 
     try:
         budget = kernel_threads(n_jobs)
@@ -58,11 +58,11 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
             return fn(item)
 
     if workers < 2:
-        if workers:
+        if not workers:
+            return []
+        with serial_runtime():
             require_serial_pools(outer=False)
-        return [row(it) for it in items]
-    require_serial_pools()
-
+            return [row(it) for it in items]
     # Exactly one task per worker, never one queued object per sample.
     pending = iter(enumerate(items))
     lock = Lock()
@@ -72,7 +72,8 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
     def consume(_):
         nonlocal failed
         # OpenMP limits are thread-local; newly created pool threads need their own limit.
-        require_serial_pools()
+        with serial_kernels():
+            require_serial_pools()
         while True:
             with lock:
                 if failed is not None:
@@ -88,8 +89,12 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
                     failed = exc
                 return
 
-    with ThreadPool(workers) as pool:
-        pool.map(consume, range(workers), chunksize=1)
+    # Native limits are process-global: a simultaneous PCA/BLAS phase must finish
+    # before these workers make every inner kernel serial.
+    with serial_runtime():
+        require_serial_pools()
+        with ThreadPool(workers) as pool:
+            pool.map(consume, range(workers), chunksize=1)
     if failed is not None:
         raise failed
     return results

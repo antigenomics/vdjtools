@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 import operator
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 __all__ = ["available_cores"]
 
@@ -171,7 +171,10 @@ _KERNEL_ENV = ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
 
 
 _LOCAL = threading.local()
+# ponytail: native limits are process-global; independent concurrent phases need processes.
 _SPAWN_ENV_LOCK = threading.RLock()
+_PHASES = threading.Condition(_SPAWN_ENV_LOCK)
+_SERIAL_PHASES = 0
 
 
 def kernel_threads(threads: int = 0) -> int:
@@ -200,16 +203,19 @@ def configure_runtime() -> None:
     """
     import sys
 
-    # Keep serial defaults without imposing a hard cap on later caller-owned contexts.
-    os.environ.update(dict.fromkeys((key for key in _KERNEL_ENV
-                                    if key != "OMP_THREAD_LIMIT"), "1"))
-    # NumPy and SciPy may load distinct BLAS pools; idle pools must sleep at handoff.
-    # OpenBLAS clamps its timeout exponent to at least 4 (zero means its long default).
-    os.environ.update(OPENBLAS_THREAD_TIMEOUT="4", OMP_WAIT_POLICY="PASSIVE")
-    if "numpy" in sys.modules or "scipy" in sys.modules:
-        from threadpoolctl import threadpool_limits
+    if getattr(_LOCAL, "serial", False):
+        return  # The parent already owns serial limits; never wait for its pool lock.
+    with _SPAWN_ENV_LOCK:
+        # Keep serial defaults without imposing a hard cap on later caller-owned contexts.
+        os.environ.update(dict.fromkeys((key for key in _KERNEL_ENV
+                                        if key != "OMP_THREAD_LIMIT"), "1"))
+        # NumPy and SciPy may load distinct BLAS pools; idle pools must sleep at handoff.
+        # OpenBLAS clamps its timeout exponent to at least 4 (zero means its long default).
+        os.environ.update(OPENBLAS_THREAD_TIMEOUT="4", OMP_WAIT_POLICY="PASSIVE")
+        if "numpy" in sys.modules or "scipy" in sys.modules:
+            from threadpoolctl import threadpool_limits
 
-        threadpool_limits(limits=1)
+            threadpool_limits(limits=1)
 
 
 @contextmanager
@@ -241,17 +247,44 @@ def serial_kernels():
 
 
 @contextmanager
+def serial_runtime():
+    """Allow independent serial-kernel maps together, excluding numerical fits."""
+    global _SERIAL_PHASES
+    if getattr(_LOCAL, "serial", False):
+        yield
+        return
+    from threadpoolctl import threadpool_limits
+
+    with _PHASES:
+        threadpool_limits(limits=1)
+        _SERIAL_PHASES += 1
+    try:
+        yield
+    finally:
+        with _PHASES:
+            _SERIAL_PHASES -= 1
+            _PHASES.notify_all()
+
+
+@contextmanager
 def numerical_kernels(threads: int = 1):
     """Temporarily budget BLAS after outer workers have joined; restore caller limits.
 
-    ``0`` selects the allocation, ``1`` is serial. This process-wide context must
-    not overlap an outer worker pool; native worker calls remain serial.
+    ``0`` selects the allocation, ``1`` is serial. Process-wide changes serialize
+    with sample and generation pools; calls inside a sample worker stay serial.
     """
     from threadpoolctl import threadpool_limits
 
     budget = kernel_threads(threads)
-    with threadpool_limits(limits=budget, user_api="blas"):
+    if getattr(_LOCAL, "serial", False):
+        # The parent owns the serial pools; changing their process-global limits here
+        # races sibling workers and waiting for its lock would deadlock the pool.
         yield budget
+        return
+    with _PHASES:
+        _PHASES.wait_for(lambda: _SERIAL_PHASES == 0)
+        with threadpool_limits(limits=1), threadpool_limits(limits=budget, user_api="blas"):
+            yield budget
 
 
 def require_serial_pools(*, outer: bool = True) -> None:
@@ -267,7 +300,8 @@ def require_serial_pools(*, outer: bool = True) -> None:
         return
     from threadpoolctl import threadpool_limits
 
-    threadpool_limits(limits=1)
+    with nullcontext() if getattr(_LOCAL, "serial", False) else _SPAWN_ENV_LOCK:
+        threadpool_limits(limits=1)
     if pool > 1:
         raise RuntimeError("Polars was initialized with multiple threads before vdjtools; "
                            "start a fresh process and import vdjtools before Polars, "
