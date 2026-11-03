@@ -809,7 +809,8 @@ CPU and container limits
 ------------------------
 
 Import ``vdjtools`` before numerical libraries in each fresh worker. Persistent
-Polars, BLAS, OpenMP and Numba import pools default to one thread. Idle OpenBLAS pools
+Polars, OpenMP and Numba import pools default to one thread; BLAS remains serial
+between explicitly budgeted numerical phases. Idle OpenBLAS pools
 use the minimum wait exponent (4), and OpenMP uses passive waiting, so alternating
 NumPy/SciPy pools release CPUs at handoff. These policies require import before
 native initialization. Native batch APIs
@@ -837,6 +838,30 @@ Process callbacks must be importable/picklable, and Python scripts must guard th
 entry point with ``if __name__ == "__main__":``. Prefer threads for shared models or
 small cohorts where spawn/import cost dominates. Failures propagate; there is no
 silent switch between backends.
+
+Apple Accelerate uses a thread-local serial/automatic policy and an immutable
+parallel ceiling; ``threadpoolctl`` does not expose that backend. On macOS 15+
+VDJtools sets the allocation ceiling before NumPy/SciPy initialization, keeps
+sample workers serial, and enables the native automatic policy during a numerical
+phase using that ceiling. To choose a smaller BLAS ceiling in a Python script,
+configure it before importing numerical libraries:
+
+.. code-block:: python
+
+   from vdjtools.cores import configure_runtime
+   configure_runtime(blas_threads=2)
+   import numpy as np
+   from vdjtools.signature.corpus import TablePCA
+
+   # Later fits/projections use threads=2, or threads=1 for serial work.
+
+The CLI configures this ceiling from ``--threads`` before loading command modules;
+no environment export is needed. Changing an initialized Accelerate ceiling,
+requesting parallel BLAS after an unverified prior initialization, or requesting
+parallel BLAS without the native policy API raises an explicit error. Start a
+fresh process for a different ceiling. Native Pgen, generation and sequence-distance
+batches retain their independent explicit budgets. On older macOS, serial BLAS
+remains supported; a backend with runtime thread controls supports other budgets.
 
 .. code-block:: bash
 

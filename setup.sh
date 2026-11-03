@@ -94,7 +94,7 @@ PY
 
 if [ "$DO_TESTS" -eq 1 ]; then
   log "running fast tests"
-  python -m pytest "$ROOT/tests/python" -q
+  python -c 'import vdjtools, pytest, sys; raise SystemExit(pytest.main(sys.argv[1:]))' "$ROOT/tests/python" -q
   log "C++ tests: cmake -S . -B build -DVDJTOOLS_TESTS=ON && cmake --build build && ctest --test-dir build"
 fi
 
