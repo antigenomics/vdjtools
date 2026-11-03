@@ -157,6 +157,10 @@ With ``error_rate`` enabled it uses fresh batched ARDA proposals instead of the
 frame's preliminary gene assignments. Proposed genes expand to every functional
 model allele; missing V/J proposals leave that segment unrestricted. D and D2
 remain unrestricted by annotation, including when no second D was called.
+The same rule applies to exact-likelihood ``infer_frame`` calls: adding, removing
+or changing preliminary ``d_call``/``d2_call`` columns does not alter the latent
+D-history support. Explicit low-level masks remain available for deliberately
+constrained histories.
 
 .. code-block:: python
 

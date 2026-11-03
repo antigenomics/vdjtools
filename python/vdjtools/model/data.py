@@ -518,29 +518,6 @@ def _filter_for_em(clones: pl.DataFrame, base, ambiguous: str = "A", *,
     return sanitize_junctions(kept, "junction", ambiguous=ambiguous, where="build_model")
 
 
-def _build_masks(uniq: pl.DataFrame, base) -> list[tuple]:
-    """Per-read E-step masks with separate D1/D2 allele sets.
-
-    AIRR writes an aligner tie comma-separated (``IGHD2-2*01,IGHD2-2*02``), so testing the whole
-    joined string against a set of single alleles never matches and falls through to an empty mask
-    = every D enumerated. On IGH that was 64% of reads: not just slow (35 D genes vs 3 for TRB) but
-    a worse model, because the D marginal stops being anchored to what arda actually saw. A
-    genuinely absent D1 call yields ``[]`` (unrestricted). A supplied D2 column
-    adds a fourth mask: absent/unknown D2 yields ``[]`` and disables tandem paths.
-    """
-    from .infer import gene_masks, call_alleles, _gene_to_alleles
-
-    masks = gene_masks(base, uniq["v_call"].to_list(), uniq["j_call"].to_list())
-    if base.chain_type != "VDJ":
-        return masks
-    index = _gene_to_alleles(base,"d")
-    calls = uniq["d_call"].to_list() if "d_call" in uniq.columns else [None]*uniq.height
-    masks = [(mk[0],mk[1],call_alleles(index,call)) for mk,call in zip(masks,calls)]
-    if "d2_call" in uniq.columns:
-        masks = [(*mk,call_alleles(index,call)) for mk,call in zip(masks,uniq["d2_call"].to_list())]
-    return masks
-
-
 def build_all(chains=CHAINS, *, groups=("human",), workers: int | None = None, out_dir=None,
               **kw) -> dict:
     """Build models for several chains concurrently — the full-corpus entry point.

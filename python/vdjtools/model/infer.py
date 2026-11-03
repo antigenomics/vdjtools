@@ -965,12 +965,8 @@ def infer_frame(template, clones: pl.DataFrame, *, seq_col: str | None = None,
                                           query_sequences=queries)
         kw["candidate_search"] = evidence
     elif use_calls and v_col in df.columns and j_col in df.columns:
-        if 'd2_call' in df.columns:
-            from .data import _build_masks
-            masks = _build_masks(df.with_columns(pl.col(v_col).alias('v_call'),
-                pl.col(j_col).alias('j_call')),template)
-        else:
-            masks = gene_masks(template, df[v_col].to_list(), df[j_col].to_list())
+        # D/D2 annotations are preliminary evidence, not constraints on latent histories.
+        masks = gene_masks(template, df[v_col].to_list(), df[j_col].to_list())
     if not native and "prune_ratio" in kw:
         if kw.pop("prune_ratio") != 0:
             raise ValueError("pure-Python inference is exact; use native=True for pruning")
