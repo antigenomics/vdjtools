@@ -91,3 +91,10 @@ def test_correct_default_is_segment_agnostic():
     assert out.height == 1
     assert out[S.COUNT].to_list() == [1010]
     assert out[S.JUNCTION_NT].to_list() == ["ACGTACGT"]           # parent survives
+
+
+@pytest.mark.parametrize("counts,expected", [([1000, 0], [1000]), ([0, 0], [])])
+def test_zero_count_neighbours_do_not_change_positive_mass(counts, expected):
+    sample = _sample(["CASSP", "CASSE"], counts, ["ACGTACGT", "ACGTACGA"])
+    result = pp.correct(sample)
+    assert result[S.COUNT].to_list() == expected
