@@ -96,6 +96,8 @@ def annotate_reads(
     threads: int = 0,
     reconstruct: bool = False,
     verbose: bool = False,
+    map_d: bool = True,
+    map_dd: bool = True,
 ) -> pl.DataFrame:
     """Map a FASTQ to a per-read AIRR table with arda (``arda rnaseq map`` → ``<prefix>.airr.tsv``).
 
@@ -112,6 +114,8 @@ def annotate_reads(
         organism: arda reference organism (``"human"`` / ``"mouse"``).
         cap: If set, annotate only the first ``cap`` reads (bounded benchmark scale).
         threads: mmseqs threads (0 = all cores).
+        map_d: False skips both ARDA D searches. Default True preserves legacy behavior.
+        map_dd: False retains single-D mapping; requires ARDA with --no-map-dd support.
         reconstruct: Merge overlapping paired mates into one fragment before mapping (recovers
             longer junctions single reads don't span; needs the FASTQ to carry both mates).
 
@@ -138,6 +142,10 @@ def annotate_reads(
         _arda_exe(), "map", "-o", str(airr), "--r1", str(r1),
         "--organism", organism, "--threads", str(kernel_threads(threads)),
     ]
+    if not map_d:
+        cmd.append("--no-map-d")
+    elif not map_dd:
+        cmd.append("--no-map-dd")
     if reconstruct:
         cmd.append("--reconstruct")
     # verbose lets arda's own mapping progress through: it is the slowest stage (minutes on a full
@@ -262,12 +270,15 @@ def prepare(
     gene_level: bool = False,
     threads: int = 0,
     verbose: bool = False,
+    map_d: bool = True,
+    map_dd: bool = True,
 ) -> pl.DataFrame:
     """Fetch → map (arda) → unique clonotypes for one ``(group, chain, label)`` bucket."""
     fq = fetch_fastq(group, chain, label)
     reads = annotate_reads(
         fq, out_dir=out_dir, prefix=f"{group}_{chain}_{label}",
         organism=ORGANISM[group], cap=cap, reconstruct=reconstruct, threads=threads, verbose=verbose,
+        map_d=map_d, map_dd=map_dd,
     )
     return unique_clonotypes(reads, naive_igm_only=naive_igm_only, gene_level=gene_level)
 

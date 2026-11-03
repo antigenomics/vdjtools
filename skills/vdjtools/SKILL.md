@@ -153,3 +153,7 @@ SciPy hypergeometric presence, and returns sample/m/qD. No extrapolation, SE or
 subset-coverage claim. For Shannon and Simpson rarefaction reuse
 `stats.inext_batch(q=(0,1,2))`; q=1 is exp(Shannon entropy), q=2 is inverse
 Simpson and Gini–Simpson equals 1-1/qD for q=2.
+
+`model.data.annotate_reads` and `prepare` retain D/D-D mapping by default.
+Use `map_d=False` to skip both, or `map_dd=False` for single-D annotation
+(ARDA must support `--no-map-dd`). Missing D2 evidence never excludes tandem histories.

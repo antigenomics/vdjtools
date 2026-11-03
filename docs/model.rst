@@ -1308,3 +1308,13 @@ mass among 128 TRB/128 TRD queries; it yielded only 1.23x/1.17x speed gains in
 that small timing probe. Raising the minimum to six lost up to 89.1%/97.8%.
 Those cutoffs are not shipped. Absolute Pgen scale does not guarantee a small
 relative error after removing short-D histories.
+
+ARDA D-search controls
+----------------------
+
+``vdjtools.model.data.annotate_reads`` and ``prepare`` accept
+``map_d=False`` to skip D annotation, or ``map_dd=False`` to retain
+single-D calls and skip tandem selection. Defaults preserve existing commands.
+The tandem switch requires an ARDA version exposing ``--no-map-dd``.
+These options affect preliminary annotations, not the histories allowed by
+probabilistic inference; an absent ``d2_call`` must not forbid a tandem history.
