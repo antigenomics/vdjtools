@@ -42,6 +42,7 @@ find_package(Threads REQUIRED)
 target_link_libraries(vdjtools_core PUBLIC Threads::Threads)
 
 if(VDJTOOLS_PYTHON)
+  set(PYBIND11_FINDPYTHON ON)
   find_package(pybind11 CONFIG REQUIRED)
   pybind11_add_module(_core src/_bindings.cpp)
   target_link_libraries(_core PRIVATE vdjtools_core)
