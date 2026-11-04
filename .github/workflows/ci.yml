@@ -69,6 +69,8 @@ jobs:
         # the guard below is what makes a silent skip visible instead.
         continue-on-error: true
         run: pip install -e ".[interop]"
+      - name: Exact-input PCA diagnosis
+        run: python tools/pca_runtime_diagnostic.py
       - name: PCA native runtime preflight
         run: >-
           python -c 'import vdjtools, numpy, scipy, sklearn, threadpoolctl, pytest;
