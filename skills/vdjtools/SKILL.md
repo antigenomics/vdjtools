@@ -29,6 +29,11 @@ section of [workflow caveats](references/caveats.md): input and pairing, feature
 identity/coverage/resources, or model references/inference/selection. Each section
 links directly to the owning documentation section.
 
+Numerical fitting/table projection uses `threads=0` for an automatic budget,
+`1` for serial, or a positive user count. Automatic nested calls borrow the
+owning numerical phase through `vdjtools.cores.numerical_threads`; sample
+workers remain serial. Source/model assets are not refitted to change a budget.
+
 ## Start with the data unit
 
 ```python
@@ -153,3 +158,7 @@ SciPy hypergeometric presence, and returns sample/m/qD. No extrapolation, SE or
 subset-coverage claim. For Shannon and Simpson rarefaction reuse
 `stats.inext_batch(q=(0,1,2))`; q=1 is exp(Shannon entropy), q=2 is inverse
 Simpson and Gini–Simpson equals 1-1/qD for q=2.
+
+`model.data.annotate_reads` and `prepare` retain D/D-D mapping by default.
+Use `map_d=False` to skip both, or `map_dd=False` for single-D annotation
+(ARDA must support `--no-map-dd`). Missing D2 evidence never excludes tandem histories.

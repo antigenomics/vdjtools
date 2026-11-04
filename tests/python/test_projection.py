@@ -89,7 +89,8 @@ def test_large_raw_feature_cohort_memory():
     workers = int(os.getenv('VDJ_BENCH_WORKERS','1'))
     def read():
         assert kernel_threads(0) == 1
-        assert all(p['num_threads'] == 1 for p in threadpool_info())
+        pools = threadpool_info()
+        assert all(p['num_threads'] == 1 for p in pools), pools
         return {'TRB':pl.DataFrame({'v_call':['TRBV10-3*01','TRBV20-1*01'],
                                    'j_call':['TRBJ2-7*01','TRBJ1-2*01'],
                                    'junction_aa':['CASSIRSSYEQYF','CSARVSGYYGYTF'],
@@ -129,13 +130,14 @@ def test_table_pca_saves_variance_and_loads_legacy(tmp_path):
 
 def test_pca_phase_budget_restores_blas_and_rejects_nested_workers(monkeypatch):
     from threadpoolctl import threadpool_info, threadpool_limits
-    from vdjtools.cores import available_cores, numerical_kernels, serial_kernels
-    from vdjtools.signature import corpus as C
-    budget = min(2, available_cores())
+    from vdjtools.cores import available_cores, numerical_kernels, serial_kernels, _uses_accelerate
+    # Accelerate's partial startup ceiling is tested in a fresh process separately.
+    budget = available_cores() if _uses_accelerate() else min(2, available_cores())
     table = pl.from_numpy(np.random.default_rng(7).normal(size=(12, 4)),
                           schema=[f'phi:{i}' for i in range(4)])
     table = table.with_columns(pl.lit('fixed').alias('embedding_space'))
-    original = C.fit_pca
+    from sklearn.pipeline import Pipeline
+    original = Pipeline.fit
     seen = []
     def checked(*args, **kwargs):
         seen.append([p['num_threads'] for p in threadpool_info() if p['user_api'] == 'blas'])
@@ -143,8 +145,8 @@ def test_pca_phase_budget_restores_blas_and_rejects_nested_workers(monkeypatch):
         assert all(t == budget for t in seen[-1])
         return original(*args, **kwargs)
     with threadpool_limits(limits=1, user_api='blas'):
-        reference = TablePCA.fit(table, n_components=2)
-        monkeypatch.setattr(C, 'fit_pca', checked)
+        reference = TablePCA.fit(table, n_components=2, threads=1)
+        monkeypatch.setattr(Pipeline, 'fit', checked)
         parallel = TablePCA.fit(table, n_components=2, threads=budget)
         assert all(p['num_threads'] == 1 for p in threadpool_info() if p['user_api'] == 'blas')
         with pytest.raises(RuntimeError, match='phase failed'):
@@ -162,10 +164,11 @@ def test_pca_phase_budget_restores_blas_and_rejects_nested_workers(monkeypatch):
 def test_corpus_map_finishes_before_blas_fit(monkeypatch):
     from threading import Lock
     from threadpoolctl import threadpool_info
-    from vdjtools.cores import available_cores, kernel_threads
+    from vdjtools.cores import available_cores, kernel_threads, _uses_accelerate
     from vdjtools.signature import corpus as C, feature_definition
     if available_cores() < 2:
         pytest.skip('needs two allocated cores')
+    budget = available_cores() if _uses_accelerate() else 2
     frame = pl.DataFrame({'v_call': ['TRBV10-3*01', 'TRBV20-1*01'],
                           'j_call': ['TRBJ2-7*01', 'TRBJ1-2*01'],
                           'junction_aa': ['CASSIRSSYEQYF', 'CSARVSGYYGYTF'],
@@ -181,18 +184,19 @@ def test_corpus_map_finishes_before_blas_fit(monkeypatch):
     def checked(*args, **kwargs):
         assert sorted(completed) == list(range(4))
         assert kernel_threads(2) == 2
-        assert all(p['num_threads'] == 2 for p in threadpool_info() if p['user_api'] == 'blas')
+        assert all(p['num_threads'] == budget for p in threadpool_info() if p['user_api'] == 'blas')
         return original(*args, **kwargs)
     monkeypatch.setattr(C, 'fit_locus', checked)
     result = C.fit_cohort([(str(i), lambda i=i: read(i)) for i in range(4)],
                           loci=('TRB',), feature_definition=feature_definition('basic'),
-                          cstar_target=None, n_jobs=2, threads=2, n_components=2)
+                          cstar_target=None, n_jobs=2, threads=budget, n_components=2)
     assert result.fits
 
 
 def test_table_projection_bounds_conversion_and_restores_threads(monkeypatch):
     from threadpoolctl import threadpool_info, threadpool_limits
-    from vdjtools.cores import available_cores
+    from vdjtools.cores import available_cores, _uses_accelerate
+    budget = available_cores() if _uses_accelerate() else min(2, available_cores())
     rng = np.random.default_rng(13)
     x = rng.normal(size=(1050, 2048))
     x[3, 5] = np.nan
@@ -215,14 +219,14 @@ def test_table_projection_bounds_conversion_and_restores_threads(monkeypatch):
         return original(frame, *args, **kwargs)
     monkeypatch.setattr(pl.DataFrame, 'to_numpy', bounded)
     with threadpool_limits(limits=1, user_api='blas'):
-        actual = rotation.transform(table, threads=min(2, available_cores()))
+        actual = rotation.transform(table, threads=budget)
         assert all(p['num_threads'] == 1 for p in threadpool_info() if p['user_api'] == 'blas')
     with threadpool_limits(limits=1, user_api='blas'), monkeypatch.context() as patch:
         def failed(*args, **kwargs):
             raise RuntimeError('projection failed')
         patch.setattr(np, 'matmul', failed)
         with pytest.raises(RuntimeError, match='projection failed'):
-            rotation.transform(table, threads=min(2, available_cores()))
+            rotation.transform(table, threads=budget)
         assert all(p['num_threads'] == 1 for p in threadpool_info() if p['user_api'] == 'blas')
     assert len(heights) > 1
     assert actual['sample_id'].equals(table['sample_id'])
@@ -232,3 +236,36 @@ def test_table_projection_bounds_conversion_and_restores_threads(monkeypatch):
         rotation.transform(table, threads=available_cores()+1)
     with pytest.raises(ValueError, match='spaces'):
         rotation.transform(table.head(0))
+
+
+def test_automatic_pca_budgets_use_allocation_and_inherit_owned_phase(monkeypatch):
+    from contextlib import contextmanager
+    from vdjtools import cores
+    from vdjtools.signature.cohort import parallel_rows
+
+    original = cores.numerical_kernels
+    seen = []
+    @contextmanager
+    def capture(threads):
+        with original(threads) as budget:
+            seen.append(budget)
+            yield budget
+    monkeypatch.setattr(cores, 'numerical_kernels', capture)
+    table = pl.from_numpy(np.random.default_rng(91).normal(size=(12, 4)),
+                           schema=[f'phi:{i}' for i in range(4)]).with_columns(
+                               pl.lit('fixed').alias('embedding_space'))
+    reference = TablePCA.fit(table, n_components=2, threads=1)
+    seen.clear()
+    fitted = TablePCA.fit(table, n_components=2)
+    actual = fitted.transform(table)
+    assert seen == [cores.available_cores()] * 2
+    np.testing.assert_allclose(actual.select(['pc0', 'pc1']).to_numpy(),
+                               reference.transform(table, threads=1).select(['pc0', 'pc1']).to_numpy(),
+                               rtol=0, atol=1e-12)
+    with original(1):
+        seen.clear()
+        TablePCA.fit(table, n_components=2).transform(table)
+        assert seen == [1, 1], 'automatic call escaped its caller-owned numerical budget'
+    seen.clear()
+    parallel_rows([0, 1], lambda _: fitted.transform(table), min(2, cores.available_cores()))
+    assert seen == [1, 1]

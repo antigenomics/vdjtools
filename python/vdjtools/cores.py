@@ -26,8 +26,9 @@ import os
 import operator
 import threading
 from contextlib import contextmanager
+from functools import lru_cache
 
-__all__ = ["available_cores"]
+__all__ = ["available_cores", "numerical_threads"]
 
 
 def _cgroup_paths(controller_name="cpu"):
@@ -171,45 +172,183 @@ _KERNEL_ENV = ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
 
 
 _LOCAL = threading.local()
+# ponytail: native limits are process-global; independent concurrent phases need processes.
 _SPAWN_ENV_LOCK = threading.RLock()
+_PHASES = threading.Condition(_SPAWN_ENV_LOCK)
+_SERIAL_PHASES = 0
+_ACCELERATE_CONFIGURED = False
+_ACCELERATE_CAP = None
+_OPENBLAS_CAPS = {}
+
+
+def _check_openblas_capacity(threads=1):
+    """Initialize BLAS providers before workers, then guard their startup capacity."""
+    __import__('scipy.linalg')  # A lazy second BLAS pool must not appear inside workers.
+    from threadpoolctl import threadpool_info
+
+    for pool in threadpool_info():
+        if pool.get('internal_api') == 'openblas':
+            capacity = _OPENBLAS_CAPS.setdefault(pool['filepath'], pool['num_threads'])
+            if threads > capacity:
+                raise RuntimeError(
+                    f'OpenBLAS started with capacity {capacity}, requested {threads}. '
+                    'Start a fresh process, import vdjtools and call '
+                    'configure_runtime(blas_threads=N) before NumPy/SciPy, '
+                    'or use the CLI --threads N.')
+
+
+@lru_cache(maxsize=1)
+def _accelerate():
+    """Apple's thread-local BLAS policy API (macOS 15+), absent on other systems."""
+    import sys
+    if sys.platform != "darwin":
+        return None
+    import ctypes
+    try:
+        library = ctypes.CDLL('/System/Library/Frameworks/Accelerate.framework/Accelerate')
+        library.BLASSetThreading.argtypes = [ctypes.c_uint]
+        library.BLASSetThreading.restype = ctypes.c_int
+        library.BLASGetThreading.argtypes = []
+        library.BLASGetThreading.restype = ctypes.c_uint
+        return library
+    except (OSError, AttributeError):
+        return None
+
+
+def _uses_accelerate():
+    import sys
+    for name in ('numpy', 'scipy'):
+        config = getattr(sys.modules.get(name), '__config__', None)
+        blas = getattr(config, 'CONFIG', {}).get('Build Dependencies', {}).get('blas', {})
+        if 'accelerate' in str(blas.get('name', '')).lower():
+            return True
+        legacy = getattr(config, 'get_info', None)
+        if legacy and any(word in str(legacy('blas_opt_info')).lower()
+                          for word in ('accelerate', 'veclib')):
+            return True
+    return False
+
+
+@contextmanager
+def _accelerate_threads(threads):
+    """Restore Apple's thread-local policy; never claim an unenforceable CPU count."""
+    library = _accelerate()
+    uses = _uses_accelerate()
+    if uses and threads > 1 and (library is None or threads != _ACCELERATE_CAP):
+        raise RuntimeError(
+            'Accelerate cannot change its initialized BLAS CPU ceiling. Start a fresh '
+            'process, import vdjtools first and call configure_runtime(blas_threads=N) '
+            'before NumPy/SciPy, or use the CLI --threads N; threads=1 is always supported.')
+    if library is None or (threads > 1 and not uses):
+        yield
+        return
+    previous = library.BLASGetThreading()
+    if library.BLASSetThreading(1 if threads == 1 else 0) != 0:
+        raise RuntimeError('Accelerate rejected the requested BLAS threading policy')
+    try:
+        yield
+    finally:
+        if library.BLASSetThreading(previous) != 0:
+            raise RuntimeError('Accelerate could not restore the BLAS threading policy')
 
 
 def kernel_threads(threads: int = 0) -> int:
-    """Resolve 0/all, 1/serial, or a positive count within this process's allocation.
+    """Resolve 0/automatic (at most 16), 1/serial, or a positive count within this process's allocation.
 
     Outer thread-pool workers have a one-core allocation. Explicit excessive counts
-    raise rather than silently clamp. Numerical import pools remain serial; native batches
+    raise rather than silently clamp. Outer worker import pools remain serial; native batches
     receive this resolved integer, never a host-wide automatic setting.
     """
     if isinstance(threads, bool):
         raise TypeError("threads must be an integer, not bool")
     threads = operator.index(threads)
-    budget = 1 if getattr(_LOCAL, "serial", False) else available_cores()
+    child_parent = os.environ.get("_VDJTOOLS_SERIAL_CHILD")
+    child = child_parent is not None and child_parent != str(os.getpid())
+    budget = 1 if getattr(_LOCAL, "serial", False) or child else available_cores()
     if threads < 0:
-        raise ValueError("threads must be non-negative (0 means allocated cores)")
+        raise ValueError("threads must be non-negative (0 means automatic, at most 16 cores)")
     if threads > budget:
-        raise ValueError(f"threads must be between 0 and {budget} (0 means allocated cores)")
-    return threads or budget
+        raise ValueError(f"threads must be between 0 and {budget} (0 means automatic, at most 16 cores)")
+    return threads or min(budget, 16)
 
 
-def configure_runtime() -> None:
-    """Keep persistent numerical pools serial before imports; limit initialized BLAS too.
+def numerical_threads(threads: int = 0) -> int:
+    """Resolve a BLAS budget; automatic nested calls borrow their caller's phase.
+
+    An explicit positive count overrides the current phase within the allocation.
+    Outer sample workers always have a one-core allocation.
+    """
+    budget = kernel_threads(threads)
+    active = getattr(_LOCAL, 'numerical', 0)
+    if threads == 0 and active:
+        return min(1 if getattr(_LOCAL, 'serial', False) else available_cores(), active)
+    return budget
+
+
+def configure_runtime(*, blas_threads: int | None = None) -> None:
+    """Reserve BLAS startup capacity and keep other persistent import pools serial.
 
     Polars cannot resize an initialized pool. Thread-pool callers detect that case and
     require a fresh interpreter rather than silently oversubscribing it.
+    On Apple Accelerate, ``blas_threads`` selects its immutable parallel ceiling
+    before NumPy/SciPy imports; None retains the initial allocation/environment cap.
+    Later numerical phases support that ceiling or serial execution.
     """
     import sys
+    global _ACCELERATE_CONFIGURED, _ACCELERATE_CAP
 
-    # Keep serial defaults without imposing a hard cap on later caller-owned contexts.
-    os.environ.update(dict.fromkeys((key for key in _KERNEL_ENV
-                                    if key != "OMP_THREAD_LIMIT"), "1"))
-    # NumPy and SciPy may load distinct BLAS pools; idle pools must sleep at handoff.
-    # OpenBLAS clamps its timeout exponent to at least 4 (zero means its long default).
-    os.environ.update(OPENBLAS_THREAD_TIMEOUT="4", OMP_WAIT_POLICY="PASSIVE")
-    if "numpy" in sys.modules or "scipy" in sys.modules:
-        from threadpoolctl import threadpool_limits
+    if getattr(_LOCAL, 'numerical', False):
+        if blas_threads is not None:
+            raise RuntimeError('Configure the BLAS ceiling before starting numerical work')
+        return
+    if getattr(_LOCAL, "serial", False) or os.environ.get("_VDJTOOLS_SERIAL_CHILD") is not None:
+        if blas_threads is not None:
+            kernel_threads(blas_threads)
+        return  # The parent already owns serial limits; never wait for its pool lock.
+    with _SPAWN_ENV_LOCK:
+        apple = _accelerate()
+        preloaded = 'numpy' in sys.modules or 'scipy' in sys.modules
+        if not _ACCELERATE_CONFIGURED:
+            if not preloaded and apple:
+                ceiling = int(os.environ.get('VECLIB_MAXIMUM_THREADS', kernel_threads()))
+                if ceiling < 1:
+                    raise ValueError('VECLIB_MAXIMUM_THREADS must be positive')
+                _ACCELERATE_CAP = min(available_cores(), ceiling)
+            _ACCELERATE_CONFIGURED = True
+        if blas_threads is not None:
+            budget = kernel_threads(blas_threads)
+            if _SERIAL_PHASES and budget != 1 and budget != _ACCELERATE_CAP:
+                raise RuntimeError('Configure the BLAS ceiling before starting sample workers')
+            if preloaded and budget != 1 and _uses_accelerate() and budget != _ACCELERATE_CAP:
+                raise RuntimeError('Configure the Accelerate BLAS ceiling before importing '
+                                   'NumPy/SciPy in a fresh process')
+            if not preloaded:
+                _ACCELERATE_CAP = budget if apple else None
+        # Keep serial defaults without imposing a hard cap on later caller-owned contexts.
+        os.environ.update(dict.fromkeys((key for key in _KERNEL_ENV
+                                        if key != "OMP_THREAD_LIMIT"), "1"))
+        if apple:
+            os.environ['VECLIB_MAXIMUM_THREADS'] = str(_ACCELERATE_CAP or 1)
+            if apple.BLASSetThreading(1) != 0:
+                raise RuntimeError('Accelerate rejected serial BLAS initialization')
+        # OpenBLAS 0.3.28 can crash when growing a pool initialized at one thread.
+        # Reserve the authorized capacity before lazy imports; phases set active limits.
+        os.environ["OPENBLAS_NUM_THREADS"] = str(kernel_threads(blas_threads or 0))
+        os.environ['OMP_WAIT_POLICY'] = 'PASSIVE'
+        if "numpy" in sys.modules or "scipy" in sys.modules:
+            from threadpoolctl import threadpool_limits
 
-        threadpool_limits(limits=1)
+            _check_openblas_capacity()
+            threadpool_limits(limits=1)
+
+
+def configure_cli_runtime(argv=None):
+    """Select the CLI BLAS ceiling before command modules import NumPy/SciPy."""
+    import argparse
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument('-t', '--threads', type=int)
+    args, _ = parser.parse_known_args(argv)
+    configure_runtime(blas_threads=args.threads)
 
 
 @contextmanager
@@ -217,8 +356,9 @@ def single_threaded_children():
     """Set import-time limits before spawning workers and restore the parent environment."""
     # ponytail: serialize generation pools; their import limits share the process environment.
     with _SPAWN_ENV_LOCK:
-        previous = {key: os.environ.get(key) for key in _KERNEL_ENV}
+        previous = {key: os.environ.get(key) for key in (*_KERNEL_ENV, "_VDJTOOLS_SERIAL_CHILD")}
         os.environ.update(dict.fromkeys(_KERNEL_ENV, "1"))
+        os.environ["_VDJTOOLS_SERIAL_CHILD"] = str(os.getpid())
         try:
             yield
         finally:
@@ -232,30 +372,80 @@ def single_threaded_children():
 @contextmanager
 def serial_kernels():
     """Bound native work within an outer thread worker, restoring thread-local state."""
+    if getattr(_LOCAL, "serial", False):
+        yield
+        return
+    from threadpoolctl import threadpool_limits
+
     previous = getattr(_LOCAL, "serial", False)
     _LOCAL.serial = True
     try:
-        yield
+        # The parent owns process-wide limits; each worker also owns thread-local pools.
+        with threadpool_limits(limits=1), _accelerate_threads(1):
+            yield
     finally:
         _LOCAL.serial = previous
+
+
+@contextmanager
+def serial_runtime():
+    """Allow independent serial-kernel maps together, excluding numerical fits."""
+    global _SERIAL_PHASES
+    if getattr(_LOCAL, "serial", False):
+        with _accelerate_threads(1):
+            yield
+        return
+    if getattr(_LOCAL, 'numerical', False):
+        with numerical_kernels(1):
+            yield
+        return
+    from threadpoolctl import threadpool_limits
+
+    with _PHASES:
+        _check_openblas_capacity()
+        threadpool_limits(limits=1)
+        _SERIAL_PHASES += 1
+    try:
+        yield
+    finally:
+        with _PHASES:
+            _SERIAL_PHASES -= 1
+            _PHASES.notify_all()
 
 
 @contextmanager
 def numerical_kernels(threads: int = 1):
     """Temporarily budget BLAS after outer workers have joined; restore caller limits.
 
-    ``0`` selects the allocation, ``1`` is serial. This process-wide context must
-    not overlap an outer worker pool; native worker calls remain serial.
+    ``0`` borrows an existing numerical phase or selects up to 16 allocated CPUs; ``1`` is
+    serial. Process-wide changes serialize
+    with sample and generation pools; calls inside a sample worker stay serial.
+    Accelerate supports its startup ceiling or serial; other counts and unknown
+    preinitialized ceilings raise, rather than silently running serially.
     """
     from threadpoolctl import threadpool_limits
 
-    budget = kernel_threads(threads)
-    with threadpool_limits(limits=budget, user_api="blas"):
+    budget = numerical_threads(threads)
+    if getattr(_LOCAL, "serial", False):
+        # The parent owns the serial pools; changing their process-global limits here
+        # races sibling workers and waiting for its lock would deadlock the pool.
         yield budget
+        return
+    with _PHASES:
+        _PHASES.wait_for(lambda: _SERIAL_PHASES == 0)
+        _check_openblas_capacity(budget)
+        with threadpool_limits(limits=1), threadpool_limits(limits=budget, user_api="blas"), \
+                _accelerate_threads(budget):
+            previous = getattr(_LOCAL, 'numerical', False)
+            _LOCAL.numerical = budget
+            try:
+                yield budget
+            finally:
+                _LOCAL.numerical = previous
 
 
 def require_serial_pools(*, outer: bool = True) -> None:
-    """Check immutable pool allocation; outer workers additionally require serial kernels."""
+    """Validate immutable pool allocation without changing an owning runtime phase."""
     import polars as pl
 
     pool = pl.thread_pool_size()
@@ -265,9 +455,6 @@ def require_serial_pools(*, outer: bool = True) -> None:
                            "start a fresh process and import vdjtools before Polars")
     if not outer:
         return
-    from threadpoolctl import threadpool_limits
-
-    threadpool_limits(limits=1)
     if pool > 1:
         raise RuntimeError("Polars was initialized with multiple threads before vdjtools; "
                            "start a fresh process and import vdjtools before Polars, "

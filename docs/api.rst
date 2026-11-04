@@ -8,6 +8,11 @@ IO/schema (``vdjtools.io``), statistics (``vdjtools.stats``), junction features
 (``vdjtools.preprocess``), biomarker association (``vdjtools.biomarker``), repertoire dynamics (``vdjtools.dynamics``), single-cell interop
 (``vdjtools.sc``), and the command-line interface (``vdjtools.cli``).
 
+CPU budgets
+-----------
+
+.. autofunction:: vdjtools.cores.numerical_threads
+
 Raw features and corpus signatures
 ----------------------------------
 

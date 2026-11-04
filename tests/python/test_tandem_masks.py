@@ -4,7 +4,6 @@ import polars as pl
 import pytest
 
 from vdjtools.model import Model
-from vdjtools.model.data import _build_masks
 from vdjtools.model.dd import to_dd
 from vdjtools.model.io import from_germline
 
@@ -30,13 +29,25 @@ def tandem(locus='TRD', same_gene=False):
     return Model(manifest=model.manifest,tables=tables,genomic=model.genomic).validate()
 
 
-def test_prepared_masks_keep_second_d_call_and_invalid_calls_distinct():
+@pytest.mark.parametrize('native', [True, False])
+@pytest.mark.parametrize('d1,d2', [('TRDD1', None), ('WRONG', None),
+                                     ('TRDD2', 'UNKNOWN'), ('TRDD2', 'TRDD1')])
+def test_frame_annotations_cannot_veto_latent_tandem_histories(d1, d2, native):
+    from vdjtools.model.infer import infer_frame
+
     model = tandem()
-    rows = pl.DataFrame({'v_call':['TRDV1']*3,'j_call':['TRDJ1']*3,
-        'd_call':['TRDD1']*3,'d2_call':['TRDD2*01','UNKNOWN',None]})
-    masks = _build_masks(rows,model)
-    assert [mask[2] for mask in masks] == [['TRDD1*01']]*3
-    assert [mask[3] for mask in masks] == [['TRDD2*01'],[],[]]
+    frame = pl.DataFrame({'junction': ['TGTAAACCCTTT'], 'v_call': ['TRDV1'],
+                          'j_call': ['TRDJ1']})
+    kwargs = {'threads': 1} if native else {}
+    expected, baseline = infer_frame(model, frame, native=native, init='template', max_iter=1, **kwargs)
+    annotated = frame.with_columns(pl.lit(d1).alias('d_call'),
+                                   pl.lit(d2, dtype=pl.String).alias('d2_call'))
+    actual, report = infer_frame(model, annotated, native=native, init='template', max_iter=1, **kwargs)
+    if native:
+        assert report.n_scoreable == baseline.n_scoreable == [1]
+    assert report.loglik == baseline.loglik
+    for name in expected.tables:
+        assert actual.tables[name].equals(expected.tables[name]), name
 
 
 def test_separate_masks_match_native_reference_and_legacy_d1_only():

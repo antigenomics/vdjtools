@@ -217,3 +217,8 @@ Pgen is exact by default. AA scoring supports an explicit `--approximate-tandem`
 option for supported dense joint-history models, including human isalgo IGH.
 Approximate file outputs carry `pgen_method=rank1`; nucleotide and Hamming-1
 requests reject this option. See the [approximation scope and validation](https://docs.isalgo.dev/vdjtools/model.html#optional-approximation-of-tandem-histories).
+
+CPU budgets use `threads=0` for automatic parallel work, capped at 16 allocated CPUs.
+Use `1` for serial work or a positive
+count to override the automatic cap within the scheduler/container allocation.
+Sample workers keep their inner numerical kernels serial.

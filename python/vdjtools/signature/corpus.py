@@ -628,12 +628,13 @@ def fit_matrices(mats: dict[str, tuple[np.ndarray, list[str]]],
                  vocab: dict[str, dict[str, list[str]]], *, sig: str, name: str,
                  mode: str = "features", n_components: "int | float" = DEFAULT_COMPONENTS,
                  winsor_p: float = 0.01, meta: "dict | None" = None, feature_definition=None,
-                 solver="full", seed=0, max_components=128, threads: int = 1, bounded=True) -> Corpus:
+                 solver="full", seed=0, max_components=128, threads: int = 0, bounded=True) -> Corpus:
     """Fit a corpus from per-locus matrices -- the memory-bounded path.
 
     Each locus is fitted only on the rows that observed it, so a corpus where half the samples have
     no TRD does not learn TRD from imputed values.
-    ``threads`` budgets BLAS for fitting only: 1 is serial, 0 uses allocated cores.
+    ``threads`` budgets BLAS for fitting only: 0 (default) uses allocated cores,
+    or borrows an existing numerical phase; 1 is serial.
     """
     L.validate_feature_definition(feature_definition)
     fits: dict[str, LocusFit] = {}
@@ -741,7 +742,7 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
                vocab: "dict[str, dict[str, list[str]]] | None" = None,
                loci: "tuple[str, ...] | None" = None, organism: str = "human",
                n_components: "int | float" = 128, weight: str = "log2p1",
-               n_jobs: int = 0, feature_definition=None, cstar_target="min", threads: int = 1, **kw) -> Corpus:
+               n_jobs: int = 0, feature_definition=None, cstar_target="min", threads: int = 0, **kw) -> Corpus:
     """Fit a corpus on **your own** cohort of clonotype frames.
 
     The shipped corpora are one route and this is the other. ``fit`` takes feature rows, so a
@@ -781,9 +782,9 @@ def fit_cohort(samples, *, sig: str = "vsig", name: str = "custom",
        Both routes are legitimate and they answer different questions. Fit here when you want a
        basis for *this* cohort; use a shipped corpus when the number has to travel.
     """
-    from ..cores import kernel_threads
+    from ..cores import numerical_threads
 
-    threads = kernel_threads(threads)
+    threads = numerical_threads(threads)
     kw["threads"] = threads
     items = list(samples.items() if isinstance(samples, dict) else samples)
     if items and not isinstance(items[0], tuple):
@@ -1657,7 +1658,7 @@ def _pool_chunk(args) -> tuple:
 
 
 def build_pools(loci, *, size, n_samples: int, seed: int, source: str, tmp: Path,
-                n_jobs: int = 1, progress=None, depth_spread: "float | str | None" = None,
+                n_jobs: int = 0, progress=None, depth_spread: "float | str | None" = None,
                 cohort: "str | None" = None) -> dict:
     """Generate isalgo pools in one native batch per locus, without a worker pool.
 
@@ -1773,7 +1774,7 @@ def _workers(n_jobs: int, cap: int) -> int:
 def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
                    loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                    size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "isalgo",
-                   n_jobs: int = 1, progress=None, tmp: "Path | None" = None,
+                   n_jobs: int = 0, progress=None, tmp: "Path | None" = None,
                    depth_spread: "float | str | None" = None,
                    cohort: "str | None" = None, feature_definition=None) -> dict:
     """The corpus matrix, ``{locus: (array, columns)}``, built across ``n_jobs`` threads.
@@ -1788,7 +1789,7 @@ def build_matrices(regime: str, *, sig: str, featurise, vocab: dict,
     Args:
         featurise: Callable mapping ``{locus: frame}`` to ``(raw, channels)``.
             It must not mutate shared resources.
-        n_jobs: Worker threads; ``0`` means allocated cores, ``1`` runs without a pool.
+        n_jobs: Worker threads; ``0`` (default) means allocated cores, ``1`` runs without a pool.
         tmp: Scratch directory for the pool files. A private temporary directory by default,
             removed when the build finishes.
 
@@ -1852,9 +1853,7 @@ def _pooled(spans, fn, workers: int, n_samples: int, progress):
     """Run contiguous spans on bounded threads, reporting completed rows."""
     from .cohort import parallel_rows
 
-    from ..cores import require_serial_pools, serial_kernels
-
-    require_serial_pools()
+    from ..cores import serial_kernels
 
     def work(span):
         with serial_kernels():
@@ -1871,7 +1870,7 @@ def _pooled(spans, fn, workers: int, n_samples: int, progress):
 
 def sample_stream(regime: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples: int = 10_000,
                   size: "int | str" = DEFAULT_SIZE, seed: int = SEED, source: str = "isalgo",
-                  progress=None, tmp: "Path | None" = None, n_jobs: int = 1,
+                  progress=None, tmp: "Path | None" = None, n_jobs: int = 0,
                   depth_spread: "float | str | None" = None, cohort: "str | None" = None):
     """Set up the pools in this process and return ``(ordered_loci, draw)``; ``draw(j)`` is sample j.
 
@@ -1896,7 +1895,7 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
                size: "int | str | None" = None, seed: int = SEED,
                n_components: "int | float" = DEFAULT_COMPONENTS, mode: str = "features",
                winsor_p: float = 0.01, source: str = "isalgo", fit_corpus: bool = True,
-               progress=None, n_jobs: int = 1, depth_spread: "float | str | None" = None,
+               progress=None, n_jobs: int = 0, depth_spread: "float | str | None" = None,
                feature_definition=None, solver="full", max_components=128):
     """Build a synthetic corpus, and fit it.
 
@@ -1922,8 +1921,7 @@ def synthesize(corpus_name: str, *, loci: "tuple[str, ...]" = L.LOCI, n_samples:
             draw against a corpus fitted on another.
         progress: Optional ``callable(locus, done, total)``.
         n_jobs: Pool-generation processes, then sample-map threads (not kernel threads).
-            ``0`` means every available core; ``1``,
-            the default, runs in-process. The result is bit-identical at every value.
+            ``0`` (default) means allocated cores; ``1`` runs in-process. The result is bit-identical at every value.
         depth_spread: Multiplicative depth range each repertoire's size is drawn log-uniformly
             across, around ``size``. ``None`` is the corpus's own -- :data:`DEPTH_SPREAD` for a pure
             regime (2.4x-11.0x), the cohort's measured richness band for a ``synthetic-*`` one (43x
@@ -2123,14 +2121,19 @@ if __name__ == "__main__":
     _demo()
 
 
-def fit_pca(matrix, n_components, *, seed=0, copy=True):
-    """Fit the established StandardScaler/PCA pipeline on sample feature rows."""
+def fit_pca(matrix, n_components, *, seed=0, copy=True, threads=0):
+    """Fit the established StandardScaler/PCA pipeline under an owned BLAS budget.
+
+    ``threads=0`` is automatic and borrows an existing numerical phase; ``1`` is serial.
+    """
     from sklearn.decomposition import PCA
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
 
-    return make_pipeline(StandardScaler(copy=copy),
-                         PCA(n_components, random_state=seed, copy=copy)).fit(matrix)
+    from ..cores import numerical_kernels
+    with numerical_kernels(threads):
+        return make_pipeline(StandardScaler(copy=copy),
+                             PCA(n_components, random_state=seed, copy=copy)).fit(matrix)
 
 
 def _space(table: pl.DataFrame) -> str:
@@ -2161,16 +2164,16 @@ class TablePCA:
 
     @classmethod
     def fit(cls, table: pl.DataFrame, *, n_components: int = 256, seed: int = 0,
-            columns: list[str] | None = None, threads: int = 1):
+            columns: list[str] | None = None, threads: int = 0):
         """Fit selected sample features; unselected channels and metadata pass through.
 
         RFF columns (phi:) are the default. For vsig/rsig tables supply explicit
         columns and an embedding_space column naming their actual feature basis.
         This standard scaler/PCA does not replace corpus winsorization.
         ``threads`` budgets BLAS during fitting (1 serial, 0 allocated cores)."""
-        from ..cores import kernel_threads, numerical_kernels
+        from ..cores import numerical_threads
 
-        threads = kernel_threads(threads)
+        threads = numerical_threads(threads)
         space = _space(table)
         cols = list(columns) if columns is not None else [c for c in table.columns if c.startswith('phi:')]
         if len(set(cols)) != len(cols) or not set(cols).issubset(table.columns):
@@ -2191,15 +2194,14 @@ class TablePCA:
         # Import the lazy solver before limiting its newly loaded BLAS pools.
         from sklearn import decomposition  # noqa: F401
 
-        with numerical_kernels(threads):
-            reducer = fit_pca(X, min(n_components, *X.shape), seed=seed, copy=False)
+        reducer = fit_pca(X, min(n_components, *X.shape), seed=seed, copy=False, threads=threads)
         scaler, pca = reducer.steps[0][1], reducer.steps[1][1]
         return cls(cols, space, fill, scaler.mean_, scaler.scale_, pca.mean_, pca.components_,
                    np.nan_to_num(pca.explained_variance_ratio_, nan=0.0))
 
     @classmethod
     def fit_features(cls, samples, *, vocab, feature_definition, n_components=256,
-                     seed=0, n_jobs=1, threads=1, cstar_target="min", weight="log2p1",
+                     seed=0, n_jobs=0, threads=0, cstar_target="min", weight="log2p1",
                      on_duplicate="error"):
         """Fit configured raw sample features without materializing a dense cohort table.
 
@@ -2210,7 +2212,7 @@ class TablePCA:
         """
         from .bounded import BlockMatrix, feature_matrices, table_pca
         from .signature import _coverage_target, _raw_feature_identity
-        from ..cores import kernel_threads, numerical_kernels
+        from ..cores import numerical_threads, numerical_kernels
         L.validate_feature_definition(feature_definition)
         if not L._configured(feature_definition):
             raise ValueError("sparse raw-feature PCA requires a configured definition")
@@ -2218,7 +2220,7 @@ class TablePCA:
         ids = [sid for sid, _ in items]
         if len(items) < 2 or len(set(ids)) != len(ids) or n_components < 1:
             raise ValueError("PCA needs at least two unique samples and a positive dimension")
-        threads = kernel_threads(threads)
+        threads = numerical_threads(threads)
         target = _coverage_target(items, n_jobs, cstar_target, {'on_duplicate': on_duplicate})
         kw = dict(feature_definition=feature_definition, cstar_target=target,
                   weight=weight, on_duplicate=on_duplicate)
@@ -2235,7 +2237,7 @@ class TablePCA:
             parameters = table_pca(raw, n_components, seed=seed)
         return cls(columns, space, *parameters)
 
-    def transform(self, table: pl.DataFrame, *, threads: int = 1) -> pl.DataFrame:
+    def transform(self, table: pl.DataFrame, *, threads: int = 0) -> pl.DataFrame:
         """Project bounded row blocks; preserve sample IDs and metadata in input order.
 
         ``threads`` budgets BLAS during application (1 serial, 0 allocated cores).
@@ -2246,8 +2248,8 @@ class TablePCA:
         selected = set(self.columns)
         if not selected.issubset(table.columns):
             raise ValueError('embedding columns differ from the fitted rotation')
-        from vdjtools.cores import kernel_threads, numerical_kernels, require_memory
-        budget = kernel_threads(threads)
+        from vdjtools.cores import numerical_threads, numerical_kernels, require_memory
+        budget = numerical_threads(threads)
         # Two dense blocks plus masks/scaling scratch fit in 32 MiB; output is N x rank.
         rows = max(1, (32 * 1024**2) // (16 * len(self.columns)))
         dtype = np.result_type(self.components.dtype, self.fill.dtype, np.float64)

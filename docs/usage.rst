@@ -809,12 +809,17 @@ CPU and container limits
 ------------------------
 
 Import ``vdjtools`` before numerical libraries in each fresh worker. Persistent
-Polars, BLAS, OpenMP and Numba import pools default to one thread. Idle OpenBLAS pools
-use the minimum wait exponent (4), and OpenMP uses passive waiting, so alternating
-NumPy/SciPy pools release CPUs at handoff. These policies require import before
-native initialization. Native batch APIs
-receive an explicit budget: ``threads=1`` is serial, ``threads=0`` uses the detected
-allocation, and positive counts must fit it. CPU affinity, SLURM per-task allocation
+Polars, OpenMP and Numba import pools default to one thread. OpenBLAS reserves
+up to 16 allocated CPUs before import; numerical phases select their active
+thread count and restore the caller's limits. OpenMP uses passive waiting.
+OpenBLAS retains its normal idle-thread lifetime or an explicit caller setting.
+Expanding beyond OpenBLAS's startup capacity can crash older native runtimes;
+such requests raise. For a larger explicit budget, call
+``configure_runtime(blas_threads=N)`` before importing NumPy/SciPy, or use
+the CLI ``--threads N``. Import-time policies require import before native initialization.
+Native batch APIs receive an explicit budget: ``threads=1`` is serial,
+``threads=0`` selects up to 16 allocated CPUs, and positive counts must fit the
+allocation. CPU affinity, SLURM per-task allocation
 and visible cgroup quotas, including parent quotas, constrain that detection.
 Kubernetes CPU requests alone are scheduling weights, not a hard allocation.
 
@@ -837,6 +842,35 @@ Process callbacks must be importable/picklable, and Python scripts must guard th
 entry point with ``if __name__ == "__main__":``. Prefer threads for shared models or
 small cohorts where spawn/import cost dominates. Failures propagate; there is no
 silent switch between backends.
+
+Apple Accelerate uses a thread-local serial/automatic policy and an immutable
+parallel ceiling; ``threadpoolctl`` does not expose that backend. On macOS 15+
+VDJtools sets the allocation ceiling before NumPy/SciPy initialization, keeps
+sample workers serial, and enables the native automatic policy during a numerical
+phase using that ceiling. To choose a smaller BLAS ceiling in a Python script,
+configure it before importing numerical libraries:
+
+.. code-block:: python
+
+   from vdjtools.cores import configure_runtime
+   configure_runtime(blas_threads=2)
+   import numpy as np
+   from vdjtools.signature.corpus import TablePCA
+
+   # Later fits/projections use threads=2, or threads=1 for serial work.
+
+The CLI configures this ceiling from ``--threads`` before loading command modules;
+no environment export is needed. For ``vdjtools pca``, omitting ``--threads`` uses
+the detected allocation (the same as ``--threads 0``). A smaller count is an
+optional resource choice, not a PCA requirement. Two threads in an example or
+regression check are arbitrary. A budget limits eligible parallel work; it does
+not promise that every kernel uses that many CPUs or that the whole process has
+only that many live OS threads. Changing an initialized Accelerate ceiling,
+requesting parallel BLAS after an unverified prior initialization, or requesting
+parallel BLAS without the native policy API raises an explicit error. Start a
+fresh process for a different ceiling. Native Pgen, generation and sequence-distance
+batches retain their independent explicit budgets. On older macOS, serial BLAS
+remains supported; a backend with runtime thread controls supports other budgets.
 
 .. code-block:: bash
 
@@ -875,3 +909,26 @@ chunk denominator, impute genes using chunk-local modes, or assume paired chains
 share a batch. ``iter_samples`` remains the simpler choice when one complete
 sample fits comfortably in RAM; TCRnet needs sample-wide neighbourhoods.
 The batch size bounds emitted rows, not parser buffers or downstream indexes.
+
+
+Sample PCA solver choice
+------------------------
+
+Both ``vdjtools pca`` and ``mir pca`` use ``TablePCA``: training-median
+imputation, feature standardization, then centered PCA. Dense tables delegate
+solver selection to `scikit-learn PCA
+<https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html>`_.
+Small or near-full fits use full SVD; low-rank large fits use seeded randomized
+SVD; modern scikit-learn uses covariance eigendecomposition for tall tables with
+at most 1,000 features. Covariance formation uses quadratic feature memory and
+squares the spectral condition number; it is not suitable for arbitrary wide
+or poorly conditioned matrices.
+
+Configured sparse raw-feature fits preserve those preprocessing semantics through
+a centered linear operator and bounded products. They avoid a dense sample-by-feature
+table, but retain the fitted components and numerical workspace. The operator
+solver is checked against the dense pipeline across the solver regimes. Projection
+of an existing rotation is matrix multiplication in bounded row blocks, with no
+refit. Uncentered ``TruncatedSVD`` changes the coordinates; ``IncrementalPCA``
+introduces a different approximate fit. Neither is an automatic replacement for
+this established rotation. Reuse a fitted basis for held-out samples.

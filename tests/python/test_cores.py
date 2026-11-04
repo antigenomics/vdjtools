@@ -134,3 +134,43 @@ def test_import_preserves_caller_openmp_hard_limit(hard_limit):
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [str(hard_limit), "1"]
+
+
+def test_auto_cap_preserves_larger_explicit_and_nested_budgets(monkeypatch):
+    import vdjtools.cores as cores
+    monkeypatch.setattr(cores, 'available_cores', lambda: 32)
+    assert cores.available_cores() == 32
+    assert cores.kernel_threads() == cores.numerical_threads() == 16
+    assert cores.kernel_threads(32) == cores.numerical_threads(32) == 32
+    monkeypatch.setattr(cores._LOCAL, 'numerical', 32, raising=False)
+    assert cores.numerical_threads() == 32
+    with cores.serial_kernels():
+        assert cores.kernel_threads() == cores.numerical_threads() == 1
+
+
+def test_pool_validation_does_not_mutate_owned_blas_phase(monkeypatch):
+    import polars as pl
+    import threadpoolctl
+    import vdjtools.cores as cores
+
+    monkeypatch.setattr(pl, 'thread_pool_size', lambda: 1)
+    with cores.numerical_kernels(1):
+        monkeypatch.setattr(threadpoolctl, 'threadpool_limits',
+                            lambda *a, **k: pytest.fail('validation changed global BLAS limits'))
+        cores.require_serial_pools()
+        assert cores.numerical_threads(0) == 1
+
+
+@pytest.mark.parametrize('timeout', [None, '4', '26'])
+def test_import_preserves_openblas_idle_timeout(timeout):
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    env.pop('OPENBLAS_THREAD_TIMEOUT', None)
+    if timeout is not None:
+        env['OPENBLAS_THREAD_TIMEOUT'] = timeout
+    result = subprocess.run([sys.executable, '-c',
+                             "import vdjtools, os; print(os.environ.get('OPENBLAS_THREAD_TIMEOUT'))"],
+                            env=env, capture_output=True, text=True, check=True, timeout=30)
+    assert result.stdout.strip() == str(timeout)

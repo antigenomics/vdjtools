@@ -52,10 +52,14 @@ def _corrected_counts(counts: np.ndarray, neighbours: "list[list[tuple[int, int]
     out = counts.astype(np.int64).copy()
     for i, nbrs in enumerate(neighbours):
         c_i = int(counts[i])
+        if c_i == 0:
+            continue
         total = c_i
         removed = False
         for j, m in nbrs:
             c_j = int(counts[j])
+            if c_j == 0:
+                continue
             log_ratio = math.log10(c_i / c_j)
             if log_ratio > m * log_ratio_threshold:
                 total += c_j

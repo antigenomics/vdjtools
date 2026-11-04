@@ -1,10 +1,10 @@
 [build-system]
-requires = ["scikit-build-core>=0.12", "pybind11>=2.12"]
+requires = ["scikit-build-core>=0.12", "pybind11>=2.12,<4"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "vdjtools"  # if the PyPI name is taken, fall back to a distinct dist name (cf. arda -> arda-mapper)
-version = "5.9.0"
+version = "5.9.1"
 description = "TCR/BCR repertoire analysis — Pgen/generation/inference, diversity, overlap, biomarkers (Python + C++)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -63,7 +63,7 @@ dependencies = [
     # `Cdr3Markup.proposed` saying which side was never curated. `annotate_junctions` passes the
     # calls straight through, so a curated corpus that leaves a side out (3,130 of VDJdb's 192,726
     # keys) gets a nucleotide junction and a D here instead of a `FailedBadSegment` and nulls.
-    "arda-mapper>=2.38.2",
+    "arda-mapper>=2.38.3",
     # seqtree = the fuzzy-search / e-value engine, vdjmatch = overlap + TCRnet on top of it.
     # Phase 4/5 landed, so they are base deps too: without them a plain install cannot do
     # error correction (preprocess.correct), fuzzy/similarity overlap, TCRnet, or
@@ -105,7 +105,7 @@ test = ["pytest>=7.4", "pytest-cov",
         "tomli>=1.1; python_version<'3.11'"]
 bench = []  # DEPRECATED no-op alias: huggingface_hub (real-data fetch) is a BASE dep.
 docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx", "sphinx-design", "sphinx-copybutton"]
-dev = ["ruff", "pytest>=7.4", "pybind11>=2.12"]
+dev = ["ruff", "pytest>=7.4", "pybind11>=2.12,<4"]
 all = ["scikit-learn"]                 # the antigenomics engines (arda-mapper, seqtree, vdjmatch) are base deps, not extras
 
 [project.urls]
@@ -123,6 +123,7 @@ editable.rebuild = false
 # dev docs, the LaTeX appendix, and stray scratch files must not ship to PyPI — the wheel carries
 # just the package + compiled _core.
 sdist.exclude = [
+    "/attic/",
     "**/*.md", "!**/README.md", "!README.md",
     "/tests", "/docs", "/.github", "/.venv", "/setup.sh", "/build", "/examples", "/assets",
     "/appendix", "/arda-ref.md", "/notebooks", "/scripts",
