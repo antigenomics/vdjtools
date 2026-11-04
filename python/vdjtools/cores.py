@@ -236,7 +236,7 @@ def _accelerate_threads(threads):
 
 
 def kernel_threads(threads: int = 0) -> int:
-    """Resolve 0/all, 1/serial, or a positive count within this process's allocation.
+    """Resolve 0/automatic (at most 16), 1/serial, or a positive count within this process's allocation.
 
     Outer thread-pool workers have a one-core allocation. Explicit excessive counts
     raise rather than silently clamp. Numerical import pools remain serial; native batches
@@ -247,10 +247,10 @@ def kernel_threads(threads: int = 0) -> int:
     threads = operator.index(threads)
     budget = 1 if getattr(_LOCAL, "serial", False) else available_cores()
     if threads < 0:
-        raise ValueError("threads must be non-negative (0 means allocated cores)")
+        raise ValueError("threads must be non-negative (0 means automatic, at most 16 cores)")
     if threads > budget:
-        raise ValueError(f"threads must be between 0 and {budget} (0 means allocated cores)")
-    return threads or budget
+        raise ValueError(f"threads must be between 0 and {budget} (0 means automatic, at most 16 cores)")
+    return threads or min(budget, 16)
 
 
 def numerical_threads(threads: int = 0) -> int:
@@ -261,7 +261,9 @@ def numerical_threads(threads: int = 0) -> int:
     """
     budget = kernel_threads(threads)
     active = getattr(_LOCAL, 'numerical', 0)
-    return min(budget, active) if threads == 0 and active else budget
+    if threads == 0 and active:
+        return min(1 if getattr(_LOCAL, 'serial', False) else available_cores(), active)
+    return budget
 
 
 def configure_runtime(*, blas_threads: int | None = None) -> None:
@@ -289,7 +291,7 @@ def configure_runtime(*, blas_threads: int | None = None) -> None:
         preloaded = 'numpy' in sys.modules or 'scipy' in sys.modules
         if not _ACCELERATE_CONFIGURED:
             if not preloaded and apple:
-                ceiling = int(os.environ.get('VECLIB_MAXIMUM_THREADS', available_cores()))
+                ceiling = int(os.environ.get('VECLIB_MAXIMUM_THREADS', kernel_threads()))
                 if ceiling < 1:
                     raise ValueError('VECLIB_MAXIMUM_THREADS must be positive')
                 _ACCELERATE_CAP = min(available_cores(), ceiling)
@@ -386,7 +388,7 @@ def serial_runtime():
 def numerical_kernels(threads: int = 1):
     """Temporarily budget BLAS after outer workers have joined; restore caller limits.
 
-    ``0`` borrows an existing numerical phase or selects the allocation; ``1`` is
+    ``0`` borrows an existing numerical phase or selects up to 16 allocated CPUs; ``1`` is
     serial. Process-wide changes serialize
     with sample and generation pools; calls inside a sample worker stay serial.
     Accelerate supports its startup ceiling or serial; other counts and unknown

@@ -224,7 +224,7 @@ def generate(
     seed: Optional[int] = typer.Option(None, help="Random seed for reproducible draws."),
     productive: bool = typer.Option(False, help="Only keep in-frame, stop-free (productive) rearrangements."),
     engine: Optional[str] = typer.Option(None, help="Sampler: native by default for bundled isalgo models; reference for legacy sources/custom paths. Explicit reference preserves historical seeds; native uses a distinct random stream."),
-    threads: int = typer.Option(0, min=0, help="Native kernel CPU budget; 0 uses allocated cores. Reference sampling is serial."),
+    threads: int = typer.Option(0, min=0, help="Native kernel CPU budget; 0 uses up to 16 allocated cores. Reference sampling is serial."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout)."),
 ) -> None:
     """Sample recombined sequences from a model — like ``olga-generate_sequences``.
@@ -250,7 +250,7 @@ _FMT = typer.Option("auto", "--format", help="auto | vdjtools | airr.")
 _OUT = typer.Option(None, "--out", "-o", help="Output TSV (default: stdout).")
 _THREADS = typer.Option(
     0, "--threads", "-t",
-    help="Sample workers (0 = allocated cores). Inner kernels stay serial; "
+    help="Sample workers (0 = automatic, up to 16 allocated cores). Inner kernels stay serial; "
          "reduce the budget to share resources or bound simultaneous sample memory.",
 )
 _SAMPLE_BACKEND = typer.Option(
@@ -630,7 +630,7 @@ def signature(
     describe: bool = typer.Option(False, "--describe",
                                   help="Print the columns THIS invocation emits, and exit."),
     jobs: int = typer.Option(0, "--jobs", "-j",
-                             help="Worker threads over samples (0 = allocated cores, 1 = serial). "
+                             help="Worker threads over samples (0 = automatic, up to 16 allocated cores, 1 = serial). "
                                   "Each worker uses one kernel thread."),
     on_duplicate: str = _ONDUP, out: Optional[Path] = _OUT,
 ) -> None:
@@ -801,7 +801,7 @@ def corpus(
     motif_definition: Optional[Path] = typer.Option(None, "--motif-definition", help="Frozen cluster maps"),
     solver: str = typer.Option("full", help="full | randomized; explicit for new wide bases"),
     jobs: int = typer.Option(0, "--jobs", "-j", help="Pool-generation processes, then sample-map threads; serial inner kernels: "
-                                                     "0 = allocated cores, 1 = no pool. "
+                                                     "0 = automatic, up to 16 allocated cores, 1 = no pool. "
                                                      "The artifact is identical at any value."),
 ) -> None:
     """Build a synthetic corpus and fit its rotation, bounds and scaling.
@@ -1011,7 +1011,7 @@ def tcrnet(
     legacy: bool = typer.Option(False, "--legacy", help="Historical ALICE formula and Q=9.41."),
     selection_profile: Optional[str] = typer.Option(None, "--selection-profile", help="Opt-in length | vj-length | model-bound calibration JSON."),
     scope: str = typer.Option("1,0,0,1", "--scope", help="Edit scope subs,ins,dels,total."),
-    threads: int = typer.Option(0, "--threads", help="0 = all cores."),
+    threads: int = typer.Option(0, "--threads", help="0 = automatic, up to 16 allocated cores."),
 ) -> None:
     """Neighbourhood enrichment against a CONTROL REPERTOIRE (TCRnet).
 
@@ -1046,7 +1046,7 @@ def alice(
     min_degree: int = typer.Option(3, "--min-degree", help="Only test clonotypes with >= this "
                                                            "many neighbours (self included)."),
     min_count: int = typer.Option(2, "--min-count", help="Ignore clonotypes below this count."),
-    threads: int = typer.Option(0, "--threads", help="0 = all cores."),
+    threads: int = typer.Option(0, "--threads", help="0 = automatic, up to 16 allocated cores."),
 ) -> None:
     """Neighbourhood enrichment against a V(D)J GENERATION MODEL (ALICE).
 

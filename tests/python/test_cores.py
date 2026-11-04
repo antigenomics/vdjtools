@@ -134,3 +134,15 @@ def test_import_preserves_caller_openmp_hard_limit(hard_limit):
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [str(hard_limit), "1"]
+
+
+def test_auto_cap_preserves_larger_explicit_and_nested_budgets(monkeypatch):
+    import vdjtools.cores as cores
+    monkeypatch.setattr(cores, 'available_cores', lambda: 32)
+    assert cores.available_cores() == 32
+    assert cores.kernel_threads() == cores.numerical_threads() == 16
+    assert cores.kernel_threads(32) == cores.numerical_threads(32) == 32
+    monkeypatch.setattr(cores._LOCAL, 'numerical', 32, raising=False)
+    assert cores.numerical_threads() == 32
+    with cores.serial_kernels():
+        assert cores.kernel_threads() == cores.numerical_threads() == 1
