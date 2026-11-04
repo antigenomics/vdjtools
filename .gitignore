@@ -97,3 +97,6 @@ screpertoire_airr.tsv
 
 # Public, reusable agent skills and their Markdown references.
 !skills/**/*.md
+
+# Private retired branches, notes and scratch; never package or publish.
+/attic/
