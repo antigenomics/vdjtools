@@ -252,10 +252,10 @@ def test_worker_base_exceptions_propagate_instead_of_killing_a_pool_thread(error
         parallel_rows(range(10),fail,2)
 
 
-def test_runtime_prevents_idle_native_pools_spinning_across_phases(monkeypatch):
+def test_runtime_preserves_openblas_timeout_and_uses_passive_openmp(monkeypatch):
     from vdjtools.cores import configure_runtime
     monkeypatch.setenv('OPENBLAS_THREAD_TIMEOUT', '28')
     monkeypatch.setenv('OMP_WAIT_POLICY', 'ACTIVE')
     configure_runtime()
-    assert os.environ['OPENBLAS_THREAD_TIMEOUT'] == '4'
+    assert os.environ['OPENBLAS_THREAD_TIMEOUT'] == '28'
     assert os.environ['OMP_WAIT_POLICY'] == 'PASSIVE'
