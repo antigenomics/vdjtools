@@ -17,9 +17,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
-if(NOT MSVC)
-  set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-endif()  # MSVC Release already uses /O2; -O3 is not a valid MSVC flag
+# Keep CMake/toolchain Release flags, including compiler-specific optimization.
 
 option(VDJTOOLS_TESTS  "Build C++ tests" OFF)
 option(VDJTOOLS_PYTHON "Build the pybind11 module" OFF)
