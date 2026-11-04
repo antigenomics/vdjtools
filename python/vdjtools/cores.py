@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 import operator
 import threading
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from functools import lru_cache
 
 __all__ = ["available_cores", "numerical_threads"]
@@ -415,7 +415,7 @@ def numerical_kernels(threads: int = 1):
 
 
 def require_serial_pools(*, outer: bool = True) -> None:
-    """Check immutable pool allocation; outer workers additionally require serial kernels."""
+    """Validate immutable pool allocation without changing an owning runtime phase."""
     import polars as pl
 
     pool = pl.thread_pool_size()
@@ -425,10 +425,6 @@ def require_serial_pools(*, outer: bool = True) -> None:
                            "start a fresh process and import vdjtools before Polars")
     if not outer:
         return
-    from threadpoolctl import threadpool_limits
-
-    with nullcontext() if getattr(_LOCAL, "serial", False) else _SPAWN_ENV_LOCK:
-        threadpool_limits(limits=1)
     if pool > 1:
         raise RuntimeError("Polars was initialized with multiple threads before vdjtools; "
                            "start a fresh process and import vdjtools before Polars, "

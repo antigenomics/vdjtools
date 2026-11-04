@@ -146,3 +146,16 @@ def test_auto_cap_preserves_larger_explicit_and_nested_budgets(monkeypatch):
     assert cores.numerical_threads() == 32
     with cores.serial_kernels():
         assert cores.kernel_threads() == cores.numerical_threads() == 1
+
+
+def test_pool_validation_does_not_mutate_owned_blas_phase(monkeypatch):
+    import polars as pl
+    import threadpoolctl
+    import vdjtools.cores as cores
+
+    monkeypatch.setattr(pl, 'thread_pool_size', lambda: 1)
+    with cores.numerical_kernels(1):
+        monkeypatch.setattr(threadpoolctl, 'threadpool_limits',
+                            lambda *a, **k: pytest.fail('validation changed global BLAS limits'))
+        cores.require_serial_pools()
+        assert cores.numerical_threads(0) == 1
