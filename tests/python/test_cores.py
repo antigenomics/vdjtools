@@ -159,3 +159,18 @@ def test_pool_validation_does_not_mutate_owned_blas_phase(monkeypatch):
                             lambda *a, **k: pytest.fail('validation changed global BLAS limits'))
         cores.require_serial_pools()
         assert cores.numerical_threads(0) == 1
+
+
+@pytest.mark.parametrize('timeout', [None, '4', '26'])
+def test_import_preserves_openblas_idle_timeout(timeout):
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    env.pop('OPENBLAS_THREAD_TIMEOUT', None)
+    if timeout is not None:
+        env['OPENBLAS_THREAD_TIMEOUT'] = timeout
+    result = subprocess.run([sys.executable, '-c',
+                             "import vdjtools, os; print(os.environ.get('OPENBLAS_THREAD_TIMEOUT'))"],
+                            env=env, capture_output=True, text=True, check=True, timeout=30)
+    assert result.stdout.strip() == str(timeout)
