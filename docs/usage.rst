@@ -856,7 +856,12 @@ configure it before importing numerical libraries:
    # Later fits/projections use threads=2, or threads=1 for serial work.
 
 The CLI configures this ceiling from ``--threads`` before loading command modules;
-no environment export is needed. Changing an initialized Accelerate ceiling,
+no environment export is needed. For ``vdjtools pca``, omitting ``--threads`` uses
+the detected allocation (the same as ``--threads 0``). A smaller count is an
+optional resource choice, not a PCA requirement. Two threads in an example or
+regression check are arbitrary. A budget limits eligible parallel work; it does
+not promise that every kernel uses that many CPUs or that the whole process has
+only that many live OS threads. Changing an initialized Accelerate ceiling,
 requesting parallel BLAS after an unverified prior initialization, or requesting
 parallel BLAS without the native policy API raises an explicit error. Start a
 fresh process for a different ceiling. Native Pgen, generation and sequence-distance
@@ -900,3 +905,26 @@ chunk denominator, impute genes using chunk-local modes, or assume paired chains
 share a batch. ``iter_samples`` remains the simpler choice when one complete
 sample fits comfortably in RAM; TCRnet needs sample-wide neighbourhoods.
 The batch size bounds emitted rows, not parser buffers or downstream indexes.
+
+
+Sample PCA solver choice
+------------------------
+
+Both ``vdjtools pca`` and ``mir pca`` use ``TablePCA``: training-median
+imputation, feature standardization, then centered PCA. Dense tables delegate
+solver selection to `scikit-learn PCA
+<https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html>`_.
+Small or near-full fits use full SVD; low-rank large fits use seeded randomized
+SVD; modern scikit-learn uses covariance eigendecomposition for tall tables with
+at most 1,000 features. Covariance formation uses quadratic feature memory and
+squares the spectral condition number; it is not suitable for arbitrary wide
+or poorly conditioned matrices.
+
+Configured sparse raw-feature fits preserve those preprocessing semantics through
+a centered linear operator and bounded products. They avoid a dense sample-by-feature
+table, but retain the fitted components and numerical workspace. The operator
+solver is checked against the dense pipeline across the solver regimes. Projection
+of an existing rotation is matrix multiplication in bounded row blocks, with no
+refit. Uncentered ``TruncatedSVD`` changes the coordinates; ``IncrementalPCA``
+introduces a different approximate fit. Neither is an automatic replacement for
+this established rotation. Reuse a fitted basis for held-out samples.
