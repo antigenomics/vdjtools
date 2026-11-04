@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import polars as pl
 import pytest
@@ -344,7 +345,8 @@ def test_prepared_examples_load(chain, min_rows):
     """The arda-mapped TRA/TRB examples that ship in the tree — no network, no arda, no mmseqs2."""
     from vdjtools.model.data import load_prepared
 
-    clones = load_prepared("human", chain)
+    clones = load_prepared("human", chain, path=Path(__file__).parent / "fixtures" / "model_reads" /
+                           f"human.{chain}.nonfunctional.fa.gz")
     assert clones.height >= min_rows
     assert clones.columns == ["junction", "v_call", "j_call", "d_call", "d2_call", "count"]
     assert clones["junction"].null_count() == 0
@@ -357,7 +359,8 @@ def test_prepared_example_trains_a_model():
     """The end the examples exist for: real junctions, straight into EM."""
     from vdjtools.model.data import load_prepared
 
-    clones = load_prepared("human", "TRA").head(2000)
+    clones = load_prepared("human", "TRA", path=Path(__file__).parent / "fixtures" / "model_reads" /
+                           "human.TRA.nonfunctional.fa.gz").head(2000)
     template = load_bundled("TRA", "arda", collapse=False)
     fitted, report = infer_frame(template, clones, max_iter=2)
     assert report.n_iter == 2
