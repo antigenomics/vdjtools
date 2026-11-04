@@ -178,6 +178,22 @@ _PHASES = threading.Condition(_SPAWN_ENV_LOCK)
 _SERIAL_PHASES = 0
 _ACCELERATE_CONFIGURED = False
 _ACCELERATE_CAP = None
+_OPENBLAS_CAPS = {}
+
+
+def _check_openblas_capacity(threads=1):
+    """Remember startup capacity before reducing pools; growing beyond it can crash."""
+    from threadpoolctl import threadpool_info
+
+    for pool in threadpool_info():
+        if pool.get('internal_api') == 'openblas':
+            capacity = _OPENBLAS_CAPS.setdefault(pool['filepath'], pool['num_threads'])
+            if threads > capacity:
+                raise RuntimeError(
+                    f'OpenBLAS started with capacity {capacity}, requested {threads}. '
+                    'Start a fresh process, import vdjtools and call '
+                    'configure_runtime(blas_threads=N) before NumPy/SciPy, '
+                    'or use the CLI --threads N.')
 
 
 @lru_cache(maxsize=1)
@@ -239,13 +255,15 @@ def kernel_threads(threads: int = 0) -> int:
     """Resolve 0/automatic (at most 16), 1/serial, or a positive count within this process's allocation.
 
     Outer thread-pool workers have a one-core allocation. Explicit excessive counts
-    raise rather than silently clamp. Numerical import pools remain serial; native batches
+    raise rather than silently clamp. Outer worker import pools remain serial; native batches
     receive this resolved integer, never a host-wide automatic setting.
     """
     if isinstance(threads, bool):
         raise TypeError("threads must be an integer, not bool")
     threads = operator.index(threads)
-    budget = 1 if getattr(_LOCAL, "serial", False) else available_cores()
+    child_parent = os.environ.get("_VDJTOOLS_SERIAL_CHILD")
+    child = child_parent is not None and child_parent != str(os.getpid())
+    budget = 1 if getattr(_LOCAL, "serial", False) or child else available_cores()
     if threads < 0:
         raise ValueError("threads must be non-negative (0 means automatic, at most 16 cores)")
     if threads > budget:
@@ -267,7 +285,7 @@ def numerical_threads(threads: int = 0) -> int:
 
 
 def configure_runtime(*, blas_threads: int | None = None) -> None:
-    """Keep persistent numerical pools serial before imports; limit initialized BLAS too.
+    """Reserve BLAS startup capacity and keep other persistent import pools serial.
 
     Polars cannot resize an initialized pool. Thread-pool callers detect that case and
     require a fresh interpreter rather than silently oversubscribing it.
@@ -282,7 +300,7 @@ def configure_runtime(*, blas_threads: int | None = None) -> None:
         if blas_threads is not None:
             raise RuntimeError('Configure the BLAS ceiling before starting numerical work')
         return
-    if getattr(_LOCAL, "serial", False):
+    if getattr(_LOCAL, "serial", False) or os.environ.get("_VDJTOOLS_SERIAL_CHILD") is not None:
         if blas_threads is not None:
             kernel_threads(blas_threads)
         return  # The parent already owns serial limits; never wait for its pool lock.
@@ -312,12 +330,14 @@ def configure_runtime(*, blas_threads: int | None = None) -> None:
             os.environ['VECLIB_MAXIMUM_THREADS'] = str(_ACCELERATE_CAP or 1)
             if apple.BLASSetThreading(1) != 0:
                 raise RuntimeError('Accelerate rejected serial BLAS initialization')
-        # Keep OpenBLAS's normal idle timeout: aggressive thread teardown crashes
-        # older runtimes during numerical-phase handoffs (including OpenBLAS 0.3.28).
+        # OpenBLAS 0.3.28 can crash when growing a pool initialized at one thread.
+        # Reserve the authorized capacity before lazy imports; phases set active limits.
+        os.environ["OPENBLAS_NUM_THREADS"] = str(kernel_threads(blas_threads or 0))
         os.environ['OMP_WAIT_POLICY'] = 'PASSIVE'
         if "numpy" in sys.modules or "scipy" in sys.modules:
             from threadpoolctl import threadpool_limits
 
+            _check_openblas_capacity()
             threadpool_limits(limits=1)
 
 
@@ -335,8 +355,9 @@ def single_threaded_children():
     """Set import-time limits before spawning workers and restore the parent environment."""
     # ponytail: serialize generation pools; their import limits share the process environment.
     with _SPAWN_ENV_LOCK:
-        previous = {key: os.environ.get(key) for key in _KERNEL_ENV}
+        previous = {key: os.environ.get(key) for key in (*_KERNEL_ENV, "_VDJTOOLS_SERIAL_CHILD")}
         os.environ.update(dict.fromkeys(_KERNEL_ENV, "1"))
+        os.environ["_VDJTOOLS_SERIAL_CHILD"] = str(os.getpid())
         try:
             yield
         finally:
@@ -374,6 +395,7 @@ def serial_runtime():
     from threadpoolctl import threadpool_limits
 
     with _PHASES:
+        _check_openblas_capacity()
         threadpool_limits(limits=1)
         _SERIAL_PHASES += 1
     try:
@@ -404,6 +426,7 @@ def numerical_kernels(threads: int = 1):
         return
     with _PHASES:
         _PHASES.wait_for(lambda: _SERIAL_PHASES == 0)
+        _check_openblas_capacity(budget)
         with threadpool_limits(limits=1), threadpool_limits(limits=budget, user_api="blas"), \
                 _accelerate_threads(budget):
             previous = getattr(_LOCAL, 'numerical', False)

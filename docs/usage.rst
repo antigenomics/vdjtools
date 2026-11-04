@@ -809,11 +809,14 @@ CPU and container limits
 ------------------------
 
 Import ``vdjtools`` before numerical libraries in each fresh worker. Persistent
-Polars, OpenMP and Numba import pools default to one thread; BLAS remains serial
-between explicitly budgeted numerical phases. OpenMP uses passive waiting;
+Polars, OpenMP and Numba import pools default to one thread. OpenBLAS reserves
+up to 16 allocated CPUs before import; numerical phases select their active
+thread count and restore the caller's limits. OpenMP uses passive waiting.
 OpenBLAS retains its normal idle-thread lifetime or an explicit caller setting.
-Forcing aggressive OpenBLAS teardown can crash older native runtimes during
-phase handoffs. Import-time policies require import before native initialization.
+Expanding beyond OpenBLAS's startup capacity can crash older native runtimes;
+such requests raise. For a larger explicit budget, call
+``configure_runtime(blas_threads=N)`` before importing NumPy/SciPy, or use
+the CLI ``--threads N``. Import-time policies require import before native initialization.
 Native batch APIs receive an explicit budget: ``threads=1`` is serial,
 ``threads=0`` selects up to 16 allocated CPUs, and positive counts must fit the
 allocation. CPU affinity, SLURM per-task allocation

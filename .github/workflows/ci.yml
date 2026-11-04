@@ -69,16 +69,6 @@ jobs:
         # the guard below is what makes a silent skip visible instead.
         continue-on-error: true
         run: pip install -e ".[interop]"
-      - name: Pure solver PCA diagnosis
-        run: python tools/pca_solver_diagnostic.py
-      - name: Exact-input PCA diagnosis
-        run: python tools/pca_runtime_diagnostic.py
-      - name: PCA native runtime preflight
-        run: >-
-          python -c 'import vdjtools, numpy, scipy, sklearn, threadpoolctl, pytest;
-          print(numpy.__version__, scipy.__version__, sklearn.__version__, flush=True);
-          print(threadpoolctl.threadpool_info(), flush=True);
-          raise SystemExit(pytest.main(["tests/python/test_bounded_signature_fit.py::test_sparse_table_pca_matches_dense_standard_scaler", "-q", "-s"]))'
       - name: Test
         # Run the expensive reference/EM cases once, retaining full platform coverage for
         # the remaining suite. No test is removed from CI.
