@@ -241,6 +241,16 @@ Choose a documentation path
 * **Look up an interface:** :doc:`cli`, :doc:`api`, :doc:`channels` and
   :doc:`glossary` define commands, functions, output fields and terminology.
 
+.. image:: ../assets/analysis-atlas-light.svg
+   :alt: vdjtools workflow overview: inputs, processing and outputs.
+   :width: 100%
+   :class: only-light
+
+.. image:: ../assets/analysis-atlas-dark.svg
+   :alt: vdjtools workflow overview: inputs, processing and outputs.
+   :width: 100%
+   :class: only-dark
+
 .. toctree::
    :hidden:
    :caption: Getting started

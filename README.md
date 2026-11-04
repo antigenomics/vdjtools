@@ -151,33 +151,8 @@ AIRR analysis, features, signatures, models and single-cell workflows. Install t
 `skills/vdjtools` directory into your agent's skill directory, or read it directly
 when working in this checkout. It links to the maintained API and workflow guides.
 
-## Development
-
-```bash
-bash setup.sh --dev-parents --tests
-source .venv/bin/activate
-uv pip install -e ".[docs]"
-pytest tests/python -q -m "not slow and not heavy and not benchmark"
-env -C docs make html
-```
-
-Uses a repo-local uv environment and a C++ toolchain. See the API reference for
-public functions and the model workshop for native model workflows.
-
-## Citing
-
-For the v2 rewrite, cite this repository. For the original tool, cite
-[Shugay et al., *PLoS Computational Biology* 2015](https://doi.org/10.1371/journal.pcbi.1004503).
-The VDJtrack recapture model in `vdjtools.dynamics` is
-[Pavlova, Zvyagin and Shugay (2024)](https://doi.org/10.3389/fimmu.2024.1321603).
-
-## License
-
-ISALGO LAB Academic and Non-Commercial Research License. The legacy Groovy/Java v1.x tool lives on the
-[`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch, with its releases
-under the repository tags `v0.0.1` … `1.2.1`.
-
-### Configurable statistical features
+<details>
+<summary>Advanced models and fitted references</summary>
 
 Opt-in `basic` uses diversity, V–J usage, junction-length spectratype and separate
 isotype composition; `joint` uses diversity, V–J–length usage and separate isotype.
@@ -218,7 +193,31 @@ option for supported dense joint-history models, including human isalgo IGH.
 Approximate file outputs carry `pgen_method=rank1`; nucleotide and Hamming-1
 requests reject this option. See the [approximation scope and validation](https://docs.isalgo.dev/vdjtools/model.html#optional-approximation-of-tandem-histories).
 
-CPU budgets use `threads=0` for automatic parallel work, capped at 16 allocated CPUs.
-Use `1` for serial work or a positive
-count to override the automatic cap within the scheduler/container allocation.
-Sample workers keep their inner numerical kernels serial.
+
+</details>
+
+## Development
+
+```bash
+bash setup.sh --dev-parents --tests
+source .venv/bin/activate
+uv pip install -e ".[docs]"
+pytest tests/python -q -m "not slow and not heavy and not benchmark"
+env -C docs make html
+```
+
+Uses a repo-local uv environment and a C++ toolchain. See the API reference for
+public functions and the model workshop for native model workflows.
+
+## Citing
+
+For the v2 rewrite, cite this repository. For the original tool, cite
+[Shugay et al., *PLoS Computational Biology* 2015](https://doi.org/10.1371/journal.pcbi.1004503).
+The VDJtrack recapture model in `vdjtools.dynamics` is
+[Pavlova, Zvyagin and Shugay (2024)](https://doi.org/10.3389/fimmu.2024.1321603).
+
+## License
+
+ISALGO LAB Academic and Non-Commercial Research License. The legacy Groovy/Java v1.x tool lives on the
+[`legacy-1.x`](https://github.com/antigenomics/vdjtools/tree/legacy-1.x) branch, with its releases
+under the repository tags `v0.0.1` … `1.2.1`.
