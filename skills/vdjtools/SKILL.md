@@ -29,6 +29,11 @@ section of [workflow caveats](references/caveats.md): input and pairing, feature
 identity/coverage/resources, or model references/inference/selection. Each section
 links directly to the owning documentation section.
 
+Numerical fitting/table projection uses `threads=0` for an automatic budget,
+`1` for serial, or a positive user count. Automatic nested calls borrow the
+owning numerical phase through `vdjtools.cores.numerical_threads`; sample
+workers remain serial. Source/model assets are not refitted to change a budget.
+
 ## Start with the data unit
 
 ```python
