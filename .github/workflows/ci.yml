@@ -69,6 +69,8 @@ jobs:
         # the guard below is what makes a silent skip visible instead.
         continue-on-error: true
         run: pip install -e ".[interop]"
+      - name: Pure solver PCA diagnosis
+        run: python tools/pca_solver_diagnostic.py
       - name: Exact-input PCA diagnosis
         run: python tools/pca_runtime_diagnostic.py
       - name: PCA native runtime preflight
