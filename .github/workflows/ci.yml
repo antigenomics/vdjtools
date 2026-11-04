@@ -69,13 +69,6 @@ jobs:
         # the guard below is what makes a silent skip visible instead.
         continue-on-error: true
         run: pip install -e ".[interop]"
-      - name: Test
-        # Run the expensive reference/EM cases once, retaining full platform coverage for
-        # the remaining suite. No test is removed from CI.
-        env:
-          TEST_MARKERS: ${{ matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && 'not slow' || 'not slow and not heavy' }}
-        # Initialize the library before optional pytest plugins can initialize BLAS.
-        run: python -c 'import vdjtools, pytest, sys; raise SystemExit(pytest.main(sys.argv[1:]))' tests/python -q --durations=25 -m "$TEST_MARKERS"
       - name: Bounded cohort resource regression
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         timeout-minutes: 5
@@ -84,6 +77,13 @@ jobs:
           VDJ_BENCH_SAMPLES: "1000"
           VDJ_BENCH_WORKERS: "2"
         run: python -c 'import vdjtools, pytest, sys; raise SystemExit(pytest.main(sys.argv[1:]))' tests/python/test_projection.py -q -s -m benchmark
+      - name: Test
+        # Run the expensive reference/EM cases once, retaining full platform coverage for
+        # the remaining suite. No test is removed from CI.
+        env:
+          TEST_MARKERS: ${{ matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && 'not slow' || 'not slow and not heavy' }}
+        # Initialize the library before optional pytest plugins can initialize BLAS.
+        run: python -c 'import vdjtools, pytest, sys; raise SystemExit(pytest.main(sys.argv[1:]))' tests/python -q --durations=25 -m "$TEST_MARKERS"
       - name: Assert the OLGA oracle suite actually ran (guard against silent skip)
         # If olga stops importing, the suite would silently skip and CI would still be green. Fail
         # loudly instead: at least one olga-gated test must be collected and not skipped.

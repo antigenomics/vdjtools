@@ -89,7 +89,8 @@ def test_large_raw_feature_cohort_memory():
     workers = int(os.getenv('VDJ_BENCH_WORKERS','1'))
     def read():
         assert kernel_threads(0) == 1
-        assert all(p['num_threads'] == 1 for p in threadpool_info())
+        pools = threadpool_info()
+        assert all(p['num_threads'] == 1 for p in pools), pools
         return {'TRB':pl.DataFrame({'v_call':['TRBV10-3*01','TRBV20-1*01'],
                                    'j_call':['TRBJ2-7*01','TRBJ1-2*01'],
                                    'junction_aa':['CASSIRSSYEQYF','CSARVSGYYGYTF'],
