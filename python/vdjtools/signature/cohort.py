@@ -60,7 +60,7 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
     if workers < 2:
         if not workers:
             return []
-        with serial_runtime():
+        with serial_runtime(), serial_kernels():
             require_serial_pools(outer=False)
             return [row(it) for it in items]
     # Exactly one task per worker, never one queued object per sample.
@@ -74,20 +74,20 @@ def parallel_rows(items, fn, n_jobs: int) -> list[dict]:
         # OpenMP limits are thread-local; newly created pool threads need their own limit.
         with serial_kernels():
             require_serial_pools()
-        while True:
-            with lock:
-                if failed is not None:
-                    return
-                item = next(pending, None)
-            if item is None:
-                return
-            i, value = item
-            try:
-                results[i] = row(value)
-            except BaseException as exc:
+            while True:
                 with lock:
-                    failed = exc
-                return
+                    if failed is not None:
+                        return
+                    item = next(pending, None)
+                if item is None:
+                    return
+                i, value = item
+                try:
+                    results[i] = row(value)
+                except BaseException as exc:
+                    with lock:
+                        failed = exc
+                    return
 
     # Native limits are process-global: a simultaneous PCA/BLAS phase must finish
     # before these workers make every inner kernel serial.

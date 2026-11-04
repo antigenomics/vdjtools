@@ -371,10 +371,16 @@ def single_threaded_children():
 @contextmanager
 def serial_kernels():
     """Bound native work within an outer thread worker, restoring thread-local state."""
+    if getattr(_LOCAL, "serial", False):
+        yield
+        return
+    from threadpoolctl import threadpool_limits
+
     previous = getattr(_LOCAL, "serial", False)
     _LOCAL.serial = True
     try:
-        with _accelerate_threads(1):
+        # The parent owns process-wide limits; each worker also owns thread-local pools.
+        with threadpool_limits(limits=1), _accelerate_threads(1):
             yield
     finally:
         _LOCAL.serial = previous

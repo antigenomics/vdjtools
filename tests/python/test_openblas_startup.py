@@ -18,6 +18,7 @@ if cores.available_cores() >= 2:
     cores.configure_cli_runtime(['pca', '--threads=2'])
     assert os.environ['OPENBLAS_NUM_THREADS'] == '2'
 cores.configure_runtime()
+import threadpoolctl
 previous = dict(os.environ)
 with cores.single_threaded_children():
     assert os.environ['OPENBLAS_NUM_THREADS'] == '1'
