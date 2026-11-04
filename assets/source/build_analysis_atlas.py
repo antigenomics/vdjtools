@@ -8,14 +8,13 @@ from html import escape
 import csv
 import io
 import math
-import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 for dark in (False, True):
     theme = 'dark' if dark else 'light'
     bg, ink, soft, line = ('#1a2332','#eef2f7','#9cadbf','#354254') if dark else ('#ffffff','#1a2332','#54657a','#e6e9ee')
-    teal = '#25c39d' if dark else '#16a085'
-    amber = '#ffbd59' if dark else '#f0a93f'
+    teal = '#25c39d' if dark else '#168b78'
+    amber = '#ffbd59' if dark else '#b17b20'
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1430" viewBox="0 0 1200 1430" role="img" aria-labelledby="title desc"><title id="title">VDJtools: immune-repertoire analysis</title><desc id="desc">A schematic workflow from bulk and paired receptor tables to nine analysis types. Charts are schematic except the recorded VDJdb motif example; the logo shows observed-residue frequency differences against V/J/length-matched background.</desc><rect width="1200" height="1430" fill="{bg}"/><g font-family="Arial, Helvetica, sans-serif">']
     def text(x,y,s,size=20,color=None,anchor='start',weight='400'):
         out.append(f'<text x="{x}" y="{y}" font-size="{size}" fill="{color or ink}" text-anchor="{anchor}" font-weight="{weight}">{escape(s)}</text>')
@@ -25,13 +24,8 @@ for dark in (False, True):
         out.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{c}" opacity="{opacity}"/>')
     def circle(x,y,r,c,fill=None):
         out.append(f'<circle cx="{x}" cy="{y}" r="{r}" fill="{fill or bg}" stroke="{c}" stroke-width="2"/>')
-    text(65,55,'ISALGO  /  VDJTOOLS',16,teal,weight='700')
     text(65,108,'Immune-repertoire analysis',30,weight='700')
     text(65,145,'From receptor tables to sequence, sample and cohort measurements',18,soft)
-    # Original vector logo, embedded without rasterization or external references.
-    logo=ET.parse(ROOT/f'assets/vdjtools_{theme}.svg').getroot()
-    logo.set('x','925');logo.set('y','18');logo.set('width','230');logo.set('height','145')
-    out.append(ET.tostring(logo,encoding='unicode'))
     path('M65 176 H1135',line)
     # Inputs: sequence rows and paired-chain barcodes, converging on a shared table.
     for i in range(4):
@@ -51,7 +45,6 @@ for dark in (False, True):
     for k in range(9):
         x=45+(k%3)*380;y=480+(k//3)*300
         out.append(f'<g transform="translate({x},{y})">')
-        text(0,0,f'{k+1:02}',15,teal,weight='700')
         if k==0:
             path('M25 135 H310 M25 135 V30',line)
             for j,h in enumerate([22,40,75,95,71,45,27,15]):rect(40+j*23,135-h,14,h,teal,0.35+j*.07)
