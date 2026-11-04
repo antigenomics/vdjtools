@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.12", "pybind11>=2.12"]
+requires = ["scikit-build-core>=0.12", "pybind11>=2.12,<4"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -105,7 +105,7 @@ test = ["pytest>=7.4", "pytest-cov",
         "tomli>=1.1; python_version<'3.11'"]
 bench = []  # DEPRECATED no-op alias: huggingface_hub (real-data fetch) is a BASE dep.
 docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "nbsphinx", "sphinx-design", "sphinx-copybutton"]
-dev = ["ruff", "pytest>=7.4", "pybind11>=2.12"]
+dev = ["ruff", "pytest>=7.4", "pybind11>=2.12,<4"]
 all = ["scikit-learn"]                 # the antigenomics engines (arda-mapper, seqtree, vdjmatch) are base deps, not extras
 
 [project.urls]

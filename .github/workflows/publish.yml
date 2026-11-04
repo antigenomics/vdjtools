@@ -107,7 +107,7 @@ jobs:
         # central correctness claim. Without it the gate would be green on a suite that skipped.
         run: pip install -e ".[test,oracle,overlap,sc]"
       - name: Test
-        run: pytest tests/python -q -m "not slow and not heavy"
+        run: python -c 'import vdjtools, pytest, sys; raise SystemExit(pytest.main(sys.argv[1:]))' tests/python -q -m "not slow and not heavy"
       - name: Assert the OLGA oracle suite actually ran (guard against silent skip)
         run: python -c "import olga.load_model"
 
