@@ -810,12 +810,13 @@ CPU and container limits
 
 Import ``vdjtools`` before numerical libraries in each fresh worker. Persistent
 Polars, OpenMP and Numba import pools default to one thread; BLAS remains serial
-between explicitly budgeted numerical phases. Idle OpenBLAS pools
-use the minimum wait exponent (4), and OpenMP uses passive waiting, so alternating
-NumPy/SciPy pools release CPUs at handoff. These policies require import before
-native initialization. Native batch APIs
-receive an explicit budget: ``threads=1`` is serial, ``threads=0`` uses the detected
-allocation, and positive counts must fit it. CPU affinity, SLURM per-task allocation
+between explicitly budgeted numerical phases. OpenMP uses passive waiting;
+OpenBLAS retains its normal idle-thread lifetime or an explicit caller setting.
+Forcing aggressive OpenBLAS teardown can crash older native runtimes during
+phase handoffs. Import-time policies require import before native initialization.
+Native batch APIs receive an explicit budget: ``threads=1`` is serial,
+``threads=0`` selects up to 16 allocated CPUs, and positive counts must fit the
+allocation. CPU affinity, SLURM per-task allocation
 and visible cgroup quotas, including parent quotas, constrain that detection.
 Kubernetes CPU requests alone are scheduling weights, not a hard allocation.
 
