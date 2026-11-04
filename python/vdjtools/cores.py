@@ -182,7 +182,8 @@ _OPENBLAS_CAPS = {}
 
 
 def _check_openblas_capacity(threads=1):
-    """Remember startup capacity before reducing pools; growing beyond it can crash."""
+    """Initialize BLAS providers before workers, then guard their startup capacity."""
+    __import__('scipy.linalg')  # A lazy second BLAS pool must not appear inside workers.
     from threadpoolctl import threadpool_info
 
     for pool in threadpool_info():
