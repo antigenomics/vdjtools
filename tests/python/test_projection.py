@@ -130,13 +130,13 @@ def test_table_pca_saves_variance_and_loads_legacy(tmp_path):
 def test_pca_phase_budget_restores_blas_and_rejects_nested_workers(monkeypatch):
     from threadpoolctl import threadpool_info, threadpool_limits
     from vdjtools.cores import available_cores, numerical_kernels, serial_kernels, _uses_accelerate
-    from vdjtools.signature import corpus as C
     # Accelerate's partial startup ceiling is tested in a fresh process separately.
     budget = available_cores() if _uses_accelerate() else min(2, available_cores())
     table = pl.from_numpy(np.random.default_rng(7).normal(size=(12, 4)),
                           schema=[f'phi:{i}' for i in range(4)])
     table = table.with_columns(pl.lit('fixed').alias('embedding_space'))
-    original = C.fit_pca
+    from sklearn.pipeline import Pipeline
+    original = Pipeline.fit
     seen = []
     def checked(*args, **kwargs):
         seen.append([p['num_threads'] for p in threadpool_info() if p['user_api'] == 'blas'])
@@ -144,8 +144,8 @@ def test_pca_phase_budget_restores_blas_and_rejects_nested_workers(monkeypatch):
         assert all(t == budget for t in seen[-1])
         return original(*args, **kwargs)
     with threadpool_limits(limits=1, user_api='blas'):
-        reference = TablePCA.fit(table, n_components=2)
-        monkeypatch.setattr(C, 'fit_pca', checked)
+        reference = TablePCA.fit(table, n_components=2, threads=1)
+        monkeypatch.setattr(Pipeline, 'fit', checked)
         parallel = TablePCA.fit(table, n_components=2, threads=budget)
         assert all(p['num_threads'] == 1 for p in threadpool_info() if p['user_api'] == 'blas')
         with pytest.raises(RuntimeError, match='phase failed'):
@@ -235,3 +235,36 @@ def test_table_projection_bounds_conversion_and_restores_threads(monkeypatch):
         rotation.transform(table, threads=available_cores()+1)
     with pytest.raises(ValueError, match='spaces'):
         rotation.transform(table.head(0))
+
+
+def test_automatic_pca_budgets_use_allocation_and_inherit_owned_phase(monkeypatch):
+    from contextlib import contextmanager
+    from vdjtools import cores
+    from vdjtools.signature.cohort import parallel_rows
+
+    original = cores.numerical_kernels
+    seen = []
+    @contextmanager
+    def capture(threads):
+        with original(threads) as budget:
+            seen.append(budget)
+            yield budget
+    monkeypatch.setattr(cores, 'numerical_kernels', capture)
+    table = pl.from_numpy(np.random.default_rng(91).normal(size=(12, 4)),
+                           schema=[f'phi:{i}' for i in range(4)]).with_columns(
+                               pl.lit('fixed').alias('embedding_space'))
+    reference = TablePCA.fit(table, n_components=2, threads=1)
+    seen.clear()
+    fitted = TablePCA.fit(table, n_components=2)
+    actual = fitted.transform(table)
+    assert seen == [cores.available_cores()] * 2
+    np.testing.assert_allclose(actual.select(['pc0', 'pc1']).to_numpy(),
+                               reference.transform(table, threads=1).select(['pc0', 'pc1']).to_numpy(),
+                               rtol=0, atol=1e-12)
+    with original(1):
+        seen.clear()
+        TablePCA.fit(table, n_components=2).transform(table)
+        assert seen == [1, 1], 'automatic call escaped its caller-owned numerical budget'
+    seen.clear()
+    parallel_rows([0, 1], lambda _: fitted.transform(table), min(2, cores.available_cores()))
+    assert seen == [1, 1]

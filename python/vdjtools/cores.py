@@ -28,7 +28,7 @@ import threading
 from contextlib import contextmanager, nullcontext
 from functools import lru_cache
 
-__all__ = ["available_cores"]
+__all__ = ["available_cores", "numerical_threads"]
 
 
 def _cgroup_paths(controller_name="cpu"):
@@ -253,6 +253,17 @@ def kernel_threads(threads: int = 0) -> int:
     return threads or budget
 
 
+def numerical_threads(threads: int = 0) -> int:
+    """Resolve a BLAS budget; automatic nested calls borrow their caller's phase.
+
+    An explicit positive count overrides the current phase within the allocation.
+    Outer sample workers always have a one-core allocation.
+    """
+    budget = kernel_threads(threads)
+    active = getattr(_LOCAL, 'numerical', 0)
+    return min(budget, active) if threads == 0 and active else budget
+
+
 def configure_runtime(*, blas_threads: int | None = None) -> None:
     """Keep persistent numerical pools serial before imports; limit initialized BLAS too.
 
@@ -375,14 +386,15 @@ def serial_runtime():
 def numerical_kernels(threads: int = 1):
     """Temporarily budget BLAS after outer workers have joined; restore caller limits.
 
-    ``0`` selects the allocation, ``1`` is serial. Process-wide changes serialize
+    ``0`` borrows an existing numerical phase or selects the allocation; ``1`` is
+    serial. Process-wide changes serialize
     with sample and generation pools; calls inside a sample worker stay serial.
     Accelerate supports its startup ceiling or serial; other counts and unknown
     preinitialized ceilings raise, rather than silently running serially.
     """
     from threadpoolctl import threadpool_limits
 
-    budget = kernel_threads(threads)
+    budget = numerical_threads(threads)
     if getattr(_LOCAL, "serial", False):
         # The parent owns the serial pools; changing their process-global limits here
         # races sibling workers and waiting for its lock would deadlock the pool.
@@ -393,7 +405,7 @@ def numerical_kernels(threads: int = 1):
         with threadpool_limits(limits=1), threadpool_limits(limits=budget, user_api="blas"), \
                 _accelerate_threads(budget):
             previous = getattr(_LOCAL, 'numerical', False)
-            _LOCAL.numerical = True
+            _LOCAL.numerical = budget
             try:
                 yield budget
             finally:
