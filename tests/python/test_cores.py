@@ -98,6 +98,7 @@ def test_the_pool_sizing_sites_use_it():
 def test_kernel_auto_budget_respects_allocation_and_pool(monkeypatch):
     from vdjtools.cores import kernel_threads, serial_kernels
     monkeypatch.setattr("vdjtools.cores.available_cores", lambda: 3)
+    monkeypatch.setattr("vdjtools.cores.physical_cores", lambda: 3)
     assert kernel_threads(0) == 3
     with serial_kernels():
         assert kernel_threads(0) == 1

@@ -51,7 +51,8 @@ assert all(p['num_threads'] == 1 for p in threadpool_info()), threadpool_info()
 
 def test_nested_thread_workers_use_serial_kernels():
     from vdjtools.cores import kernel_threads, serial_kernels
-    with patch('vdjtools.cores.available_cores', return_value=4):
+    with patch('vdjtools.cores.available_cores', return_value=4), \
+            patch('vdjtools.cores.physical_cores', return_value=4):
         with serial_kernels():
             assert kernel_threads(0) == 1
             with pytest.raises(ValueError):

@@ -258,7 +258,7 @@ def test_automatic_pca_budgets_use_allocation_and_inherit_owned_phase(monkeypatc
     seen.clear()
     fitted = TablePCA.fit(table, n_components=2)
     actual = fitted.transform(table)
-    assert seen == [cores.available_cores()] * 2
+    assert seen == [cores.physical_cores()] * 2
     np.testing.assert_allclose(actual.select(['pc0', 'pc1']).to_numpy(),
                                reference.transform(table, threads=1).select(['pc0', 'pc1']).to_numpy(),
                                rtol=0, atol=1e-12)
