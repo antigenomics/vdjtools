@@ -1,4 +1,5 @@
 """Exercise an installed Windows wheel: topology, native model, I/O and spawn."""
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -15,6 +16,7 @@ def summarize(frame):
 
 
 def main():
+    subprocess.run(["vdjtools", "--help"], check=True, capture_output=True, text=True)
     assert 1 <= physical_cores() <= available_cores()
     model = load_bundled("TRA", "isalgo")
     sample = generate(model, 8, seed=7, productive_only=True, engine="native", threads=0)
