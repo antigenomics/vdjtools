@@ -23,6 +23,7 @@ wins, because they constrain independently and a box can carry both.
 from __future__ import annotations
 
 import os
+import logging
 import operator
 import threading
 from contextlib import contextmanager
@@ -365,7 +366,7 @@ def kernel_threads(threads: int = 0) -> int:
     """Resolve 0/automatic (physical cores), 1/serial, or a positive count within this process's allocation.
 
     Outer thread-pool workers have a one-core allocation. Explicit excessive counts
-    raise rather than silently clamp. Outer worker import pools remain serial; native batches
+    are capped to that allocation. Outer worker import pools remain serial; native batches
     receive this resolved integer, never a host-wide automatic setting.
     """
     if isinstance(threads, bool):
@@ -377,8 +378,8 @@ def kernel_threads(threads: int = 0) -> int:
     if threads < 0:
         raise ValueError("threads must be non-negative (0 means automatic physical cores)")
     if threads > budget:
-        raise ValueError(f"threads must be between 0 and {budget} (0 means automatic physical cores)")
-    return threads or min(budget, physical_cores())
+        logging.getLogger(__name__).warning("Requested %d threads; available budget %d; using %d threads", threads, budget, budget)
+    return min(threads, budget) if threads else min(budget, physical_cores())
 
 
 def numerical_threads(threads: int = 0) -> int:

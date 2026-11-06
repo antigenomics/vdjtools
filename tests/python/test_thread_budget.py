@@ -31,7 +31,8 @@ def test_counts_respect_allocation_and_reject_invalid_requests():
         assert kernel_threads(0) == 2
         assert kernel_threads(1) == 1
         assert kernel_threads(2) == 2
-        for bad in (-1, 3, True, 1.5):
+        assert kernel_threads(3) == 2
+        for bad in (-1, True, 1.5):
             with pytest.raises((ValueError, TypeError)):
                 kernel_threads(bad)
 
@@ -55,8 +56,7 @@ def test_nested_thread_workers_use_serial_kernels():
             patch('vdjtools.cores.physical_cores', return_value=4):
         with serial_kernels():
             assert kernel_threads(0) == 1
-            with pytest.raises(ValueError):
-                kernel_threads(2)
+            assert kernel_threads(2) == 1
         assert kernel_threads(0) == 4
 
 
@@ -141,10 +141,9 @@ def test_numerical_phase_waits_for_running_sample_map():
     assert fitting.is_set() and not errors
 
 
-def test_pool_rejects_explicit_overallocation_even_for_small_inputs():
+def test_pool_caps_explicit_overallocation_even_for_small_inputs():
     with patch('vdjtools.cores.available_cores', return_value=2):
-        with pytest.raises(ValueError):
-            parallel_rows([], _pool_probe, 3)
+        assert parallel_rows([], _pool_probe, 3) == []
 
 
 @pytest.mark.parametrize('v2', [True, False])
