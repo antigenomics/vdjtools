@@ -94,7 +94,7 @@ marimo edit examples/single_cell_interop.py
 A [marimo](https://marimo.io) notebook computing CDR3 amino-acid features with
 `vdjtools.features` on the aging cohort: `physchem_profile` (hydropathy, charge,
 volume, the 10 Kidera factors) per sample, correlated with donor age (the strongest is
-CDR3 **hydropathy**, Spearman r ≈ −0.45), and `kmer_profile` 3-mer spectra embedded by
+CDR3 **hydropathy**, Spearman r ≈ −0.45; [recorded validation](https://github.com/antigenomics/vdjtools/commit/6bb7d56a2c7bce76fc8c7c77c61e8875b368a309)), and `kmer_profile` 3-mer spectra embedded by
 PCA and coloured by age. Pure polars:
 
 ```bash
@@ -208,7 +208,7 @@ A [marimo](https://marimo.io) notebook reproducing the Komech 2018 **TRBV9 / TRB
 in ankylosing spondylitis on [`isalgo/airr_ankspond`](https://huggingface.co/datasets/isalgo/airr_ankspond)
 (60 donors), with the disease-vs-HLA-B27-carriage contrast — B27 is 26/27 confounded with AS, so
 only the B27-matched comparison separates disease from carriage (AS/B27+ 16/26 vs HD/B27+ 1/12,
-OR ≈ 17.6) — plus a metaclonotype family view.
+OR ≈ 17.6; [recorded validation](https://github.com/antigenomics/vdjtools/commit/4bfd68e25b1d9f7d87ab43024282ce44c08ac6de)) — plus a metaclonotype family view.
 
 ```bash
 pip install -e ".[examples,overlap]"
@@ -259,7 +259,7 @@ marimo edit examples/model_workshop.py
 A [marimo](https://marimo.io) notebook on the three feature choices that are easy to get wrong,
 each measurable in seconds on repertoires sampled from the bundled models (no download):
 why the amino-acid block is **Anscombe arcsine** and not `log1p` of counts (`log1p` moves ~7.5×
-across a depth change that leaves arcsine at 1.04×), why an ambiguous V call must go through
+across a depth change that leaves arcsine at 1.04×; [recorded endpoint table](https://github.com/antigenomics/vdjtools/blob/f8d2c8bdeffa3a43fffd9c491b2204020cf8b037/docs/signature.rst#L59-L84)), why an ambiguous V call must go through
 `resolve_gene` rather than `strip_allele`, and why the number of principal components kept from
 the corpus rotation is a real choice rather than a default.
 
