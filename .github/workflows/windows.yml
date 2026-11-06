@@ -1,0 +1,31 @@
+name: Windows end-to-end
+on:
+  push:
+    branches: [master, dev, codex/windows-e2e]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      arda_ref:
+        description: Coordinated ARDA source ref
+        default: master
+        required: false
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install build
+      - run: python -m build --wheel
+      - name: Install built wheel and runtime dependencies
+        shell: pwsh
+        run: python -m pip install (Get-ChildItem dist/*.whl).FullName
+      - name: Install coordinated ARDA
+        env:
+          ARDA_REF: ${{ inputs.arda_ref || 'master' }}
+        run: python -m pip install --no-deps --force-reinstall "arda-mapper @ git+https://github.com/antigenomics/arda.git@$env:ARDA_REF"
+      - name: Run installed-wheel workflows
+        run: python scripts/windows_smoke.py
