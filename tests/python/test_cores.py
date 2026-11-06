@@ -189,3 +189,13 @@ def test_physical_topology_counts_smt_once(monkeypatch):
     assert cores.physical_cores() == 20
     monkeypatch.setattr(cores, "available_cores", lambda: 8)
     assert cores.physical_cores() == 8
+
+
+def test_windows_topology_budget(monkeypatch):
+    import vdjtools.cores as cores
+    monkeypatch.setattr(cores.os, "name", "nt")
+    monkeypatch.setattr(cores, "_windows_cpu_counts", lambda: (40, 20))
+    monkeypatch.setattr(cores, "available_cores", lambda: 40)
+    assert cores.physical_cores() == 20
+    assert cores.kernel_threads() == 20
+    assert cores.kernel_threads(40) == 40
