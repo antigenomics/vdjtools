@@ -67,6 +67,10 @@ Prebuilt CPython wheels include the native extension. A source install needs a C
 toolchain. Optional extras include `[overlap]` for sample MDS, `[sc]` for single-cell
 bridges and `[examples]` for marimo notebooks. See [getting started](https://docs.isalgo.dev/vdjtools/getting-started.html).
 
+Native Windows installation uses the same `pip install` command; WSL is not required.
+The [Windows workflow](.github/workflows/windows.yml) builds and installs a wheel,
+then checks native generation/Pgen, AIRR I/O and spawned sample workers.
+
 ## Quickstart
 
 ```python
