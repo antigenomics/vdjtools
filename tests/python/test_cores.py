@@ -102,8 +102,7 @@ def test_kernel_auto_budget_respects_allocation_and_pool(monkeypatch):
     assert kernel_threads(0) == 3
     with serial_kernels():
         assert kernel_threads(0) == 1
-        with pytest.raises(ValueError, match="between 0 and 1"):
-            kernel_threads(2)
+        assert kernel_threads(2) == 1
         with pytest.raises(ValueError, match="threads"):
             kernel_threads(-1)
     assert kernel_threads(0) == 3

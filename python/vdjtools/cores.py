@@ -300,11 +300,11 @@ def _check_openblas_capacity(threads=1):
         if pool.get('internal_api') == 'openblas':
             capacity = _OPENBLAS_CAPS.setdefault(pool['filepath'], pool['num_threads'])
             if threads > capacity:
-                raise RuntimeError(
-                    f'OpenBLAS started with capacity {capacity}, requested {threads}. '
-                    'Start a fresh process, import vdjtools and call '
-                    'configure_runtime(blas_threads=N) before NumPy/SciPy, '
-                    'or use the CLI --threads N.')
+                logging.getLogger(__name__).warning(
+                    "Requested %d BLAS threads; initialized capacity %d; using %d threads",
+                    threads, capacity, capacity)
+                threads = capacity
+    return threads
 
 
 @lru_cache(maxsize=1)
@@ -543,7 +543,7 @@ def numerical_kernels(threads: int = 1):
         return
     with _PHASES:
         _PHASES.wait_for(lambda: _SERIAL_PHASES == 0)
-        _check_openblas_capacity(budget)
+        budget = _check_openblas_capacity(budget)
         with threadpool_limits(limits=1), threadpool_limits(limits=budget, user_api="blas"), \
                 _accelerate_threads(budget):
             previous = getattr(_LOCAL, 'numerical', False)

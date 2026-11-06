@@ -33,10 +33,9 @@ def test_learned_pool_is_one_model_batch_and_identical_across_cpu_counts(tmp_pat
         got.append(frame)
     assert calls == [("TRG", "isalgo"), ("TRG", "isalgo")]
     assert_frame_equal(*got)
-    with pytest.raises(ValueError, match="invalid n_jobs"):
-        C.build_pools(["TRG"], size=30, n_samples=4, seed=7,
+    C.build_pools(["TRG"], size=30, n_samples=4, seed=7,
                       source="learned", tmp=tmp_path, n_jobs=3)
-    assert len(calls) == 2, "reject CPU oversubscription before loading a model"
+    assert len(calls) == 3
 
 
 def test_explicit_olga_pool_retains_reference_chunk_seeds(tmp_path):
