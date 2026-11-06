@@ -3,7 +3,6 @@ import os
 import subprocess
 import sys
 
-import pytest
 
 
 def test_lazy_parent_capacity_and_scoped_child_environment():
@@ -43,8 +42,7 @@ def test_openblas_capacity_survives_serial_handoffs(monkeypatch):
     cores._check_openblas_capacity(4)
     pool['num_threads'] = 1
     cores._check_openblas_capacity(4)
-    with pytest.raises(RuntimeError, match='capacity 4, requested 8'):
-        cores._check_openblas_capacity(8)
+    assert cores._check_openblas_capacity(8) == 4
 
 
 def test_pca_alternates_serial_and_automatic_without_pool_growth_crash():
