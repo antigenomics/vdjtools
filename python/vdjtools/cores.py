@@ -219,6 +219,8 @@ def _windows_cpu_counts():
                 physical += 1
                 break
         offset += length
+    if not mask.value or not physical:
+        raise RuntimeError("Windows returned empty CPU affinity or physical topology")
     logical = mask.value.bit_count()
     # Job CPU rate is a fraction of the host capacity, not the affinity mask.
     class Rate(C.Structure):
@@ -226,14 +228,20 @@ def _windows_cpu_counts():
     rate = Rate()
     query_job = kernel.QueryInformationJobObject
     query_job.argtypes = [W.HANDLE, C.c_int, C.c_void_p, W.DWORD, C.c_void_p]
-    if query_job(None, 15, C.byref(rate), C.sizeof(rate), None) and rate.flags & 1:
+    in_job = W.BOOL()
+    kernel.IsProcessInJob.argtypes = [W.HANDLE, W.HANDLE, C.POINTER(W.BOOL)]
+    if not kernel.IsProcessInJob(process, None, C.byref(in_job)):
+        raise RuntimeError("Windows job membership query failed")
+    if in_job.value and not query_job(None, 15, C.byref(rate), C.sizeof(rate), None):
+        raise RuntimeError("Windows job CPU rate query failed")
+    if rate.flags & 1:
         maximum = (rate.rate >> 16) if rate.flags & 16 else rate.rate
         if rate.flags & (4 | 16) and maximum:
             kernel.GetActiveProcessorCount.argtypes = [W.WORD]
             kernel.GetActiveProcessorCount.restype = W.DWORD
             host = kernel.GetActiveProcessorCount(0xffff) or os.cpu_count() or logical
             logical = min(logical, max(1, host * maximum // 10000))
-    return (logical, min(physical, logical)) if physical else (logical, logical)
+    return logical, min(physical, logical)
 
 
 def physical_cores() -> int:
