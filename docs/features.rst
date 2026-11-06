@@ -235,7 +235,7 @@ registry; an implemented feature definition does not imply a published rotation.
 Sample PCA application processes byte-bounded row blocks instead of converting
 the entire feature table to a dense array. ``TablePCA.transform(table, threads=0)``
 uses an automatic BLAS budget, matching the default of ``TablePCA.fit``.
-Automatic calls inherit an owning numerical phase or select up to 16 allocated
+Automatic calls inherit an owning numerical phase or select allocated physical
 CPUs. ``threads=1`` is serial; positive explicit budgets must fit the allocation.
 ``vdjtools project-features --threads 0`` uses this policy for fit and apply.
 The numerical phase restores the caller's native thread limits on exit.

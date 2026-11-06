@@ -39,7 +39,7 @@ donors, ages 0–103), reading each signal three complementary ways from a singl
 - **Repertoires become more clonal with age** — top-clone read share.
 
 ```bash
-pip install -e ".[examples,overlap]"          # overlap = vdjmatch/seqtree + scikit-learn (MDS)
+pip install -e ".[examples,overlap]"          # overlap = scikit-learn (MDS); sequence engines are base dependencies
 examples/run.sh                               # interactive marimo editor
 # or directly:
 marimo edit examples/aging.py
@@ -127,7 +127,7 @@ continuous kernel that neither legacy vdjtools nor mirpy has. It builds all-pair
 distance matrices (`pairwise_distances`), embeds the cohort (`cluster_samples`, metric
 MDS), shows where the similarity kernel finds graded overlap between repertoires that
 share **no identical clonotype**, and runs a convergence test (`tcrnet`). Needs the
-`[overlap]` extra (`vdjmatch`, `seqtree`, `scikit-learn`):
+`[overlap]` extra (`scikit-learn` for MDS):
 
 ```bash
 pip install -e ".[examples,overlap]"
@@ -147,7 +147,7 @@ min-incidence, and the significance threshold. It rediscovers known CMV clones
 (e.g. `CASSLAPGATNEKLFF` ↔ pp65 `NLVPMVATV` / HLA-A\*02:01) from raw repertoires.
 
 ```bash
-pip install -e ".[examples,overlap]"          # overlap = vdjmatch, for the 1-mismatch option
+pip install -e ".[examples,overlap]"          # overlap = scikit-learn; vdjmatch is a base dependency
 marimo edit examples/emerson_biomarker.py
 ```
 
@@ -228,7 +228,7 @@ marimo edit examples/biomarker_explorer.py
 
 ## `model_explorer.py` — recombination Bayes-net explorer
 
-A [marimo](https://marimo.io) notebook exploring any bundled recombination model (OLGA vs learned):
+A [marimo](https://marimo.io) notebook exploring any bundled recombination model (`olga-legacy` vs `isalgo`, also exposed as `olga` and `learned`):
 the Bayes-net graph, per-event entropy, mutual information, and the marginal tables
 (`vdjtools.model.analyze`). No download — uses the models shipped in the wheel.
 

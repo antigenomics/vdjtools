@@ -139,8 +139,9 @@ def test_import_preserves_caller_openmp_hard_limit(hard_limit):
 def test_auto_cap_preserves_larger_explicit_and_nested_budgets(monkeypatch):
     import vdjtools.cores as cores
     monkeypatch.setattr(cores, 'available_cores', lambda: 32)
+    monkeypatch.setattr(cores, 'physical_cores', lambda: 20)
     assert cores.available_cores() == 32
-    assert cores.kernel_threads() == cores.numerical_threads() == 16
+    assert cores.kernel_threads() == cores.numerical_threads() == 20
     assert cores.kernel_threads(32) == cores.numerical_threads(32) == 32
     monkeypatch.setattr(cores._LOCAL, 'numerical', 32, raising=False)
     assert cores.numerical_threads() == 32
@@ -174,3 +175,17 @@ def test_import_preserves_openblas_idle_timeout(timeout):
                              "import vdjtools, os; print(os.environ.get('OPENBLAS_THREAD_TIMEOUT'))"],
                             env=env, capture_output=True, text=True, check=True, timeout=30)
     assert result.stdout.strip() == str(timeout)
+
+
+def test_physical_topology_counts_smt_once(monkeypatch):
+    import vdjtools.cores as cores
+    from pathlib import Path
+    monkeypatch.setattr(cores, "available_cores", lambda: 40)
+    monkeypatch.setattr(cores.os, "sched_getaffinity", lambda pid: set(range(40)), raising=False)
+    def topology(path):
+        cpu = int(str(path).split("/cpu/cpu")[1].split("/")[0])
+        return "0" if path.name == "physical_package_id" else str(cpu % 20)
+    monkeypatch.setattr(Path, "read_text", topology)
+    assert cores.physical_cores() == 20
+    monkeypatch.setattr(cores, "available_cores", lambda: 8)
+    assert cores.physical_cores() == 8

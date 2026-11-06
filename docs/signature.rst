@@ -532,7 +532,7 @@ Parallelism
 -----------
 
 ``--jobs`` / ``n_jobs`` selects worker threads: 0 (the default for signature
-application) uses up to 16 allocated cores, capped at the sample count; 1 runs in the
+application) uses allocated physical cores, capped at the sample count; 1 runs in the
 calling process, and a positive count must fit the allocation and is capped
 by the number of samples. No timing or sample-depth heuristic changes that count.
 
@@ -550,7 +550,7 @@ the standalone raw-feature API continues to return its full column dictionary.
 For fitting, ``fit_cohort(..., n_jobs=16, threads=16)`` finishes and joins the
 feature workers before PCA uses up to 16 BLAS threads. ``threads=1`` preserves
 serial fitting; ``threads=0`` (the library default) selects an automatic budget
-of at most 16 CPUs within the scheduler/container allocation. Automatic nested calls inherit their
+of physical cores within the scheduler/container allocation. Automatic nested calls inherit their
 owning numerical phase. Excessive counts raise. ``fit_matrices`` and ``TablePCA.fit`` accept the same fitting-only
 ``threads`` budget and restore the caller's BLAS limits afterwards.
 The default cohort coverage target requires two passes through the input; an explicit

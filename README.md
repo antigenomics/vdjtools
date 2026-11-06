@@ -131,10 +131,15 @@ native Pgen, generation and inference engines.
 
 ## Resource budgets
 
+Logical CPUs are hardware threads, not physical cores: a 40-logical-CPU node may
+have 20 physical cores. Automatic sizing uses visible topology and respects affinity,
+SLURM and container limits; unknown topology falls back to the logical allocation.
+Explicit positive budgets may use SMT threads within that allocation.
+
 Import `vdjtools` before numerical libraries in a fresh interpreter. Native batch
 APIs use allocation-aware CPU budgets; sample workers use serial inner kernels.
 Signature `--jobs` and analysis `--threads` select bounded workers, with `0` for the
-detected allocation. Excessive or nested budgets raise. The final feature table
+physical cores visible within the detected allocation. Excessive or nested budgets raise. The final feature table
 still grows with sample count and feature width. Configured randomized corpus fits
 and `TablePCA.fit_features` use sparse rows and bounded statistic chunks; their
 remaining workspace grows with nonzero entries and the requested component count. See

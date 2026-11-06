@@ -165,6 +165,33 @@ def available_cores(default: int = 1) -> int:
     return max(1, min(usable)) if usable else max(1, default)
 
 
+def physical_cores() -> int:
+    """Physical cores visible to this process, capped by its logical allocation.
+
+    Unknown topology falls back to the allocation; SMT is never assumed to be 2x.
+    """
+    from pathlib import Path
+    import sys
+    import subprocess
+
+    budget = available_cores()
+    try:
+        if hasattr(os, "sched_getaffinity"):
+            cores = set()
+            for cpu in os.sched_getaffinity(0):
+                topology = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology")
+                cores.add(((topology / "physical_package_id").read_text().strip(),
+                           (topology / "core_id").read_text().strip()))
+            return min(budget, len(cores)) if cores else budget
+        if sys.platform == "darwin":
+            count = int(subprocess.check_output(
+                ["sysctl", "-n", "hw.physicalcpu"], timeout=2, text=True))
+            return min(budget, count) if count > 0 else budget
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return budget
+
+
 # These runtimes read their limits during import, before a worker initializer runs.
 _KERNEL_ENV = ("POLARS_MAX_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
                "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
@@ -253,7 +280,7 @@ def _accelerate_threads(threads):
 
 
 def kernel_threads(threads: int = 0) -> int:
-    """Resolve 0/automatic (at most 16), 1/serial, or a positive count within this process's allocation.
+    """Resolve 0/automatic (physical cores), 1/serial, or a positive count within this process's allocation.
 
     Outer thread-pool workers have a one-core allocation. Explicit excessive counts
     raise rather than silently clamp. Outer worker import pools remain serial; native batches
@@ -266,10 +293,10 @@ def kernel_threads(threads: int = 0) -> int:
     child = child_parent is not None and child_parent != str(os.getpid())
     budget = 1 if getattr(_LOCAL, "serial", False) or child else available_cores()
     if threads < 0:
-        raise ValueError("threads must be non-negative (0 means automatic, at most 16 cores)")
+        raise ValueError("threads must be non-negative (0 means automatic physical cores)")
     if threads > budget:
-        raise ValueError(f"threads must be between 0 and {budget} (0 means automatic, at most 16 cores)")
-    return threads or min(budget, 16)
+        raise ValueError(f"threads must be between 0 and {budget} (0 means automatic physical cores)")
+    return threads or min(budget, physical_cores())
 
 
 def numerical_threads(threads: int = 0) -> int:
@@ -417,7 +444,7 @@ def serial_runtime():
 def numerical_kernels(threads: int = 1):
     """Temporarily budget BLAS after outer workers have joined; restore caller limits.
 
-    ``0`` borrows an existing numerical phase or selects up to 16 allocated CPUs; ``1`` is
+    ``0`` borrows an existing numerical phase or selects allocated physical cores; ``1`` is
     serial. Process-wide changes serialize
     with sample and generation pools; calls inside a sample worker stay serial.
     Accelerate supports its startup ceiling or serial; other counts and unknown
